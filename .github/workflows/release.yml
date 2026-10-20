@@ -90,6 +90,8 @@ jobs:
           persist-credentials: false
       - name: Read the version out of Cargo.toml
         id: read
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 \
@@ -101,14 +103,14 @@ jobs:
 
           # A hand-pushed tag still releases, but only if the two agree — this is the drift
           # ADR-0012 accepts and refuses to resolve silently.
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             tagged="${GITHUB_REF_NAME#version/}"
             if [ "$tagged" != "$version" ]; then
               echo "::error::the tag says $tagged and Cargo.toml says $version — bump one of them"
               exit 1
             fi
             publish=true
-          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+          elif [ "$DRY_RUN" = "true" ]; then
             publish=false
           else
             publish=true
@@ -136,7 +138,7 @@ jobs:
           on=$(git ls-remote --tags origin "refs/tags/$tag" | cut -f1)
           if [ -n "$on" ]; then
             # On a push run this very tag is what started us; anywhere else it is a spent number.
-            if [ "${{ github.event_name }}" = "push" ] && [ "$on" = "$GITHUB_SHA" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$on" = "$GITHUB_SHA" ]; then
               echo "$tag is the tag that started this run"
             else
               echo "::error::the tag $tag already exists, on ${on:0:7}"
