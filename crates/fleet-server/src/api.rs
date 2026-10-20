@@ -385,7 +385,7 @@ async fn ui_css() -> Response {
     stylesheet(include_str!("../static/ui.css"))
 }
 
-/// The bundled UI's second look, after IBM's Carbon Design System as Würth Phoenix's NetEye wears it.
+/// The bundled UI's second look, after IBM's Carbon Design System.
 async fn ui_carbon_css() -> Response {
     stylesheet(include_str!("../static/ui-carbon.css"))
 }

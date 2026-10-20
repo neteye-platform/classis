@@ -1,13 +1,13 @@
-/* The Carbon look, as Würth Phoenix's NetEye and SATAYO wear IBM's Carbon Design System (v11):
-   the Gray 100 theme, its shell header one with the page, layers a step lighter each — the
-   lists on layer-01, what is opened from them on layer-02 — and the house purple (#b14bc3)
-   where Carbon would put its interactive blue on a selection: the top line of the active tab
-   and the bar on the current row. Tabs are Carbon's contained tabs, sitting on the list they
-   head; the filter bar's choices are round chips, outlined until they hold a value. Buttons,
-   links and focus keep Carbon's own blue and white; badges are Carbon's tag colour pairs.
+/* The Carbon look, after IBM's Carbon Design System (v11): the Gray 100 theme, its shell header
+   one with the page, layers a step lighter each — the lists on layer-01, what is opened from them
+   on layer-02 — and a purple (#b14bc3) where Carbon would put its interactive blue on a
+   selection: the top line of the active tab and the bar on the current row. Tabs are Carbon's
+   contained tabs, sitting on the list they head; the filter bar's choices are round chips,
+   outlined until they hold a value. Buttons, links and focus keep Carbon's own blue and white;
+   badges are Carbon's tag colour pairs.
 
-   Dark (Gray 100) is the ground state, as the products ship; light (Gray 10, with the same
-   purple and chips) is the other, below. Which one shows is the page's choice: the operator's,
+   Dark (Gray 100) is the ground state; light (Gray 10, with the same purple and chips) is the
+   other, below. Which one shows is the page's choice: the operator's,
    or the system's. The faces are IBM Plex where the operator's machine has it installed; the plane's
    policy loads nothing from another origin, so the stacks fall back as Carbon's own do. */
 :root {

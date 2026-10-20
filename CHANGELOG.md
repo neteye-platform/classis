@@ -271,7 +271,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A v
 ### Added
 
 - **Two more looks for the UI:** a style combo chooses between the GitKraken look, a Carbon look —
-  IBM's Carbon Design System as Würth Phoenix's NetEye wears it, Gray 100 with its purple — or a
+  after IBM's Carbon Design System, Gray 100 with a purple accent — or a
   quiet look where colour says only state and selection. Beside it, three buttons choose light,
   dark or System, which follows the operating system's preference as it changes. The two are
   independent: a theme holds across every look. A first visit follows the system; a light or dark
