@@ -37,9 +37,11 @@ Authority runs **specification → accepted ADRs → individual change**.
 
 ## License of contributions
 
-This project is licensed under the [Apache License 2.0](LICENSE). By submitting a contribution, you
-agree that it is provided under the terms of that License, without any additional terms or conditions
-(section 5 of the Apache License 2.0). Do not submit code you are not authorised to license this way.
+This project is licensed under either of the [MIT License](LICENSE-MIT) or the
+[Apache License 2.0](LICENSE-APACHE), at your option. Unless you explicitly state otherwise, any
+contribution you intentionally submit for inclusion is dual licensed as above, without any
+additional terms or conditions (section 5 of the Apache License 2.0). Do not submit code you are
+not authorised to license this way.
 
 ## Reporting security issues
 

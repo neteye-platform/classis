@@ -7,7 +7,7 @@ name = "fleet-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 
 [package.metadata]
 cargo-fuzz = true
