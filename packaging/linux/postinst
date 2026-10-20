@@ -1,0 +1,117 @@
+#!/bin/sh
+# Post-install for the `.deb` and the `.rpm` alike (ADR-0019 clause 36, ADR-0029 clause 13).
+#
+# The package delivered `/usr/libexec/opamp-fleet/supervisor` and nothing else. The install itself —
+# the versioned layout, the `current` pointer, the systemd unit — belongs to the Client's own
+# `service install` (ADR-0019), which is all this calls. No package ships a unit file: one that did
+# would know nothing of ADR-0019's service name or ADR-0018's restart policy, and there would be two
+# registrations disagreeing about which is the real one.
+#
+# What an operator invokes on PATH is a symlink through the layout's `current` pointer (ADR-0019),
+# laid here — so `opamp-fleet --version` answers for the binary the service runs, not for whatever
+# this package happened to deliver. The link carries the **product's** name and the file it resolves
+# to carries the program's (ADR-0019 clause 3): two variant builds must not collide on one
+# `/usr/bin` entry, and they would if the link were named after the program they share.
+#
+# The paths name the default system roots (`default_layout_root` and `default_root` in
+# crates/fleet-agent/src/service/manager.rs), the only roots a packaged install ever uses: this script
+# never passes `--root`. They are two roots on Linux — the executable layout under `/opt`, because
+# SELinux never lets systemd execute a binary labeled `var_lib_t`; the configuration and state under
+# `/var/lib`, where data belongs (ADR-0019 clause 8).
+#
+# The service runs under the system account `opamp-fleet` (ADR-0042 clause 5). It is created here
+# where it is missing — on every run, also on a host that stays root, so that moving such a host is
+# one command — and never modified or removed. Only a first registration, where no unit exists, is
+# told the account; every later one runs `service install` without `--run-as`, which keeps the
+# account the unit names (ADR-0042 clause 2). A host that chose root with `--run-as root` stays root.
+#
+# There is no migration branch here, and that is ADR-0042 clause 1: an upgrade is a
+# re-registration, so there is nothing to carry across.
+#
+# dpkg calls this as `postinst configure <old-version>`, rpm as `%post <count>`. The two argument
+# conventions have nothing in common, so nothing here reads "$1" except to bow out of dpkg's abort
+# paths — everything else is idempotent by ADR-0019 and safe on either.
+set -e
+
+case "${1-}" in
+abort-upgrade | abort-remove | abort-deconfigure) exit 0 ;;
+esac
+
+# Asked *before* `service install` runs, because install swings the `current` pointer and stops
+# nothing: a host that was already running is one under management being upgraded, and its process
+# still holds the previous binary while the pointer now names the new one.
+running=no
+if command -v systemctl >/dev/null 2>&1 &&
+	systemctl is-active --quiet opamp-fleet.service; then
+	running=yes
+fi
+
+if ! getent passwd opamp-fleet >/dev/null 2>&1; then
+	# A group of that name without its account is joined, since `--user-group` would refuse it.
+	if getent group opamp-fleet >/dev/null 2>&1; then
+		useradd --system --gid opamp-fleet --no-create-home --home-dir /var/lib/opamp-fleet \
+			--shell /usr/sbin/nologin opamp-fleet
+	else
+		useradd --system --user-group --no-create-home --home-dir /var/lib/opamp-fleet \
+			--shell /usr/sbin/nologin opamp-fleet
+	fi
+fi
+
+if [ -e /etc/systemd/system/opamp-fleet.service ]; then
+	/usr/libexec/opamp-fleet/supervisor service install
+else
+	/usr/libexec/opamp-fleet/supervisor service install --run-as opamp-fleet
+fi
+
+# `-n`: without it, ln would place the link *inside* the directory an existing link resolves to.
+# On rpm upgrades the erasure of the old package's files deletes this link again; `%posttrans`
+# (packaging/linux/posttrans) re-lays it after that erasure, which dpkg does not need — it removes
+# the obsolete `/usr/bin` file during unpack, before this runs.
+ln -sfn /opt/opamp-fleet/current/supervisor /usr/bin/opamp-fleet
+
+if [ "$running" = yes ]; then
+	# Restart, never start. A service that was running was configured by somebody, and it has to
+	# finish this upgrade on the binary the package just delivered rather than on the one it still
+	# has mapped.
+	systemctl restart opamp-fleet.service
+	exit 0
+fi
+
+cat <<'EOF'
+
+The service is registered and stopped. Not starting it is deliberate: a Client without a client
+certificate refuses to start. Two steps remain:
+
+  opamp-fleet service install --interactive
+  systemctl start opamp-fleet
+
+The first asks for the endpoint, the Server's CA, a bootstrap certificate and its key (or a
+bootstrap.p12 and its password), and the package verification key, writes supervisor.toml, and
+enrols this host with the Server: open the enrolment window first and approve the request it waits
+for. `opamp-fleet service config` asks again later.
+
+Without a terminal, put the fleet's files in a directory and name it. A bootstrap.p12 also needs
+the file holding its password (--bootstrap-password-file). This waits for the same approval:
+
+  opamp-fleet service install --endpoint wss://<server>/v1/opamp \
+    --fleet-files /root/fleet --bootstrap-password-file /root/fleet/bootstrap.pass
+
+To write the file yourself instead, give it at least the endpoint and the client identity, and the
+service enrols when it starts:
+
+  endpoint = "wss://<server>/v1/opamp"
+  [tls]
+  cert_file = "<client or bootstrap certificate>"
+  key_file = "<its key>"
+
+The configuration lets the Server update this Client itself, from signed packages only
+— the fleet then patches its own agent like any other program. Write `self_update = false` under
+[packages] in supervisor.toml to keep that one update manual.
+
+A new installation runs the service, and every Agent it supervises, as the system account
+opamp-fleet, and every upgrade keeps the account the unit names. An Agent that needs root (GLPI
+Agent's full inventory, a Telegraf input without a sudo rule, a port below 1024) needs a sudo rule,
+a drop-in under /etc/systemd/system/opamp-fleet.service.d/, or root, chosen with:
+
+  opamp-fleet service install --run-as root
+EOF

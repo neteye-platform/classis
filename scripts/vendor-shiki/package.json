@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Build inputs of crates/fleet-server/static/shiki.js; see scripts/vendor-shiki.sh (ADR-0038).",
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "shiki": "4.5.0"
+  }
+}

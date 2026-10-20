@@ -1,0 +1,456 @@
+{
+  "uid": "opamp-agents-traces",
+  "title": "Fleet Agents \u2014 Traces",
+  "description": "Control-loop operations, their phases, and which phase fails.",
+  "tags": [
+    "opamp",
+    "clickhouse"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "operation",
+        "label": "Operation",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "description": "The control-loop operation, i.e. the root span's name.",
+        "query": {
+          "refId": "tempvar",
+          "editorType": "sql",
+          "format": 1,
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT DISTINCT SpanName FROM otel.otel_traces WHERE ParentSpanId = '' ORDER BY 1"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "trace",
+        "label": "Trace",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "description": "A trace id, for the detail panel. Filled by clicking one in the table."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "About this dashboard",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Every trace here is one fleet operation.** A Client opens a span for installing a package, applying a configuration \u2014 a Managed Process's, and its own Supervisor set \u2014 applying offered connection settings, and updating itself (ADR-0016). Its phases are the child spans, and the outcome it reported to the Server is the span status, so *which phase failed* is a question these panels answer.\n\nMessage handling is deliberately not traced, so the rate below is operations and not traffic. A self-update spans a restart and still arrives as one trace."
+      },
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "Spans per second, by service",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time,\n       ServiceName AS service,\n       count() / $__interval_s AS spans_per_second\nFROM otel.otel_traces\nWHERE $__timeFilter(Timestamp)\nGROUP BY time, service\nORDER BY time"
+        }
+      ],
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "Errored spans per second",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time,\n       ServiceName AS service,\n       countIf(StatusCode = 'Error') / $__interval_s AS errored_per_second\nFROM otel.otel_traces\nWHERE $__timeFilter(Timestamp)\nGROUP BY time, service\nORDER BY time"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "Operation duration p50 / p95 / p99",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time,\n       quantile(0.50)(Duration) / 1000000 AS p50_ms,\n       quantile(0.95)(Duration) / 1000000 AS p95_ms,\n       quantile(0.99)(Duration) / 1000000 AS p99_ms\nFROM otel.otel_traces\nWHERE ParentSpanId = '' AND $__timeFilter(Timestamp)\nGROUP BY time\nORDER BY time"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "type": "table",
+      "title": "Phases, by how often they fail",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95 ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Failed %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT SpanName AS \"Phase\",\n       count() AS \"Runs\",\n       countIf(StatusCode = 'Error') AS \"Failed\",\n       round(100 * countIf(StatusCode = 'Error') / count(), 1) AS \"Failed %\",\n       quantile(0.95)(Duration) / 1000000 AS \"p95 ms\"\nFROM otel.otel_traces\nWHERE ParentSpanId != '' AND $__timeFilter(Timestamp)\nGROUP BY \"Phase\"\nORDER BY \"Failed\" DESC, \"Runs\" DESC"
+        }
+      ],
+      "description": "Child spans grouped by name. Where Tempo's service map showed which service talks to which, an Agent's spans are phases of one operation \u2014 so what is worth seeing is which phase fails.",
+      "id": 5
+    },
+    {
+      "type": "table",
+      "title": "Operations",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this trace",
+                    "url": "/d/opamp-agents-traces/fleet-agents-traces?var-trace=${__value.raw}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration (ms)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT TraceId AS \"Trace\",\n       SpanName AS \"Operation\",\n       Timestamp AS \"Started\",\n       Duration / 1000000 AS \"Duration (ms)\",\n       StatusCode AS \"Outcome\",\n       StatusMessage AS \"Message\"\nFROM otel.otel_traces\nWHERE ParentSpanId = '' AND $__timeFilter(Timestamp)\n      AND match(SpanName, '${operation:regex}')\nORDER BY Timestamp DESC\nLIMIT 200"
+        }
+      ],
+      "description": "Root spans. Click a trace id to open it below.",
+      "id": 6
+    },
+    {
+      "type": "traces",
+      "title": "Trace detail",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 3,
+          "queryType": "traces",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT TraceId AS traceID,\n       SpanId AS spanID,\n       ParentSpanId AS parentSpanID,\n       ServiceName AS serviceName,\n       SpanName AS operationName,\n       toFloat64(toUnixTimestamp64Milli(Timestamp)) AS startTime,\n       toFloat64(Duration) / 1000000 AS duration,\n       arrayMap(k -> map('key', k, 'value', SpanAttributes[k]), mapKeys(SpanAttributes)) AS tags,\n       arrayMap(k -> map('key', k, 'value', ResourceAttributes[k]), mapKeys(ResourceAttributes)) AS serviceTags,\n       if(StatusCode = 'Error', 2, 0) AS statusCode\nFROM otel.otel_traces\nWHERE TraceId = '${trace}'\nORDER BY startTime ASC, duration DESC"
+        }
+      ],
+      "description": "Set by clicking a trace id above, or paste one into the Trace variable.",
+      "id": 7
+    }
+  ]
+}

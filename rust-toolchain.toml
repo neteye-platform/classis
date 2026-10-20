@@ -1,0 +1,5 @@
+# Pin the toolchain so every contributor and CI build on the same Rust (ADR-0010): an exact
+# release, raised by a reviewed commit, never a channel name that moves under a build.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

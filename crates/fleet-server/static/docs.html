@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>API · OpAMP Fleet</title>
+    <style>
+      body { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <!--
+      The Server's REST API, rendered from the OpenAPI document it serves at
+      /api/v1/openapi.json (ADR-0023). Redoc is vendored and served from this same origin
+      (/api/v1/docs/redoc.js) — no external request, so the docs work offline (ADR-0010).
+    -->
+    <redoc spec-url="/api/v1/openapi.json"></redoc>
+    <script src="/api/v1/docs/redoc.js"></script>
+  </body>
+</html>

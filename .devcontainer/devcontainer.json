@@ -1,0 +1,111 @@
+{
+  "name": "OpAMP Fleet DevContainer",
+
+  // Pinned to a Debian *release*, not the floating `:debian` tag.
+  "image": "mcr.microsoft.com/devcontainers/base:debian12",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+  },
+  // The host's agent config directory. HOME is set on Linux and macOS, USERPROFILE on Windows;
+  // exactly one of the two is non-empty, so concatenating both yields the home directory on every
+  // host (the pattern the Dev Containers documentation recommends).
+  "mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/home/vscode/.claude,type=bind"
+  ],
+
+  "shutdownAction": "stopContainer",
+
+  // Runs on the host before the container is created. Ensures the bind-mount source for the agent
+  // config exists, so Docker does not auto-create it as a root-owned directory (which breaks
+  // credential writes inside the container). Written to work in both a POSIX shell and cmd.exe:
+  // plain `mkdir` (cmd.exe knows no `-p`; the parent is the home directory and always exists) and
+  // `|| exit 0` so an already existing directory — an error for both shells — does not abort the
+  // container build.
+  "initializeCommand": "mkdir \"${localEnv:HOME}${localEnv:USERPROFILE}/.claude\" || exit 0",
+
+  // Runs inside the container once it is created. Git does not version its hooks, so the
+  // repository keeps them under .githooks/ and this points git at them: pre-commit refuses a
+  // commit on main, pre-push runs the checks first (AGENTS.md §5 and §6). Outside the container,
+  // run the same command once per clone (README → "Getting Started"). It is the first command of
+  // `postCreateCommand` below, which also installs the system packages listed there.
+
+  // DevContainer Features layered on top of the base image. The container intentionally has NO
+  // access to the host Docker daemon (no socket mount) — see ADR-0002. Manage the host's containers
+  // from a host-side VS Code extension instead (README → "Host container management").
+  "features": {
+    // GitHub CLI (`gh`) — used by the coding agent for GitHub operations and as the git
+    // credential helper. Git writes still require explicit human approval (see AGENTS.md §6).
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // Rust stable toolchain (rustup + cargo, with rustfmt & clippy) — the project's language
+    // toolchain (ADR-0010). The build chain needs no system protoc (ADR-0011 uses the
+    // pure-Rust protox), so no extra system packages are required here.
+    "ghcr.io/devcontainers/features/rust:1": {}
+  },
+
+  // System packages the base image does not carry, installed once when the container is created.
+  //
+  // Both are *developer tooling* — nothing shipped depends on them, which is why they
+  // need no ADR (AGENTS.md §3.6) — and each earns its place:
+  //
+  //   socat     forwards the host's OpenTelemetry Collector onto this container's loopback, see
+  //             `postStartCommand` below.
+  //   llvm      `llvm-lib`, without which `cargo xwin` cannot typecheck the Client for Windows.
+  //             That check is not optional in practice: `#[cfg(unix)]` code is invisible to an
+  //             ordinary local run, so a Windows-only compile error reaches CI instead of the
+  //             author. See README → "Build, Test & Run".
+  "postCreateCommand": "git config core.hooksPath .githooks && sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends socat llvm",
+
+  // Runs inside the container on every start. The development observability stack runs on the host,
+  // apart from this container (observability/compose.yaml); this puts its Collector on the
+  // container's loopback, 127.0.0.1:4317 and :4318, because the Client sends own telemetry in
+  // plaintext to a loopback IP literal alone (ADR-0016). See observability/README.md.
+  "postStartCommand": ".devcontainer/forward-otlp.sh",
+
+  "customizations": {
+    // VS Code extensions installed inside the container
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-vscode-remote.remote-containers",
+        // Rust development: language server, debugger, and Cargo.toml support.
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+
+  // The Server's two planes (ADR-0013), published the way each one is meant to be reached.
+  //
+  // The Agent plane (4320, OpAMP + package downloads) is where the fleet connects, so `appPort`
+  // publishes it through Docker itself (`-p 0.0.0.0:4320:4320`) and the Server is reachable from
+  // the host network under the host's own IP — not just from the host via localhost. VS Code's
+  // `forwardPorts` would bind the host side to 127.0.0.1 only; do not add 4320 to it, the two
+  // mechanisms fight over the same host port.
+  //
+  // The Operator plane (4321, REST API + UI) binds loopback *inside* the container by default,
+  // which Docker cannot publish — so it goes through `forwardPorts`, which tunnels into the
+  // container and reaches a loopback listener. That is also the right exposure for it: the
+  // developer, not the network.
+  "appPort": ["0.0.0.0:4320:4320"],
+  "forwardPorts": [4321],
+  "portsAttributes": {
+    "4320": { "label": "OpAMP Fleet Server (Agent plane: OpAMP + downloads)" },
+    "4321": { "label": "OpAMP Fleet Server (Operator plane: REST + UI)" },
+    // The forwarder of `postStartCommand` listens here and leads to the host's Collector. VS Code
+    // would offer to forward these ports back to the host, onto the ports the Collector already
+    // holds there; labelled for the Ports view, ignored by the auto-forwarder.
+    "4317": { "label": "OTLP/gRPC → host Collector", "onAutoForward": "ignore" },
+    "4318": { "label": "OTLP/HTTP → host Collector", "onAutoForward": "ignore" }
+  },
+
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "32gb"
+  }
+}

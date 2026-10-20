@@ -1,0 +1,418 @@
+/* The Carbon look, as Würth Phoenix's NetEye and SATAYO wear IBM's Carbon Design System (v11):
+   the Gray 100 theme, its shell header one with the page, layers a step lighter each — the
+   lists on layer-01, what is opened from them on layer-02 — and the house purple (#b14bc3)
+   where Carbon would put its interactive blue on a selection: the top line of the active tab
+   and the bar on the current row. Tabs are Carbon's contained tabs, sitting on the list they
+   head; the filter bar's choices are round chips, outlined until they hold a value. Buttons,
+   links and focus keep Carbon's own blue and white; badges are Carbon's tag colour pairs.
+
+   Dark (Gray 100) is the ground state, as the products ship; light (Gray 10, with the same
+   purple and chips) is the other, below. Which one shows is the page's choice: the operator's,
+   or the system's. The faces are IBM Plex where the operator's machine has it installed; the plane's
+   policy loads nothing from another origin, so the stacks fall back as Carbon's own do. */
+:root {
+  color-scheme: dark;
+  --bg: #161616;               /* background */
+  --panel: #262626;            /* layer-01: tabs, filter bar, tables */
+  --panel-2: #393939;          /* layer-02: editors and dialogs */
+  --field: #393939;            /* field-02: a field on layer-01 */
+  --field-hover: #474747;
+  --field-2: #525252;          /* field-03: a field on layer-02 */
+  --field-2-hover: #636363;
+  --field-border: #6f6f6f;     /* border-strong-01 */
+  --border: #393939;           /* border-subtle-01 */
+  --border-2: #525252;         /* border-subtle-02 */
+  --border-strong: #6f6f6f;
+  --text: #f4f4f4;             /* text-primary */
+  --muted: #c6c6c6;            /* text-secondary */
+  --helper: #8d8d8d;           /* text-helper: labels */
+  --placeholder: rgba(244, 244, 244, 0.4);
+  --text-inverse: #161616;
+  --text-error: #ff8389;
+  --link: #78a9ff;             /* link-primary */
+  --link-hover: #a6c8ff;
+  --primary: #0f62fe;          /* button-primary */
+  --primary-hover: #0050e6;
+  --primary-active: #002d9c;
+  --primary-fg: #ffffff;
+  --tertiary: #ffffff;         /* button-tertiary */
+  --tertiary-hover: #f4f4f4;
+  --tertiary-hover-fg: #161616;
+  --focus: #ffffff;
+  --focus-inset: #161616;
+  /* The house purple: what is selected — the active tab, the current row. */
+  --accent: #b14bc3;
+  --accent-fg: #ffffff;
+  --tab-hover: #262626;
+  --count-bg: #525252;
+  --count-fg: #c6c6c6;
+  --row-hover: #333333;        /* layer-hover-01 */
+  --head-bg: #393939;          /* layer-accent-01 */
+  --head-hover: #474747;
+  --selected: #2c2c2c;
+  --selected-hover: #333333;
+  /* The filter chips: an outline until the filter holds a value, then filled. */
+  --chip-line: #424a6c;
+  --chip-fg: #c6daff;
+  /* Attribute namespaces: Carbon's blue, teal, magenta and cool-gray tag pairs. */
+  --hue-blue-bg: #0043ce;  --hue-blue-fg: #d0e2ff;
+  --hue-teal-bg: #005d5d;  --hue-teal-fg: #9ef0f0;
+  --hue-pink-bg: #9f1853;  --hue-pink-fg: #ffd6e8;
+  --hue-slate-bg: #4d5358; --hue-slate-fg: #dde1e6;
+  --chip-on-bg: #424a6c;
+  --chip-on-fg: #c6daff;
+  --code-bg: #262626;
+  --overlay: rgba(0, 0, 0, 0.65);
+  /* Tags: tag-background-* / tag-color-*. */
+  --tag-green-bg: #0e6027;  --tag-green-fg: #a7f0ba;
+  --tag-gray-bg: #525252;   --tag-gray-fg: #e0e0e0;
+  --tag-yellow-bg: #684e00; --tag-yellow-fg: #fddc69;
+  --tag-red-bg: #a2191f;    --tag-red-fg: #ffd7d9;  --tag-red-hover: #c21e25;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, ".SFNSText-Regular", sans-serif;
+  --mono: "IBM Plex Mono", Menlo, "DejaVu Sans Mono", "Bitstream Vera Sans Mono", Courier, monospace;
+  /* An effective configuration's colours (ADR-0038), from Carbon's tokens: keys in link-primary,
+     strings and numbers in the green and yellow tag colours, comments in text-helper. */
+  --shiki-foreground: #f4f4f4;
+  --shiki-background: #262626;
+  --shiki-token-keyword: #78a9ff;
+  --shiki-token-string: #a7f0ba;
+  --shiki-token-string-expression: #a7f0ba;
+  --shiki-token-constant: #fddc69;
+  --shiki-token-comment: #8d8d8d;
+  --shiki-token-parameter: #ffd6e8;
+  --shiki-token-function: #9ef0f0;
+  --shiki-token-punctuation: #c6c6c6;
+  --shiki-token-link: #78a9ff;
+}
+/* The only other state. Dark needs no rule of its own — :root above *is* dark, so the page's
+   `data-theme="dark"` matches nothing here. Carbon's Gray 10 theme; editors stay white, since
+   Gray 10's layer-02 is the page's own colour. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f4f4;
+  --panel: #ffffff;
+  --panel-2: #ffffff;
+  --field: #f4f4f4;
+  --field-hover: #e8e8e8;
+  --field-2: #f4f4f4;
+  --field-2-hover: #e8e8e8;
+  --field-border: #8d8d8d;
+  --border: #e0e0e0;
+  --border-2: #e0e0e0;
+  --border-strong: #8d8d8d;
+  --text: #161616;
+  --muted: #525252;
+  --helper: #6f6f6f;
+  --placeholder: rgba(22, 22, 22, 0.4);
+  --text-inverse: #ffffff;
+  --text-error: #da1e28;
+  --link: #0f62fe;
+  --link-hover: #0043ce;
+  --tertiary: #0f62fe;
+  --tertiary-hover: #0050e6;
+  --tertiary-hover-fg: #ffffff;
+  --focus: #0f62fe;
+  --focus-inset: #ffffff;
+  --tab-hover: #e8e8e8;
+  --count-bg: #e0e0e0;
+  --count-fg: #525252;
+  --row-hover: #e8e8e8;
+  --head-bg: #e0e0e0;
+  --head-hover: #d1d1d1;
+  --selected: #f2f2f2;
+  --selected-hover: #e8e8e8;
+  --chip-line: #424a6c;
+  --chip-fg: #424a6c;
+  /* Attribute namespaces: Carbon's blue, teal, magenta and cool-gray tag pairs. */
+  --hue-blue-bg: #d0e2ff;  --hue-blue-fg: #0043ce;
+  --hue-teal-bg: #9ef0f0;  --hue-teal-fg: #005d5d;
+  --hue-pink-bg: #ffd6e8;  --hue-pink-fg: #9f1853;
+  --hue-slate-bg: #dde1e6; --hue-slate-fg: #343a3f;
+  --chip-on-bg: #424a6c;
+  --chip-on-fg: #ffffff;
+  --code-bg: #f4f4f4;
+  --overlay: rgba(22, 22, 22, 0.5);
+  --tag-green-bg: #a7f0ba;  --tag-green-fg: #0e6027;
+  --tag-gray-bg: #e0e0e0;   --tag-gray-fg: #161616;
+  --tag-yellow-bg: #fddc69; --tag-yellow-fg: #684e00;
+  --tag-red-bg: #ffd7d9;    --tag-red-fg: #a2191f;  --tag-red-hover: #ffc2c5;
+  /* An effective configuration's colours (ADR-0038), the same roles in Gray 10. */
+  --shiki-foreground: #161616;
+  --shiki-background: #f4f4f4;
+  --shiki-token-keyword: #0f62fe;
+  --shiki-token-string: #0e6027;
+  --shiki-token-string-expression: #0e6027;
+  --shiki-token-constant: #684e00;
+  --shiki-token-comment: #6f6f6f;
+  --shiki-token-parameter: #9f1853;
+  --shiki-token-function: #005d5d;
+  --shiki-token-punctuation: #525252;
+  --shiki-token-link: #0f62fe;
+}
+
+* { box-sizing: border-box; }
+/* body-01: 14px on 20px. */
+body {
+  margin: 0;
+  font: 14px/1.43 var(--sans);
+  letter-spacing: 0.16px;
+  background: var(--bg);
+  color: var(--text);
+}
+/* The products use the whole window, with a 16px gutter. */
+.wrap { margin: 0; padding: 0 16px 16px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* The shell header: Gray 100 in both themes, 48px, across the whole window, the product's name
+   bold and what follows it in the helper grey on the same line. The shadow and the clip carry
+   its background past the gutter without touching the markup; the band re-declares the Gray
+   100 tokens its contents read, so they need no rules of their own. */
+.page-head {
+  --text: #f4f4f4; --muted: #c6c6c6; --helper: #8d8d8d; --link: #78a9ff; --link-hover: #a6c8ff;
+  --field: #262626; --field-hover: #333333; --field-border: #6f6f6f; --focus: #ffffff; --focus-inset: #161616;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  min-height: 48px; margin-bottom: 16px; padding: 0; color: var(--text);
+  background: #161616; box-shadow: 0 0 0 100vmax #161616; clip-path: inset(0 -100vmax);
+}
+.page-head > div:first-child { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.page-head h1 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.29; letter-spacing: 0.1px; }
+.page-head p { margin: 0; color: var(--helper); font-size: 14px; line-height: 1.29; }
+/* The header's actions are ghost buttons: no border, the active nav item's layer under the pointer. */
+.page-head .btn-ghost { border-color: transparent; color: var(--muted); padding: 0 15px; }
+.page-head .btn-ghost:hover { background: #262626; color: var(--text); }
+.page-head select { height: 32px; }
+/* The theme's three buttons sit side by side as the header's other actions do; the pressed one
+   carries the purple line the active tab does, under it. */
+.theme-switch { display: inline-flex; }
+.theme-switch .btn[aria-pressed="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* Carbon's button, medium (40px): text set left, the right side kept for the icon slot. */
+.btn {
+  border: 1px solid transparent; border-radius: 0; padding: 0 63px 0 15px; min-height: 40px;
+  font: inherit; font-size: 14px; font-weight: 400; letter-spacing: 0.16px; text-align: left;
+  cursor: pointer; white-space: nowrap; transition: background-color 70ms cubic-bezier(0, 0, 0.38, 0.9);
+}
+.btn:focus-visible {
+  outline: 0; border-color: var(--focus);
+  box-shadow: inset 0 0 0 1px var(--focus), inset 0 0 0 2px var(--focus-inset);
+}
+.btn-primary, .btn-ok { background: var(--primary); color: var(--primary-fg); }
+.btn-primary:hover, .btn-ok:hover { background: var(--primary-hover); }
+.btn-primary:active, .btn-ok:active { background: var(--primary-active); }
+/* Carbon's tertiary button: the action's colour as an outline, filled on hover. */
+.btn-ghost { background: transparent; color: var(--tertiary); border-color: var(--tertiary); }
+.btn-ghost:hover { background: var(--tertiary-hover); color: var(--tertiary-hover-fg); }
+/* A button sized to sit inside a form line, a toolbar or a table row rather than to head one:
+   Carbon's small (32px). Its icon slot is dropped, since none of these carries an icon and a
+   row of them would otherwise not fit its cell. */
+.btn-sm, .btn-ok, .filters .btn { padding: 0 15px; min-height: 32px; }
+/* A key fingerprint is compared character by character with the Client's log, so it is shown
+   whole, in the monospace face, and breaks anywhere rather than overflowing its cell. */
+.fingerprint { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+
+/* A Carbon tile: a flat layer on the page, told apart by its colour rather than a border. */
+.card { background: var(--panel); border: 0; border-radius: 0; }
+
+/* Carbon's contained tabs: the active one is the layer of the list below it, joined to it, with
+   the purple line on top; the others lie on the page and take a layer under the pointer. */
+.tabs { display: flex; gap: 0; margin: 0; border: 0; }
+.tab {
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px;
+  border: 0; border-top: 2px solid transparent; background: transparent; color: var(--muted);
+  font: inherit; font-weight: 400; cursor: pointer;
+  transition: background-color 70ms cubic-bezier(0.2, 0, 0.38, 0.9);
+}
+.tab:hover { background: var(--tab-hover); color: var(--text); }
+.tab.active { background: var(--panel); color: var(--text); font-weight: 600; border-top-color: var(--accent); }
+/* The count on a tab: Carbon's small gray tag. */
+.tab .num {
+  display: inline-flex; align-items: center; min-height: 18px; padding: 0 8px; border-radius: 9px;
+  background: var(--count-bg); color: var(--count-fg); font-family: var(--sans); font-size: 12px; font-weight: 400;
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Configurations and Packages editors — each fills its own tab, on the layer a detail panel
+   takes, its heading separated by a subtle rule. */
+.config { padding: 16px; margin-bottom: 16px; background: var(--panel-2); }
+.config h2 {
+  margin: -16px -16px 16px; padding: 16px; border-bottom: 1px solid var(--border-2);
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+.config-fields { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+/* Carbon's fields: a filled box with one line under it, which the focus ring replaces. A field
+   takes the field token of the layer it sits on. */
+.config-fields input, textarea, select, .filters input {
+  border: 0; border-bottom: 1px solid var(--field-border); border-radius: 0;
+  background: var(--field); color: var(--text); font-size: 14px; letter-spacing: 0.16px;
+  transition: background-color 70ms cubic-bezier(0.2, 0, 0.38, 0.9);
+}
+.config-fields input:hover, textarea:hover, select:hover, .filters input:hover { background: var(--field-hover); }
+.config input, .config textarea, .config select { background: var(--field-2); }
+.config input:hover, .config textarea:hover, .config select:hover { background: var(--field-2-hover); }
+.config-fields input {
+  flex: 1; min-width: 220px; height: 40px; padding: 0 16px; font-family: var(--mono); font-size: 13px;
+}
+.config-fields input::placeholder, textarea::placeholder { color: var(--placeholder); }
+/* A field whose value is a short token, so four of them fit one row. */
+.config-fields input.narrow { flex: 0 1 190px; min-width: 150px; }
+/* A field the action refuses to run without. Marked only while it is empty — once it holds
+   a value there is nothing left to point at, and a line that kept shouting would be the same
+   noise as no marking at all. The line takes the amber badge's colour, the warning's. */
+.config-fields input.required:placeholder-shown { border-bottom: 2px solid var(--tag-yellow-fg); }
+/* A field that stands alone on its line and should not stretch across it — the package name,
+   which everything on the lines below is a statement about. */
+.config-fields input.quarter { flex: 0 1 25%; min-width: 180px; }
+/* A chip that is picked wears the filled filter chip. */
+.chip.selected { background: var(--chip-on-bg); color: var(--chip-on-fg); }
+.chip.clickable { cursor: pointer; }
+.pill.clickable { cursor: pointer; }
+textarea {
+  width: 100%; min-height: 120px; padding: 11px 16px;
+  font-family: var(--mono); font-size: 13px; resize: vertical;
+}
+.config-actions { display: flex; align-items: center; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+.hash { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* Filter bar: on the list's layer, joined to the tab above and the table below. Its choices
+   are the round filter chips; its search is a small Carbon field. */
+.filters { display: flex; align-items: center; gap: 8px; padding: 8px 16px; min-height: 48px; margin-bottom: 0; }
+.filters .dropdown, .filters select {
+  display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px;
+  border: 1px solid var(--chip-line); border-radius: 14px; background: transparent;
+  color: var(--chip-fg); font-size: 14px; white-space: nowrap;
+}
+.filters select:hover { background: var(--chip-on-bg); color: var(--chip-on-fg); }
+.filters input { flex: 1; margin-left: 8px; height: 32px; padding: 0 16px; font-family: var(--sans); }
+.filters input::placeholder { color: var(--placeholder); font-family: var(--sans); }
+/* A choice from a fixed list looks like the text fields beside it. */
+select { height: 40px; padding: 0 16px; font-family: inherit; }
+
+.table-wrap { overflow-x: auto; }
+/* Fixed layout: the table is exactly as wide as its container and never wider — content
+   wraps or ellipsizes inside its column instead of growing a horizontal scrollbar. The
+   narrow columns are sized in px for the one kind of value they hold; Name gets a share of
+   the whole; what remains is split between the columns whose content is genuinely
+   elastic (Operating System is px too — its values repeat from a small set). The wrap's
+   overflow-x stays as the fallback for windows too narrow for any division. */
+table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
+th[data-key="name"] { width: 16%; }
+th[data-key="version"] { width: 76px; }
+th[data-key="os"] { width: 136px; }
+th.col-network { width: 140px; }
+th[data-key="config"] { width: 116px; }
+th[data-key="seq"] { width: 56px; }
+th[data-key="seen"] { width: 92px; }
+/* Carbon's data table, medium: a 40px header row on the accent layer, rows in the primary
+   text divided by a subtle line. */
+thead th {
+  text-align: left; padding: 0 16px; height: 40px; background: var(--head-bg);
+  color: var(--text); font-size: 14px; font-weight: 600; white-space: nowrap; user-select: none;
+}
+thead th.sortable { cursor: pointer; }
+thead th.sortable:hover { background: var(--head-hover); }
+th .arrow { opacity: .7; font-size: 10px; }
+/* overflow hidden: under the fixed layout a value that fits no line of its column — one
+   overlong chip, an unbroken token — is clipped at the cell's edge rather than written
+   across the neighbour; the full value stays in the cell's own tooltip or details. */
+tbody td { padding: 10px 16px 9px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow: hidden; color: var(--text); }
+/* An agent is a row — and, when it is the current one, the rows under it that carry its
+   sets. The separator then belongs after the last of them, or the agent would read as
+   several; a row without detail rows keeps its own. */
+tbody tr.agent { cursor: pointer; }
+tbody tr.agent.current td, tbody tr.detail td { border-bottom: 0; }
+tbody tr.detail.last td { border-bottom: 1px solid var(--border); }
+tbody tr.detail td { padding-top: 0; padding-bottom: 8px; }
+tbody tr.detail:hover { background: transparent; }
+tbody tr:hover { background: var(--row-hover); }
+/* The current Agent: the purple bar on its edge, over a layer barely off the table's own, so
+   no cell content has to change color and the chips on it keep their own. */
+tbody tr.agent.current td { background: var(--selected); }
+tbody tr.agent.current:hover td { background: var(--selected-hover); }
+tbody tr.agent.current td:first-child { box-shadow: inset 3px 0 var(--accent); }
+td.chk, th.chk { width: 48px; }
+input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--text); cursor: pointer; }
+
+.name { color: var(--link); font-weight: 400; text-decoration: none; }
+.name:hover { color: var(--link-hover); text-decoration: underline; }
+tbody td .name { color: var(--text); font-weight: 400; }
+tbody td .name:hover { color: var(--link); }
+.sub { color: var(--helper); font-size: 12px; letter-spacing: 0.32px; font-family: var(--mono); margin-top: 2px; }
+/* The helper grey reaches 4.5:1 on layer-01 only; on an editor's layer the secondary takes over. */
+.config .sub { color: var(--muted); }
+/* The UID is long and rarely read, but must be selectable when it is: one line, its own text
+   selection, and a size that keeps it under the name rather than beside it. */
+.uid { font-size: 11px; opacity: 0.75; white-space: nowrap; user-select: all; overflow: hidden; text-overflow: ellipsis; }
+
+/* Carbon's tag, medium: a 24px pill in one of its colour pairs, label-01 type. */
+.pill { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; min-height: 24px; border-radius: 12px; font-size: 12px; line-height: 1.33; font-weight: 400; letter-spacing: 0.32px; white-space: nowrap; }
+/* The ✕ riding inside the Disconnected tag: Carbon's dismissible tag's close button, a round
+   target in the tag's own colour that takes the tag's hover shade under the pointer. */
+.pill .forget-btn {
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-right: -4px; border-radius: 50%; font-size: 11px; font-weight: 600;
+  background: transparent; color: inherit;
+}
+.pill .forget-btn:hover { background: var(--tag-red-hover); }
+/* Sized for its widest state — "Disconnected" with the ✕ — so the column does not breathe
+   when an Agent's connection flips; the Stale tag wraps below rather than widening it. */
+th.status, td.status { width: 180px; min-width: 180px; }
+/* Carbon has one green tag; Connected and the other good states both wear it. */
+.pill.solid-green, .pill.green { background: var(--tag-green-bg); color: var(--tag-green-fg); }
+/* The tag that heads a detail row: the purple, as the bar on the row it belongs to. */
+.pill.violet { background: var(--accent); color: var(--accent-fg); }
+.pill.gray { background: var(--tag-gray-bg); color: var(--tag-gray-fg); }
+.pill.amber { background: var(--tag-yellow-bg); color: var(--tag-yellow-fg); }
+.pill.red { background: var(--tag-red-bg); color: var(--tag-red-fg); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+.cfg { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfg.cfg-open { cursor: pointer; }
+.cfg.cfg-open:hover { color: var(--link); text-decoration: underline; }
+/* Text that is a document rather than a cell — an effective configuration, the reason a
+   Supervisor will not start — opens whole in this dialog, where it scrolls inside its own
+   box. A row stays one line high whatever the text is: a column that grows to fit the
+   longest error pushes every other row off the screen, and the error is read once. Carbon's
+   modal: a square layer over the overlay, its title in heading-03. */
+.text-dialog { background: var(--panel-2); color: var(--text); border: 0; border-radius: 0; padding: 16px; width: min(768px, 92vw); }
+.text-dialog::backdrop { background: var(--overlay); }
+.text-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; font-size: 20px; font-weight: 400; line-height: 1.4; }
+.text-full { margin: 0; padding: 16px; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 65vh; overflow: auto; border: 0; border-radius: 0; background: var(--code-bg); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+/* A Package's entries: one chip per row, its columns aligned across the rows. */
+.entry-list { flex-direction: column; align-items: flex-start; }
+.entry-list .chip { display: flex; gap: 16px; align-items: baseline; font-family: var(--mono); white-space: normal; max-width: 100%; border-radius: 0; padding: 4px 8px; }
+.entry-list .platform { min-width: 110px; }
+.entry-list .size { min-width: 64px; text-align: right; }
+.entry-list .sha { user-select: all; word-break: break-all; }
+.entry-list .sig { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.entry-list .sig input { width: 22ch; font-family: var(--mono); font-size: 12px; }
+.dep-pkg-head { display: flex; gap: 16px; align-items: center; margin: 8px 0 4px; }
+/* Carbon's gray tag. */
+.chip { display: inline-flex; align-items: center; min-height: 24px; background: var(--tag-gray-bg); color: var(--tag-gray-fg); border-radius: 12px; padding: 0 8px; font-size: 12px; letter-spacing: 0.32px; white-space: nowrap; }
+.chip.hue-blue { background: var(--hue-blue-bg); color: var(--hue-blue-fg); }
+.chip.hue-teal { background: var(--hue-teal-bg); color: var(--hue-teal-fg); }
+.chip.hue-pink { background: var(--hue-pink-bg); color: var(--hue-pink-fg); }
+.chip.hue-slate { background: var(--hue-slate-bg); color: var(--hue-slate-fg); }
+/* The count of a list value's further entries: a disc in the chip's own ink. */
+.chip-count {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: color-mix(in srgb, currentColor 18%, transparent); font-weight: 600;
+}
+code { font-family: var(--mono); font-size: 0.92em; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.empty { padding: 48px 0; text-align: center; color: var(--muted); }
+.err { color: var(--text-error); font-size: 12px; letter-spacing: 0.32px; margin-top: 4px; }
+
+/* A form field with its caption: what the field is, and whether the action needs it. The words
+   "required" and "optional" say it, so the marking does not rest on colour alone; the required
+   one takes the warning's hue. The field's width class sits on the label, which is the flex
+   item; the control inside fills it. */
+.config-fields .field, .config-actions .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px; }
+.config-fields .field.quarter { flex: 0 1 25%; min-width: 180px; }
+.config-fields .field.narrow { flex: 0 1 190px; min-width: 150px; }
+.config-fields .field > input, .config-fields .field > select, .config-actions .field > input { flex: none; width: 100%; min-width: 0; box-sizing: border-box; }
+.field-cap { display: block; font-size: 11px; color: var(--muted); }
+label.field-cap { margin-bottom: 4px; }
+.need { margin-left: 4px; font-weight: 400; }
+.need.req { font-weight: 600; color: var(--tag-yellow-fg); }

@@ -1,13 +1,24 @@
+# Editor-neutral formatting baseline, read by every major editor and by most CLI formatters.
+# .vscode/settings.json carries the same intent, but applies only inside VS Code — this file is
+# what a coding agent, a different editor, or a formatter run from the command line sees.
+#
+# It states only what is toolchain-independent. Once a language is chosen, its own formatter is
+# authoritative for that language's files: add a section here that agrees with the formatter's
+# configuration rather than one that contends with it.
+#
+# No 'max_line_length' is set on purpose. Prettier and others read it as a print width and would
+# reflow the hand-wrapped prose in the documentation; the wrapping in this repository is a
+# convention for humans, not a rule for a tool.
 root = true
 
 [*]
 charset = utf-8
 end_of_line = lf
-indent_size = 4
-indent_style = space
 insert_final_newline = true
 trim_trailing_whitespace = true
-
-[*.{json,md,yaml,yml}]
+indent_style = space
 indent_size = 2
-max_line_length = 120
+
+[*.md]
+# Two trailing spaces are a hard line break in Markdown — trimming them changes the rendering.
+trim_trailing_whitespace = false

@@ -1,0 +1,78 @@
+[package]
+name = "opamp"
+description = "The OpAMP communication layer: protobuf types generated from the specification, framing and body rules, and an agent's client and a server endpoint with their TLS and listener"
+# The Baseline's MAJOR.MINOR, and a patch number of the crate's own (ADR-0010) — not the product's
+# release number in `[workspace.package]`. A test fails when it disagrees with `BASELINE`.
+version = "0.20.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = true
+repository = "https://github.com/mbrigl/opamp-fleet"
+readme = "README.md"
+keywords = ["opamp", "opentelemetry", "protobuf", "agent-management"]
+categories = ["network-programming", "encoding"]
+include = ["build.rs", "src/**", "proto/**", "README.md", "LICENSE", "NOTICE"]
+
+# Neither side is on by default: without features this is the wire layer alone, and a program that
+# wants only the types pulls no web framework (ADR-0010).
+[features]
+client = ["dep:tokio", "dep:tracing", "dep:ring", "dep:tokio-tungstenite", "dep:futures-util", "dep:reqwest", "dep:rustls", "dep:webpki-roots"]
+server = ["dep:tokio", "dep:tracing", "dep:axum", "dep:axum-server", "dep:hyper", "dep:hyper-util", "dep:tokio-tungstenite", "dep:futures-util", "dep:rustls"]
+
+[dependencies]
+prost.workspace = true
+uuid.workspace = true
+# ADR-0010: the endpoint's gzip MUST, written once for both ends.
+flate2.workspace = true
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+# The reconnect jitter's randomness — the `ring` both ends already link (ADR-0013).
+ring = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+# The TLS both sides build from the material an application hands them (ADR-0010): rustls with
+# the ring provider, never a system library (ADR-0013).
+rustls = { workspace = true, optional = true }
+# The trust anchors a client uses when the application names no CA of its own.
+webpki-roots = { workspace = true, optional = true }
+# The server listener (ADR-0010): TLS termination with a handshake bound, and the hyper timer
+# without which the header-read bound of ADR-0013 silently does nothing.
+axum-server = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+# Generating certificates for the TLS tests, rather than pasting fixtures that expire.
+rcgen.workspace = true
+
+[[test]]
+name = "server_endpoint"
+required-features = ["server"]
+
+[[test]]
+name = "server_listen"
+required-features = ["server"]
+
+[[test]]
+name = "client_connection"
+required-features = ["client", "server"]
+
+# docs.rs shows every part, each marked with the feature it needs.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(docsrs)"] }
+
+[build-dependencies]
+prost-build.workspace = true
+protox.workspace = true

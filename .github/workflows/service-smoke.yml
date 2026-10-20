@@ -1,0 +1,52 @@
+name: Service smoke
+
+# The one thing every other test stands in for: the machine's *real* service manager (ADR-0019,
+# ADR-0018). `crates/fleet-agent/tests/service_smoke.rs` installs the Client as a system service, starts
+# it, kills its process, and asserts the manager brings it back — the restart a self-update depends
+# on and that no in-process stand-in can prove.
+#
+# Deliberately not on `push` or `pull_request`. It registers a system service, needs elevation, and
+# waits on timers; a merge must not hang on it, and a flake must not read as a broken change.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Saturday, well outside working hours in CET.
+    - cron: "0 3 * * 6"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: service smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Generous: the test waits out the restart delay several times over, and a hang should fail as
+    # a timeout rather than burn a runner hour.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows: `service-manager`'s `sc.exe` backend discards the restart policy, so the Client
+        # registers the SCM's recovery actions itself and reports `ServiceSpecific(10)` on exit so
+        # a self-update's exit reads as a failure rather than a clean stop. None of that is
+        # asserted anywhere else.
+        # Linux: the unit the Client writes itself (ADR-0042) — a re-registration keeps its
+        # account, the service keeps the privileges `sudo` and setuid helpers need, and systemd
+        # accepts the unit. The run step needs `sudo -E` there, which the Windows runner does not
+        # (its shell is already elevated).
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Built as its own step so a compile failure is not reported as a smoke-test failure.
+      - name: Build
+        run: cargo test -p fleet-agent --test service_smoke --locked --no-run
+      - name: Install, start, kill, restart, stop, uninstall
+        if: runner.os == 'Windows'
+        run: cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+      - name: Install, start, kill, restart, stop, uninstall; keep the account and the privileges
+        if: runner.os == 'Linux'
+        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1

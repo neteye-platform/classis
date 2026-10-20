@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // The package is `fleet-server`, the binary it produces is `server`.
+      "type": "lldb",
+      "request": "launch",
+      "name": "Server",
+      "cargo": {
+        "args": ["build", "--bin", "server", "--package", "fleet-server"],
+        "filter": { "name": "server", "kind": "bin" }
+      },
+      "args": ["--config", ".dev-pki/server.toml"],
+      "preLaunchTask": "dev pki",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      // The package is `fleet-agent`, the binary it produces is `supervisor` (ADR-0019):
+      // `--package` takes the first, `--bin` and the filter take the second.
+      "type": "lldb",
+      "request": "launch",
+      "name": "Supervisor",
+      "cargo": {
+        "args": ["build", "--bin", "supervisor", "--package", "fleet-agent"],
+        "filter": { "name": "supervisor", "kind": "bin" }
+      },
+      "args": ["--config", ".dev-pki/supervisor.toml"],
+      "preLaunchTask": "dev pki",
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Server + Supervisor",
+      "configurations": ["Server", "Supervisor"],
+      "stopAll": true
+    }
+  ]
+}

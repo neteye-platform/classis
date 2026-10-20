@@ -1,0 +1,50 @@
+# Dependabot version updates (https://docs.github.com/code-security/dependabot).
+#
+# This is the continuous, automatic half of dependency hygiene: Dependabot opens PRs to bump
+# dependencies on a schedule and — once "Dependabot security updates" is enabled in the repo's
+# Settings → Advanced Security — raises fix PRs for advisories between the weekly cargo-deny runs.
+# It complements .github/workflows/audit.yml, which is the hard gate that fails a build on a
+# vulnerability.
+version: 2
+updates:
+  # The Cargo workspace (opamp, server and client share one lockfile at the root) and the fuzz
+  # targets' own lockfile (fuzz/), in one entry: a group spans both directories, so a crate both
+  # lock is bumped in one PR instead of one per directory.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/"
+      - "/fuzz"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # One PR per week for the routine patch/minor bumps.
+      cargo-patch-minor:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      # The breaking bumps — for a 0.x crate that includes 0.21 → 0.23 — together in a second PR,
+      # reviewed apart from the routine one but not one PR per crate.
+      cargo-major:
+        applies-to: version-updates
+        update-types:
+          - "major"
+      # Fixes for advisories, whenever they come, in one PR rather than one per advisory.
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # The Actions the CI and release workflows use (ADR-0044). For a first-party action (actions/*,
+  # on its major tag) it raises the pull request for a new major; for a third-party action, pinned
+  # to a commit SHA with '# vX.Y.Z' beside it, it raises one for every release and rewrites the SHA
+  # and the comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -1,0 +1,453 @@
+{
+  "uid": "opamp-agents-logs-doris",
+  "title": "Fleet Agents — Logs (Doris)",
+  "description": "The Client's own log output, as OTLP log records.",
+  "tags": [
+    "clickhouse",
+    "doris",
+    "opamp"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "doris"
+        },
+        "description": "The Client's service.name.",
+        "query": "SELECT DISTINCT service_name FROM otel.otel_logs ORDER BY 1",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "definition": "SELECT DISTINCT service_name FROM otel.otel_logs ORDER BY 1"
+      },
+      {
+        "name": "level",
+        "label": "Level",
+        "type": "custom",
+        "query": "TRACE,DEBUG,INFO,WARN,ERROR",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "search",
+        "label": "Contains",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "description": "Case-insensitive substring of the log body. Empty matches everything."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Lines in window",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*)\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'\n  AND severity_text REGEXP '${level:regex}'",
+          "format": "table"
+        }
+      ],
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Errors in window",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT SUM(CASE WHEN severity_text = 'ERROR' THEN 1 ELSE 0 END)\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'",
+          "format": "table"
+        }
+      ],
+      "description": "Not filtered by the level picker on purpose — an error count that hides when you filter to INFO would be worse than none.",
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Warnings in window",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT SUM(CASE WHEN severity_text = 'WARN' THEN 1 ELSE 0 END)\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'",
+          "format": "table"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Clients logging",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT service_instance_id)\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'",
+          "format": "table"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume by level",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`, severity_text AS level, COUNT(*) AS lines\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'\n  AND severity_text REGEXP '${level:regex}'\nGROUP BY `time`, level\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume by client",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       service_instance_id AS agent,\n       COUNT(*) AS lines\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'\n  AND severity_text REGEXP '${level:regex}'\nGROUP BY `time`, agent\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 6
+    },
+    {
+      "type": "logs",
+      "title": "Log",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp,\n       body,\n       severity_text AS level,\n       service_name AS service,\n       service_instance_id AS agent,\n       CAST(log_attributes['code.namespace'] AS STRING) AS target,\n       trace_id\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\n  AND service_name REGEXP '${service:regex}'\n  AND severity_text REGEXP '${level:regex}'\n  AND LOCATE(LOWER('${search}'), LOWER(body)) > 0\nORDER BY timestamp DESC\nLIMIT 1000",
+          "format": "table"
+        }
+      ],
+      "id": 7
+    }
+  ]
+}

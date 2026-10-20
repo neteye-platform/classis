@@ -1,0 +1,76 @@
+name: CI
+
+# What the Definition of Done (AGENTS.md §5) asks beyond Linux, on the stack of ADR-0010: the
+# Client checked and tested on Windows and macOS, and release builds of the Client on every
+# platform it ships on — Linux, Windows, and macOS — and of the Server on Linux only
+# (docs/SPECIFICATION.md). Build, test and lint on Linux are the 'rust' job of checks.yml, which
+# runs scripts/check-rust.sh as the local gate does. The commands MUST match README.md →
+# "Build, Test & Run", the single source of truth.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ADR-0019: the client carries platform-specific service paths (the Windows SCM shim, launchd
+  # semantics) that a Linux-only lint never compiles. Keep them honest: clippy and tests on the
+  # real platforms. Actual service registration still needs the manual smoke checklist
+  # (README.md → "Running as an OS service") — CI runners cannot exercise systemd/launchd/SCM.
+  #
+  # Both are required status checks (README.md → "Repository settings"). A ruleset names a check
+  # by the job's rendered name, so these two are plain jobs without a 'name:' or a matrix: the
+  # check is then called by the job id, which scripts/check-docs.sh compares with the README.
+  # fleet-tools too: the release packs every Client archive with `opamp-fleetctl`, Windows
+  # included, and publishes it for macOS (ADR-0028).
+  client-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Clippy
+        run: cargo clippy -p fleet-agent -p fleet-tools --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test -p fleet-agent --locked
+
+  client-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Clippy
+        run: cargo clippy -p fleet-agent -p fleet-tools --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test -p fleet-agent --locked
+
+  # The Client ships on Linux, macOS, and Windows; the Server on Linux only.
+  release-build:
+    name: release (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: client-linux, os: ubuntu-latest, package: fleet-agent, binary: target/release/supervisor }
+          - { name: client-windows, os: windows-latest, package: fleet-agent, binary: target/release/supervisor.exe }
+          - { name: client-macos, os: macos-latest, package: fleet-agent, binary: target/release/supervisor }
+          - { name: server-linux, os: ubuntu-latest, package: fleet-server, binary: target/release/server }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build (release)
+        run: cargo build -p ${{ matrix.package }} --release --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error

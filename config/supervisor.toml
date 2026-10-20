@@ -1,0 +1,333 @@
+# OpAMP Fleet Client configuration. Every setting is optional; the values shown are the
+# defaults. For development, scripts/dev-pki.sh writes a supervisor.toml with the certificates
+# a Client needs. Start with:
+# cargo run -p fleet-agent -- --config .dev-pki/supervisor.toml
+
+# The Server's OpAMP endpoint. The URL scheme selects the transport:
+#   wss:// → WebSocket (the default: Server pushes changes within seconds)
+#   https:// → plain HTTP polling (see poll_interval_secs)
+# Both are TLS 1.3. ws:// and http:// are accepted only to 127.0.0.1 or ::1; to any other host,
+# the name localhost included, the Client refuses to start.
+endpoint = "wss://127.0.0.1:4320/v1/opamp"
+
+# The Agent's service.instance.name — the operator's name for *this* Client, shown in the fleet UI
+# and matchable by a Selector. Its service.name is the constant type `supervisor`, the same on every
+# host, which is what a package or Configuration aimed at every Client matches. The default below is
+# a display name, not an identifier — give this one a name of yours: it is what tells Clients apart.
+name = "Supervisor Agent"
+
+# Poll interval of the plain-HTTP transport, in seconds (the protocol's default: 30).
+poll_interval_secs = 30
+
+# Heartbeat interval over the WebSocket transport, in seconds (the protocol's default: 30).
+# 0 disables heartbeats; on plain HTTP every poll already is the periodic report.
+heartbeat_interval_secs = 30
+
+# The largest OpAMP message accepted or sent, on either transport and in either direction — the
+# Supervisor Endpoint included. The protocol requires the limit and recommends this default; a
+# message past it is never sent, and an oversized one from the Server is refused.
+max_message_size_bytes = 67108864
+
+# Where the Client persists its instance_uid, the received remote configuration, and any
+# Server-offered connection settings. Persisted connection settings override
+# endpoint and the intervals above; delete <state_dir>/connection-settings.pb to revert.
+# A package for the Client itself is streamed to <state_dir>/packages/ first, so this
+# directory needs room for one agent binary.
+state_dir = "client-state"
+
+# The Client's own log on disk, written **only while it runs as a service** — in the
+# foreground it goes to stderr alone, because somebody is reading it there. It exists because the
+# Windows SCM discards a service's stderr, so a Client installed there had no readable log at all;
+# on Linux and macOS it duplicates what journalctl and `log show` already keep, so that "where are
+# the logs" has one answer on every platform. This is not the Client's own telemetry: that needs
+# a Server it can already reach, which is exactly what a start-up failure does not have.
+# It is the machine's — nothing here ever arrives from the Server.
+# [logging]
+# enabled = true            # false writes nothing; for a host whose platform already collects stderr
+# dir = "/var/log/opamp"    # default: <state_dir>/logs, which survives updates and `uninstall`
+# keep = 7                  # daily files kept, then deleted. A bound, not a switch: 0 is refused
+
+# Where the per-Supervisor directories live; the default is <state_dir>/supervisors.
+# Each Supervisor owns everything under its own directory — its identity, the received
+# configuration, its program/, and the artifact staging its updates go through:
+#
+#   <supervisor_dir>/<name>/instance-uid, remote-config.pb, config/, program/, packages/
+#
+# Set this when the programs must not live where the state does: /var/lib is often mounted
+# noexec, and it is sized for state rather than for a few hundred megabytes of Collector.
+# supervisor_dir = "/opt/opamp-fleet/supervisors"
+
+# Operator-defined attributes describing this *host*, reported by every Agent this Client presents
+# so the Server's Selectors can target them. They are what a fresh Agent carries into its very
+# first message, before the Server has ever seen it.
+#
+# To tag one Agent among several on this host, use a Server label instead (PUT
+# /api/v1/agents/<uid>/labels): it is keyed by that Agent's uid, matched by the same Selectors, and
+# takes effect without editing a file here. A label on this Client's own Agent holds for all of
+# its Agents.
+# [attributes]
+# env = "prod"
+
+# Optional Gateway Mode: this Client stands at a network boundary, accepts OpAMP from
+# other Clients, and folds them onto a small pool of upstream connections. It composes with the
+# [[supervisor]] blocks below — a host may supervise its own processes and gateway for others.
+#
+# upstream_connections is a CAP, not a count: connections are opened as Agents appear, so a Gateway
+# in front of three Agents holds three. Each Agent sticks to its connection while that lives.
+#
+# The Gateway makes no authentication decisions of its own — a downstream peer is admitted by its
+# handshake against client_ca_file, and the Gateway refuses only a certificate the Server revoked
+# and a package download the Server did not offer to the requesting host through it.
+# It forwards no Authorization header upstream. It admits nobody until the
+# operator marks its host as a Gateway on the Server (PUT /api/v1/hosts/<host>/gateway). Mutual
+# TLS is per hop: [gateway.tls] verifies the Agents connecting to *this* Client, while the identity
+# presented to the Server is the one in [tls] below. The endpoint above must be
+# ws:// or wss://, since a polling connection cannot carry the Server's pushes to the Agents behind
+# a Gateway.
+#
+# The Gateway fetches each package the Server hosts once, when it relays an offer of it, and serves
+# it on its listen address only to the hosts whose Agents it relayed that offer to. It
+# holds them under <state_dir>/gateway-packages, bounded by package_cache_bytes; an artifact larger
+# than that is not delivered through the Gateway.
+# [gateway]
+# listen = "0.0.0.0:4320"
+# upstream_connections = 10
+# package_cache_bytes = 10737418240  # 10 GiB, the default; 0 fails startup
+# [gateway.tls]
+# cert_file = "gateway.pem"
+# key_file = "gateway-key.pem"
+# client_ca_file = "client-ca.pem"   # the fleet's client CA — never a bootstrap CA: downstream
+#                                    # Agents travel upstream as members
+# bootstrap_ca_file = "bootstrap-ca.pem"  # optional: the public certificate of the Server's
+#                                         # [enrolment] bootstrap_ca_file, never its key; relays a
+#                                         # plain-HTTP enrolment request of a host behind it
+
+# TLS toward the Server. ca_file trusts a private CA; cert_file and key_file are this Client's
+# identity, and the Client refuses to start without one — the Server asks for it in the
+# handshake and admits by it alone. The Client sends no credential; a leftover [auth] section from
+# an earlier version is ignored, with one warning at startup, and can be deleted.
+# [tls]
+# ca_file = "ca.pem"          # replaces the built-in roots — the private-CA deployment
+# cert_file = "client.pem"    # this Client's certificate, or a BOOTSTRAP certificate to enrol with
+# key_file = "client-key.pem" # its private key; cert_file and key_file go together or not at all
+#
+# A certificate the Server issued outranks the one written here: the Client stores that pair in
+# <state_dir> as client-cert.pem and client-key.pem and prefers it. Deleting the stored pair reverts
+# to this one.
+#
+# Enrolment: a fresh host connects with a bootstrap certificate (from the Server's [enrolment]
+# bootstrap CA), sends a signing request for a key that never leaves this
+# host, and logs that key's fingerprint. An operator opens the Server's enrolment window and
+# approves the request with that fingerprint; the issued certificate arrives through the ordinary
+# offer flow and is used from then on, renewed the same way two thirds through its life.
+
+# Package verification. REQUIRED to take packages: every Server-offered package MUST
+# carry a valid Ed25519 signature over its artifact, and without a key this Client takes no
+# package at all — its own self-update included — and says so at startup. A [[supervisor]] block
+# takes package delivery by naming its program with a bare file name (see the blocks below);
+# *which* artifact it then receives is the Server's decision, expressed as that package's
+# Deployment — never a key in this file.
+# Generate a key and sign artifacts with the operator tool (`opamp-fleetctl package keygen`, then
+# `opamp-fleetctl package sign`): its keygen output is this value.
+#
+# A download goes to this Client's own Server origin — the scheme, host and port of its endpoint —
+# and nowhere else, every redirect hop included: every artifact is uploaded to the Server. There
+# is no list of other sources; a file still naming allowed_sources fails startup.
+#
+# self_update is the consent for the Server to replace *this Client's own* binary. **Absent — as
+# here — means the consent stands**: a Client the fleet cannot update is the one program
+# on the host that has to be patched by hand. It takes effect once verification_key is set. Write
+# `self_update = false` to withdraw it, and the Client's own Agent then declares no package
+# capability at all — no offer can reach it; the Supervisors still take theirs.
+#
+# The consent takes one package, named after this Client's own Agent type, `supervisor`, and the
+# name is not configurable: an offer under any other name is refused and reported, never applied.
+# This is one of two independent guards, and it is the one on this side of the wire — the Server
+# will not offer a package built for another Agent type either. Neither replaces the other: an
+# operator who typed a Collector artifact as `supervisor` gets past the Server, and this name is
+# what is left.
+#
+# What happens on an accepted offer: the artifact is verified like any other, staged as a new
+# version *beside* the running one in the versioned install layout, and proved by running
+# `supervisor self-check` on it before the `current` pointer moves. The process then exits and asks
+# the service manager to restart it — it does not restart itself. A marker in state_dir carries the
+# outcome across that restart: the new version commits itself once it reaches the Server, and one
+# that will not stay up is rolled back to its predecessor after three attempts.
+# [packages]
+# self_update = true                 # the default; false withdraws the consent entirely
+# verification_key = "<hex-encoded Ed25519 public key>"
+# archive_key = "the key an encrypted .7z was packed with"   # opens an encrypted
+#                          # artifact. One secret for the fleet — a single archive serves every
+#                          # Agent. The Server never learns this key; the artifact stays encrypted
+#                          # wherever it is stored and is opened only on the host that runs it.
+
+# ── Supervisor Mode ────────────────────────────────────────
+# Each [[supervisor]] block runs one Supervisor managing one local process; each appears to the
+# Server as its own Agent, all sharing this Client's one connection. Without any block, the
+# Client presents itself as a single Agent, as above.
+#
+# There are two kinds of Supervisor, `collector` and `command`. Both
+# know nothing about the agent they run, so their blocks say everything. A **wrapper** — a kind
+# that knows its agent, when a build carries one — has a block that says which host runs it and
+# little else. A key that a
+# wrapper supplies is refused by name rather than silently overridden, and the message says what
+# supplies the value now.
+#
+# This Client reports the kinds it carries as attributes of its own Agent
+# (supervisor.kind.collector = "true", one key per kind), so a Supervisor set the Server rolls out
+# can be aimed at the Clients that can actually run it.
+#
+# Timing is the fleet's policy first. These two apply to every Managed Process; a wrapped kind
+# (when a build carries one) corrects them where its agent demands it, and only
+# an unwrapped block may state its own.
+# [supervisors]
+# stop_timeout_secs = 10   # graceful-stop budget before the process is killed
+# apply_grace_secs = 3     # how long a restarted process must survive before a received
+#                          # configuration is acknowledged APPLIED (0 = acknowledge on start)
+# delivered_env = []       # environment names a Server-delivered block may set ("OTEL_*" for a
+#                          # prefix); never PATH, LD_* or DYLD_*
+# delivered_args = false   # whether a Server-delivered block may state its own arguments
+# remote_config_disabled = []   # Supervisor names whose Agents take no remote configuration and
+#                               # run only on the files placed in <supervisor_dir>/<name>/config/,
+#                               # e.g. ["otelcol"]; a delivered block must repeat their running
+#                               # block exactly
+# server_manages_set = true     # false: the Server offers this Client no Supervisor set, and the
+#                               # [[supervisor]] blocks below, including any a set wrote earlier,
+#                               # are the operator's alone; review them before switching it off
+#
+# How a block names its program — `binary` for a collector, `command` for a custom one — has one
+# shape: a **bare file name**. The program lives in <supervisor_dir>/<name>/program/, a directory
+# this Client creates and owns, which is what makes replacing it a rename this Client can make.
+# Every Supervisor therefore takes package updates; there is no second shape and no opt-out.
+#
+# An absolute path is refused at startup: the Client manages only programs it installs. To bring
+# an agent the machine already carries under management, repack it and upload it as a Set.
+# Anything in between — ./x, bin/x —
+# fails at startup rather than being guessed at, and a bare name is NOT searched for in $PATH; it
+# names a file in that one directory.
+#
+# Every block reports two names, and they answer different questions:
+#
+#   name           service.instance.name — *which* Agent this is. Yours, unique per block, also the
+#                  directory name, so it follows the usual name grammar (lowercase, digits, '-').
+#                  A Managed Process can never overwrite it.
+#   service_name   service.name — *what* this Agent is, the Agent type. Optional. A Managed Process
+#                  that reports its own type wins over it (a Collector with the opampextension
+#                  states the dist.name it was built with); with neither, the program's file name
+#                  is used. Unlike `name` it may be a reverse FQDN, as the protocol recommends.
+#
+# A Deployment aims at the type to reach every Agent of a kind, at the instance name to reach
+# exactly one:
+#
+#   curl -X PUT -H 'Content-Type: application/json' \
+#        -d '{"selector": {"service.instance.name": "edge-01"}}' \
+#        --cacert ca.pem https://<server>:4321/api/v1/deployments/edge-01
+
+# 1. A Collector WITH the opampextension — it reports its own description, health, and
+# effective configuration to the Supervisor Endpoint. The extension ships only in the Contrib
+# distribution, hence otelcol-contrib. Prebuilt distributions are published at
+# https://github.com/open-telemetry/opentelemetry-collector-releases/releases — one .tar.gz per
+# platform, uploadable as a package exactly as published; the binary inside is named after the
+# distribution (otelcol-contrib, otelcol), which is why `binary` below says the same.
+# Pin endpoint_port and make sure the configuration the
+# Server distributes carries the extension pointing at it:
+#
+#   extensions:
+#     opamp:
+#       server:
+#         ws:
+#           endpoint: ws://127.0.0.1:4321/v1/opamp
+#           tls:
+#             insecure: true
+#   service:
+#     extensions: [opamp]
+#
+# [[supervisor]]
+# type = "collector"
+# name = "otelcol-contrib"
+# binary = "otelcol-contrib"  # bare, so it lives in this Supervisor's program/ directory and
+#                          # takes binary updates from the Server:
+#                          # the artifact the Server selects for this Agent is verified, swapped
+#                          # over it, health-gated on apply_grace_secs, and rolled back if it will
+#                          # not stay up. *Which* artifact is the Server's decision — a Deployment
+#                          # aims it there (PUT /api/v1/deployments/<name>), so a rollout is aimed
+#                          # centrally instead of from this file.
+#                          # An artifact that is a .tar.gz is unpacked here: the member
+#                          # whose file name matches this one is what gets installed, so an
+#                          # upstream release can be uploaded exactly as published.
+#                          # Put the first copy there yourself; every later one arrives by package.
+# args = []                # extra arguments, appended after the --config flags
+# endpoint_port = 4321     # the Supervisor Endpoint on 127.0.0.1 the extension connects to
+# stop_timeout_secs = 10   # optional: overrides [supervisors] for this block. Only a kind that
+# apply_grace_secs = 3     # knows nothing about its agent takes these — a wrapper would hold the
+#                          # value instead, because how long an agent needs is the agent's
+#                          # property, not this host's.
+# [supervisor.env]         # optional environment for the process
+# OTLP_HTTP_ENDPOINT = "127.0.0.1:4318"
+
+# 2. A Collector WITHOUT the extension — the core distribution has no opampextension, so the
+# Supervisor observes it from the outside (spawn, exit, restart). endpoint_port stays unset:
+# the endpoint still comes up on an ephemeral port (it always does), nothing ever connects.
+# Every received config-map entry is written to <supervisor_dir>/<name>/config/ under its
+# Configuration's name and passed as its own --config; a change restarts the collector.
+# Named by a bare file name like every other program here, so this Collector too came from a
+# Server-offered package and is updated by the fleet.
+# [[supervisor]]
+# type = "collector"
+# name = "otelcol"
+# binary = "otelcol"
+# service_name = "otelcol"   # without the extension nothing reports a type, so state one here;
+#                            # left out, the program's file name ("otelcol") is used anyway.
+# [supervisor.env]           # optional environment for the process; same variable as in the
+#                            # block above, its own value here — the receiver port is offset so
+#                            # both collectors can run on one host (see config/examples/)
+# OTLP_HTTP_ENDPOINT = "127.0.0.1:14318"
+
+# 3. Any other process — a Foreign Agent under a generic "command" Custom Supervisor. The
+# process speaks no OpAMP, so the Supervisor observes it from the outside (spawn, exit,
+# restart). Every received config-map entry is written to <supervisor_dir>/<name>/config/
+# under its Configuration's name; point the program's own flag at that file and
+# the Supervisor restarts the process on a change so it re-reads it. Named by an absolute
+# path here, so it is the machine's program: installed and updated by whatever put it there,
+# never by the Server. A bare file name instead would put it in this Supervisor's own
+# program/ directory and consent to package delivery, like `binary` above.
+#
+# args and env values may use two placeholders naming this Supervisor's own directories, so
+# nothing has to be kept in sync with state_dir or supervisor_dir:
+#
+#   ${supervisor_dir}   <supervisor_dir>/<name>       — everything this Supervisor owns
+#   ${config_dir}       <supervisor_dir>/<name>/config — the written configuration entries
+#
+# Any other ${...} is passed to the process untouched, so an agent's own variable syntax keeps
+# working — which also means a misspelled placeholder is handed over rather than refused. The
+# program itself (command, binary) is never substituted: it is a bare file name, and that must be
+# readable in this file rather than assembled at startup.
+#
+# command is a bare file name and nothing else. The program lives in this Supervisor's own
+# program/ directory, where the Client installed it from a Server-offered package — an absolute
+# path is refused at startup, because the Client manages only programs it installs. To bring an
+# agent the machine already carries under management, repack it and upload it as a Set.
+# [[supervisor]]
+# type = "command"
+# name = "my-agent"
+# command = "my-agent"
+# args = ["--config", "${config_dir}/my-agent-conf"]
+# version_args = ["--version"]          # what it reports as service.version — and, for this kind,
+#                                       # the check run against a staged package before the
+#                                       # running program is stopped
+# [supervisor.env]                      # optional environment for the process
+# LOG_LEVEL = "info"
+#
+# The process starts in the directory its program lives in. There is no working_dir key: the
+# answer is always this Supervisor's own program/ (or its tree root), and the old default — the
+# directory the service manager happened to leave the Client in, usually / — was one nobody chose.
+#
+# There is no reload_signal key either. Whether a program re-reads its configuration on a signal
+# is the program's own convention, and a wrong one is invisible: a signal the process ignores
+# looks exactly like an apply that worked. An agent under this kind applies by restarting; an
+# agent whose in-place reload is worth having is an agent worth a kind of its own.
+#
+# To tag ONE Agent among several on this host, use a Server label (PUT /api/v1/agents/<uid>/
+# labels): keyed by that Agent's uid, matched by the same Selectors, and effective at once. The
+# [attributes] table at the top of this file still describes the *host*, and every Agent on it
+# carries those.

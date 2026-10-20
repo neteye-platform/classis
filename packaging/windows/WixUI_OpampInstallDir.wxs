@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WixUI_InstallDir with one page inserted (ADR-0019 clause 39):
+
+      WelcomeDlg → InstallDirDlg → EndpointDlg → VerifyReadyDlg
+
+  This is the customization WiX documents for adding a dialog to a built-in set: copy the fragment
+  from the toolset's own WixUI_InstallDir.wxs and re-point the navigation. It is a copy on purpose —
+  overriding a stock dialog set's Publish rows in place depends on ControlEvent ordering that the
+  set is free to renumber, and a wrong guess there is a wizard that silently skips a page.
+
+  Two departures from the original, both deliberate:
+
+    * **No LicenseAgreementDlg.** Apache-2.0 requires no click-through, and the dialog needs the
+      license as RTF — a second copy of LICENSE, in a format nothing else here uses, that would have
+      to be kept in sync. WelcomeDlg goes straight to InstallDirDlg, which is the removal WiX's own
+      customization guide gives as its worked example.
+    * **The x64 CheckTargetPath rows are inlined.** The toolset generates those per architecture
+      from a `?foreach?`; this package ships one architecture (ADR-0019 keeps Windows on arm64 out),
+      so the one variant is written out rather than generated.
+
+  Everything else — the dialog refs, the browse plumbing, the maintenance and patch paths — is the
+  toolset's, unchanged, and must stay that way: these rows are load-bearing for dialogs this file
+  does not define.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI Id="WixUI_OpampInstallDir">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <DialogRef Id="EndpointDlg" />
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+      <!-- Straight past the licence page, which this set does not use. -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="CheckTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="3" />
+      <!-- The one re-pointed row: the directory page hands over to the endpoint page. -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="EndpointDlg" Order="4" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+
+      <Publish Dialog="BrowseDlg" Control="OK" Event="CheckTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SetTargetPath" Value="[_BrowseProperty]" Order="3" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="EndDialog" Value="Return" Order="4" />
+
+      <!-- The inserted page's own navigation. -->
+      <Publish Dialog="EndpointDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+      <Publish Dialog="EndpointDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+
+      <!-- Back from the confirmation lands on the endpoint page, not on the directory page. -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="EndpointDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+
+      <Property Id="ARPNOMODIFY" Value="1" />
+    </UI>
+
+    <UIRef Id="WixUI_Common" />
+  </Fragment>
+</Wix>

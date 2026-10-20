@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The one dialog this installer adds to the stock set (ADR-0019 clause 39): where the Server is, and
+  whether the fleet may update this Client itself (ADR-0018).
+
+  Geometry, control ids and button positions are InstallDirDlg's, so the page it follows and this
+  one are the same page with a different field. The `!(loc.…)` strings resolve out of the WiX UI
+  extension's own localization, which is already in the build.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI>
+      <Dialog Id="EndpointDlg" Width="370" Height="270" Title="!(loc.InstallDirDlg_Title)">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="373" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="373" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Server endpoint" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Which Server this Client reports to." />
+
+        <Control Id="EndpointLabel" Type="Text" X="20" Y="52" Width="320" Height="32" NoPrefix="yes"
+                 Text="OpAMP endpoint — the scheme selects the transport. The prefilled value is the local development Server; replace it with your Server's endpoint, for example wss://fleet.example.com/v1/opamp, or clear it to configure the Client after the install." />
+        <Control Id="EndpointEdit" Type="Edit" X="20" Y="86" Width="320" Height="18" Property="ENDPOINT" />
+
+        <!--
+          Checked by default (ADR-0018). The box is checked whenever SELFUPDATE is non-empty, and
+          clearing it empties the property — which is what the package's SELFUPDATEFLAG condition
+          reads. The answer goes into supervisor.toml either way, so it is visible and editable on the
+          host afterwards rather than sunk into the installer.
+        -->
+        <Control Id="SelfUpdateCheck" Type="CheckBox" X="20" Y="112" Width="320" Height="12"
+                 Property="SELFUPDATE" CheckBoxValue="1"
+                 Text="Let the Server update this Client's own binary" />
+        <Control Id="SelfUpdateNote" Type="Text" X="33" Y="126" Width="307" Height="30" NoPrefix="yes"
+                 Text="This is how the fleet patches the Client itself; without it this host is the one machine you update by hand. The Client only ever takes a package named after itself — anything else is refused and reported." />
+
+        <!--
+          The client identity is not asked for (ADR-0019 clause 39): it is a pair of files the
+          operator puts on the host. The configuration lives under %ProgramData%, not in
+          INSTALLFOLDER (ADR-0019). No square brackets in the text: a control's Text is a formatted
+          string, and [name] would be replaced by the property of that name.
+        -->
+        <Control Id="IdentityNote" Type="Text" X="20" Y="160" Width="320" Height="44" NoPrefix="yes"
+                 Text="The client certificate and its key — a bootstrap certificate to enrol with, or one already issued — are files you put on this host. Name them as cert_file and key_file in the tls section of %ProgramData%\opamp-fleet\supervisor.toml afterwards, or run &quot;supervisor service config&quot; from an elevated prompt to enrol this host." />
+
+        <Control Id="StartNote" Type="Text" X="20" Y="207" Width="320" Height="25" NoPrefix="yes"
+                 Text="The service is registered but not started, so that a Client which is not yet fully configured never runs against the wrong Server." />
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>

@@ -1,0 +1,65 @@
+[package]
+name = "fleet-tools"
+description = "opamp-fleetctl, the OpAMP Fleet operator tool: package artifacts and the fleet's certificates (ADR-0028)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# One binary, `opamp-fleetctl`, and no library: nothing in this workspace depends on this crate —
+# the arrow points the other way (ADR-0028 clause 16, ADR-0010).
+[[bin]]
+name = "opamp-fleetctl"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+# The ring provider every binary installs at startup (ADR-0010, ADR-0013).
+opamp = { workspace = true, features = ["client"] }
+# ADR-0010: the Client's own `archive` — its 7z Unix-mode convention, used when packing, and its
+# unpackers, used by the tests to open what these tools produce. Checking an artifact against the
+# code that will install it is the property worth asserting, and it is why these tools live in the
+# same workspace as the Client rather than beside it.
+fleet-agent = { path = "../fleet-agent" }
+fleet-core.workspace = true
+# ADR-0026: `pack` writes the containers a Client can open, so it needs the *writers* — `compress`
+# for 7z, and the gzip/tar pair for `.tar.gz` and for the tree `opamp-fleetctl package fetch`
+# repacks.
+sevenz-rust2 = { workspace = true, features = ["compress"] }
+flate2.workspace = true
+tar.workspace = true
+# ADR-0026: package signatures are raw Ed25519 over the artifact bytes; `keygen`/`sign` produce
+# exactly what the Client verifies.
+ring.workspace = true
+sha2.workspace = true
+# Every hash, key, and signature these tools print is hex — the form the REST API and
+# `supervisor.toml` take them in.
+hex.workspace = true
+# ADR-0010: `opamp-fleetctl package fetch` asks which agent, which version, and which platforms. The
+# Client needs the same crate for its interactive install (ADR-0019), so this is one workspace
+# dependency serving two crates rather than a second prompt library.
+dialoguer.workspace = true
+# ADR-0028: the `pki` commands make the fleet's certificates with rcgen, on the dates `time` speaks,
+# and read a certificate's end back with x509-parser — the crates the Server's client CA uses.
+rcgen.workspace = true
+time.workspace = true
+x509-parser.workspace = true
+# The paths the fragments name, quoted as TOML strings.
+toml.workspace = true
+# Listing releases and downloading artifacts. TLS is rustls/ring, as everywhere (ADR-0013) — the
+# provider is installed at startup through the Client's own helper, since `rustls-no-provider`
+# refuses to build a client without one.
+reqwest.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+# ADR-0027: the signing file is read strictly — unknown fields refused — which derive states in
+# one line per type rather than in hand-written checks over a `serde_json::Value`.
+serde.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# ADR-0028: the end-to-end test runs the real Server and the real Client in-process on what
+# `pki init` wrote, reading the fragments as their configuration files are read.
+fleet-server = { path = "../fleet-server" }

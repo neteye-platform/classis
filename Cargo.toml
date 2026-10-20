@@ -1,0 +1,204 @@
+# Cargo workspace (ADR-0010): the Server and the Client are two binaries sharing one wire layer
+# (`opamp`, publishable, with the client and the server behind features — ADR-0010) and
+# the project's own common code (`fleet-core`). One workspace, one lockfile, one pinned toolchain (`rust-toolchain.toml`), so both ends
+# resolve the same compiler and dependency versions and cannot drift apart on the wire format.
+[workspace]
+resolver = "2"
+members = ["crates/opamp", "crates/fleet-core", "crates/fleet-server", "crates/fleet-agent", "crates/fleet-tools"]
+
+[workspace.package]
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+# Versions are pinned once here and referenced from each crate with `<dep>.workspace = true`.
+[workspace.dependencies]
+opamp = { path = "crates/opamp", version = "0.20" }
+fleet-core = { path = "crates/fleet-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "io-util", "process"] }
+axum = "0.8"
+prost = "0.14"
+prost-build = "0.14"
+# Pure-Rust protobuf compilation — no system protoc anywhere in the build chain (ADR-0011).
+protox = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+# Format-preserving TOML editing (ADR-0017): rewriting `client.toml`'s `[[supervisor]]` blocks
+# must not destroy the operator's comments and layout in the rest of the file.
+toml_edit = "0.25"
+futures-util = "0.3"
+tracing = "0.1"
+# `registry` is what a layered subscriber composes on: the OTLP log bridge needs a reloadable slot
+# in it, because the destination cannot exist until the Server names one (ADR-0016). The `reload`
+# module itself is unconditional in 0.3.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+# The rolling file the Client writes while it runs as a service (ADR-0019) — the Windows SCM
+# discards a service's stderr, so without this a Client installed there has no readable log at all.
+# `tokio-rs/tracing`'s own appender, so the rotation lives beside the logging stack rather than
+# being hand-written inside the component whose job is to explain failures.
+tracing-appender = "0.2"
+sha2 = "0.11"
+hex = "0.4"
+uuid = { version = "1", features = ["v7"] }
+# Decoding gzip request bodies on the plain-HTTP transport — a Baseline MUST (ADR-0013) — and,
+# on the Client, the gzip layer of a `.tar.gz` package artifact (ADR-0026).
+flate2 = "1"
+# Opening a `.7z` package artifact, encrypted or not (ADR-0026). Pure Rust; default features are
+# off because they pull `bzip2`, which links a *system* library — `aes256` is the RustCrypto AES
+# this needs, and LZMA/LZMA2 decoding is in the base. That keeps what ADR-0011 and ADR-0013
+# actually secured: no system dependency, no cmake, no `protoc`. This build is not free of C —
+# `ring` compiles C and assembly in its build script, so a C compiler is required either way
+# (ADR-0021).
+# `compress` adds the *writer*, which is behind that one feature in its entirety: it is what lets
+# `opamp-fleetctl package pack` build the artifact an operator has otherwise no supported way to
+# produce. Only `crates/fleet-tools` and the Client's own tests ask for it (ADR-0010); the
+# Client daemon never encodes, and does not enable it.
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["aes256"] }
+# Reading a `.zip` package artifact (ADR-0026 clause 66) — the container the GLPI Agent's portable Windows
+# build is published in. Default features pull C-binding codecs (bzip2, xz, zstd), so only
+# `deflate` is taken, which decompresses on the `flate2`/`miniz_oxide` chain already present;
+# reading stays pure Rust (ADR-0011, ADR-0013). Read-only and unencrypted: the Client never
+# writes a zip, and a confidential artifact is a `.7z` (ADR-0026).
+zip = { version = "9", default-features = false, features = ["deflate"] }
+# Reading the tar inside a `.tar.gz` package artifact (ADR-0026). Pure Rust and no system library,
+# which is what ADR-0011 and ADR-0013 keep this build free of; the Client extracts one member and
+# never writes a path the archive chose.
+tar = "0.4"
+# Encoding Basic credentials into their Authorization header value (ADR-0021).
+base64 = "0.23"
+# Constant-time credential comparison on the Server (ADR-0021).
+constant_time_eq = "0.6"
+# kill(2) for the graceful SIGTERM stop of Managed Processes (ADR-0017). Unix-only.
+libc = "0.2"
+# The Client's WebSocket transport; rustls enables `wss://` (ADR-0013).
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+# The Client's plain-HTTP(S) polling transport (ADR-0013); `json` serves the REST-API tests.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip", "json"] }
+# TLS via rustls with the *ring* provider — no system OpenSSL and no cmake/aws-lc build (ADR-0013).
+# The provider is installed once at each binary's startup.
+# `tls12` stays enabled because reqwest requires it; TLS 1.3 alone is enforced where the provider and
+# every configuration are built (`opamp::tls`, ADR-0010).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# Ed25519 verification of downloaded package artifacts (ADR-0026) — the same ring already vendored
+# for TLS, used directly, so no new crypto backend enters the build.
+ring = "0.17"
+# Operators' Basic passwords are kept as Argon2id hashes, never in clear (ADR-0021); the
+# RustCrypto implementation, pure Rust, no system library.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "password-hash"] }
+# The client-certificate CSR flow (ADR-0021): the Client produces the request, the Server signs it
+# as a local CA. Pinned to the `ring` backend — the provider ADR-0013 already installs, whose C is
+# already compiled in this build — rather than `aws_lc_rs`, which would add cmake and more C.
+# `x509-parser` is what reads a CSR back, and a certificate's validity for the renewal window.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem", "x509-parser"] }
+# The dates rcgen speaks in. It takes and returns `time::OffsetDateTime` for a certificate's
+# validity but re-exports none of it, so "now plus ninety days" needs the crate itself — already in
+# the tree as rcgen's own dependency, and preferable to hand-rolling calendar arithmetic.
+time = { version = "0.3", default-features = false, features = ["std"] }
+# Reading back the validity of the certificate the Client holds, which is what decides when to
+# renew (ADR-0021). rcgen parses X.509 only behind a private, test-only path, so this is the
+# public way in — and it is the very parser rcgen itself uses, already in the tree.
+x509-parser = "0.18"
+# The bootstrap certificate as a password-protected PKCS#12 file (ADR-0029): the Server writes it,
+# the Client reads it. Pure Rust on the RustCrypto crates, for the password-based encryption only;
+# the TLS handshake stays on ring. Pinned exactly, and without its default `pbes1` feature, so the
+# legacy RC2 and 3DES schemes are not linked. `pkcs12`, `pkcs5` and `der` read the file's structure,
+# so the Client refuses what `p12-keystore` would accept beyond PBES2 with PBKDF2-HMAC-SHA-2 and
+# AES-CBC under a SHA-2 MAC — the same versions it already pulls in.
+p12-keystore = { version = "=0.4.1", default-features = false }
+pkcs12 = "=0.2.0-pre.0"
+pkcs5 = { version = "0.8", features = ["pbes2"] }
+der = "0.8"
+# The Agent's own telemetry (ADR-0016): the standard's own implementation, not a second copy of its
+# schema. `http-proto` is the OTLP/HTTP protobuf encoding the Baseline's destination_endpoint
+# requires; `reqwest-client` replaces the default *blocking* client, which would stall a tokio
+# worker; `grpc-tonic` is deliberately absent, since the schema permits no gRPC destination here.
+opentelemetry = { version = "0.33", features = ["trace", "metrics", "logs"] }
+opentelemetry_sdk = { version = "0.33", features = ["trace", "metrics", "logs", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-client", "trace", "metrics", "logs"] }
+# Metric and attribute names from the standard rather than string literals of our own (ADR-0016).
+# `semconv_experimental` is needed because the *process* metrics the Baseline points at — CPU and
+# memory of the Agent's process — are still experimental upstream. Taking them from here anyway is
+# the point: an experimental name that moves becomes a compile error on the next version bump,
+# where a string literal would quietly keep emitting the old one.
+opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
+# The standard bridge from this Client's existing `tracing` output to OTLP log records (ADR-0016).
+opentelemetry-appender-tracing = "0.33"
+# The other half of that bridge (ADR-0016): the appender above converts `tracing` *events* and says
+# so itself — this converts `tracing` *spans* into OpenTelemetry spans, which is what makes the
+# `own_traces` exporter have anything to export. Numbered one release ahead of the OTel crates it
+# binds to, so `0.34` is the one built against `opentelemetry` `0.33`; that pairing is a decision
+# (ADR-0016 clause 11), not a range to widen. It is also what gives the exported log records their
+# TraceId: entering a span activates its OpenTelemetry context, which is where the appender reads
+# the correlation from — the reason its own `experimental_use_tracing_span_context` could be dropped.
+tracing-opentelemetry = "0.34"
+# The OTLP exporters' HTTP client trait. Both crates are already compiled into this binary through
+# `opentelemetry-otlp`; declaring them directly adds no supply chain, it only makes the trait
+# nameable so the exporters can be handed a client bound to this process's Tokio runtime — see
+# `client/src/telemetry.rs` for why that binding is necessary.
+opentelemetry-http = { version = "0.33", default-features = false, features = ["reqwest"] }
+async-trait = "0.1"
+
+# Process CPU and memory for a pid on Linux, macOS, and Windows — the one gap the SDK leaves, and
+# three platform APIs not worth hand-rolling (ADR-0016). Pure Rust over libc.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# The built-in root store, for the one case the transports' own defaults cannot cover: a Client
+# presenting a client certificate (ADR-0021) to a Server with a publicly trusted one, which needs
+# a rustls config built by hand. Data, not code — and already in the tree via the TLS stack.
+webpki-roots = "1"
+# Server-side TLS listener; `-no-provider` so it uses the ring provider we install, not aws-lc-rs.
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+# The hyper timer the HTTP/1 header-read timeout needs to exist at all (ADR-0013): hyper defaults
+# that timeout to 30 seconds but resolves it to *nothing* while no `Timer` is installed, and
+# neither axum nor axum-server installs one. `tokio` is the only feature asked for — it is what
+# `rt::TokioTimer` sits behind. The crate is already in the tree as axum's own dependency, so this
+# adds an entry to a manifest and no code to either binary.
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+# The upgrade `opamp` takes a WebSocket over with, so it reads the frames itself (ADR-0010). Already
+# in the tree as axum's own dependency, with these features.
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+# Code-first OpenAPI for the REST API (ADR-0023): the document is derived from the registered
+# routes and schemas at compile time, so contract and behaviour cannot drift.
+utoipa = "6"
+utoipa-axum = "0.3"
+# Reads the repository in build.rs to compute the baked-in version (ADR-0012). Build-dependency
+# only — nothing of it ships in a binary. Default features off: no HTTPS/SSH transports, the
+# build script only opens the local checkout.
+git2 = { version = "0.21", default-features = false }
+# The Client's subcommand CLI (ADR-0019). No `env` feature: the Client is file-configured
+# (ADR-0010), never configured through environment variables.
+clap = { version = "4", features = ["derive"] }
+# Cross-platform service lifecycle — systemd, launchd, and the Windows SCM behind one API
+# (ADR-0019). Pulls no TLS/crypto backends, so the rustls/ring-only constraint (ADR-0013) holds.
+service-manager = "0.11"
+# The questionnaire of `service install --interactive` and `service config` (ADR-0019 clause
+# 21): validated answers, defaults and a yes/no confirmation, the same on three operating systems.
+# `password` is the one feature: the password of a `bootstrap.p12` is asked with input hidden
+# (ADR-0029), and its one dependency, `zeroize`, is already in the tree. It pulls no TLS/crypto
+# backend, so ADR-0013 holds.
+dialoguer = { version = "0.12", default-features = false, features = ["password"] }
+# The Windows-only SCM runtime shim (ADR-0019): status reporting and the stop control handler,
+# without which the SCM kills the service with error 1053. Compiled on Windows targets only.
+windows-service = "0.8"
+
+# The key derivations of the bootstrap PKCS#12 file (ADR-0029) run 600 000 iterations: unoptimized,
+# a test that seals and opens one file waits seconds. The crates their loops are compiled in are
+# optimized in the dev profile too; nothing else is.
+[profile.dev.package]
+p12-keystore.opt-level = 3
+pkcs12.opt-level = 3
+pkcs5.opt-level = 3
+pbkdf2.opt-level = 3
+hmac.opt-level = 3
+sha2.opt-level = 3
+digest.opt-level = 3
+block-buffer.opt-level = 3
+aes.opt-level = 3
+cbc.opt-level = 3
+
+# A release build checks integer arithmetic as a debug build does: an overflowing length, index or
+# deadline panics instead of wrapping into a wrong value.
+[profile.release]
+overflow-checks = true
