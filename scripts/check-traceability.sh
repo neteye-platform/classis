@@ -99,7 +99,9 @@ for f in "$ROOT/$ADR_DIR"/[0-9][0-9][0-9][0-9]-*.md; do
   name="$(basename "$f")"
   id="ADR-${name:0:4}"
   known_adrs+=("$id")
-  status_line="$(grep -m1 -F '**Status:**' "$f")"
+  # The field wraps like any other line; a continuation line is indented.
+  status_line="$(awk 'index($0, "- **Status:**") == 1 { f = 1; print; next }
+    f && /^[[:space:]]+[^[:space:]]/ { print; next } f { exit }' "$f")"
   case "$status_line" in
     *🟢*)
       accepted+=("$id")

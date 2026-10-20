@@ -151,11 +151,16 @@ table_cell() {
   awk -F'|' -v n="$1" '{ c = $(n + 1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", c); print c }'
 }
 
-# applies_to_of <adr file> — the content of its '**Applies to:**' header line, trimmed; empty
-# when the line is missing or blank.
+# applies_to_of <adr file> — the content of its '**Applies to:**' header field, wrapped lines
+# joined by one space and trimmed; empty when the field is missing or blank.
 applies_to_of() {
-  grep -m1 -F '**Applies to:**' "$1" | sed -E 's/^.*\*\*Applies to:\*\*[[:space:]]*//; s/[[:space:]]+$//'
+  header_field "$1" 'Applies to' | tr -s '[:space:]' ' ' \
+    | sed -E 's/^.*\*\*Applies to:\*\*[[:space:]]*//; s/[[:space:]]+$//'
 }
+
+# status_of <adr file> — its '**Status:**' header field on one line, wrapped lines joined by one
+# space; empty when the field is missing.
+status_of() { header_field "$1" Status | tr -s '[:space:]' ' '; }
 
 # _contains <needle> <haystack...> — true if needle equals one of the arguments.
 _contains() {
@@ -212,7 +217,7 @@ is_doc_file() {
 # the rejection. Verifying either one's references would demand that the tree still contain what
 # the project decided against, so the reference checks below skip them.
 is_inactive_adr() {
-  [[ "$1" == "$ADR_DIR"/* ]] && grep -m1 -F '**Status:**' "$1" | grep -q '⚪\|🔴'
+  [[ "$1" == "$ADR_DIR"/* ]] && status_of "$1" | grep -q '⚪\|🔴'
 }
 
 check_adr_index() {
@@ -277,7 +282,7 @@ check_adr_index() {
       add_error "ADR index: lists '$f', but no such ADR file exists"
       continue
     fi
-    file_status="$(grep -m1 -F '**Status:**' "$ADR_DIR/$f" | first_status_emoji)"
+    file_status="$(status_of "$ADR_DIR/$f" | first_status_emoji)"
     if [[ -z "$file_status" ]]; then
       add_error "$f: no '**Status:**' line with a status emoji found"
     elif [[ "$file_status" != "$status" ]]; then
@@ -345,7 +350,7 @@ check_adr_headers() {
   needle="$(instruction_needle)"
   while IFS= read -r f; do
     base="$(basename "$f")"
-    line="$(grep -m1 -F '**Status:**' "$f")"
+    line="$(status_of "$f")"
     emoji="$(printf '%s' "$line" | first_status_emoji)"
     if [[ -n "$emoji" ]]; then
       count="$(printf '%s' "$line" | grep -oE '🟢|🟡|🔴|⚪' | wc -l | tr -d ' ')"
@@ -405,7 +410,7 @@ check_adr_supersessions() {
   while IFS= read -r f; do
     base="$(basename "$f")"
     nr="${base%%-*}"
-    line="$(grep -m1 -F '**Status:**' "$f")"
+    line="$(status_of "$f")"
 
     # Forward: every ADR this one claims to supersede — one, several whose decisions it
     # consolidates, or named clauses of one (ADR-0009) — must carry the matching status line: ⚪
@@ -414,7 +419,7 @@ check_adr_supersessions() {
       [[ -n "$target" ]] || continue
       target_file="$(find "$ADR_DIR" -maxdepth 1 -type f -name "$target-*.md" | head -n1)"
       [[ -n "$target_file" ]] || continue
-      target_line="$(grep -m1 -F '**Status:**' "$target_file")"
+      target_line="$(status_of "$target_file")"
       target_emoji="$(printf '%s' "$target_line" | first_status_emoji)"
       if ! grep -qx "$nr" <<<"$(superseding_numbers "$target_line")"; then
         add_error "$(basename "$target_file"): $base supersedes it, but its status line does not say 'superseded by ADR-$nr'"
@@ -900,7 +905,7 @@ check_inherited_adrs() {
   local f base
   while IFS= read -r f; do
     header_field "$f" Deciders | grep -qF 'NUC maintainer' || continue
-    [[ "$(grep -m1 -F '**Status:**' "$f" | first_status_emoji)" == "🟡" ]] || continue
+    [[ "$(status_of "$f" | first_status_emoji)" == "🟡" ]] || continue
     base="$(basename "$f")"
     add_error "$base: inherited from the template and still proposed after setup — accept it with your name in Deciders and the status flipped, or supersede it (docs/adr/README.md)"
   done < <(find "$ADR_DIR" -maxdepth 1 -type f -name '[0-9][0-9][0-9][0-9]-*.md' | sort)

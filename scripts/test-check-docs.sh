@@ -405,6 +405,23 @@ d="$(repo consolidation-wrapped-half)"
 consolidation "$d" no wrap
 expect fail "a wrapped Supersedes field, the name on the second line not flipped" "$d" "0002-decision.md: 0003-decision.md supersedes it"
 
+# A header field wraps at the line width like any other: the status and the Applies to text are
+# read across the continuation lines, joined by one space.
+d="$(repo status-wrapped)"
+consolidation "$d" yes
+sed -i 's|^- \*\*Status:\*\* ⚪ superseded by |- **Status:** ⚪ superseded by\n  |' "$d/docs/adr/0002-decision.md"
+expect pass "a Status field wrapped before the superseding ADR" "$d"
+
+d="$(repo applies-to-wrapped)"
+sed -i 's|^- \*\*Applies to:\*\* everything$|- **Applies to:** every part\n  of it|' "$d/docs/adr/0001-decision.md"
+sed -i 's/| everything |/| every part of it |/' "$d/docs/adr/README.md"
+expect pass "an Applies to field wrapped onto a second line" "$d"
+
+d="$(repo applies-to-wrapped-differs)"
+sed -i 's|^- \*\*Applies to:\*\* everything$|- **Applies to:** every part\n  of it|' "$d/docs/adr/0001-decision.md"
+sed -i 's/| everything |/| every part |/' "$d/docs/adr/README.md"
+expect fail "an Applies to field whose second line the index leaves out" "$d" "is 'every part' in the index but 'every part of it' in the file"
+
 # partial <dir> <status of ADR 1> <Supersedes entry suffix> — ADR 2 supersedes ADR 1, whole or by
 # clause (ADR-0009); ADR 1 carries the given status line, ADR 2 the given text after its link.
 partial() {
