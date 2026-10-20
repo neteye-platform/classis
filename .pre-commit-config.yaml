@@ -2,12 +2,18 @@
 repos:
   - repo: builtin
     hooks:
+      # Vendored bundles (Redoc and Shiki, the latter's SHA-256 pinned in scripts/vendor-shiki.lock)
+      # and fuzz seeds (inputs the fuzzer reads byte for byte) are kept as they came.
       - id: trailing-whitespace
+        exclude: &verbatim ^(crates/fleet-server/static/(redoc\.standalone|shiki)\.js|fuzz/seeds/.*)$
       - id: check-added-large-files
       - id: check-case-conflict
       - id: end-of-file-fixer
+        exclude: *verbatim
       - id: fix-byte-order-marker
+      # JSON with comments, as VS Code and the Dev Container specification read it.
       - id: check-json
+        exclude: ^(\.vscode/[^/]+|\.devcontainer/devcontainer)\.json$
       - id: check-json5
       - id: check-toml
       - id: check-yaml
@@ -17,7 +23,9 @@ repos:
       - id: mixed-line-ending
       - id: check-symlinks
       - id: check-merge-conflict
+      # A throwaway key the PEM fuzz target starts from, and a test that sets a PEM header alone.
       - id: detect-private-key
+        exclude: ^(fuzz/seeds/pem/ec-key|crates/fleet-agent/src/telemetry\.rs)$
       - id: check-executables-have-shebangs
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -39,7 +47,9 @@ repos:
   - repo: https://github.com/codespell-project/codespell
     rev: 57b21406f092110c18776e39b0bda50d37c945c8 # frozen: v2.4.3
     hooks:
+      # Vendored bundles and lockfiles are not prose; .codespellrc holds the words it must accept.
       - id: codespell
+        exclude: ^(crates/fleet-server/static/(redoc\.standalone|shiki)\.js|(fuzz/)?Cargo\.lock|scripts/vendor-shiki/package-lock\.json)$
 
   - repo: https://github.com/rhysd/actionlint
     rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # frozen: v1.7.12

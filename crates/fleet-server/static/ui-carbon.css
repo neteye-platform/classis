@@ -165,7 +165,7 @@ body {
 
 /* The shell header: Gray 100 in both themes, 48px, across the whole window, the product's name
    bold and what follows it in the helper grey on the same line. The shadow and the clip carry
-   its background past the gutter without touching the markup; the band re-declares the Gray
+   its background past the gutter without touching the markup; the band redeclares the Gray
    100 tokens its contents read, so they need no rules of their own. */
 .page-head {
   --text: #f4f4f4; --muted: #c6c6c6; --helper: #8d8d8d; --link: #78a9ff; --link-hover: #a6c8ff;

@@ -1,0 +1,6 @@
+[codespell]
+# Words that are right where they stand: a city in test certificates (Linz), identifiers and test
+# names (readded, readding, crasher, xdescribe), deliberate typos a test feeds a parser (comand,
+# endpont), names from other projects (NotIn, in-toto's .intoto, devlop, uptodate in a URL), a
+# country code (FO) and accepted spellings (unparseable, implementors).
+ignore-words-list = linz,readded,readding,crasher,xdescribe,comand,endpont,notin,intoto,devlop,uptodate,fo,unparseable,implementors
