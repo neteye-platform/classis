@@ -125,7 +125,11 @@ services:
         condition: service_healthy
     healthcheck:
       # Healthy once the FE reports this BE alive — the state a stream load and a query need.
-      test: ["CMD-SHELL", "mysql -uroot -h${DORIS_SUBNET_PREFIX:-10.250.0}.10 -P9030 -N -e 'SHOW BACKENDS' | grep -w ${DORIS_SUBNET_PREFIX:-10.250.0}.11 | grep -qw true"]
+      test:
+        - CMD-SHELL
+        - >-
+          mysql -uroot -h${DORIS_SUBNET_PREFIX:-10.250.0}.10 -P9030 -N -e 'SHOW BACKENDS'
+          | grep -w ${DORIS_SUBNET_PREFIX:-10.250.0}.11 | grep -qw true
       interval: 5s
       timeout: 5s
       retries: 60

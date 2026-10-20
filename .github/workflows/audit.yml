@@ -45,4 +45,3 @@ jobs:
       # The fuzz targets have a lockfile of their own (fuzz/Cargo.lock); the same gate holds.
       - name: cargo deny (fuzz targets)
         run: cargo deny --manifest-path fuzz/Cargo.toml check
-

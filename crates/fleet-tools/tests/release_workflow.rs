@@ -250,6 +250,12 @@ fn words_after<'w>(text: &'w str, prefix: &str) -> Vec<&'w str> {
         .collect()
 }
 
+/// The action a `uses:` value names, without its ref: the pin and its comment are ADR-0049's, and
+/// `scripts/check-action-refs.sh` holds them.
+fn action(uses: &str) -> &str {
+    uses.split_once('@').map_or(uses, |(action, _)| action)
+}
+
 /// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8).
 const PUBLISHED: [&str; 6] = [
     "*.tar.gz",
@@ -301,8 +307,9 @@ fn only_the_publish_job_may_attest() {
             line.strip_prefix("- uses: ")
                 .or_else(|| line.strip_prefix("uses: "))
         })
+        .map(action)
         .collect();
-    assert_eq!(uses, ["actions/download-artifact@v8", "actions/attest@v4"]);
+    assert_eq!(uses, ["actions/download-artifact", "actions/attest"]);
 
     // A dry run stops before it, so it attests nothing.
     assert!(
@@ -338,7 +345,7 @@ fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
 
     // One attestation, its subjects the files themselves: every asset and SHA256SUMS.
     let attest = step(publish, "Attest the assets");
-    assert!(attest.contains("uses: actions/attest@v4\n"), "{attest}");
+    assert!(attest.contains("uses: actions/attest@"), "{attest}");
     assert!(!attest.contains("subject-checksums"), "{attest}");
     let subjects: Vec<&str> = attest
         .split_once("subject-path: |\n")
@@ -409,8 +416,9 @@ fn the_sbom_job_writes_one_sbom_per_program_and_target_with_a_pinned_tool() {
         .lines()
         .map(str::trim)
         .filter_map(|line| line.strip_prefix("- uses: "))
+        .map(action)
         .collect();
-    assert_eq!(uses, ["actions/checkout@v7", "actions/upload-artifact@v7"]);
+    assert_eq!(uses, ["actions/checkout", "actions/upload-artifact"]);
 
     let write = step(sbom, "Write the SBOMs");
     for line in [
