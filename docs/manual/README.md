@@ -30,8 +30,6 @@ decides _whether_ it takes one at all).
 - **[`docs/CONFORMANCE.md`](../CONFORMANCE.md)** — how much of the OpAMP
   protocol each end implements, capability by capability, including what is
   deliberately missing.
-- **[`CHANGELOG.md`](../../CHANGELOG.md)** — what an upgrade needs edited or
-  moved before it will start.
 
 ## Before you start
 

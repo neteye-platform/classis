@@ -195,4 +195,5 @@ file does not state is not a rule of this project.
   human's to perform; removing it from the branch tip is cleanup, not
   remediation. Tell the human immediately.
 - No check enforces either rule. What the repository's configuration does about
-  secrets, and where it stops, is in [`SECURITY.md`](SECURITY.md).
+  secrets, and where it stops, is in
+  [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md#secrets).

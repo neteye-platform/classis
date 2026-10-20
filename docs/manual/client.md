@@ -2255,15 +2255,15 @@ Client builds no exporter and sends nothing.
 **The Client will not start.** Configuration errors are deliberately fatal and
 name the key. The ones you are most likely to meet:
 
-| Message about                                              | What to do                                                                                                                                                                                      |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accepts_packages` / `package` in a `[[supervisor]]` block | Both keys were removed. Delete them; every Agent consents to packages, and the Server's Deployment decides which artifact. See [`CHANGELOG.md`](../../CHANGELOG.md) for the per-host migration. |
-| a program that is not a bare file name                     | `binary`/`command` name a file in the Supervisor's own `program/` directory, never a path. See [How a block names its program](#how-a-block-names-its-program).                                 |
-| an unknown key                                             | Every key is checked; a typo is refused rather than ignored.                                                                                                                                    |
-| `[tls] cert_file and key_file are required`                | Give the Client its certificate and key: one the client CA issued, or a bootstrap certificate to [enrol](#enrolment-the-first-certificate) with.                                                |
-| an endpoint refused as plaintext                           | `ws://` and `http://` are accepted only to `127.0.0.1` or `::1`. Use `wss://` or `https://`, and set `[tls] ca_file` for a private CA.                                                          |
-| `[gateway.tls] is required`, or its `client_ca_file`       | A Gateway serves its Agents over mutual TLS only; give it `cert_file`, `key_file` and `client_ca_file`.                                                                                         |
-| `[packages] allowed_sources is removed`                    | The key no longer exists: a Client downloads only from its own Server's origin. Delete it.                                                                                                      |
+| Message about                                              | What to do                                                                                                                                                      |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accepts_packages` / `package` in a `[[supervisor]]` block | Both keys were removed. Delete them; every Agent consents to packages, and the Server's Deployment decides which artifact.                                      |
+| a program that is not a bare file name                     | `binary`/`command` name a file in the Supervisor's own `program/` directory, never a path. See [How a block names its program](#how-a-block-names-its-program). |
+| an unknown key                                             | Every key is checked; a typo is refused rather than ignored.                                                                                                    |
+| `[tls] cert_file and key_file are required`                | Give the Client its certificate and key: one the client CA issued, or a bootstrap certificate to [enrol](#enrolment-the-first-certificate) with.                |
+| an endpoint refused as plaintext                           | `ws://` and `http://` are accepted only to `127.0.0.1` or `::1`. Use `wss://` or `https://`, and set `[tls] ca_file` for a private CA.                          |
+| `[gateway.tls] is required`, or its `client_ca_file`       | A Gateway serves its Agents over mutual TLS only; give it `cert_file`, `key_file` and `client_ca_file`.                                                         |
+| `[packages] allowed_sources is removed`                    | The key no longer exists: a Client downloads only from its own Server's origin. Delete it.                                                                      |
 
 **A Foreign Agent runs but never gets new configuration.** Its command line is
 pointing somewhere the Client does not write. Use `${config_dir}` (see

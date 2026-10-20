@@ -436,7 +436,6 @@ service that will not start.
 
 ```text
 README.md             # overview & setup for humans
-CHANGELOG.md          # operator-facing changes: what an upgrade needs edited or moved
 AGENTS.md             # single source of truth for coding agents
 docs/manual/         # the user manual: setting up a fleet, then Server, Client, and the operator tools, option by option
 docs/SPECIFICATION.md # the specification: problem, goals, vocabulary
@@ -444,6 +443,7 @@ docs/GLOSSARY.md      # the vocabulary everyone uses, kept current inline
 docs/CONVENTIONS.md   # how this project writes what no check decides, kept current inline
 docs/ARCHITECTURE.md  # the system as it currently stands
 docs/CONFORMANCE.md   # OpAMP Protocol Baseline + capability conformance matrix
+docs/SECURITY-MODEL.md # the Dev Container, secrets, pinned actions, the fleet trust model, supported versions
 docs/HARDENING.md     # candidate hardening measures for the Client-Server link (a backlog, not decisions)
 docs/adr/             # Architecture Decision Records (+ template)
 crates/               # Cargo workspace: opamp (shared) · fleet-core · fleet-server · fleet-agent · fleet-tools (operator CLIs)
@@ -463,7 +463,7 @@ renovate.json         # Renovate: the organisation preset, with Cargo requiremen
 .agents/skills/       # the procedures of AGENTS.md as Agent Skills, one directory each (ADR-0005)
 .claude/CLAUDE.md     # pointer for Claude Code to read AGENTS.md
 .claude/skills/       # pointers (one symlink per skill) for Claude Code to read .agents/skills/
-.claude/settings.json # Claude Code permissions: deny reading .env files (see SECURITY.md)
+.claude/settings.json # Claude Code permissions: deny reading .env files (see docs/SECURITY-MODEL.md)
 ```
 
 ## Dev Container
