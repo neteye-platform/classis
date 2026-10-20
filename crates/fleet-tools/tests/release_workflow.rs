@@ -147,7 +147,7 @@ fn each_archive_is_named_like_the_clients_packed_by_the_tool_and_checksummed() {
         upload.contains("${{ steps.pack_tool.outputs.name }}.sha256"),
         "{upload}"
     );
-    assert!(workflow.contains("cat *.sha256 | sort -k2 > SHA256SUMS"));
+    assert!(workflow.contains("cat -- *.sha256 | sort -k2 > SHA256SUMS"));
     assert!(workflow.contains("*.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS"));
 
     // No installer carries it.
@@ -379,7 +379,7 @@ fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
     let release = step(publish, "Publish the release");
     assert!(release.contains("gh release create "), "{release}");
     let mut published = vec![PUBLISHED[0]];
-    published.extend(words_after(release, "*.tar.gz "));
+    published.extend(words_after(release, "-- *.tar.gz "));
     assert_eq!(published, PUBLISHED, "{release}");
 }
 

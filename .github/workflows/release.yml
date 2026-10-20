@@ -399,8 +399,11 @@ jobs:
           # 10), and no host was ever installed under that path.
           #
           # `-F`: these are literals, and a mid-pattern `$` is what regex dialects disagree on.
-          grep -qF 'rm -rf "$layout_root"' <<<"$scripts"
-          grep -qF 'rm -rf "$data_root"' <<<"$scripts"
+          # shellcheck disable=SC2016 # the `$` is the scriptlet's, not this shell's
+          {
+            grep -qF 'rm -rf "$layout_root"' <<<"$scripts"
+            grep -qF 'rm -rf "$data_root"' <<<"$scripts"
+          }
           # ADR-0042 clause 5: the account is created, a first registration names it, and the
           # package requires what creates it.
           grep -q 'useradd --system' <<<"$scripts"
@@ -483,8 +486,8 @@ jobs:
       - name: Collect the checksums
         run: |
           cd artifacts
-          cat *.sha256 | sort -k2 > SHA256SUMS
-          rm -f *.sha256
+          cat -- *.sha256 | sort -k2 > SHA256SUMS
+          rm -f -- *.sha256
           ls -l
       # ADR-0045: one SLSA build-provenance attestation over every published asset, SHA256SUMS
       # included, its digests computed from the files themselves.
@@ -670,4 +673,4 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.version }}" \
             --notes-file notes.md \
-            *.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS
+            -- *.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS
