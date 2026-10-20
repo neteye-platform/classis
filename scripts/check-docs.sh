@@ -83,8 +83,8 @@
 #      is silent.
 #  13. Template identity replaced: once TEMPLATE-SETUP.md is gone, none of the template's
 #      placeholders is left: the project name NUC in the README title and the Dev Container name,
-#      the template's repository in the README badge, the copyright holder in LICENSE, the
-#      security contact in SECURITY.md, and a CODEOWNERS with no active rule. Step 1 of the setup
+#      the template's repository in the README badge, the copyright holder in LICENSE, and the
+#      security contact in SECURITY.md. Step 1 of the setup
 #      replaces each; a placeholder that survives it describes the template, not the project. A
 #      file that does not exist has nothing to check.
 #  14. Template release named: README.md carries a '**Template release:**' line naming a
@@ -922,9 +922,6 @@ check_template_identity() {
   placeholder .devcontainer/devcontainer.json '"name": "NUC DevContainer"' "the Dev Container still carries the template's name"
   placeholder LICENSE '^Copyright\b.*\bMaintainer\b' "the copyright holder is still the placeholder; name the maintainer"
   placeholder SECURITY.md 'TODO: add a security contact' "the security contact is still the placeholder"
-  if [[ -f "$ROOT/.github/CODEOWNERS" ]] && ! grep -qE '^[^#[:space:]]' "$ROOT/.github/CODEOWNERS"; then
-    add_error ".github/CODEOWNERS: no active rule; name the code owner and uncomment the two rules"
-  fi
 }
 
 # Check 14 (see the header). The first matching line is read; a Markdown list marker before the

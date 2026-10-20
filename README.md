@@ -377,7 +377,7 @@ interop/              # the Go side of the interop check against opamp-go (ADR-0
 observability/        # the development observability stack — Collector, ClickHouse, Grafana — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
 .githooks/            # git hooks: refuse a commit on main and a push while the checks are red
-.github/              # CI workflows, Dependabot, issue & pull request templates, code owners
+.github/              # CI workflows, Dependabot, issue & pull request templates
 .devcontainer/        # Dev Container definition (base image + Features + the OTLP forwarder)
 .vscode/              # shared editor settings
 .editorconfig         # editor-neutral formatting baseline
@@ -456,7 +456,7 @@ Some of this project's rules cannot be enforced by files in the repository
 ([`AGENTS.md` §6](AGENTS.md#6-project-rules)). They are settings on the GitHub repository itself,
 configured once by a maintainer and worth re-checking after a repository move or transfer:
 
-- a **ruleset on `main`** that requires pull requests, requires the
+- a **ruleset on `main`** that requires pull requests with one approving review, requires the
   <!-- required-checks begin — compared with the workflow's jobs by scripts/check-docs.sh -->
   `docs`, `traceability`, `devcontainer`, `actions`, `sensors`, `shell`, `rust`,
   `client-windows`, and `client-macos`
@@ -464,11 +464,6 @@ configured once by a maintainer and worth re-checking after a repository move or
   jobs as required status checks — every job of the **Checks** workflow, and the Client's
   Windows and macOS jobs of the **CI** workflow (rulesets list checks by their job name) — and
   blocks force pushes and branch deletion;
-- enable **require a review from Code Owners** on that ruleset, so the two artifacts only a human
-  decides, [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) and everything under
-  [`docs/adr/`](docs/adr/) ([`AGENTS.md` §3](AGENTS.md#3-adr-rules)), cannot be merged without the
-  owner named in [`.github/CODEOWNERS`](.github/CODEOWNERS), which has to carry a real handle or
-  team for the requirement to mean anything;
 - enable **secret scanning with push protection**, the only mechanical backstop behind the secrets
   rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is otherwise carried by review alone;
 - enable **private vulnerability reporting** (see [`SECURITY.md`](SECURITY.md)).

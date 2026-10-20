@@ -35,14 +35,12 @@ security posture:
   which is a deliberate act, not a default.
 - **The specification and the decision record change only by human decision.** A change to
   [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) is a decision rather than an edit, and only a
-  human changes an ADR's status ([`AGENTS.md` §3](AGENTS.md#3-adr-rules)). The gate is
-  [`.github/CODEOWNERS`](.github/CODEOWNERS) together with the Code-Owner review requirement
-  listed under [**Repository settings**](README.md#repository-settings). It does not stop the
-  edit; it routes it to a human before it reaches `main`, and it holds for every agent alike.
-  Two limits are worth knowing. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is deliberately
-  not gated, because [§5](AGENTS.md#5-quality-bar--definition-of-done) requires it to change in
-  the same commit as the structure it describes. And a code owner GitHub does not know matches
-  nobody, so the file enforces nothing until it carries a real handle.
+  human changes an ADR's status ([`AGENTS.md` §3](AGENTS.md#3-adr-rules)). The gate is the
+  approving review that the ruleset on `main` requires of every pull request (see
+  [**Repository settings**](README.md#repository-settings)). It does not stop the edit; it routes
+  it to a human before it reaches `main`, and it holds for every agent alike. It is not specific to
+  these files: any reviewer with write access satisfies it, so whether a change to the
+  specification or an ADR is the decision of the right human is review only.
 
 ## Secrets
 
