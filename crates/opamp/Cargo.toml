@@ -12,7 +12,7 @@ repository = "https://github.com/mbrigl/opamp-fleet"
 readme = "README.md"
 keywords = ["opamp", "opentelemetry", "protobuf", "agent-management"]
 categories = ["network-programming", "encoding"]
-include = ["build.rs", "src/**", "proto/**", "README.md", "LICENSE", "NOTICE"]
+include = ["build.rs", "src/**", "proto/**", "README.md", "LICENSE-APACHE", "LICENSE-MIT", "NOTICE"]
 
 # Neither side is on by default: without features this is the wire layer alone, and a program that
 # wants only the types pulls no web framework (ADR-0010).

@@ -101,8 +101,8 @@ windows-service.workspace = true
 [package.metadata.deb]
 name = "opamp-fleet"
 maintainer = "Markus Brigl <markus.brigl@gmail.com>"
-copyright = "Copyright the OpAMP Fleet contributors. Licensed under the Apache License 2.0."
-license-file = ["../../LICENSE", "0"]
+copyright = "Copyright (c) 2026 Würth IT Italy S.r.l. Licensed under the MIT License or the Apache License, Version 2.0, at your option."
+license-file = ["../../LICENSE-APACHE", "0"]
 section = "admin"
 priority = "optional"
 extended-description = """\

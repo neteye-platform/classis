@@ -11,9 +11,9 @@
 
   Two departures from the original, both deliberate:
 
-    * **No LicenseAgreementDlg.** Apache-2.0 requires no click-through, and the dialog needs the
-      license as RTF — a second copy of LICENSE, in a format nothing else here uses, that would have
-      to be kept in sync. WelcomeDlg goes straight to InstallDirDlg, which is the removal WiX's own
+    * **No LicenseAgreementDlg.** Neither MIT nor Apache-2.0 requires a click-through, and the
+      dialog needs the license as RTF — a second copy of the license, in a format nothing else here
+      uses, that would have to be kept in sync. WelcomeDlg goes straight to InstallDirDlg, which is the removal WiX's own
       customization guide gives as its worked example.
     * **The x64 CheckTargetPath rows are inlined.** The toolset generates those per architecture
       from a `?foreach?`; this package ships one architecture (ADR-0019 keeps Windows on arm64 out),

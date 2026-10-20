@@ -10,7 +10,7 @@ members = ["crates/opamp", "crates/fleet-core", "crates/fleet-server", "crates/f
 version = "0.6.0"
 edition = "2021"
 rust-version = "1.99"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # Versions are pinned once here and referenced from each crate with `<dep>.workspace = true`.

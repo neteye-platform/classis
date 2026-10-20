@@ -198,6 +198,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A v
 
 ### Changed
 
+- **The licence is MIT OR Apache-2.0, held by Würth IT Italy S.r.l.** The project, the published
+  `opamp` crate and the packages are licensed under either licence, at the recipient's option.
+  `LICENSE` is replaced by `LICENSE-MIT` and `LICENSE-APACHE`, and the Debian package's copyright
+  file names the new holder. Nothing to change in a deployment.
 - **An enrolment request proves its bootstrap certificate**
   ([ADR-0039](docs/adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)).
   The Client adds a bootstrap proof to every enrolment request: the bootstrap certificate it

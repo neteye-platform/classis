@@ -1,7 +1,8 @@
 opamp — the OpAMP wire layer of OpAMP Fleet
-Copyright 2026 Markus Brigl
+Copyright (c) 2026 Würth IT Italy S.r.l.
 
-Licensed under the Apache License, Version 2.0 (see LICENSE).
+Licensed under the MIT License (LICENSE-MIT) or the Apache License, Version 2.0
+(LICENSE-APACHE), at your option.
 
 -------------------------------------------------------------------------------
 

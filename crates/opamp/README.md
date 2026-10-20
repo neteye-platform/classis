@@ -41,5 +41,5 @@ Server and Client are built on it.
 
 ## License
 
-Apache-2.0. The vendored schema is the OpenTelemetry Authors', under the same licence; see
-`NOTICE`.
+MIT OR Apache-2.0. The vendored schema is the OpenTelemetry Authors', under the Apache License,
+Version 2.0; see `NOTICE`.
