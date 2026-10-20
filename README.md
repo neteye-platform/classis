@@ -1,9 +1,9 @@
 # OpAMP Fleet
 
-[![Release](https://img.shields.io/github/v/release/mbrigl/opamp-fleet?display_name=release&label=release)](https://github.com/mbrigl/opamp-fleet/releases/latest)
-[![CI](https://github.com/mbrigl/opamp-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/mbrigl/opamp-fleet/actions/workflows/ci.yml)
-[![Checks](https://github.com/mbrigl/opamp-fleet/actions/workflows/checks.yml/badge.svg)](https://github.com/mbrigl/opamp-fleet/actions/workflows/checks.yml)
-[![Audit](https://github.com/mbrigl/opamp-fleet/actions/workflows/audit.yml/badge.svg)](https://github.com/mbrigl/opamp-fleet/actions/workflows/audit.yml)
+[![Release](https://img.shields.io/github/v/release/neteye-platform/classis?display_name=release&label=release)](https://github.com/neteye-platform/classis/releases/latest)
+[![CI](https://github.com/neteye-platform/classis/actions/workflows/ci.yml/badge.svg)](https://github.com/neteye-platform/classis/actions/workflows/ci.yml)
+[![Checks](https://github.com/neteye-platform/classis/actions/workflows/checks.yml/badge.svg)](https://github.com/neteye-platform/classis/actions/workflows/checks.yml)
+[![Audit](https://github.com/neteye-platform/classis/actions/workflows/audit.yml/badge.svg)](https://github.com/neteye-platform/classis/actions/workflows/audit.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 **OpAMP Fleet** is a Rust implementation of OpenTelemetry [OpAMP](https://opentelemetry.io/docs/specs/opamp/)-based
@@ -188,7 +188,7 @@ tool, and a `SHA256SUMS` file. Every asset is a subject of one build-provenance 
 the workflow verifies before it creates the release
 ([ADR-0045](docs/adr/0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md));
 an operator checks a download with
-`gh attestation verify SHA256SUMS --repo mbrigl/opamp-fleet --signer-workflow mbrigl/opamp-fleet/.github/workflows/release.yml`
+`gh attestation verify SHA256SUMS --repo neteye-platform/classis --signer-workflow neteye-platform/classis/.github/workflows/release.yml`
 and then `sha256sum -c --ignore-missing SHA256SUMS`. The files are named after the **Set** an operator uploads them
 to, not after the product inside them
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)) — and the program inside them and its configuration

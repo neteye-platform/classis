@@ -1,4 +1,4 @@
-module github.com/mbrigl/opamp-fleet/interop
+module github.com/neteye-platform/classis/interop
 
 go 1.25.0
 

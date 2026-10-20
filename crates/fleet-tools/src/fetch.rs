@@ -114,7 +114,7 @@ impl AgentKind {
             // ADR-0019 it is named and packed like one too, which is what makes that possible.
             AgentKind::Supervisor => Source {
                 service_name: "supervisor",
-                repo: "mbrigl/opamp-fleet",
+                repo: "neteye-platform/classis",
             },
         }
     }

@@ -609,8 +609,9 @@ deliver the same binary and run its own `service install`.
 
 39. **The MSI asks for the installation folder, the endpoint and the self-update consent, all as
     public properties.** The UI is a copy of the stock `WixUI_InstallDir` set with one dialog inserted —
-    `WelcomeDlg → InstallDirDlg → EndpointDlg → VerifyReadyDlg` — and **no licence page**: Apache-2.0
-    needs no click-through, and the dialog wants a second copy of `LICENSE` as RTF. It is a copy with
+    `WelcomeDlg → InstallDirDlg → EndpointDlg → VerifyReadyDlg` — and **no licence page**: neither
+    MIT nor Apache-2.0 needs a click-through, and the dialog wants a second copy of the licence as
+    RTF. It is a copy with
     the navigation re-pointed, as WiX's customization guide prescribes, because overriding a stock
     set's rows in place depends on control-event ordering the toolset may renumber.
 

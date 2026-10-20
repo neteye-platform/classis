@@ -8,7 +8,7 @@
 
 ## Context
 
-A release of `mbrigl/opamp-fleet`, a public repository, publishes the following assets
+A release of `neteye-platform/classis`, a public repository, publishes the following assets
 ([ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md) clause 34):
 
 - the Client's five `.tar.gz` archives;

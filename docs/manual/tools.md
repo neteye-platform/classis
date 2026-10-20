@@ -30,8 +30,8 @@ proves it was built by this repository's release workflow, and its hash must mat
 executable:
 
 ```console
-$ gh attestation verify opamp-fleetctl_<version>_linux_amd64.tar.gz --repo mbrigl/opamp-fleet \
-    --signer-workflow mbrigl/opamp-fleet/.github/workflows/release.yml
+$ gh attestation verify opamp-fleetctl_<version>_linux_amd64.tar.gz --repo neteye-platform/classis \
+    --signer-workflow neteye-platform/classis/.github/workflows/release.yml
 $ sha256sum -c --ignore-missing SHA256SUMS
 $ tar xzf opamp-fleetctl_<version>_linux_amd64.tar.gz
 $ ./opamp-fleetctl --version
@@ -65,7 +65,7 @@ checksum file goes with them:
 |---|---|---|
 | `otelcol` | `open-telemetry/opentelemetry-collector-releases` | the core Collector's `.tar.gz`, as published |
 | `otelcol-contrib` | the same repository | the Contrib Collector's `.tar.gz`, as published |
-| `supervisor` | `mbrigl/opamp-fleet` — this project's own releases | the `.tar.gz` this fleet's Client is released as, one per platform, as published. It is the package a Client updates *itself* from; the `.deb`, `.rpm` and `.msi` beside it are for installing a Client by hand and are passed over |
+| `supervisor` | `neteye-platform/classis` — this project's own releases | the `.tar.gz` this fleet's Client is released as, one per platform, as published. It is the package a Client updates *itself* from; the `.deb`, `.rpm` and `.msi` beside it are for installing a Client by hand and are passed over |
 
 Four things it does on every run:
 

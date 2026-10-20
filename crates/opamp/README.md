@@ -36,7 +36,7 @@ and `opamp::BASELINE` says so at run time. The patch number is the crate's own. 
 — including a new `prost` minor version, since `prost` types are part of this API — comes only
 with the next specification release.
 
-This crate is developed as part of [OpAMP Fleet](https://github.com/mbrigl/opamp-fleet), whose
+This crate is developed as part of [OpAMP Fleet](https://github.com/neteye-platform/classis), whose
 Server and Client are built on it.
 
 ## License
