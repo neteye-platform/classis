@@ -14,11 +14,12 @@ name: Checks
 # - Dev Container: no host Docker socket, Features pinned and locked, the container-management
 #   extension on the host side (ADR-0002), checked by scripts/check-devcontainer.sh after its own
 #   self-test has passed.
-# - Action references: every third-party action a workflow uses is pinned to a commit SHA with
-#   its release in a comment, and that release's tag still points to the pinned commit; every
-#   first-party action (actions/*) is on its major version tag; Dependabot is configured to raise
-#   both (ADR-0044). Checked by scripts/check-action-refs.sh --resolve, which reads the tags with
-#   git ls-remote, after its own self-test has passed. The same job runs
+# - Action references: every action a workflow uses, actions/* included, is pinned to a commit
+#   SHA with its ref in a comment, and that ref still leads to the pinned commit: a release tag,
+#   or, for the organisation's own repositories, a branch that contains it; Renovate, on the
+#   organisation preset, raises every update, and no Dependabot configuration is left (ADR-0049).
+#   Checked by scripts/check-action-refs.sh --resolve, which reads the tags with git ls-remote and
+#   fetches the branches' commit graphs, after its own self-test has passed. The same job runs
 #   scripts/check-build-hardening.sh after its self-test: no checkout keeps the token, the release
 #   is gated on advisories and built uncached with pinned tools, and the compiler, the release
 #   profile's overflow checks and the crates that forbid unsafe code are as that script lists.
@@ -68,7 +69,7 @@ jobs:
       # working tree: a documentation link into a submodule would otherwise break in CI while
       # working locally. Their *contents* are never read — check-docs.sh enumerates via
       # `git ls-files`, which lists a submodule as one gitlink entry, not as its files.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: recursive
@@ -84,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The check's own tests run first: a check that is wrong passes nothing worth trusting.
@@ -97,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The check's own tests run first: a check that is wrong passes nothing worth trusting.
@@ -110,13 +111,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The check's own tests run first: a check that is wrong passes nothing worth trusting.
       - name: Self-test the action reference check
         run: bash scripts/test-check-action-refs.sh
-      - name: Check that third-party actions are pinned to a commit SHA, first-party ones to their major tag, and Dependabot covers them
+      - name: Check that every action is pinned to a commit SHA its ref resolves to, and Renovate raises the updates
         run: bash scripts/check-action-refs.sh --resolve
       - name: Self-test the build hardening check
         run: bash scripts/test-check-build-hardening.sh
@@ -127,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -149,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Self-test the git hooks
@@ -163,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # rustup honours rust-toolchain.toml (the pinned release + rustfmt + clippy) on first use.

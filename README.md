@@ -377,7 +377,8 @@ interop/              # the Go side of the interop check against opamp-go (ADR-0
 observability/        # the development observability stack — Collector, ClickHouse, Grafana — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
 .githooks/            # git hooks: refuse a commit on main and a push while the checks are red
-.github/              # CI workflows, Dependabot, issue & pull request templates
+.github/              # CI workflows, issue & pull request templates
+renovate.json         # Renovate: the organisation preset, with Cargo requirements kept as ranges (ADR-0049)
 .devcontainer/        # Dev Container definition (base image + Features + the OTLP forwarder)
 .vscode/              # shared editor settings
 .editorconfig         # editor-neutral formatting baseline

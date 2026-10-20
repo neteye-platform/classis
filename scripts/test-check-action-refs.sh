@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-action-refs.sh. Verifies: ADR-0044
+# Self-test of scripts/check-action-refs.sh. Verifies: ADR-0049
 #
 # Each case builds a fixture under a temporary directory — one workflow with one 'uses:' line and
-# a dependabot.yml with the github-actions ecosystem — runs the check against it, and asserts the
-# exit code and, for a failing case, the message that names the violation. The baseline passes;
-# every other case breaks one thing ADR-0044 decides, or writes a reference in a form the check
-# has to read like the plain one.
+# a renovate.json that extends the organisation preset and carries the cargo rule — runs the check
+# against it, and asserts the exit code and, for a failing case, the message that names the
+# violation. The baseline passes; every other case breaks one thing ADR-0049 decides, or writes a
+# reference in a form the check has to read like the plain one.
 #
 # Usage:
 #     scripts/test-check-action-refs.sh
@@ -23,31 +23,71 @@ trap 'rm -rf "$work"' EXIT
 failed=0
 passed=0
 
-# The stub git answers 'git … ls-remote <url> <ref>…' from $work/bin/remotes, lines of
-# '<url> <sha> <ref>', printing the lines of that URL whose ref was asked for, as git does. A URL
-# listed as '<url> unreachable' fails as an unreachable remote does. Every call is logged to
-# $work/bin/calls, one line per URL.
+# The stub git answers from two files under $work/bin, and logs every remote it is asked about to
+# $work/bin/calls, one line per URL:
+# - 'ls-remote <url> <ref>…' from remotes, lines of '<url> <sha> <ref>': it prints the lines of
+#   that URL whose ref was asked for, as git does. A URL listed as '<url> unreachable' fails as an
+#   unreachable remote does.
+# - 'init --bare <dir>', then '-C <dir> fetch … <url> refs/heads/<b>:…': the fetch succeeds when
+#   remotes lists refs/heads/<b> for that URL, and records the URL and branch in <dir>.
+# - '-C <dir> merge-base --is-ancestor <sha> refs/heads/<b>': succeeds when branches, lines of
+#   '<url> <branch> <sha>', lists that commit on the branch <dir> was fetched from.
 S=6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # the commit an annotated tag peels to
 T=63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # that tag's own object ID
 L=8cca0918f8471c33515202b73f56ab27f2bed283 # the commit a lightweight tag points to
 O=1111111111111111111111111111111111111111 # a commit no tag names
+C=3d3c42e5aac5ba805825da76410c181273ba90b1 # the commit of actions/checkout's v7.0.1
+H=0a794cd86afd0dbc3762088170e51988740fb8d4 # a branch head
+A=2222222222222222222222222222222222222222 # an ancestor of that head
 mkdir -p "$work/bin"
 cat > "$work/bin/git" <<'EOF'
 #!/usr/bin/env bash
-dir="$(dirname "$0")"
+bin="$(dirname "$0")"
 while [[ "${1:-}" == -c ]]; do shift 2; done
-[[ "${1:-}" == ls-remote ]] || { echo "stub git: unexpected call: $*" >&2; exit 2; }
-url="$2"; shift 2
-echo "$url" >> "$dir/calls"
-if grep -qxF "$url unreachable" "$dir/remotes"; then
-  echo "fatal: unable to access '$url/': Could not resolve host" >&2
-  exit 128
-fi
-while read -r u sha ref; do
-  [[ "$u" == "$url" ]] || continue
-  for want in "$@"; do [[ "$ref" == "$want" ]] && printf '%s\t%s\n' "$sha" "$ref"; done
-done < "$dir/remotes"
-exit 0
+repo=""
+if [[ "${1:-}" == -C ]]; then repo="$2"; shift 2; fi
+case "${1:-}" in
+  ls-remote)
+    url="$2"; shift 2
+    echo "$url" >> "$bin/calls"
+    if grep -qxF "$url unreachable" "$bin/remotes"; then
+      echo "fatal: unable to access '$url/': Could not resolve host" >&2
+      exit 128
+    fi
+    while read -r u sha ref; do
+      [[ "$u" == "$url" ]] || continue
+      for want in "$@"; do [[ "$ref" == "$want" ]] && printf '%s\t%s\n' "$sha" "$ref"; done
+    done < "$bin/remotes"
+    exit 0
+    ;;
+  init)
+    mkdir -p "${!#}"
+    exit 0
+    ;;
+  fetch)
+    args=("$@"); n=${#args[@]}
+    url="${args[n - 2]}"; spec="${args[n - 1]}"; branch="${spec%%:*}"; branch="${branch#refs/heads/}"
+    echo "$url" >> "$bin/calls"
+    if grep -qxF "$url unreachable" "$bin/remotes"; then
+      echo "fatal: unable to access '$url/': Could not resolve host" >&2
+      exit 128
+    fi
+    if ! awk -v u="$url" -v r="refs/heads/$branch" '$1 == u && $3 == r { f = 1 } END { exit !f }' "$bin/remotes"; then
+      echo "fatal: couldn't find remote ref refs/heads/$branch" >&2
+      exit 128
+    fi
+    echo "$url $branch" > "$repo/fetched"
+    exit 0
+    ;;
+  merge-base)
+    sha="$3"
+    read -r url branch < "$repo/fetched"
+    grep -qxF "$url $branch $sha" "$bin/branches"
+    exit
+    ;;
+esac
+echo "stub git: unexpected call: $*" >&2
+exit 2
 EOF
 chmod +x "$work/bin/git"
 cat > "$work/bin/remotes" <<EOF
@@ -56,6 +96,13 @@ https://github.com/owner/annotated $T refs/tags/v2.9.2
 https://github.com/owner/annotated $S refs/tags/v2.9.2^{}
 https://github.com/owner/moved $O refs/tags/v1.0.0
 https://github.com/owner/gone unreachable
+https://github.com/actions/checkout $C refs/tags/v7.0.1
+https://github.com/neteye-platform/repo-commons $H refs/heads/main
+https://github.com/neteye-platform/gone unreachable
+EOF
+cat > "$work/bin/branches" <<EOF
+https://github.com/neteye-platform/repo-commons main $H
+https://github.com/neteye-platform/repo-commons main $A
 EOF
 : > "$work/bin/calls"
 
@@ -74,26 +121,33 @@ workflow() {
   } > "$dir/.github/workflows/checks.yml"
 }
 
-# dependabot <dir> <ecosystem line> — write dependabot.yml with one update entry.
-dependabot() {
-  local dir="$1" ecosystem="$2"
+# renovate <dir> [extends] [rule…] — write renovate.json extending the given preset (the
+# organisation's by default) with the given packageRules entries (the cargo rule by default).
+CARGO_RULE='{ "matchManagers": ["cargo"], "rangeStrategy": "update-lockfile" }'
+renovate() {
+  local dir="$1" extends="${2:-github>neteye-platform/repo-commons}"; shift 2 2>/dev/null || shift
+  local rules=("$@")
+  ((${#rules[@]})) || rules=("$CARGO_RULE")
   {
-    echo "# Keeps the actions current (a comment the check does not read)."
-    echo "version: 2"
-    echo "updates:"
-    echo "  $ecosystem"
-    echo "    directory: /"
-    echo "    schedule:"
-    echo "      interval: monthly"
-  } > "$dir/.github/dependabot.yml"
+    echo "{"
+    echo "  \"\$schema\": \"https://docs.renovatebot.com/renovate-schema.json\","
+    echo "  \"extends\": [\"$extends\"],"
+    echo "  \"packageRules\": ["
+    local i
+    for i in "${!rules[@]}"; do
+      printf '    %s%s\n' "${rules[i]}" "$( ((i + 1 < ${#rules[@]})) && echo ,)"
+    done
+    echo "  ]"
+    echo "}"
+  } > "$dir/renovate.json"
 }
 
 # repo <name> — a fixture that passes the check, printed as its path.
 repo() {
   local dir="$work/$1"
   mkdir -p "$dir/.github/workflows"
-  workflow "$dir" "- uses: actions/checkout@v7"
-  dependabot "$dir" "- package-ecosystem: github-actions"
+  workflow "$dir" "- uses: actions/checkout@$C # v7.0.1"
+  renovate "$dir"
   echo "$dir"
 }
 
@@ -118,27 +172,71 @@ expect() {
 # --- cases: references ------------------------------------------------------------------------
 
 d="$(repo baseline)"
-expect pass "an action on its major version tag, Dependabot configured" "$d" "1 references: 1 first-party on major tags, 0 third-party"
+expect pass "a first-party action on a SHA with its release in a comment, Renovate configured" "$d" "1 references, 1 on commit SHAs; Renovate configured"
 
-d="$(repo sha)"
-workflow "$d" "- uses: actions/checkout@0e58ed8671d6b60d0890c21b07f8835ace038e67 # v7.0.1"
-expect fail "a first-party action on a commit SHA" "$d" "is first-party"
+d="$(repo first-party-major-tag)"
+workflow "$d" "- uses: actions/checkout@v7"
+expect fail "a first-party action on its major tag" "$d" "'actions/checkout@v7' is not pinned to a full commit SHA — pin it to the 40-character lowercase SHA and name its ref in a comment, 'owner/action@<sha> # vX.Y.Z' (ADR-0049 clause 1)"
 
 d="$(repo branch)"
 workflow "$d" "- uses: actions/checkout@main"
-expect fail "a branch" "$d" "is first-party"
+expect fail "a branch" "$d" "is not pinned to a full commit SHA"
 
 d="$(repo full-version)"
 workflow "$d" "- uses: actions/checkout@v7.0.1"
-expect fail "a full version tag" "$d" "is first-party"
+expect fail "a full version tag" "$d" "is not pinned to a full commit SHA"
 
 d="$(repo untagged)"
 workflow "$d" "- uses: actions/checkout"
-expect fail "no ref at all" "$d" "names no ref"
+expect fail "no ref at all" "$d" "is not pinned to a full commit SHA"
 
-d="$(repo action-in-subdirectory)"
-workflow "$d" "- uses: actions/cache/restore@v4"
-expect pass "a first-party action inside a repository, on its major tag" "$d" "1 first-party on major tags"
+d="$(repo third-party-pinned)"
+workflow "$d" "- uses: Swatinem/rust-cache@$S # v2.9.2"
+expect pass "a third-party action on a SHA with its release in a comment" "$d" "1 on commit SHAs"
+
+d="$(repo third-party-tag)"
+workflow "$d" "- uses: Swatinem/rust-cache@v2"
+expect fail "a third-party action on its major tag" "$d" "is not pinned to a full commit SHA"
+
+d="$(repo no-comment)"
+workflow "$d" "- uses: Swatinem/rust-cache@$S"
+expect fail "a SHA without the release comment" "$d" "not '# vX.Y.Z'"
+
+d="$(repo major-comment)"
+workflow "$d" "- uses: Swatinem/rust-cache@$S # v2"
+expect fail "a SHA whose comment names only a major" "$d" "carries '# v2', not '# vX.Y.Z'"
+
+d="$(repo unprefixed-comment)"
+workflow "$d" "- uses: Swatinem/rust-cache@$S # 2.9.2"
+expect fail "a SHA whose comment has no leading v" "$d" "(ADR-0049 clause 2)"
+
+d="$(repo short-sha)"
+workflow "$d" "- uses: Swatinem/rust-cache@6323deb # v2.9.2"
+expect fail "a short SHA" "$d" "is not pinned to a full commit SHA"
+
+d="$(repo uppercase-sha)"
+workflow "$d" "- uses: Swatinem/rust-cache@${S^^} # v2.9.2"
+expect fail "an uppercase SHA" "$d" "is not pinned to a full commit SHA"
+
+d="$(repo github-owner)"
+workflow "$d" "- uses: github/codeql-action/init@v3"
+expect fail "an action owned by github on a tag" "$d" "is not pinned to a full commit SHA"
+
+d="$(repo in-subdirectory)"
+workflow "$d" "- uses: actions/cache/restore@$S # v4.2.0" "- uses: owner/repo/path/to/action@$S # v1.2.3"
+expect pass "actions inside a repository, pinned" "$d" "2 references, 2 on commit SHAs"
+
+d="$(repo org-branch)"
+workflow "$d" "- uses: neteye-platform/repo-commons/.github/actions/setup@$H # main"
+expect pass "an action of the organisation on a SHA with its branch in a comment" "$d" "1 on commit SHAs"
+
+d="$(repo other-owner-branch)"
+workflow "$d" "- uses: other/repo@$S # main"
+expect fail "a branch comment for an owner outside the organisation" "$d" "carries '# main', not '# vX.Y.Z' — end the line in a comment naming the release tag the SHA was taken from, as three numbers; only an owner of neteye-platform may name a branch (ADR-0049 clause 2)"
+
+d="$(repo org-owner-prefix)"
+workflow "$d" "- uses: neteye-platform-fork/repo@$S # main"
+expect fail "an owner that only starts with the organisation's name" "$d" "only an owner of neteye-platform may name a branch"
 
 d="$(repo local-action)"
 workflow "$d" "- uses: ./.github/actions/setup"
@@ -161,83 +259,28 @@ workflow "$d" "- uses: docker://registry.example:5000/tools/image:1.2"
 expect pass "a docker image on a registry with a port, with a tag" "$d" "1 references"
 
 d="$(repo commented-out)"
-workflow "$d" "# - uses: actions/checkout@main" "- uses: actions/checkout@v7"
+workflow "$d" "# - uses: actions/checkout@main" "- uses: actions/checkout@$C # v7.0.1"
 expect pass "a commented-out reference is not read" "$d" "1 references"
 
-d="$(repo trailing-comment)"
-workflow "$d" "- uses: actions/checkout@v7 # the major tag, ADR-0044"
-expect pass "a trailing comment after the reference" "$d" "1 references"
-
 d="$(repo quoted)"
-workflow "$d" "- uses: \"actions/checkout@v7\""
-expect pass "a quoted reference" "$d" "1 references"
+workflow "$d" "- uses: \"actions/checkout@$C\" # v7.0.1"
+expect pass "a quoted reference with its comment" "$d" "1 on commit SHAs"
 
 d="$(repo keyed-form)"
-workflow "$d" "- name: Check out" "  uses: actions/checkout@v7"
+workflow "$d" "- name: Check out" "  uses: actions/checkout@$C # v7.0.1"
 expect pass "a reference written after a name key, not as the list item" "$d" "1 references"
 
 d="$(repo keyed-form-branch)"
 workflow "$d" "- name: Check out" "  uses: actions/checkout@main"
-expect fail "the same form on a branch" "$d" "is first-party"
+expect fail "the same form on a branch" "$d" "is not pinned to a full commit SHA"
 
 d="$(repo two-workflows)"
 cp "$d/.github/workflows/checks.yml" "$d/.github/workflows/nightly.yaml"
-workflow "$d" "- uses: actions/checkout@v7"
 expect pass "a second workflow with a .yaml extension is read" "$d" "2 references"
 
 d="$(repo no-workflows)"
 rm -r "$d/.github/workflows"
 expect fail "no workflow at all" "$d" "no workflow found"
-
-# --- cases: third-party references ------------------------------------------------------------
-
-d="$(repo third-party-pinned)"
-workflow "$d" "- uses: Swatinem/rust-cache@$S # v2.9.2"
-expect pass "a third-party action on a SHA with its release in a comment" "$d" "1 references: 0 first-party on major tags, 1 third-party on commit SHAs; Dependabot"
-
-d="$(repo third-party-tag)"
-workflow "$d" "- uses: Swatinem/rust-cache@v2"
-expect fail "a third-party action on its major tag" "$d" "is a third-party action not pinned to a full commit SHA"
-
-d="$(repo third-party-full-version)"
-workflow "$d" "- uses: Swatinem/rust-cache@v2.9.2"
-expect fail "a third-party action on a full version tag" "$d" "(ADR-0044 clause 3)"
-
-d="$(repo third-party-no-ref)"
-workflow "$d" "- uses: Swatinem/rust-cache"
-expect fail "a third-party action with no ref" "$d" "is a third-party action not pinned to a full commit SHA"
-
-d="$(repo third-party-no-comment)"
-workflow "$d" "- uses: Swatinem/rust-cache@$S"
-expect fail "a SHA without the release comment" "$d" "not '# vX.Y.Z'"
-
-d="$(repo third-party-major-comment)"
-workflow "$d" "- uses: Swatinem/rust-cache@$S # v2"
-expect fail "a SHA whose comment names only a major" "$d" "carries '# v2', not '# vX.Y.Z'"
-
-d="$(repo third-party-unprefixed-comment)"
-workflow "$d" "- uses: Swatinem/rust-cache@$S # 2.9.2"
-expect fail "a SHA whose comment has no leading v" "$d" "(ADR-0044 clause 3)"
-
-d="$(repo third-party-short-sha)"
-workflow "$d" "- uses: Swatinem/rust-cache@6323deb # v2.9.2"
-expect fail "a short SHA" "$d" "is a third-party action not pinned to a full commit SHA"
-
-d="$(repo third-party-uppercase-sha)"
-workflow "$d" "- uses: Swatinem/rust-cache@${S^^} # v2.9.2"
-expect fail "an uppercase SHA" "$d" "is a third-party action not pinned to a full commit SHA"
-
-d="$(repo github-owner)"
-workflow "$d" "- uses: github/codeql-action/init@v3"
-expect fail "an action owned by github is third-party" "$d" "is a third-party action not pinned to a full commit SHA"
-
-d="$(repo third-party-in-subdirectory)"
-workflow "$d" "- uses: owner/repo/path/to/action@$S # v1.2.3"
-expect pass "a third-party action inside a repository, pinned" "$d" "1 third-party on commit SHAs"
-
-d="$(repo third-party-quoted)"
-workflow "$d" "- uses: \"owner/a@$S\" # v1.2.3"
-expect pass "a quoted third-party reference with its comment" "$d" "1 third-party on commit SHAs"
 
 d="$(repo reusable-workflow)"
 {
@@ -245,38 +288,41 @@ d="$(repo reusable-workflow)"
   echo "on: [pull_request]"
   echo "jobs:"
   echo "  call:"
-  echo "    uses: owner/repo/.github/workflows/w.yml@$S # v1.2.3"
+  echo "    uses: neteye-platform/repo-commons/.github/workflows/w.yaml@$H # main"
   echo "  call-tagged:"
   echo "    uses: owner/repo/.github/workflows/w.yml@v1"
 } > "$d/.github/workflows/checks.yml"
-expect fail "a reusable workflow is classified as an action is" "$d" "'owner/repo/.github/workflows/w.yml@v1' is a third-party action"
+expect fail "a reusable workflow is read as an action is" "$d" "'owner/repo/.github/workflows/w.yml@v1' is not pinned"
 sed -i '/call-tagged/,$d' "$d/.github/workflows/checks.yml"
-expect pass "a pinned reusable workflow as a job-level key" "$d" "1 third-party on commit SHAs"
+expect pass "a pinned reusable workflow of the organisation as a job-level key" "$d" "1 on commit SHAs"
 
 d="$(repo offline-does-not-resolve)"
-workflow "$d" "- uses: owner/moved@$S # v1.0.0"
+workflow "$d" "- uses: owner/moved@$S # v1.0.0" "- uses: neteye-platform/repo-commons@$O # main"
 : > "$work/bin/calls"
-expect pass "without --resolve no tag is looked up" "$d" "1 third-party on commit SHAs; Dependabot"
-[[ -s "$work/bin/calls" ]] && { failed=$((failed + 1)); echo "FAIL: the offline run called git ls-remote" >&2; }
+expect pass "without --resolve no ref is looked up" "$d" "2 on commit SHAs; Renovate"
+[[ -s "$work/bin/calls" ]] && { failed=$((failed + 1)); echo "FAIL: the offline run called git" >&2; }
 
 # --- cases: --resolve (stub git) --------------------------------------------------------------
 
 CHECK_FLAGS=(--resolve)
 
+d="$(repo resolve-first-party)"
+expect pass "a first-party action whose tag points to the pinned commit" "$d" "1 on commit SHAs, resolved"
+
 d="$(repo resolve-lightweight)"
 workflow "$d" "- uses: owner/light@$L # v1.0.0"
-expect pass "a lightweight tag that points to the pinned commit" "$d" "third-party on commit SHAs, resolved"
+expect pass "a lightweight tag that points to the pinned commit" "$d" "on commit SHAs, resolved"
 
 d="$(repo resolve-annotated)"
 workflow "$d" "- uses: owner/annotated@$S # v2.9.2" "- uses: owner/annotated/sub/action@$S # v2.9.2"
 : > "$work/bin/calls"
-expect pass "an annotated tag whose peeled commit is the pinned one, inside a repository too" "$d" "2 third-party on commit SHAs, resolved"
+expect pass "an annotated tag whose peeled commit is the pinned one, inside a repository too" "$d" "2 on commit SHAs, resolved"
 [[ "$(wc -l < "$work/bin/calls")" -eq 1 ]] \
   || { failed=$((failed + 1)); echo "FAIL: one repository and tag was looked up $(wc -l < "$work/bin/calls") times, not once" >&2; }
 
 d="$(repo resolve-tag-object)"
 workflow "$d" "- uses: owner/annotated@$T # v2.9.2"
-expect fail "the tag object's own ID pinned in place of its commit" "$d" "tag v2.9.2 of owner/annotated is $S, not the pinned commit (ADR-0044 clause 4)"
+expect fail "the tag object's own ID pinned in place of its commit" "$d" "tag v2.9.2 of owner/annotated is $S, not the pinned commit (ADR-0049 clause 3)"
 
 d="$(repo resolve-moved)"
 workflow "$d" "- uses: owner/moved@$S # v1.0.0"
@@ -290,30 +336,76 @@ d="$(repo resolve-unreachable)"
 workflow "$d" "- uses: owner/gone@$S # v1.0.0"
 expect fail "a repository that cannot be reached" "$d" "git ls-remote of owner/gone failed"
 
-d="$(repo resolve-first-party)"
+d="$(repo resolve-branch-head)"
+workflow "$d" "- uses: neteye-platform/repo-commons/.github/workflows/a.yaml@$H # main" \
+              "- uses: neteye-platform/repo-commons/.github/workflows/b.yaml@$A # main"
 : > "$work/bin/calls"
-expect pass "a first-party action is not looked up" "$d" "1 first-party on major tags, 0 third-party on commit SHAs, resolved"
-[[ -s "$work/bin/calls" ]] && { failed=$((failed + 1)); echo "FAIL: a first-party action was looked up" >&2; }
+expect pass "a branch that contains the pinned commit, as its head and as an ancestor" "$d" "2 on commit SHAs, resolved"
+[[ "$(wc -l < "$work/bin/calls")" -eq 1 ]] \
+  || { failed=$((failed + 1)); echo "FAIL: one repository and branch was fetched $(wc -l < "$work/bin/calls") times, not once" >&2; }
+
+d="$(repo resolve-branch-not-contained)"
+workflow "$d" "- uses: neteye-platform/repo-commons@$O # main"
+expect fail "a branch that does not contain the pinned commit" "$d" "branch main of neteye-platform/repo-commons does not contain the pinned commit (ADR-0049 clause 3)"
+
+d="$(repo resolve-branch-missing)"
+workflow "$d" "- uses: neteye-platform/repo-commons@$H # develop"
+expect fail "a commented branch that does not exist" "$d" "fetching branch develop of neteye-platform/repo-commons failed"
+
+d="$(repo resolve-branch-unreachable)"
+workflow "$d" "- uses: neteye-platform/gone@$H # main"
+expect fail "an organisation repository that cannot be reached" "$d" "fetching branch main of neteye-platform/gone failed"
 
 CHECK_FLAGS=()
 
-# --- cases: Dependabot ------------------------------------------------------------------------
+# --- cases: Renovate --------------------------------------------------------------------------
 
-d="$(repo dependabot-missing)"
-rm "$d/.github/dependabot.yml"
-expect fail "no dependabot.yml" "$d" "dependabot.yml: not found"
+d="$(repo renovate-missing)"
+rm "$d/renovate.json"
+expect fail "no renovate.json" "$d" "renovate.json: not found"
 
-d="$(repo dependabot-other-ecosystem)"
-dependabot "$d" "- package-ecosystem: npm"
-expect fail "a dependabot.yml without the github-actions ecosystem" "$d" "has no 'package-ecosystem: github-actions' entry"
+d="$(repo renovate-other-preset)"
+renovate "$d" "config:recommended"
+expect fail "a renovate.json that extends another preset" "$d" "does not extend \"github>neteye-platform/repo-commons\""
 
-d="$(repo dependabot-commented)"
-dependabot "$d" "# - package-ecosystem: github-actions"
-expect fail "the github-actions ecosystem only in a comment" "$d" "has no 'package-ecosystem: github-actions' entry"
+d="$(repo renovate-no-cargo-rule)"
+renovate "$d" "github>neteye-platform/repo-commons" '{ "matchManagers": ["npm"], "rangeStrategy": "update-lockfile" }'
+expect fail "a renovate.json without the cargo rule" "$d" "has no packageRules entry with \"matchManagers\": [\"cargo\"]"
 
-d="$(repo dependabot-quoted)"
-dependabot "$d" "- package-ecosystem: \"github-actions\""
-expect pass "the ecosystem value in quotes" "$d" "Dependabot configured"
+d="$(repo renovate-cargo-pin)"
+renovate "$d" "github>neteye-platform/repo-commons" '{ "matchManagers": ["cargo"], "rangeStrategy": "pin" }'
+expect fail "a cargo rule that pins" "$d" "(ADR-0049 clause 5)"
+
+d="$(repo renovate-split-rule)"
+renovate "$d" "github>neteye-platform/repo-commons" '{ "matchManagers": ["cargo"] }' '{ "rangeStrategy": "update-lockfile" }'
+expect fail "the two keys in two different rules" "$d" "(ADR-0049 clause 5)"
+
+d="$(repo renovate-reordered)"
+renovate "$d" "github>neteye-platform/repo-commons" '{ "description": "ranges", "rangeStrategy": "update-lockfile", "matchManagers": [ "cargo" ] }'
+expect pass "the cargo rule with its keys in the other order and a description" "$d" "Renovate configured"
+
+d="$(repo renovate-multiline)"
+cat > "$d/renovate.json" <<'EOF'
+{
+  "extends": [
+    "github>neteye-platform/repo-commons"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "cargo"
+      ],
+      "rangeStrategy": "update-lockfile"
+    }
+  ]
+}
+EOF
+expect pass "a renovate.json written over several lines" "$d" "Renovate configured"
+
+d="$(repo dependabot-present)"
+mkdir -p "$d/.github"
+printf 'version: 2\nupdates: []\n' > "$d/.github/dependabot.yml"
+expect fail "a dependabot.yml beside renovate.json" "$d" ".github/dependabot.yml: exists"
 
 # --- summary ----------------------------------------------------------------------------------
 

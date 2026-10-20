@@ -52,8 +52,8 @@ reports findings that do not apply.
 
 Constraints from other decisions:
 
-- [ADR-0044](0044-third-party-actions-are-pinned-to-a-commit-sha.md) pins third-party actions to a SHA. A first-party action (`actions/*`) stays
-  on its major tag.
+- [ADR-0049](0049-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md) pins every action, first-party (`actions/*`) included, to a
+  commit SHA with its release in a comment.
 - The release workflow installs every tool that writes what ships at an exact version raised by a
   reviewed commit (`cargo install --locked cargo-deb@3.8.0 …`).
   [`scripts/check-build-hardening.sh`](../../scripts/check-build-hardening.sh) check 3 holds that
@@ -101,8 +101,8 @@ like the rest.
    as the packaging tools are. No action installs it.
 
 4. **One build-provenance attestation covers every published asset.** After `SHA256SUMS` is
-   assembled and before the release is created, the `publish` job runs `actions/attest@v4` in
-   provenance mode, on its major tag (ADR-0044). The subjects are:
+   assembled and before the release is created, the `publish` job runs `actions/attest` in
+   provenance mode, pinned to a commit SHA ([ADR-0049](0049-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md)). The subjects are:
    - every file it then publishes: the `.tar.gz` archives, the `.deb`, `.rpm` and `.msi`, the
      `.cdx.json` SBOMs;
    - `SHA256SUMS` itself.

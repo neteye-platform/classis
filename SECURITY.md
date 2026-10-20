@@ -72,12 +72,16 @@ credentials the built-in patterns miss.
 
 ## Actions in the workflows
 
-A third-party action the workflows run is pinned to a full commit SHA, with the release it was
-taken from in a `# vX.Y.Z` comment on the same line, and CI resolves that release's tag to check it
-still points to the pinned commit. A first-party action (`actions/*`) stays on its major version
-tag, a mutable reference accepted with its risk in
-[ADR-0044](docs/adr/0044-third-party-actions-are-pinned-to-a-commit-sha.md). Both are held by
-[`scripts/check-action-refs.sh`](scripts/check-action-refs.sh), and Dependabot raises both.
+Every action the workflows run, GitHub's own `actions/*` included, is pinned to a full commit SHA,
+with the ref it was taken from in a comment on the same line: the release tag as `# vX.Y.Z`, or,
+for a reusable workflow of the organisation's own `neteye-platform` repositories, which publish no
+tags, the branch (`# main`). CI resolves each ref and checks that it still leads to the pinned
+commit: a tag must point to it, a branch must contain it. The organisation enforces the same
+pinning as a GitHub setting, which refuses a run that references an action by a tag. This is
+[ADR-0049](docs/adr/0049-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md),
+held by [`scripts/check-action-refs.sh`](scripts/check-action-refs.sh). Renovate, on the
+organisation preset, raises every update; a branch comment says only that the commit was on the
+branch, not which state of it was reviewed.
 
 ## Fleet trust model
 

@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>neteye-platform/repo-commons"]
+  "extends": ["github>neteye-platform/repo-commons"],
+  "packageRules": [
+    {
+      "description": "Keep Cargo version requirements as ranges, which Cargo.lock pins: the preset's pin rules reach [dependencies] but not [workspace.dependencies], and the published opamp crate does not impose exact requirements on its consumers (ADR-0049 clause 5)",
+      "matchManagers": ["cargo"],
+      "rangeStrategy": "update-lockfile"
+    }
+  ]
 }
