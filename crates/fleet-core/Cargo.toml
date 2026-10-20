@@ -1,0 +1,29 @@
+[package]
+name = "fleet-core"
+description = "What the Server and the Client of OpAMP Fleet implement identically, beyond the protocol (ADR-0010)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+# Resolving the baked version from the repository's tags (ADR-0012). A build dependency only: it is
+# linked into no artifact, and it sits here rather than in each binary so that both ends report a
+# version computed by one implementation.
+git2.workspace = true
+
+[dependencies]
+# The bootstrap certificate as a password-protected PKCS#12 file, written by the Server and read by
+# the Client (ADR-0029): `pkcs12`, `pkcs5` and `der` read which schemes a file uses; `rcgen` and
+# `x509-parser` tell whether the key and the certificate belong together.
+p12-keystore.workspace = true
+pkcs12.workspace = true
+pkcs5.workspace = true
+der.workspace = true
+rcgen.workspace = true
+x509-parser.workspace = true
+# The host a certificate that names none is taken for, on the Server and on a Gateway alike
+# (ADR-0039): the SHA-256 of its issuer and serial.
+sha2.workspace = true
+hex.workspace = true

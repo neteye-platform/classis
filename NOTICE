@@ -1,0 +1,54 @@
+OpAMP Fleet
+Copyright (c) 2026 Würth IT Italy S.r.l.
+
+This product includes software developed by the OpAMP Fleet contributors.
+
+Licensed under the MIT License (LICENSE-MIT) or the Apache License, Version 2.0
+(LICENSE-APACHE), at your option.
+
+-------------------------------------------------------------------------------
+
+This product bundles the following third-party software, vendored as a static
+asset embedded into the Server binary (ADR-0010):
+
+Redoc (redoc@2.5.3) — crates/fleet-server/static/redoc.standalone.js
+  Copyright (c) Redocly
+  Licensed under the MIT License.
+  https://github.com/Redocly/redoc
+
+Shiki (shiki@4.5.0) — crates/fleet-server/static/shiki.js, built by
+scripts/vendor-shiki.sh (ADR-0038), bundling:
+  shiki, @shikijs/core, @shikijs/engine-javascript, @shikijs/langs,
+  @shikijs/primitive, @shikijs/types (4.5.0)
+    Copyright (c) 2021 Pine Wu, Copyright (c) 2023 Anthony Fu
+    Licensed under the MIT License.
+    https://github.com/shikijs/shiki
+  @shikijs/vscode-textmate (10.0.2)
+    Copyright (c) Microsoft Corporation
+    Licensed under the MIT License.
+    https://github.com/shikijs/vscode-textmate
+  oniguruma-to-es (4.3.6), oniguruma-parser (0.12.2), regex (6.1.0),
+  regex-utilities (2.3.0), regex-recursion (6.0.2)
+    Copyright (c) 2024-2026 Steven Levithan
+    Licensed under the MIT License.
+    https://github.com/slevithan/oniguruma-to-es
+  hast-util-to-html (9.0.5), hast-util-whitespace (3.0.0),
+  html-void-elements (3.0.0), property-information (7.2.0), zwitch (2.0.4),
+  stringify-entities (4.0.4), character-entities-legacy (3.0.0),
+  character-entities-html4 (2.1.0), ccount (2.0.1),
+  comma-separated-tokens (2.0.3), space-separated-tokens (2.0.2)
+    Copyright (c) Titus Wormer
+    Licensed under the MIT License.
+    https://github.com/syntax-tree/hast-util-to-html
+  The grammars, as @shikijs/langs 4.5.0 carries them (from tm-grammars):
+    yaml — TextMate's yaml.tmbundle
+      Permission to copy, use, modify, sell and distribute this software is
+      granted. This software is provided "as is" without express or implied
+      warranty, and with no claim as to its suitability for any purpose.
+      https://github.com/textmate/yaml.tmbundle
+    toml — TextMate's toml.tmbundle, under the same permission notice as yaml.
+      https://github.com/textmate/toml.tmbundle
+    ini — Visual Studio Code's ini extension
+      Copyright (c) Microsoft Corporation
+      Licensed under the MIT License.
+      https://github.com/microsoft/vscode/tree/main/extensions/ini

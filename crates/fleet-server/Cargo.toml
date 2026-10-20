@@ -1,0 +1,52 @@
+[package]
+name = "fleet-server"
+description = "OpAMP Fleet Server: dual-transport OpAMP endpoint, REST API, and bundled UI (ADR-0010, ADR-0013)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The program keeps its name; the package's is a build-time identifier.
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+opamp = { workspace = true, features = ["server"] }
+fleet-core.workspace = true
+# Streaming a stored package artifact into the response body (ADR-0026) — the same workspace
+# dependency the Client already builds on, promoted from dev-only.
+futures-util.workspace = true
+tokio.workspace = true
+axum.workspace = true
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+sha2.workspace = true
+hex.workspace = true
+ring.workspace = true
+argon2.workspace = true
+libc.workspace = true
+flate2.workspace = true
+base64.workspace = true
+constant_time_eq.workspace = true
+# ADR-0021: which CA issued the certificate a connection carries — the client CA's member, or the
+# bootstrap CA's enrolling host. The parser rcgen itself uses, already in the tree.
+x509-parser = { workspace = true, features = ["verify"] }
+# The configuration the listener of `opamp` serves with (ADR-0010).
+rustls.workspace = true
+rcgen.workspace = true
+time.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+
+[dev-dependencies]
+# The tests drive both planes over HTTP. The Server itself sends no request for a package
+# (ADR-0033), so it is no dependency of the binary.
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+tempfile = "3"

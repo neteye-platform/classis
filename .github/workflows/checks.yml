@@ -1,0 +1,173 @@
+name: Checks
+
+# Enforces the repository's rules as CI. Pure bash + coreutils — nothing is installed but the Rust
+# toolchain of the rust job (ShellCheck, used by the shell job, ships preinstalled on the
+# GitHub-hosted runner image).
+# scripts/check-all.sh runs the same checks in the same order locally (AGENTS.md §5); a check
+# added here is added there in the same change. Check 9 of scripts/check-docs.sh
+# verifies that the two lists, and the required checks named in README.md, still agree.
+# - Documentation: the consistency checks that scripts/check-docs.sh runs, after its own self-test
+#   has passed. Its header lists them and is the single place they are described — this file does
+#   not restate the list.
+# - Traceability: every accepted ADR is cited by a test and every citation names something that
+#   exists (ADR-0003), checked by scripts/check-traceability.sh after its own self-test has passed.
+# - Dev Container: no host Docker socket, Features pinned and locked, the container-management
+#   extension on the host side (ADR-0002), checked by scripts/check-devcontainer.sh after its own
+#   self-test has passed.
+# - Action references: every action a workflow uses, actions/* included, is pinned to a commit
+#   SHA with its ref in a comment, and that ref still leads to the pinned commit: a release tag,
+#   or, for the organisation's own repositories, a branch that contains it; Renovate, on the
+#   organisation preset, raises every update, and no Dependabot configuration is left (ADR-0049).
+#   Checked by scripts/check-action-refs.sh --resolve, which reads the tags with git ls-remote and
+#   fetches the branches' commit graphs, after its own self-test has passed. The same job runs
+#   scripts/check-build-hardening.sh after its self-test: no checkout keeps the token, the release
+#   is gated on advisories and built uncached with pinned tools, and the compiler, the release
+#   profile's overflow checks and the crates that forbid unsafe code are as that script lists.
+# - Sensors: what weakens the test suite and no toolchain's tools notice — test files deleted
+#   and skip markers added since the pull request's base — reported by
+#   scripts/sensor-tests-kept.sh for the reviewer (AGENTS.md, section 5), and the changes since
+#   the last design revision, reported by scripts/sensor-revision-due.sh (ADR-0004), each after
+#   its self-test has passed. The job reports and never fails on what it counts; the reason for
+#   a finding is in the pull request, and a due revision is the human's to schedule. It checks
+#   out the full history because both sensors read it.
+# - Shell lint: every shell script passes ShellCheck — the scripts are this repository's
+#   enforcement layer, so they are linted themselves. The job first runs the self-test of the
+#   git hooks under .githooks/, which refuse a commit on main and a push while the checks are
+#   red: a hook that is wrong guards nothing.
+# - Rust: the Cargo workspace built, tested and linted by scripts/check-rust.sh — the commands of
+#   README.md → "Build, Test & Run", on the stack of ADR-0010 — the same script
+#   scripts/check-all.sh runs, so the build and the tests gate a push as they gate a merge. The one
+#   job of this workflow that installs something: rustup reads rust-toolchain.toml on first use,
+#   and the cache keeps the build within its timeout. Check 9 recognises the job by its run line.
+#
+# Every job is bounded by a timeout — a hung step would otherwise occupy a runner until the
+# platform's own six-hour limit — and every checkout runs with 'persist-credentials: false': the
+# workflow token is needed to fetch the code, not afterwards, and leaving it in .git/config makes
+# it readable to every later step and to anything they invoke.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel a pull request's superseded runs: a new push makes the previous run's verdict irrelevant,
+# while a queued run keeps a required check pending. Runs on 'main' are never cancelled — every
+# commit there keeps a result of its own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Submodules are checked out because the link check resolves relative targets against the
+      # working tree: a documentation link into a submodule would otherwise break in CI while
+      # working locally. Their *contents* are never read — check-docs.sh enumerates via
+      # `git ls-files`, which lists a submodule as one gitlink entry, not as its files.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      # The check's own tests run first: a check that is wrong passes nothing worth trusting.
+      - name: Self-test the documentation checks
+        run: bash scripts/test-check-docs.sh
+      - name: Self-test the Protocol Baseline check
+        run: bash scripts/test-check-protocol-baseline.sh
+      - name: Check documentation consistency
+        run: bash scripts/check-docs.sh
+
+  traceability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The check's own tests run first: a check that is wrong passes nothing worth trusting.
+      - name: Self-test the traceability check
+        run: bash scripts/test-check-traceability.sh
+      - name: Check that accepted decisions and criteria are verified by tests
+        run: bash scripts/check-traceability.sh
+
+  devcontainer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The check's own tests run first: a check that is wrong passes nothing worth trusting.
+      - name: Self-test the Dev Container check
+        run: bash scripts/test-check-devcontainer.sh
+      - name: Check that the Dev Container keeps the host engine out of reach
+        run: bash scripts/check-devcontainer.sh
+
+  actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The check's own tests run first: a check that is wrong passes nothing worth trusting.
+      - name: Self-test the action reference check
+        run: bash scripts/test-check-action-refs.sh
+      - name: Check that every action is pinned to a commit SHA its ref resolves to, and Renovate raises the updates
+        run: bash scripts/check-action-refs.sh --resolve
+      - name: Self-test the build hardening check
+        run: bash scripts/test-check-build-hardening.sh
+      - name: Check that checkouts keep no token and the release is gated, uncached and pinned
+        run: bash scripts/check-build-hardening.sh
+
+  sensors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The sensor's own tests run first: a sensor that is wrong reports nothing worth reading.
+      - name: Self-test the tests-kept sensor
+        run: bash scripts/test-sensor-tests-kept.sh
+      # The base is the pull request's base branch, or the previous tip on a push to main. A
+      # forced push leaves that tip out of the history the checkout fetches, so it passes none.
+      - name: Report test files deleted and skip markers added since the base
+        run: bash scripts/sensor-tests-kept.sh "$BASE"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || (!github.event.forced && github.event.before) || '' }}
+      - name: Self-test the revision-due sensor
+        run: bash scripts/test-sensor-revision-due.sh
+      - name: Report the changes since the last design revision
+        run: bash scripts/sensor-revision-due.sh
+
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Self-test the git hooks
+        run: bash scripts/test-git-hooks.sh
+      - name: The self-tests' fixtures leave an inherited repository alone
+        run: bash scripts/test-fixture-isolation.sh
+      - name: Lint shell scripts with ShellCheck
+        run: bash scripts/check-shell.sh
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rustup honours rust-toolchain.toml (the pinned release + rustfmt + clippy) on first use.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build, test and lint the workspace
+        run: bash scripts/check-rust.sh

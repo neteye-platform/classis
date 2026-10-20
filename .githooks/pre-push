@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# Git pre-push hook: the checks pass before anything is pushed.
+#
+# AGENTS.md, section 5 requires scripts/check-all.sh to pass before a push, and CI runs the same
+# checks on every pull request. This hook runs them first, so a red push never leaves the machine
+# and the permission prompt an agent answers on 'git push' is only ever about a green one. Enabled
+# through 'git config core.hooksPath .githooks', which the Dev Container sets on creation
+# (.devcontainer/devcontainer.json); outside it, run that command once per clone.
+#
+# A repository without scripts/check-all.sh has nothing to run, and the push proceeds.
+# Bypassable with 'git push --no-verify'. scripts/test-git-hooks.sh exercises this hook.
+
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+if [[ -n "$root" && -f "$root/scripts/check-all.sh" ]]; then
+  if ! bash "$root/scripts/check-all.sh"; then
+    echo >&2
+    echo "pre-push: refused — the checks are red, and they pass before anything is pushed (AGENTS.md, section 5). Fix them, then push again." >&2
+    exit 1
+  fi
+fi
+
+exit 0

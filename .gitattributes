@@ -1,0 +1,17 @@
+# Line endings. Everything text-like is normalized to LF on the way into the repository and
+# checked out with LF on every host, whatever a contributor's core.autocrlf is set to.
+#
+# This is not cosmetic here: this repository's entire enforcement layer is bash scripts under
+# scripts/, and the Dev Container runs Linux no matter what the host is. A script that arrives
+# with CRLF line endings fails as 'bad interpreter: /usr/bin/env bash^M' — a failure whose message
+# names neither the file nor the real cause. .vscode/settings.json sets "files.eol" for the same
+# reason, but only for VS Code and only for files it writes; git needs its own rule.
+* text=auto eol=lf
+
+# Stated separately so it survives an edit to the line above: an executable script must never
+# gain CRLF.
+*.sh text eol=lf
+
+# 'text=auto' detects binary content by inspection, so ordinary binary files need no rule here.
+# Add an explicit '<pattern> binary' line only for a format that detection gets wrong — a file
+# git diffs or normalizes although it must not be touched.

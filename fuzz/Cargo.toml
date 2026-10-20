@@ -1,0 +1,109 @@
+# Fuzz targets for every parser that reads bytes from the network or from a downloaded artifact
+# (specification Q-2). Outside the workspace: libFuzzer needs a nightly compiler, and the workspace
+# builds on the pinned stable one. Run with `cargo +nightly fuzz run <target>` from the repository
+# root; README → "Build, Test & Run" names the command, and the fuzz workflow runs every target.
+[package]
+name = "fleet-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+opamp = { path = "../crates/opamp", features = ["client", "server"] }
+fleet-agent = { path = "../crates/fleet-agent" }
+fleet-server = { path = "../crates/fleet-server" }
+fleet-core = { path = "../crates/fleet-core" }
+prost = "0.14"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+tempfile = "3"
+toml = "1"
+# Reads the issued certificate back, so the assertion is on what was signed, not on its text.
+x509-parser = "0.18"
+
+# Its own workspace, so the repository's stable build never compiles libFuzzer.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "frame_decode"
+path = "fuzz_targets/frame_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "body_decode"
+path = "fuzz_targets/body_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_receive"
+path = "fuzz_targets/client_receive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pem"
+path = "fuzz_targets/pem.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "csr_sign"
+path = "fuzz_targets/csr_sign.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "archive_tree"
+path = "fuzz_targets/archive_tree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pkcs12"
+path = "fuzz_targets/pkcs12.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "revocation_list"
+path = "fuzz_targets/revocation_list.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "supervisor_set"
+path = "fuzz_targets/supervisor_set.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "archive_member"
+path = "fuzz_targets/archive_member.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "renewal_proof"
+path = "fuzz_targets/renewal_proof.rs"
+test = false
+doc = false
+bench = false

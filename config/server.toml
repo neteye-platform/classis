@@ -1,0 +1,346 @@
+# OpAMP Fleet Server configuration. Every setting has a default, shown here, except [tls]:
+# the Server refuses to start without a certificate and key. For development,
+# scripts/dev-pki.sh creates a set and a server.toml that uses it. Start with:
+# cargo run -p fleet-server -- --config .dev-pki/server.toml
+#
+# HOW THIS FILE IS ORDERED, AND WHY IT MATTERS. Every bare key comes first; every [section] comes
+# after them. That is not tidiness — it is the only layout in which the commented examples below can
+# be switched on safely. A TOML section header captures every bare key that follows it until the
+# next header, so a `[telemetry_offer]` sitting above `data_dir` would swallow it the moment
+# anyone uncommented it, and the Server would refuse to start with "unknown field `data_dir`".
+# Add new settings accordingly: a bare key goes in the first half, a section in the second.
+
+# =============================================================================================
+# Settings
+# =============================================================================================
+
+# TWO LISTENERS, SPLIT BY AUDIENCE. Both serve TLS 1.3 and nothing older.
+#
+# The AGENT PLANE: the OpAMP endpoint (/v1/opamp) and the package download the offers point at.
+# Port 4320 is the protocol's default. It listens on the loopback until you publish it to where the
+# fleet is, with listen = "0.0.0.0:4320". The OPERATOR PLANE — the REST API (/api/v1/*), the API
+# docs (/api/v1/docs), and the UI (/) — is the [rest] section in the second half of this file.
+listen = "127.0.0.1:4320"
+
+# The connections the Agent plane holds at once. Past it, a new connection is closed on
+# accept and the ones held keep working. Raise it together with the process's file-descriptor
+# limit for a fleet larger than this.
+max_connections = 10000
+
+# Where the Server keeps ALL of its state, one directory per domain, created owner-only (0700) when
+# missing, every file in it 0600. The layout is fixed; anything else in it stops the Server, named:
+#
+#   configurations/<name>.json            a Configuration, with every revision still rolled out
+#   deployments/<name>.json               a Deployment
+#   packages/<agent type>@<version>.json  a Package: its identity and entries, no bytes
+#   blobs/<sha256>                        an artifact, named by its SHA-256, stored once
+#   agents/<instance_uid>.json            an Agent: what it reported, its assignment, its labels
+#   hosts/<host>.json                     a Host
+#   certificates/<issuer>-<serial>.json   a certificate the client CA signed (the register)
+#   revocations.json                      the revocation list
+#   bootstrap/<issuer>-<serial>.json      a bootstrap certificate the Server issued, and its
+#                                         PKCS#12 file beside it as .p12
+#   enrolment.json                        the enrolment window and its pending requests
+#   audit/audit-<first seq>.jsonl         the audit record
+#
+# Back it up as one directory, with the Server stopped. A Server before 0.5.5 kept its state under
+# config_dir and packages_dir instead; those keys stop this Server at startup, and
+#   server migrate --config-dir <old> --packages-dir <old> --data-dir <new>
+# moves it here once, while the Server is stopped.
+data_dir = "fleet-data"
+
+# The largest OpAMP message accepted or sent, on either transport and in either direction. The
+# protocol requires the limit and recommends this default; a fleet of small status reports runs
+# comfortably on far less. An oversized request is answered 413, an oversized WebSocket message
+# closes the connection with 1009.
+max_message_size_bytes = 67108864
+
+# How long an Agent that declares ReportsHeartbeat may be silent before the fleet view calls it
+# stale. It is an observation, never a state change: nothing is torn down, and the next
+# report clears it. Ignored when [connection_offer] names a heartbeat interval — the period this
+# Server actually asked for is a better answer than a default. Three times the protocol's own
+# default heartbeat of 30 s, because one missed beat is a lost packet.
+stale_after_secs = 90
+
+# The largest package artifact the REST API accepts on upload. A package is a program, not a
+# message: an otelcol-contrib binary is a few hundred megabytes, so this bound is far larger than
+# max_message_size_bytes above and applies to the package upload route alone.
+#
+# WHAT IS ROLLED OUT, AND HOW. Three objects, and the split is the whole of the model:
+#
+#   a CONFIGURATION   content only — {"body", "service_name", "role"}, no Selector — written with
+#                     PUT /api/v1/configurations/{name}. It reaches only the Agents of the type its
+#                     service_name names, which every Configuration states.
+#   a PACKAGE         what an Agent type runs at a version. Its identity is those two tokens and
+#                     nothing else — no name of its own, no Selector, no kind flag — holding one
+#                     uploaded artifact per platform, each with its Ed25519 signature. It aims at
+#                     nobody and is never rolled out.
+#   a DEPLOYMENT      a name, the channel its Selector aims at, at most one Package per Agent type,
+#                     and any number of Configurations. The only thing rolled out.
+#
+# The Agent type is compared raw against the `service.name` the Agents report, so spell
+# it exactly — a Client updating itself is typed `supervisor`.
+#
+# Create a Package with PUT /api/v1/packages/{agent_type}/{version} — the body has no writable
+# field, so {} is all of it. Then upload one artifact per platform with
+# PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch} (artifact as the body), and sign
+# each entry with PUT .../entries/{os}/{arch}/signature, body {"signature": "<hex>"}. Every
+# artifact is uploaded: the Server holds what it offers and fetches nothing from anywhere. No two
+# entries share a platform — writing one again replaces it, and its signature with it. One
+# signature serves every Deployment that holds the Package.
+#
+# Then put it in a channel, with the Configurations that go with it:
+#   PUT  /api/v1/deployments/{name}                    body {"selector": {"channel": "stable"}}
+#   PUT  /api/v1/deployments/{name}/packages/{agent_type}/{version}
+#   PUT  /api/v1/deployments/{name}/configurations/{configuration}
+#   POST /api/v1/deployments/{name}/rollout               <- THE ONLY CALL THAT DISTRIBUTES
+#
+# SAVING NEVER DISTRIBUTES: everything above the rollout stores. The rollout replaces each Agent's
+# assignment with one release — the Package for its type, and every Configuration that fits its
+# type, as saved now — and sends only what changed. An Agent that enrols, or is labelled into the
+# channel, afterwards waits for an act of its own. A Deployment stays editable in every state;
+# an edit waits for the next press.
+#
+# An Agent belongs to AT MOST ONE Deployment. Two claiming it is a conflict — it is offered
+# nothing new and the fleet view names both — so a Selector may not be empty and there is no
+# fleet-wide default. A Selector is equality and cannot say "not", so channels are a partition over
+# an attribute every Agent carries. The Server prescribes NO key — `channel` (which stream of
+# versions a host follows), `region` (where it runs) and `tenant` (whose it is) are examples, not a
+# schema. Set it in the host's [attributes], or as a Server label (PUT /api/v1/agents/<uid>/labels),
+# which needs no access to the host.
+#
+# A canary is two channels holding different versions. Finishing the rollout is giving the stable
+# channel the canary's version and pressing once more — NOT widening the canary channel, which would
+# have both claim the same hosts.
+#
+# While a Package is rolled out to an Agent its entries are immutable; ship a change as the next
+# version, which is a new Package. Nothing an Agent's assignment pins — a Package, a Configuration
+# or a Deployment — can be deleted: roll those Agents out through a Deployment without it first. Taking a bad version back is not a rollout: the fleet only
+# moves forward, and what reverses a release is the host's own health-gated rollback.
+#
+# The download endpoint sits on the Agent plane, behind the same handshake as /v1/opamp: only an
+# Agent holding a certificate of the fleet reaches it. The content hash and the
+# signature are what protect an installed binary, and an unsigned entry is offered to nobody.
+max_package_size_bytes = 1073741824
+
+# =============================================================================================
+# Sections — everything below here is a [table]. Nothing but tables may follow.
+# =============================================================================================
+
+# The operator's public package-signing key, hex — the same value as the Clients'
+# [packages] verification_key (`opamp-fleetctl package keygen` prints it). Optional. With it the
+# Server checks each entry's signature when it is written and when the store is loaded, and the
+# Packages tab and GET /api/v1/packages report it valid or invalid; without it every signature is
+# reported unchecked. FEEDBACK ONLY: an invalid signature is stored and offered all the same — each
+# Client's own check is what decides. A malformed key fails startup.
+# [packages]
+# verification_key = "<hex-encoded Ed25519 public key>"
+
+# TLS, REQUIRED: the Agent plane serves HTTPS/WSS with this certificate and key, in TLS 1.3
+# only, and so does the Operator plane unless [rest.tls] below names its own. Without the
+# section the Server refuses to start, naming it.
+#
+# client_ca_file is REQUIRED too: the Agent plane asks every peer for a client
+# certificate IN THE HANDSHAKE, and one that chains to neither this CA nor the bootstrap CA of
+# [enrolment] never reaches the Server — the package download included. That certificate is the
+# whole of admission: the Agent plane has no credential, and an [auth] section is refused at
+# startup. The Operator plane asks
+# for none; a browser reaches it with the password of [rest.auth].
+[tls]
+cert_file = "cert.pem"
+key_file = "key.pem"
+client_ca_file = "client-ca.pem"
+
+# The certificate authority that signs Agent CSRs. Present is what arms the CSR flow:
+# the Server declares AcceptsConnectionSettingsRequest, and an Agent that holds one of its
+# certificates renews it automatically once it is two thirds through its life — generating a key
+# that never leaves its host, and receiving the certificate as an ordinary connection-settings
+# offer. Point client_ca_file above at this CA's certificate.
+#
+# This is deliberately NOT the listener's own certificate and key: a CA private key sitting where
+# the server certificate lives means compromising the Server mints fleet members at will. A
+# certificate can be revoked through the REST API; validity_days bounds what one stolen
+# unnoticed is good for, and a Client renews at two thirds of it.
+# [client_ca]
+# cert_file = "client-ca.pem"
+# key_file = "client-ca-key.pem"
+# validity_days = 30
+
+# ENROLMENT: how a fresh host gets its first certificate. It connects with a BOOTSTRAP
+# certificate from a CA of its own — never the client CA. That opens
+# nothing by itself: the connection is admitted only while an operator holds the enrolment window
+# open, it may only send a certificate signing request, and the request waits until an operator
+# approves it:
+#   POST /api/v1/enrolment/window  {"open_for_secs": 3600}   opens it (1 s to 24 h); closed by default
+#   GET  /api/v1/enrolments                                  lists the pending requests
+#   POST /api/v1/enrolments/<id>/approve | /reject           decides one
+# The Client logs its request's key fingerprint, which is the id listed, so an approval can be
+# matched to a host. Needs [client_ca], which signs the approved request. Without [enrolment] no
+# host enrols, and an operator issues every certificate.
+# With bootstrap_ca_key_file the Server also issues the bootstrap certificates, each with a subject
+# the operator names (country, state, locality, organization, organizational_unit,
+# organization_identifier), which every host certificate issued from it carries, and hands out the
+# key in that one answer:
+#   POST /api/v1/bootstrap-certificates  {"subject": {"organization": "…"}, "validity_days": 10}
+#   GET  /api/v1/bootstrap-certificates  lists the valid ones, each revocable by its serial
+# The pending queue holds at most 1024 requests; those of one bootstrap certificate at most
+# max_pending_per_bootstrap of them (1 to 1024), a quarter by default.
+# [enrolment]
+# bootstrap_ca_file = "bootstrap-ca.pem"
+# bootstrap_ca_key_file = "bootstrap-ca-key.pem"
+# max_pending_per_bootstrap = 256
+
+# Repeated admission failures from one peer address: past max_failures 401s within
+# window_secs, the address is answered 429 with Retry-After for backoff_secs, before anything else
+# is checked. The Operator plane counts its own failures the same way.
+# [admission_throttle]
+# max_failures = 10
+# window_secs = 60
+# backoff_secs = 300
+
+# How often an admitted peer is heard on the Agent plane. Every OpAMP message and every
+# package download takes a token from the bucket of the host its certificate names — of the Agent
+# it names and of the aggregate, for a host marked as a Gateway. A message past the limit is
+# answered Unavailable with a 30 s retry_info, a download 429 with Retry-After: 30. 0 is refused;
+# the Server warns at startup when messages_per_sec times the heartbeat carries fewer than 256
+# Agents per host.
+# [agent_rate_limit]
+# messages_per_sec = 10
+# burst = 300
+# gateway_messages_per_sec = 500
+# gateway_burst = 10000
+
+# The audit record: one JSON line per security decision — admissions and refusals,
+# enrolment, issuance, revocation, operator acts, package outcomes — in
+# <data_dir>/audit/, each line carrying the SHA-256 of the one before. Check it with
+#   server audit-verify <data_dir>/audit
+# A Server that cannot write it admits no one until it can. Bounded by size, never switched off.
+# [audit]
+# max_file_bytes = 67108864   # a file this large is closed and the next one started
+# keep_files = 16             # the oldest past this is deleted, its last hash recorded first
+
+# Optional connection settings offered to the fleet: every Agent declaring
+# AcceptsOpAMPConnectionSettings is offered these, verifies them by actually connecting, and
+# switches only on success. Either key or both works, but not an empty section. The offer carries
+# no credential and no headers: a credential key (bearer_token_file, username, password_file,
+# bearer_token, password) is refused at startup, naming the key.
+# [connection_offer]
+# heartbeat_interval_secs = 30             # heartbeat on WebSocket, polling interval on HTTP
+# endpoint = "wss://fleet.example:4320/v1/opamp"   # move the fleet to a new endpoint
+
+# WHERE THE FLEET SENDS ITS OWN TELEMETRY. Each signal is independent, and each is
+# offered only to Agents that declare they can report it. The endpoints are full OTLP/HTTP URLs
+# WITH PATH — this Server appends no /v1/metrics for you, because guessing a receiver's routing is
+# how telemetry disappears into a 404 nobody looks at.
+#
+# An Agent sends process metrics for itself and for each process it supervises, its own log output,
+# and spans over the operations that already have a lifecycle here (a configuration applied, a
+# package installed, a self-update). It refuses a cleartext http:// destination anywhere but the
+# loopback literals 127.0.0.1 and ::1 — by address, never by name.
+#
+# Nothing about this is configured on the Client: the capability means "report to the destination
+# the Server specifies", so this section is the only place it comes from.
+#
+# Five things worth knowing before you fill this in:
+#
+#  - The destinations are FLEET-WIDE. There is no Selector here as there is on Deployments:
+#    every Agent is offered the same three addresses. The only
+#    per-Agent variation is which of the three signals it gets, and that follows the capabilities
+#    the Agent itself declares.
+#  - A change here needs a SERVER RESTART. The offer is compiled once at startup; there is no
+#    reload, over SIGHUP or otherwise, and the REST API does not manage it.
+#  - The headers below apply to ALL THREE signals. There is one header map, not one per signal —
+#    which is the right shape when the three URLs are one collector, and the wrong one if you split
+#    them across backends that want different tokens.
+#  - Metrics arrive every 10 SECONDS per Agent, the interval the protocol recommends. Size the
+#    backend for it: that is six exports a minute per Agent — six hundred a minute across a hundred
+#    of them — each carrying process metrics for the Agent and for every process it supervises.
+#  - Offer only what you can receive. A signal you leave unset is simply not offered, and the Agent
+#    reports nothing for it — which costs less than a destination that answers 404 forever.
+#  - What this section says, it says about ALL THREE signals. An Agent already reporting
+#    traces STOPS when you remove traces_endpoint from here: the offer is the whole truth about own
+#    telemetry, not a list of changes. Which is what makes a destination removable at all.
+#
+# TURNING IT OFF. An endpoint set to the empty string is an explicit withdrawal — the Agent shuts
+# that exporter down, forgets the destination, and acknowledges it like any other offer:
+#
+#     [telemetry_offer]
+#     metrics_endpoint = ""      # stop reporting metrics
+#
+# That is the only way to say "stop all three", because a Server that offers nothing says nothing:
+# DELETING this section does not switch anything off. It withdraws nothing, so that a Server with no
+# telemetry of its own cannot tear down a fleet another Server pointed at a collector — and so an
+# Agent keeps reporting across restarts, which is the point of the destination being persisted.
+# To stop a fleet: set the endpoints empty, restart the Server, let the Agents acknowledge, then
+# remove the section.
+#
+# Pick ONE of the three shapes below. They are alternatives, not a sequence — switching on two of
+# them leaves the file with a duplicated table header, which is an error rather than a merge.
+#
+# (1) Development — the stack in observability/ runs on the host and publishes the Collector's
+#     OTLP/HTTP port there; inside the Dev Container, .devcontainer/forward-otlp.sh puts that port
+#     on the container's loopback, so the same URL reaches the same Collector in both places.
+#     Cleartext is accepted here because the address is a loopback literal, the one place
+#     plaintext is allowed — 127.0.0.1, not the name localhost. While the stack is
+#     down, the exports fail and the Agents keep running; the next export after it is up arrives.
+# [telemetry_offer]
+# metrics_endpoint = "http://127.0.0.1:4318/v1/metrics"
+# traces_endpoint = "http://127.0.0.1:4318/v1/traces"
+# logs_endpoint = "http://127.0.0.1:4318/v1/logs"
+
+# (2) Production — TLS in front of the collector, and a token if it wants one. An Agent REFUSES a
+#     cleartext destination anywhere but 127.0.0.1 or ::1 — a LAN address and a host name included:
+#     it is not warned about and not downgraded, the offer comes back FAILED naming the
+#     reason. Terminate TLS 1.3 in front of the receiver and offer the https:// URL.
+# [telemetry_offer]
+# metrics_endpoint = "https://collector.example:4318/v1/metrics"
+# traces_endpoint = "https://collector.example:4318/v1/traces"
+# logs_endpoint = "https://collector.example:4318/v1/logs"
+# [telemetry_offer.headers]
+# Authorization = "Bearer a-telemetry-token"
+#
+# (3) Metrics only — the smallest useful shape: one signal, no header, nothing else offered.
+# [telemetry_offer]
+# metrics_endpoint = "https://collector.example:4318/v1/metrics"
+
+# THE OPERATOR PLANE: the REST API, the API docs, and the bundled UI, on their own
+# listener, over the TLS of [tls]. This port carries the authority to reconfigure and re-package the
+# entire fleet — hence loopback by default. Reach it through an SSH tunnel, or publish it
+# deliberately with listen = "0.0.0.0:4321": off the loopback [rest.auth] is required, and the
+# Server refuses to start without it.
+#
+# It must differ from the Agent plane's `listen` above; equal addresses are refused at startup,
+# by name, instead of surfacing later as "address already in use".
+[rest]
+listen = "127.0.0.1:4321"
+max_connections = 256
+
+# Basic authentication over the WHOLE Operator plane: the REST API, the OpenAPI document,
+# the API docs, and the UI. Optional on the loopback, required anywhere else. Every request
+# then needs `Authorization: Basic <base64(user:password)>`; anything else is answered 401 with a
+# challenge, which is what makes a browser ask for the password instead of showing a bare error —
+# so the UI needs no login page.
+#
+# Several users are how a credential is rotated, or one operator's is withdrawn on its own. The
+# operator tools carry it in the URL they are given: --server https://fleet-admin:secret@host:4321
+#
+# This is authentication, not authorization: everyone listed can do everything the plane offers.
+# Basic sends the password on every request; the plane's TLS is what keeps it off the wire. The
+# password is listed by its Argon2id hash: `server hash-credential --basic`.
+# [rest.auth.basic_users]
+# fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
+
+# The Operator plane's own certificate and key, OPTIONAL. Without the section the Operator plane
+# serves [tls]'s, which chains to the fleet's server CA — the one every Client trusts, and one a
+# browser trusts only once it is imported. With it, the Operator plane serves this pair instead,
+# typically from your organization's own PKI, so that its browsers trust the UI as they are; the
+# Agent plane keeps [tls]'s. cert_file holds the leaf first and any intermediates after it.
+#
+# Nothing else belongs here: the Operator plane asks for no client certificate. A key that does
+# not match its certificate refuses the start, naming both files. A new pair takes effect when the
+# Server restarts; `server pki status` lists it, and the running Server warns before it ends.
+# A certificate from a PKI rarely names 127.0.0.1: through an SSH tunnel to a loopback listen,
+# dial the name the certificate carries.
+# [rest.tls]
+# cert_file = "ui.pem"
+# key_file = "ui-key.pem"

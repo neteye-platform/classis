@@ -1,0 +1,30 @@
+#!/bin/sh
+# Pre-removal for the `.deb` and the `.rpm` alike (ADR-0019 clause 36).
+#
+# The mirror of the post-install: what `service install` registered, `service uninstall` removes.
+# `service uninstall` itself deletes nothing (ADR-0019); the cleanup a *package* removal owes —
+# the staged versions, the `current` pointer, the PATH symlink, and on purge the data root —
+# happens in the post-removal (ADR-0019), after the package's own files are gone.
+#
+# An **upgrade** must fall straight through. dpkg calls `prerm upgrade <new>` and rpm `%preun 1`
+# before installing the replacement, whose post-install re-runs `service install`; unregistering
+# here would stop a managed host's Client in the middle of an `apt upgrade` and, because the
+# post-install never starts what it did not find running, leave it stopped.
+set -e
+
+case "${1-}" in
+# dpkg: everything that is not a real removal.
+upgrade | failed-upgrade | deconfigure) exit 0 ;;
+# rpm: "$1" is the number of instances that will remain — 1 means a replacement is coming.
+1) exit 0 ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1; then
+	systemctl stop opamp-fleet.service >/dev/null 2>&1 || true
+fi
+
+# Best-effort: a host whose service was never registered, or already unregistered by hand, must
+# still be able to remove the package. The payload path, not the PATH symlink (ADR-0019): the
+# symlink resolves through a layout an operator may have already deleted by hand, while the
+# payload is the file this package guarantees to still exist at this moment.
+/usr/libexec/opamp-fleet/supervisor service uninstall || true

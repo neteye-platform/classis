@@ -1,0 +1,3 @@
+# A pull request body sits under the pull request's title, so its template starts at "##".
+config:
+  first-line-heading: false

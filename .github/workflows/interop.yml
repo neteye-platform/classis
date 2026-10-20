@@ -1,0 +1,45 @@
+name: Interop
+
+# Conformance against a second reading of the specification (ADR-0011). The Client and the Server
+# share `crates/opamp` and were written from the same sentences, so a misread MUST is symmetric and
+# the rest of the suite cannot see it. `crates/fleet-agent/tests/interop_opamp_go.rs` meets each end
+# with `opamp-go`, the reference implementation, pinned in `interop/go.mod`.
+#
+# Deliberately not on `push` or `pull_request`: it needs a Go toolchain the ordinary build does not,
+# and a red run is triaged before it is called a defect (`interop/README.md`), so a merge must not
+# hang on it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Saturday, an hour after the service smoke test.
+    - cron: "0 4 * * 6"
+
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    name: interop against opamp-go
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: interop/go.mod
+          cache-dependency-path: interop/go.sum
+      # The harness is code too: formatted and vetted before anything runs it.
+      - name: Lint the Go harness
+        working-directory: interop
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Built as its own step so a compile failure is not reported as an interop failure.
+      - name: Build
+        run: cargo test -p fleet-agent --test interop_opamp_go --locked --no-run
+      - name: Both ends against opamp-go, on both transports
+        run: cargo test -p fleet-agent --test interop_opamp_go --locked -- --ignored --nocapture --test-threads=1

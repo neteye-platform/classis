@@ -1,0 +1,53 @@
+#!/bin/sh
+# Post-removal for the `.deb` and the `.rpm` alike (ADR-0019).
+#
+# `service uninstall` (already run in the pre-removal) deliberately deletes nothing — that rule
+# (ADR-0019) protects the *manual* flows, where the layout is the operator's. A package removal is
+# different: the operator asked this host to stop being managed, and what the package flow created
+# it cleanly takes back —
+#
+#   remove:  the PATH symlink and the executable layout — every staged version and the `current`
+#            pointer, which live under `/opt`. The data root stays: this host's identity and the
+#            configuration the operator wrote are not binaries, and a reinstall picks them back up.
+#   purge:   (dpkg only) all of the above and the data root itself — state, logs and
+#            configuration included. Purge is dpkg's word for "leave nothing"; rpm has no
+#            equivalent and stays at remove-level cleanup.
+#
+# That distinction is ADR-0019's, with the paths redrawn across the two roots by ADR-0019 clause 8.
+#
+# Only on a real removal. dpkg calls `postrm upgrade <new>` mid-upgrade, where the new version's
+# post-install re-lays the link; rpm's `%postun` gets the count of remaining instances, where `1`
+# means a replacement is installed. Cleaning up there would undo the successor's work.
+#
+# The paths name the default system roots (`default_layout_root` and `default_root` in
+# crates/fleet-agent/src/service/manager.rs) — the only roots a packaged install ever uses. An install
+# rooted elsewhere with `--root` is a manual one and is deliberately not touched.
+#
+# No hook removes the account `opamp-fleet` or its group, on removal or on purge (ADR-0042 clause
+# 4): files it owns outside the two roots, such as a Managed Process's output, would pass to
+# whichever account is later given the same uid.
+#
+# `-L` guards the symlink removal: only a symlink is ours to delete. A regular file at that path
+# is an operator's (or an older package's) binary, and deleting somebody else's file on the way
+# out is how uninstalls earn distrust.
+set -e
+
+layout_root=/opt/opamp-fleet
+data_root=/var/lib/opamp-fleet
+
+case "${1-}" in
+# dpkg: a real removal, keeping state and configuration.
+remove) ;;
+# dpkg: leave nothing.
+purge)
+	rm -rf "$data_root"
+	;;
+# rpm: no instance remains.
+0) ;;
+*) exit 0 ;;
+esac
+
+if [ -L /usr/bin/opamp-fleet ]; then
+	rm -f /usr/bin/opamp-fleet
+fi
+rm -rf "$layout_root"

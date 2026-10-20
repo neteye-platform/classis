@@ -1,0 +1,14 @@
+#!/bin/sh
+# rpm `%posttrans` only — dpkg has no equivalent hook and needs none (ADR-0019).
+#
+# On an rpm *upgrade*, the ordering is: new files land, new `%post` runs, and only then are the
+# old package's files erased — including the regular `/usr/bin` file an earlier release delivered
+# there, which takes the symlink `%post` just laid with it. This scriptlet runs
+# after that erasure, at the end of the transaction, so the link it lays is the one that survives.
+# On a fresh install it merely repeats `%post`'s work, which is idempotent.
+#
+# dpkg removes the obsolete `/usr/bin` file during unpack, before `postinst configure` runs, so
+# the deb's link is never at risk and cargo-deb is not given this file.
+set -e
+
+ln -sfn /opt/opamp-fleet/current/supervisor /usr/bin/opamp-fleet

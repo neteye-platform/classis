@@ -1,0 +1,393 @@
+/* The quiet look: a fleet console is watched for hours and read for exceptions, so the page
+   stays still and only state is loud. Surfaces are warm, near-neutral paper; the action you
+   press is ink, not a brand colour, so no hue on the page competes with what a badge says.
+   Colour means exactly two things: the state of an Agent or an act (green, amber, red, gray,
+   each a tint with its own dot) and what is selected (indigo). Hierarchy is carried by type —
+   weight, size, tracking and a monospace face with tabular figures for every identifier and
+   number — rather than by boxes and lines; the lines that remain are hairlines.
+
+   Light is the ground state; dark is the other, below. Which one shows is the page's choice: the
+   operator's, or the system's. Only the platform's own faces are used, since the plane's policy loads
+   nothing from another origin. */
+:root {
+  color-scheme: light;
+  --bg: #f7f6f3;
+  --panel: #ffffff;
+  /* The track a segmented control or a field sits in — a step below the page. */
+  --sunken: #efeee9;
+  --border: #e7e5e0;
+  --border-strong: #d6d3cc;
+  --text: #1c1b19;
+  --muted: #6b6862;
+  --faint: #8f8b84;
+  --link: #1c1b19;
+  /* The action is ink: the darkest thing on the page, so it is found without a colour. */
+  --primary: #1c1b19;
+  --primary-fg: #ffffff;
+  --primary-hover: #3a3833;
+  /* What is picked, expanded, or being edited — and the focus ring, which points the same way. */
+  --accent: #4f46e5;
+  --accent-fg: #ffffff;
+  --accent-text: #4338ca;
+  --accent-tint: #eef0ff;
+  --row-current: #f8f8fd;
+  --row-hover: #faf9f6;
+  --chip-bg: #f1f0ec;
+  --chip-fg: #3d3b36;
+  /* Attribute namespaces: hues no state uses, tinted, their text at 7:1. */
+  --hue-blue-bg: #c4d9f7;  --hue-blue-fg: #123a6e;
+  --hue-teal-bg: #b9e6de;  --hue-teal-fg: #0a4f46;
+  --hue-pink-bg: #f4c8de;  --hue-pink-fg: #7c1449;
+  --hue-slate-bg: #cdd5e2; --hue-slate-fg: #273449;
+  --ok-bg: #1e7a3f;
+  --ok-fg: #ffffff;
+  --soft-green-bg: #e7f4ec;
+  --soft-green-fg: #1e7a3f;
+  --soft-gray-bg: #efeee9;
+  --soft-gray-fg: #57544e;
+  --soft-amber-bg: #fcf2df;
+  --soft-amber-fg: #965a06;
+  --soft-red-bg: #fcebeb;
+  --soft-red-fg: #b4232c;
+  --shadow-sm: 0 1px 2px rgba(28, 27, 25, 0.06);
+  --shadow-lg: 0 24px 48px -12px rgba(28, 27, 25, 0.25), 0 2px 6px rgba(28, 27, 25, 0.08);
+  --overlay: rgba(28, 27, 25, 0.35);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  /* An effective configuration's colours (ADR-0038): keys in ink, values in the namespace hues
+     no state uses, comments muted, so neither a state nor the selection's indigo appears. */
+  --shiki-foreground: #1c1b19;
+  --shiki-background: #f7f6f3;
+  --shiki-token-keyword: #1c1b19;
+  --shiki-token-string: #0a4f46;
+  --shiki-token-string-expression: #0a4f46;
+  --shiki-token-constant: #123a6e;
+  --shiki-token-comment: #6b6862;
+  --shiki-token-parameter: #7c1449;
+  --shiki-token-function: #273449;
+  --shiki-token-punctuation: #6b6862;
+  --shiki-token-link: #1c1b19;
+}
+/* The only other state. Light needs no rule of its own — :root above *is* light, so the
+   page's `data-theme="light"` matches nothing here. The same roles on warm graphite: panels
+   lift by lightness rather than by shadow, which dark surfaces swallow. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211;
+  --panel: #1b1b19;
+  --sunken: #0d0d0c;
+  --border: #2a2926;
+  --border-strong: #3a3935;
+  --text: #ecebe7;
+  --muted: #9c9890;
+  --faint: #75726b;
+  --link: #ecebe7;
+  --primary: #ecebe7;
+  --primary-fg: #121211;
+  --primary-hover: #ffffff;
+  --accent: #5b52e6;
+  --accent-fg: #ffffff;
+  --accent-text: #a5a0ff;
+  --accent-tint: #1f1d3a;
+  --row-current: #1e1e22;
+  --row-hover: #201f1d;
+  --chip-bg: #262523;
+  --chip-fg: #d4d1ca;
+  /* Attribute namespaces: hues no state uses, tinted, their text at 7:1. */
+  --hue-blue-bg: #24456f;  --hue-blue-fg: #c3dcfb;
+  --hue-teal-bg: #1b4d47;  --hue-teal-fg: #a5ebe0;
+  --hue-pink-bg: #5c2443;  --hue-pink-fg: #f9c8e1;
+  --hue-slate-bg: #3b465b; --hue-slate-fg: #d3dbe9;
+  --ok-bg: #4cc77a;
+  --ok-fg: #073318;
+  --soft-green-bg: #15281c;
+  --soft-green-fg: #5fd38a;
+  --soft-gray-bg: #262523;
+  --soft-gray-fg: #b3afa6;
+  --soft-amber-bg: #2b2212;
+  --soft-amber-fg: #f0b54a;
+  --soft-red-bg: #2e1718;
+  --soft-red-fg: #f58a8a;
+  --shadow-sm: 0 0 0 1px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px #2a2926;
+  --overlay: rgba(0, 0, 0, 0.6);
+  /* An effective configuration's colours (ADR-0038), the same roles on graphite. */
+  --shiki-foreground: #ecebe7;
+  --shiki-background: #121211;
+  --shiki-token-keyword: #ecebe7;
+  --shiki-token-string: #a5ebe0;
+  --shiki-token-string-expression: #a5ebe0;
+  --shiki-token-constant: #c3dcfb;
+  --shiki-token-comment: #9c9890;
+  --shiki-token-parameter: #f9c8e1;
+  --shiki-token-function: #d3dbe9;
+  --shiki-token-punctuation: #9c9890;
+  --shiki-token-link: #ecebe7;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+body {
+  margin: 0;
+  font: 14px/1.5 var(--sans);
+  background: var(--bg);
+  color: var(--text);
+}
+::selection { background: var(--accent-tint); color: var(--accent-text); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 40px 32px 64px; }
+
+/* The head is type alone: no band, no box. The controls in it are small and quiet, since they
+   are set once and then forgotten. */
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
+.page-head h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -0.025em; line-height: 1.2; }
+.page-head p { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
+.page-head .btn, .page-head select { height: 30px; padding: 0 10px; font-size: 12.5px; }
+/* The theme's three buttons, joined into one bar; the pressed one is ink, as an action is. */
+.theme-switch { display: inline-flex; }
+.theme-switch .btn { border-radius: 0; box-shadow: none; }
+.theme-switch .btn + .btn { margin-left: -1px; }
+.theme-switch .btn:first-child { border-radius: 7px 0 0 7px; }
+.theme-switch .btn:last-child { border-radius: 0 7px 7px 0; }
+.theme-switch .btn[aria-pressed="true"] { position: relative; background: var(--text); color: var(--panel); border-color: var(--text); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent; border-radius: 7px; padding: 0 14px; height: 34px;
+  font: inherit; font-size: 13.5px; font-weight: 550; cursor: pointer; white-space: nowrap;
+  transition: background-color 120ms var(--ease), border-color 120ms var(--ease), color 120ms var(--ease);
+}
+.btn-primary { background: var(--primary); color: var(--primary-fg); box-shadow: var(--shadow-sm); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-ghost { background: var(--panel); color: var(--text); border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+.btn-ghost:hover { border-color: var(--faint); }
+/* The rollout act, wearing the Healthy badge's tint and its shape, pressable. Hover deepens it
+   to the solid green, the same step the badge's dot is in. */
+.btn-ok {
+  background: var(--soft-green-bg); color: var(--soft-green-fg); box-shadow: none;
+  border-radius: 999px; height: 24px; padding: 0 10px; font-size: 12px;
+}
+.btn-ok:hover { background: var(--ok-bg); color: var(--ok-fg); }
+/* A button sized to sit inside a form line rather than to head one. */
+.btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+/* A key fingerprint is compared character by character with the Client's log, so it is shown
+   whole, in the monospace face, and breaks anywhere rather than overflowing its cell. */
+.fingerprint { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); }
+
+/* Tabs: a segmented control. The managements are places, not actions, so the active one is
+   lifted out of its track rather than coloured; indigo stays reserved for what is selected
+   *within* a section. */
+.tabs {
+  display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 24px; max-width: 100%; overflow-x: auto;
+  background: var(--sunken); border-radius: 10px; border: 1px solid var(--border);
+}
+.tab {
+  border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13.5px;
+  font-weight: 550; padding: 6px 14px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  transition: background-color 120ms var(--ease), color 120ms var(--ease);
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); background: var(--panel); box-shadow: var(--shadow-sm), 0 0 0 1px var(--border); }
+.tab .num { margin-left: 8px; font-size: 12px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Configurations and Packages editors — each fills its own tab */
+.config { padding: 20px; margin-bottom: 20px; }
+.config h2 { margin: 0 0 14px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.config-fields { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+/* Fields sit a step below the surface they are on, so an empty one still reads as a place to
+   type; focus lifts it to the panel and rings it. */
+.config-fields input, textarea, select, .filters input {
+  border: 1px solid var(--border-strong); border-radius: 7px; background: var(--bg); color: var(--text);
+  font-size: 13px; transition: border-color 120ms var(--ease), background-color 120ms var(--ease);
+}
+.config-fields input:focus, textarea:focus, .filters input:focus, select:focus {
+  background: var(--panel); border-color: var(--accent); outline: 3px solid var(--accent-tint); outline-offset: 0;
+}
+.config-fields input { flex: 1; min-width: 220px; height: 34px; padding: 0 12px; font-family: var(--mono); }
+.config-fields input::placeholder, textarea::placeholder { color: var(--faint); }
+/* A field whose value is a short token, so four of them fit one row. */
+.config-fields input.narrow { flex: 0 1 190px; min-width: 150px; }
+/* A field the action refuses to run without. Marked only while it is empty — once it holds
+   a value there is nothing left to point at, and a border that kept shouting would be the
+   same noise as no marking at all. */
+.config-fields input.required:placeholder-shown { border-color: var(--soft-amber-fg); border-style: dashed; }
+/* A field that stands alone on its line and should not stretch across it — the package name,
+   which everything on the lines below is a statement about. */
+.config-fields input.quarter { flex: 0 1 25%; min-width: 180px; }
+/* Selected is the second accent, not the primary: the primary is what you press, this is
+   what you are looking at. */
+.chip.selected { background: var(--accent); color: var(--accent-fg); }
+.chip.clickable { cursor: pointer; transition: background-color 120ms var(--ease); }
+.chip.clickable:not(.selected):hover { background: var(--accent-tint); color: var(--accent-text); }
+.pill.clickable { cursor: pointer; }
+textarea {
+  width: 100%; min-height: 120px; padding: 10px 12px; line-height: 1.55;
+  font-family: var(--mono); font-size: 12.5px; resize: vertical;
+}
+.config-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.hash { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* Filter bar */
+.filters { display: flex; align-items: center; gap: 0; padding: 10px; margin-bottom: 14px; }
+.filters .dropdown {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--border-strong); border-radius: 7px; color: var(--muted);
+  font-size: 13px; background: var(--panel); white-space: nowrap;
+}
+.filters input { flex: 1; margin-left: 8px; height: 32px; padding: 0 12px; font-family: var(--sans); }
+.filters input::placeholder { color: var(--faint); }
+/* A choice from a fixed list looks like the text fields beside it. */
+select { height: 34px; padding: 0 10px; font-family: inherit; cursor: pointer; }
+.filters select { height: 32px; }
+
+.table-wrap { overflow-x: auto; }
+/* Fixed layout: the table is exactly as wide as its container and never wider — content
+   wraps or ellipsizes inside its column instead of growing a horizontal scrollbar. The
+   narrow columns are sized in px for the one kind of value they hold; Name gets a share of
+   the whole; what remains is split between the columns whose content is genuinely
+   elastic (Operating System is px too — its values repeat from a small set). The wrap's
+   overflow-x stays as the fallback for windows too narrow for any division. */
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; table-layout: fixed; }
+th[data-key="name"] { width: 16%; }
+th[data-key="version"] { width: 72px; }
+th[data-key="os"] { width: 130px; }
+th.col-network { width: 136px; }
+th[data-key="config"] { width: 110px; }
+th[data-key="seq"] { width: 52px; }
+th[data-key="seen"] { width: 88px; }
+/* Column heads are labels, not content: small capitals in the muted ink, so the eye lands on
+   the rows. */
+thead th {
+  text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.07em; white-space: nowrap; user-select: none;
+}
+thead th.sortable { cursor: pointer; }
+thead th.sortable:hover { color: var(--text); }
+th .arrow { opacity: .7; font-size: 9px; margin-left: 2px; }
+/* overflow hidden: under the fixed layout a value that fits no line of its column — one
+   overlong chip, an unbroken token — is clipped at the cell's edge rather than written
+   across the neighbour; the full value stays in the cell's own tooltip or details. */
+tbody td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow: hidden; }
+tbody tr:last-child td { border-bottom: 0; }
+/* An agent is a row — and, when it is the current one, the rows under it that carry its
+   sets. The separator then belongs after the last of them, or the agent would read as
+   several; a row without detail rows keeps its own. */
+tbody tr.agent { cursor: pointer; }
+tbody tr.agent.current td, tbody tr.detail td { border-bottom: 0; }
+tbody tr.detail.last td { border-bottom: 1px solid var(--border); }
+/* The current Agent: indigo, because it is what is being looked at — the accent, not the
+   primary — as a bar on the row's edge and a wash barely off the panel, so no cell content has
+   to change colour and the chips on it keep their own. Its detail rows share the wash, so the
+   group reads as one. */
+tbody tr.agent.current td, tbody tr.detail td { background: var(--row-current); }
+tbody tr.agent.current td:first-child, tbody tr.detail td:first-child { box-shadow: inset 3px 0 var(--accent); }
+tbody tr.detail td { padding-top: 0; padding-bottom: 8px; }
+tbody tr.detail:hover { background: transparent; }
+tbody tr { transition: background-color 80ms var(--ease); }
+tbody tr:hover { background: var(--row-hover); }
+td.chk, th.chk { width: 40px; }
+input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+
+.name { color: var(--link); font-weight: 600; text-decoration: none; }
+.name:hover { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }
+.sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+td .sub, .uid { font-family: var(--mono); }
+/* The UID is long and rarely read, but must be selectable when it is: one line, its own text
+   selection, and a size that keeps it under the name rather than beside it. */
+.uid { font-size: 11px; color: var(--faint); white-space: nowrap; user-select: all; overflow: hidden; text-overflow: ellipsis; }
+
+/* A state badge: a tint with the state's own dot. The tint is quiet enough that a column of
+   Healthy rows is calm; the word and the dot carry the state, so it reads without colour. */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px;
+  border-radius: 999px; font-size: 12px; font-weight: 550; white-space: nowrap;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
+}
+/* The ✕ riding inside the Disconnected badge: a small solid disc in the badge's own colors
+   inverted, so it reads as a control rather than dissolving into the label beside it. */
+.pill .forget-btn {
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; margin-right: -4px; border-radius: 50%; font-size: 10px; font-weight: 700;
+  background: var(--soft-red-fg); color: var(--soft-red-bg);
+}
+.pill .forget-btn:hover { filter: brightness(1.15); }
+/* Sized for its widest state — "Disconnected" with the ✕ — so the column does not breathe
+   when an Agent's connection flips; the Stale pill wraps below rather than widening it. */
+th.status, td.status { width: 180px; min-width: 180px; }
+.pill.solid-green { background: var(--ok-bg); color: var(--ok-fg); box-shadow: none; }
+/* The badge that heads a detail row. The accent, because these rows exist only under the
+   current Agent — the same indigo that marks its row as the one being looked at. */
+.pill.violet { background: var(--accent); color: var(--accent-fg); box-shadow: none; }
+.pill.green { background: var(--soft-green-bg); color: var(--soft-green-fg); }
+.pill.gray { background: var(--soft-gray-bg); color: var(--soft-gray-fg); }
+.pill.amber { background: var(--soft-amber-bg); color: var(--soft-amber-fg); }
+.pill.red { background: var(--soft-red-bg); color: var(--soft-red-fg); }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+
+.cfg { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfg.cfg-open { cursor: pointer; }
+.cfg.cfg-open:hover { color: var(--accent-text); }
+/* Text that is a document rather than a cell — an effective configuration, the reason a
+   Supervisor will not start — opens whole in this dialog, where it scrolls inside its own
+   box. A row stays one line high whatever the text is: a column that grows to fit the
+   longest error pushes every other row off the screen, and the error is read once. */
+.text-dialog {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 14px;
+  padding: 18px 20px; width: min(760px, 92vw); box-shadow: var(--shadow-lg);
+}
+.text-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); }
+.text-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; font-weight: 600; }
+.text-full {
+  margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 65vh; overflow: auto;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+}
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+/* A Package's entries: one chip per row, its columns aligned across the rows. */
+.entry-list { flex-direction: column; align-items: flex-start; }
+.entry-list .chip { display: flex; gap: 14px; align-items: baseline; font-family: var(--mono); white-space: normal; max-width: 100%; border-radius: 7px; padding: 5px 10px; }
+.entry-list .platform { min-width: 110px; }
+.entry-list .size { min-width: 64px; text-align: right; }
+.entry-list .sha { user-select: all; word-break: break-all; }
+.entry-list .sig { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.entry-list .sig input { width: 22ch; font-family: var(--mono); font-size: 12px; }
+.dep-pkg-head { display: flex; gap: 10px; align-items: center; margin: 10px 0 4px; }
+.chip { background: var(--chip-bg); color: var(--chip-fg); border-radius: 6px; padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+.chip.hue-blue { background: var(--hue-blue-bg); color: var(--hue-blue-fg); }
+.chip.hue-teal { background: var(--hue-teal-bg); color: var(--hue-teal-fg); }
+.chip.hue-pink { background: var(--hue-pink-bg); color: var(--hue-pink-fg); }
+.chip.hue-slate { background: var(--hue-slate-bg); color: var(--hue-slate-fg); }
+/* Outlined in their own ink, since the detail row they sit on is itself tinted. */
+.chip[class*="hue-"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 40%, transparent); }
+/* The count of a list value's further entries: a disc in the chip's own ink. */
+.chip-count {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: color-mix(in srgb, currentColor 18%, transparent); font-weight: 600;
+}
+code { font-family: var(--mono); font-size: 0.9em; padding: 1px 5px; border-radius: 4px; background: var(--sunken); }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.empty { padding: 56px 0; text-align: center; color: var(--muted); }
+.err { color: var(--soft-red-fg); font-size: 12px; margin-top: 4px; }
+
+/* Thin scrollbars in the page's own greys, so a scrolling box does not paint the platform's. */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+
+/* A form field with its caption: what the field is, and whether the action needs it. The words
+   "required" and "optional" say it, so the marking does not rest on colour alone; the required
+   one takes the warning's hue. The field's width class sits on the label, which is the flex
+   item; the control inside fills it. */
+.config-fields .field, .config-actions .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px; }
+.config-fields .field.quarter { flex: 0 1 25%; min-width: 180px; }
+.config-fields .field.narrow { flex: 0 1 190px; min-width: 150px; }
+.config-fields .field > input, .config-fields .field > select, .config-actions .field > input { flex: none; width: 100%; min-width: 0; box-sizing: border-box; }
+.field-cap { display: block; font-size: 11px; color: var(--muted); }
+label.field-cap { margin-bottom: 4px; }
+.need { margin-left: 4px; font-weight: 400; }
+.need.req { font-weight: 600; color: var(--soft-amber-fg); }

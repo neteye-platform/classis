@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer (ADR-0019).
+
+  The package delivers one file into `Program Files` and then calls the Client's own
+  `service install` (ADR-0019), which builds the layout and the state directory under
+  `%ProgramData%\opamp-fleet`. That division is ADR-0019 clause 8: `Program Files` is
+  `TrustedInstaller`-owned and read-only once installation finishes, and the layout is rewritten at
+  runtime by the daemon — the self-update stages a new version directory and swings `current`. It
+  is the same line the `.deb` and `.rpm` draw between `/usr/libexec` and `/opt`. The MSI therefore
+  passes **no root at all** and takes the platform defaults, which is also what makes a Windows
+  host installed from the archive and one installed by this package identical.
+
+  It registers no service of its own. An MSI `ServiceInstall` element would write a registration
+  knowing nothing of ADR-0019's service name and display name, nor of ADR-0018's SCM recovery
+  actions, both of which `service install` sets through calls the `service-manager` backend cannot
+  make. There is one install path on four operating systems and this is not a second one.
+
+  Built by `wix build` with the UI extension; `Version` and `BinaryPath` come in as -d arguments
+  from the release workflow, so the version in the MSI is the one the binary reports (ADR-0012).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="OpAMP Fleet Agent"
+           Manufacturer="OpAMP Fleet"
+           Version="$(Version)"
+           Language="1033"
+           Codepage="1252"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500"
+           UpgradeCode="0CC090C9-169E-493A-B497-760713C83DDC">
+
+    <!--
+      The UpgradeCode above is the product's permanent identity: it is how Windows Installer knows
+      1.2.4 is an upgrade of 1.2.3 rather than a second product beside it. NEVER change it. A new
+      GUID here strands every host that already carries the old one — they would keep the old
+      version installed forever and gain a duplicate entry in Add/Remove Programs. The ProductCode
+      is deliberately left to be generated per build, which is what MajorUpgrade requires.
+    -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first to install this one." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <SummaryInformation Description="OpAMP Fleet Agent — places a machine under OpAMP management" />
+
+    <!--
+      Every answer the dialogs collect is a public property (all uppercase) and Secure, and that is
+      not cosmetic:
+
+        * public, because Windows Installer resets private properties when execution crosses from
+          the UI sequence into the execute sequence — a value typed into a dialog would never reach
+          the custom action below;
+        * Secure, because that is what lets an administrator set them on the command line, which is
+          how Intune, Group Policy and SCCM will deploy this:
+
+              msiexec /i supervisor_1.2.3_windows_amd64.msi /qn ^
+                INSTALLFOLDER="C:\Program Files\opamp-fleet" ^
+                ENDPOINT="wss://fleet.example.com/v1/opamp" ^
+                SELFUPDATE=0
+
+      ENDPOINT is empty by default in the execute sequence: an empty one is a legal answer meaning
+      "configure later", and it selects the second custom action below. Only the interactive dialog
+      is prefilled with the development default (ADR-0019) — the SetProperty runs in the UI
+      sequence alone, so a silent deploy (`/qn`, Intune, Group Policy) that names no ENDPOINT still
+      defers configuration instead of pinning every host it touches to localhost, which is the
+      thousand-hosts state ADR-0019 refuses to manufacture. A value given on the command line wins
+      over the prefill, and a maintenance run never re-answers a question the first install already
+      settled. The value is the development Server in its `http://` form — deliberately not the
+      loader's own `ws://` default: the scheme selects the transport, and ADR-0019 records the
+      operator's choice of HTTP for the click-through install. `tests/msi_exe_command.rs` holds
+      the value to the loader's endpoint rule and to this string.
+    -->
+    <Property Id="ENDPOINT" Secure="yes" />
+
+    <!--
+      The self-update consent (ADR-0018). Unlike ENDPOINT's prefill this default is set in *both*
+      sequences, because default-on is the decision rather than a convenience for the click-through
+      path: a silent `/qn` deploy that names nothing gets a fleet-updatable Client, which is the
+      point. An administrator withdraws it the same way the dialog's cleared checkbox does:
+
+          msiexec /i supervisor_1.2.3_windows_amd64.msi /qn SELFUPDATE=0
+
+      Both spellings of "off" have to work, and this is the MSI trap worth naming: a condition of
+      the bare property name is true for *any* non-empty value, so `SELFUPDATE=0` — which is what an
+      administrator will type — would read as ON. The dialog's checkbox clears the property to empty
+      instead. Hence the two-armed condition below, which is what SELFUPDATEFLAG is computed from
+      rather than repeated at each use.
+
+      SELFUPDATEFLAG is computed in the **execute** sequence alone, and deliberately not in "both":
+      the only readers are the deferred custom actions, whose formatted Target is resolved as the
+      installation script is written — and `InstallInitialize`, the point a SetProperty feeding a
+      deferred action belongs before, exists in the execute sequence only. A `Sequence="both"` here
+      would ask the UI sequence to schedule against an action it does not have. The checkbox's own
+      value reaches the execute sequence on its own, because SELFUPDATE is public and Secure.
+    -->
+    <Property Id="SELFUPDATE" Value="1" Secure="yes" />
+    <!--
+      `SELFUPDATE=0` given to a run that shows the UI is normalised to empty first, so the checkbox
+      renders unchecked instead of checked-but-not-honoured: a checkbox is checked whenever its
+      property is non-empty, and "0" is non-empty. `{}` is the formatted field that yields nothing,
+      which is how a property is cleared. UI sequence only — a silent install draws no checkbox, and
+      there the two-armed condition below already reads "0" correctly.
+    -->
+    <SetProperty Id="SELFUPDATE"
+                 Value="{}"
+                 Sequence="ui"
+                 After="LaunchConditions"
+                 Condition="SELFUPDATE=&quot;0&quot;" />
+    <SetProperty Id="SELFUPDATEFLAG"
+                 Value=" --no-self-update"
+                 Sequence="execute"
+                 Before="InstallInitialize"
+                 Condition="NOT SELFUPDATE OR SELFUPDATE=&quot;0&quot;" />
+    <SetProperty Id="ENDPOINT"
+                 Value="wss://127.0.0.1:4320/v1/opamp"
+                 Sequence="ui"
+                 After="LaunchConditions"
+                 Condition="NOT ENDPOINT AND NOT Installed" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" Secure="yes" />
+
+    <!--
+      One directory the operator configures (ADR-0019 clause 39), holding the payload this package
+      delivers: `supervisor.exe` and nothing else. The layout and the state directory are not here
+      — `service install` puts them under `%ProgramData%\opamp-fleet`, for ADR-0019 clause 8's
+      reason. The operator still configures one path; it simply is not the install root.
+
+      Named after the **product**, not its display name (ADR-0019 clause 7): `nodejs`, `Git` and
+      `PowerShell` sit under `Program Files` under their own slugs, and a directory named for the
+      display name would be the one place a variant build could not tell itself apart.
+    -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="opamp-fleet" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ClientFiles" Directory="INSTALLFOLDER">
+      <Component Id="ClientExe">
+        <File Id="SupervisorExe"
+              Name="supervisor.exe"
+              Source="$(BinaryPath)"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="OpAMP Fleet Agent" Level="1">
+      <ComponentGroupRef Id="ClientFiles" />
+    </Feature>
+
+    <!--
+      WelcomeDlg → InstallDirDlg → EndpointDlg → VerifyReadyDlg (WixUI_OpampInstallDir.wxs).
+      A plain UIRef rather than `ui:WixUI`: that element names one of the toolset's built-in sets,
+      and this set is ours.
+    -->
+    <UIRef Id="WixUI_OpampInstallDir" />
+
+    <!--
+      Registering the service, deferred and without impersonation: it writes under Program Files and
+      talks to the SCM, and neither is something the invoking user may be able to do. A type 18
+      custom action takes a command line that "commonly contains properties that are designated
+      dynamically" — the Target is a formatted field resolved when the installation script is
+      written, so INSTALLFOLDER and ENDPOINT arrive without a CustomActionData round trip.
+
+      Two actions rather than one condition inside a command line, because an empty endpoint flag
+      is not the same request as no endpoint flag at all: the first would be rejected by the
+      loader's own endpoint rule, the second is the ordinary "configure it later" install that
+      only warns.
+
+      The self-update answer needs no third and fourth action, because unlike the endpoint it *has*
+      a no-op spelling: `[SELFUPDATEFLAG]` is empty when the consent stands, and a formatted field
+      of an unset property resolves to nothing — so the consenting command line carries no
+      self-update flag at all.
+
+      **No root flag here, and that is ADR-0019 clause 8.** A root would name `[INSTALLFOLDER]`, and
+      a directory property always resolves with a trailing backslash, which the C runtime that
+      builds the client's argv reads before a quote as an escaped, literal quote rather than the
+      end of the argument — so the root would swallow the rest of the line and the install would
+      die with error 1722. INSTALLFOLDER is not the install root, so no directory property reaches
+      a command line at all. `tests/msi_exe_command.rs` parses these lines exactly as the CRT will
+      and asserts both: that they survive the split, and that they name no root.
+
+      (Spelled without the flag's own name on purpose: an XML comment may not contain a double
+      hyphen, so writing it out here is a build error, not a typo somebody can fix later.)
+    -->
+    <CustomAction Id="RegisterServiceWithEndpoint"
+                  FileRef="SupervisorExe"
+                  ExeCommand="service install --endpoint &quot;[ENDPOINT]&quot;[SELFUPDATEFLAG]"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <CustomAction Id="RegisterService"
+                  FileRef="SupervisorExe"
+                  ExeCommand="service install[SELFUPDATEFLAG]"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <!--
+      The mirror, and best-effort by design (`Return="ignore"`): a host whose service was already
+      unregistered by hand must still be able to uninstall. Sequenced before RemoveFiles, because a
+      type 18 action needs its executable to still be on disk.
+
+      `service uninstall` leaves both roots behind, as it does everywhere (ADR-0019) — deleting a
+      supervisor.toml the operator answered or edited would be the overwrite ADR-0019 refuses, one
+      step later. What this package's uninstaller then empties is INSTALLFOLDER, which
+      holds only the payload it delivered: exactly right, and the reason ADR-0019 clause 8 moved
+      the data out of `Program Files`. The configuration and the state survive under
+      `%ProgramData%\opamp-fleet`, the same remove-versus-purge shape the `.deb` has.
+    -->
+    <CustomAction Id="StopService"
+                  FileRef="SupervisorExe"
+                  ExeCommand="service stop"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="UnregisterService"
+                  FileRef="SupervisorExe"
+                  ExeCommand="service uninstall"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!--
+        After InstallFiles: the executable these actions run is the one this package just laid down,
+        so it has to exist first.
+
+        The service is registered and left stopped, exactly as the `.deb` and `.rpm` post-install
+        does and for the same reason (ADR-0019 clause 37): a Client with no configuration
+        dials the development default and manages nothing, and an installer must not manufacture
+        that state on every host it touches. An install that was given an ENDPOINT still does not
+        start — the client identity is not in yet (ADR-0019).
+      -->
+      <Custom Action="RegisterServiceWithEndpoint" After="InstallFiles"
+              Condition="NOT REMOVE AND ENDPOINT&lt;&gt;&quot;&quot;" />
+      <Custom Action="RegisterService" After="RegisterServiceWithEndpoint"
+              Condition="NOT REMOVE AND ENDPOINT=&quot;&quot;" />
+
+      <!-- Only a real uninstall. On a major upgrade the new package re-registers straight after. -->
+      <Custom Action="StopService" Before="UnregisterService"
+              Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="UnregisterService" Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>

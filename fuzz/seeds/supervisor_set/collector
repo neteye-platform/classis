@@ -1,0 +1,6 @@
+[[supervisor]]
+type = "collector"
+name = "otelcol"
+
+[supervisor.env]
+OTEL_RESOURCE_ATTRIBUTES = "site=a"

@@ -1,0 +1,230 @@
+# The development observability stack, as a Compose project of its own: OTLP in, Grafana out.
+#
+#   traces  ─┐                             ┌─▶ ClickHouse ──┐
+#   metrics ─┼─▶ OpenTelemetry Collector ──┤                ├──▶ Grafana
+#   logs    ─┘                             └─▶ Apache Doris ┘
+#
+# One store instead of Tempo + Prometheus + Loki: one query language for all three signals, one
+# place to retain and delete, and joins *across* signals that three separate stores cannot do at
+# all. What it costs is named in README.md — read it before assuming this is strictly better.
+#
+# Two such stores, side by side: the Collector writes every signal to ClickHouse and to Apache
+# Doris alike, and Grafana carries each dashboard twice, once per store — so the two can be
+# compared on the same data. Neither depends on the other; a Doris that is down costs the
+# ClickHouse half nothing, because each exporter queues on its own.
+#
+# Nothing shipped depends on it. It exists so own telemetry (ADR-0016) can be looked at while
+# working on the Client and the Server, and it runs on the *host*, apart from the Dev Container:
+# start it when you want it, from this directory or with `-f observability/compose.yaml`. The Dev
+# Container reaches the Collector through the host (README.md → "Reaching it from the Dev
+# Container"); it needs no Docker socket for that, so ADR-0002 stands as it is.
+#
+# Every relative path below resolves against this file's directory, the Compose project directory.
+# The bind mounts carry `z`: on an SELinux host (Fedora, RHEL) a file mounted without it is
+# unreadable inside the container, and nothing says so — Grafana comes up with no datasource and
+# no dashboards, and the Collector without its configuration. Docker and hosts without SELinux
+# ignore the option.
+#
+# Ports published on the host, on OBSERVABILITY_BIND (default 0.0.0.0 — every interface):
+#   4317 OTLP/gRPC, 4318 OTLP/HTTP, 8888 Collector self-metrics, 13133 Collector health,
+#   3001 Grafana, 8123 ClickHouse HTTP, 9000 ClickHouse native, 8030 Doris FE HTTP and web UI,
+#   9030 Doris FE MySQL protocol.
+#
+# Doris needs fixed addresses: its images register the FE and the BE with each other by IP, never
+# by name (`FE_SERVERS`, `BE_ADDR`). The project network therefore has a
+# subnet of its own, DORIS_SUBNET_PREFIX.0/24 (default 10.250.0); change the prefix if it collides
+# with a network on the host.
+
+name: opamp-observability
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.22.13
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: otel
+      CLICKHOUSE_USER: otel
+      CLICKHOUSE_PASSWORD: otel
+    # ClickHouse opens a lot of files; below this it refuses to start on many hosts.
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:8123:8123"   # HTTP — what `curl` and README.md's checks use
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:9000:9000"   # native protocol — what the Collector and Grafana speak
+    healthcheck:
+      # The client is in the image, so this needs no extra tool and tests the thing that matters:
+      # that the server answers a query as the user the Collector will connect as.
+      test: ["CMD", "clickhouse-client", "--user", "otel", "--password", "otel", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  # Apache Doris, single node: one FE (metadata, SQL, the HTTP API the Collector's stream load
+  # starts at) and one BE (storage and execution). The FE redirects a stream load to the BE's
+  # registered address, which is why the Collector shares this network with both.
+  doris-fe:
+    image: apache/doris:fe-4.1.4
+    restart: unless-stopped
+    environment:
+      FE_SERVERS: "fe1:${DORIS_SUBNET_PREFIX:-10.250.0}.10:9010"
+      FE_ID: "1"
+      # The image's JDK (17.0.2) cannot read cgroup v2 on a kernel whose /proc/cgroups no longer
+      # lists the v2-only controllers (memory, cpuset, io — gone on 7.0): its container detection
+      # throws, BDB JE's first look at the OS MXBean fails with it, and the FE exits at startup with
+      # "Could not initialize class com.sleepycat.je.utilint.JVMSystemUtils". Without container
+      # detection the JVM sizes itself from the host, which costs nothing here: fe.conf fixes the
+      # heap at -Xmx8192m anyway. Drop this once the image ships a JDK that reads the newer layout.
+      JAVA_TOOL_OPTIONS: "-XX:-UseContainerSupport"
+    volumes:
+      - doris-fe-meta:/opt/apache-doris/fe/doris-meta
+    ports:
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:8030:8030"   # HTTP API and web UI
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:9030:9030"   # MySQL protocol — what Grafana and `mysql` speak
+    networks:
+      default:
+        ipv4_address: "${DORIS_SUBNET_PREFIX:-10.250.0}.10"
+    healthcheck:
+      # Not `SELECT 1`: since Doris 4 even that is planned onto a BE ("No backend available as scan
+      # node"), and the BE waits for this check — the two would wait on each other forever.
+      # SHOW FRONTENDS is answered by the FE alone, from its own metadata.
+      test: ["CMD-SHELL", "mysql -uroot -h127.0.0.1 -P9030 -N -e 'SHOW FRONTENDS' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  doris-be:
+    image: apache/doris:be-4.1.4
+    restart: unless-stopped
+    environment:
+      # The image's entrypoint registers this BE with the FE (ALTER SYSTEM ADD BACKEND) on its first
+      # start, and derives priority_networks from BE_ADDR's /24.
+      FE_SERVERS: "fe1:${DORIS_SUBNET_PREFIX:-10.250.0}.10:9010"
+      BE_ADDR: "${DORIS_SUBNET_PREFIX:-10.250.0}.11:9050"
+    # The image's entrypoint sets SKIP_CHECK_ULIMIT itself, so the BE starts even where the host's
+    # vm.max_map_count is below the 2000000 Doris asks for — which rootless Podman cannot raise. For
+    # more than a development load, raise it on the host: `sudo sysctl -w vm.max_map_count=2000000`.
+    #
+    # No `ulimits:` here, unlike ClickHouse: the same check skips Doris' open-files floor, and a
+    # nofile above the user's hard limit (524288 on the host this was written on) makes rootless
+    # Podman refuse the container outright — "crun: setrlimit `RLIMIT_NOFILE`: Operation not
+    # permitted". The container inherits the user's limit instead, which is well above what a
+    # development BE opens.
+    volumes:
+      - doris-be-storage:/opt/apache-doris/be/storage
+    networks:
+      default:
+        ipv4_address: "${DORIS_SUBNET_PREFIX:-10.250.0}.11"
+    depends_on:
+      doris-fe:
+        condition: service_healthy
+    healthcheck:
+      # Healthy once the FE reports this BE alive — the state a stream load and a query need.
+      test:
+        - CMD-SHELL
+        - >-
+          mysql -uroot -h${DORIS_SUBNET_PREFIX:-10.250.0}.10 -P9030 -N -e 'SHOW BACKENDS'
+          | grep -w ${DORIS_SUBNET_PREFIX:-10.250.0}.11 | grep -qw true
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro,z
+    ports:
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:4317:4317"     # OTLP/gRPC
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:4318:4318"     # OTLP/HTTP  <- the Client's exporters speak this
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:8888:8888"     # the Collector's own Prometheus metrics
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:13133:13133"   # health_check extension
+    depends_on:
+      clickhouse:
+        # Not `service_started`: the exporter creates its tables on the first batch, and a
+        # ClickHouse that is still opening its databases fails that in a way the retry can outlive.
+        condition: service_healthy
+      doris-be:
+        # The Doris exporter creates its database and tables when the Collector starts, and a
+        # Collector whose exporter cannot start does not start at all.
+        condition: service_healthy
+
+  # The Grafana Doris app (VeloDB's `velodb-doris-app`: log Discover and a Jaeger-like trace view
+  # over the exporter's tables) is not in Grafana's catalog, so GF_PLUGINS_PREINSTALL cannot fetch
+  # it. This one-shot container puts a pinned release, checked against its published SHA-256, into
+  # the volume Grafana mounts as that plugin's directory. It does nothing once the version is there.
+  grafana-doris-app:
+    image: alpine:3.24.2
+    restart: "no"
+    environment:
+      VERSION: "1.1.4"
+      SHA256: 988efff73aafe1cb665f6a7db971a4e8ca825d588b1229763a931d8b6b5988f5
+    command:
+      - sh
+      - -euc
+      - |
+        if [ "$$(cat /plugin/.version 2>/dev/null)" = "$$VERSION" ]; then exit 0; fi
+        wget -qO /tmp/app.zip "https://github.com/jeffreys-cat/grafana-doris-app/releases/download/v$$VERSION/velodb-doris-app-$$VERSION.zip"
+        echo "$$SHA256  /tmp/app.zip" | sha256sum -c -
+        rm -rf /tmp/app /plugin/* && unzip -qo /tmp/app.zip -d /tmp/app && cp -R /tmp/app/velodb-doris-app/. /plugin/
+        echo "$$VERSION" > /plugin/.version
+    volumes:
+      - grafana-doris-app:/plugin
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    restart: unless-stopped
+    environment:
+      # Not Grafana's default 3000. Set on Grafana itself rather than only on the host side, so
+      # `grafana:3001` inside the Compose network and `localhost:3001` on the host are one port.
+      GF_SERVER_HTTP_PORT: "3001"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Open the stack read-only, so looking at a dashboard costs no login.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      # The ClickHouse datasource is not built in. `_SYNC` because the plugin has to be on disk
+      # before Grafana reads the provisioning below — the async variant races it. Unpinned on
+      # purpose: Grafana resolves the newest version compatible with itself, and a pin here goes
+      # stale against the image above. To pin, append it: "grafana-clickhouse-datasource@4.20.0".
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-clickhouse-datasource
+      # The Doris app is unsigned (it ships no MANIFEST.txt), and Grafana loads an unsigned plugin
+      # only when it is named here. Doris itself needs no plugin: it speaks the MySQL protocol, and
+      # Grafana's MySQL datasource is the driver (provisioning/datasources).
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: velodb-doris-app
+      # Opens straight on the overview instead of Grafana's welcome page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/agents-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+      - grafana-data:/var/lib/grafana
+      - grafana-doris-app:/var/lib/grafana/plugins/velodb-doris-app:ro
+    ports:
+      - "${OBSERVABILITY_BIND:-0.0.0.0}:3001:3001"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      doris-be:
+        condition: service_healthy
+      grafana-doris-app:
+        condition: service_completed_successfully
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: "${DORIS_SUBNET_PREFIX:-10.250.0}.0/24"
+
+volumes:
+  clickhouse-data:
+  doris-fe-meta:
+  doris-be-storage:
+  grafana-data:
+  grafana-doris-app:
