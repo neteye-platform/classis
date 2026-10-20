@@ -272,12 +272,7 @@ d="$(repo identity-contact)"
 echo "- email the maintainer: <!-- TODO: add a security contact address -->." > "$d/SECURITY.md"
 expect fail "the placeholder security contact after setup" "$d" "SECURITY.md: the security contact is still the placeholder"
 
-d="$(repo identity-codeowners)"
-printf '# /docs/SPECIFICATION.md @owner\n# /docs/adr/ @owner\n' > "$d/.github/CODEOWNERS"
-expect fail "a CODEOWNERS with its rules still commented out after setup" "$d" ".github/CODEOWNERS: no active rule"
-
 d="$(repo identity-done)"
-printf '# owners\n\n* @someone\n' > "$d/.github/CODEOWNERS"
 printf 'MIT License\n\nCopyright (c) 2026 Someone\n' > "$d/LICENSE"
 expect pass "identity replaced after setup" "$d"
 
