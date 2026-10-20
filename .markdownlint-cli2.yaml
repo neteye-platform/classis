@@ -1,0 +1,16 @@
+# permissionsync's configuration, plus what this repository's documents need.
+config:
+  line-length:
+    code_blocks: false
+    tables: false
+    # An ADR's title is its decision in one sentence, and a heading cannot wrap.
+    headings: false
+  # An ADR numbers its clauses across lists that prose interrupts, and other documents cite
+  # them by number ("ADR-0026 clause 61"), so a list starts where the clauses stand.
+  ol-prefix: false
+  # CHANGELOG.md repeats Added, Changed and Fixed under every release.
+  no-duplicate-heading:
+    siblings_only: true
+  # A code span may hold a leading space on purpose: the client CA's name with ` CA` turned into
+  # ` Certificate`.
+  no-space-in-code: false

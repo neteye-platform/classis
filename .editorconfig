@@ -6,9 +6,8 @@
 # authoritative for that language's files: add a section here that agrees with the formatter's
 # configuration rather than one that contends with it.
 #
-# No 'max_line_length' is set on purpose. Prettier and others read it as a print width and would
-# reflow the hand-wrapped prose in the documentation; the wrapping in this repository is a
-# convention for humans, not a rule for a tool.
+# Markdown prose wraps at 80 columns, as markdownlint's line-length rule checks
+# (.markdownlint-cli2.yaml); `prettier --prose-wrap always --print-width 80` writes it.
 root = true
 
 [*]
@@ -20,5 +19,6 @@ indent_style = space
 indent_size = 2
 
 [*.md]
+max_line_length = 80
 # Two trailing spaces are a hard line break in Markdown — trimming them changes the rendering.
 trim_trailing_whitespace = false
