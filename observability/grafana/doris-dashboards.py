@@ -19,6 +19,7 @@ status back to `Error`/`Ok`/`Unset`, so both twins show the same words.
 Grafana reaches Doris through its built-in MySQL datasource, so the macros are MySQL's:
 `$__timeFilter(col)`, `$__timeGroup(col, $__interval)`, `$__timeFrom()`, `$__timeTo()`.
 """
+
 import copy
 import json
 import os
@@ -55,11 +56,14 @@ TIME = "$__timeGroup(timestamp, $__interval) AS `time`"
 
 def gauge_filter(indent: str = "  ") -> str:
     """The overview's client, instance and platform filters."""
-    return "\n".join(f"{indent}AND {c}" for c in (
-        "service_name REGEXP '${client:regex}'",
-        f"{AGENT} REGEXP '${{instance:regex}}'",
-        f"{PLATFORM} REGEXP '${{platform:regex}}'",
-    ))
+    return "\n".join(
+        f"{indent}AND {c}"
+        for c in (
+            "service_name REGEXP '${client:regex}'",
+            f"{AGENT} REGEXP '${{instance:regex}}'",
+            f"{PLATFORM} REGEXP '${{platform:regex}}'",
+        )
+    )
 
 
 GAUGE_FILTER = gauge_filter()
@@ -95,19 +99,31 @@ PANELS = {
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
 {LOG_FILTER}""",
-    ("agents-logs.json", "Errors in window"): """SELECT SUM(CASE WHEN severity_text = 'ERROR' THEN 1 ELSE 0 END)
+    (
+        "agents-logs.json",
+        "Errors in window",
+    ): """SELECT SUM(CASE WHEN severity_text = 'ERROR' THEN 1 ELSE 0 END)
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
   AND service_name REGEXP '${service:regex}'""",
-    ("agents-logs.json", "Warnings in window"): """SELECT SUM(CASE WHEN severity_text = 'WARN' THEN 1 ELSE 0 END)
+    (
+        "agents-logs.json",
+        "Warnings in window",
+    ): """SELECT SUM(CASE WHEN severity_text = 'WARN' THEN 1 ELSE 0 END)
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
   AND service_name REGEXP '${service:regex}'""",
-    ("agents-logs.json", "Clients logging"): """SELECT COUNT(DISTINCT service_instance_id)
+    (
+        "agents-logs.json",
+        "Clients logging",
+    ): """SELECT COUNT(DISTINCT service_instance_id)
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
   AND service_name REGEXP '${service:regex}'""",
-    ("agents-logs.json", "Volume by level"): f"""SELECT {TIME}, severity_text AS level, COUNT(*) AS lines
+    (
+        "agents-logs.json",
+        "Volume by level",
+    ): f"""SELECT {TIME}, severity_text AS level, COUNT(*) AS lines
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
 {LOG_FILTER}
@@ -126,7 +142,7 @@ ORDER BY `time`""",
        severity_text AS level,
        service_name AS service,
        service_instance_id AS agent,
-       {attr('log_attributes', 'code.namespace')} AS target,
+       {attr("log_attributes", "code.namespace")} AS target,
        trace_id
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
@@ -138,20 +154,39 @@ LIMIT 1000""",
     ("agents-overview.json", "Agents reporting"): f"""SELECT COUNT(DISTINCT {AGENT})
 FROM otel.otel_metrics_gauge
 WHERE metric_name = 'process.uptime' AND $__timeFilter(timestamp)""",
-    ("agents-overview.json", "Clients reporting"): """SELECT COUNT(DISTINCT service_instance_id)
+    (
+        "agents-overview.json",
+        "Clients reporting",
+    ): """SELECT COUNT(DISTINCT service_instance_id)
 FROM otel.otel_metrics_gauge
 WHERE $__timeFilter(timestamp)""",
-    ("agents-overview.json", "Memory, all agents"): latest_per_agent("process.memory.usage", "SUM"),
-    ("agents-overview.json", "Busiest agent, CPU"): latest_per_agent("process.cpu.utilization", "MAX"),
-    ("agents-overview.json", "Log lines / min"): """SELECT COUNT(*) / GREATEST(1, MINUTES_DIFF($__timeTo(), $__timeFrom()))
+    ("agents-overview.json", "Memory, all agents"): latest_per_agent(
+        "process.memory.usage", "SUM"
+    ),
+    ("agents-overview.json", "Busiest agent, CPU"): latest_per_agent(
+        "process.cpu.utilization", "MAX"
+    ),
+    (
+        "agents-overview.json",
+        "Log lines / min",
+    ): """SELECT COUNT(*) / GREATEST(1, MINUTES_DIFF($__timeTo(), $__timeFrom()))
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)""",
-    ("agents-overview.json", "Traces / min"): """SELECT COUNT(*) / GREATEST(1, MINUTES_DIFF($__timeTo(), $__timeFrom()))
+    (
+        "agents-overview.json",
+        "Traces / min",
+    ): """SELECT COUNT(*) / GREATEST(1, MINUTES_DIFF($__timeTo(), $__timeFrom()))
 FROM otel.otel_traces
 WHERE parent_span_id = '' AND $__timeFilter(timestamp)""",
-    ("agents-overview.json", "Process memory"): process_series("process.memory.usage", "memory"),
-    ("agents-overview.json", "Process CPU"): process_series("process.cpu.utilization", "cpu"),
-    ("agents-overview.json", "Process uptime"): process_series("process.uptime", "uptime"),
+    ("agents-overview.json", "Process memory"): process_series(
+        "process.memory.usage", "memory"
+    ),
+    ("agents-overview.json", "Process CPU"): process_series(
+        "process.cpu.utilization", "cpu"
+    ),
+    ("agents-overview.json", "Process uptime"): process_series(
+        "process.uptime", "uptime"
+    ),
     # ClickHouse's argMaxIf per metric becomes a latest-per-(agent, metric) inner query pivoted
     # by the outer one: Doris has MAX_BY, but no conditional form of it.
     ("agents-overview.json", "Agents"): f"""SELECT agent AS `Agent`,
@@ -169,19 +204,22 @@ FROM (SELECT {AGENT} AS agent,
              metric_name,
              MAX_BY(value, timestamp) AS latest,
              MAX(timestamp) AS last_sample,
-             ANY_VALUE({attr('attributes', 'service.instance.name')}) AS name,
-             ANY_VALUE({attr('attributes', 'service.name')}) AS type,
-             ANY_VALUE({attr('resource_attributes', 'service.instance.name')}) AS client,
-             ANY_VALUE({attr('resource_attributes', 'service.version')}) AS client_version,
-             ANY_VALUE({attr('resource_attributes', 'os.type')}) AS os,
-             ANY_VALUE({attr('resource_attributes', 'host.arch')}) AS arch
+             ANY_VALUE({attr("attributes", "service.instance.name")}) AS name,
+             ANY_VALUE({attr("attributes", "service.name")}) AS type,
+             ANY_VALUE({attr("resource_attributes", "service.instance.name")}) AS client,
+             ANY_VALUE({attr("resource_attributes", "service.version")}) AS client_version,
+             ANY_VALUE({attr("resource_attributes", "os.type")}) AS os,
+             ANY_VALUE({attr("resource_attributes", "host.arch")}) AS arch
       FROM otel.otel_metrics_gauge
       WHERE $__timeFilter(timestamp)
-{gauge_filter('        ')}
+{gauge_filter("        ")}
       GROUP BY agent, metric_name) AS per_metric
 GROUP BY agent
 ORDER BY agent""",
-    ("agents-overview.json", "Log volume by level"): f"""SELECT {TIME}, severity_text AS level, COUNT(*) AS lines
+    (
+        "agents-overview.json",
+        "Log volume by level",
+    ): f"""SELECT {TIME}, severity_text AS level, COUNT(*) AS lines
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
 GROUP BY `time`, level
@@ -191,12 +229,15 @@ ORDER BY `time`""",
        severity_text AS level,
        service_name AS service,
        trace_id,
-       {attr('log_attributes', 'code.namespace')} AS target
+       {attr("log_attributes", "code.namespace")} AS target
 FROM otel.otel_logs
 WHERE $__timeFilter(timestamp)
 ORDER BY timestamp DESC
 LIMIT 500""",
-    ("agents-overview.json", "Spans by service"): f"""SELECT {TIME}, service_name AS service, COUNT(*) AS spans
+    (
+        "agents-overview.json",
+        "Spans by service",
+    ): f"""SELECT {TIME}, service_name AS service, COUNT(*) AS spans
 FROM otel.otel_traces
 WHERE $__timeFilter(timestamp)
 GROUP BY `time`, service
@@ -213,7 +254,7 @@ ORDER BY `time`""",
        timestamp AS `Started`,
        duration / 1000 AS `Duration (ms)`,
        {OUTCOME} AS `Outcome`,
-       {attr('span_attributes', 'service.instance.id')} AS `Agent`
+       {attr("span_attributes", "service.instance.id")} AS `Agent`
 FROM otel.otel_traces
 WHERE parent_span_id = '' AND $__timeFilter(timestamp)
 ORDER BY timestamp DESC
@@ -241,7 +282,10 @@ FROM otel.otel_traces
 WHERE parent_span_id = '' AND $__timeFilter(timestamp)
 GROUP BY `time`
 ORDER BY `time`""",
-    ("agents-traces.json", "Phases, by how often they fail"): f"""SELECT span_name AS `Phase`,
+    (
+        "agents-traces.json",
+        "Phases, by how often they fail",
+    ): f"""SELECT span_name AS `Phase`,
        COUNT(*) AS `Runs`,
        {ERRORED} AS `Failed`,
        ROUND(100 * {ERRORED} / COUNT(*), 1) AS `Failed %`,
@@ -263,7 +307,7 @@ ORDER BY timestamp DESC
 LIMIT 200""",
     # The trace view takes its frame by field name; the span and resource attributes arrive as
     # JSON arrays of {key, value}, the shape the view reads tags in.
-    ("agents-traces.json", "Trace detail"): f"""SELECT trace_id AS traceID,
+    ("agents-traces.json", "Trace detail"): """SELECT trace_id AS traceID,
        span_id AS spanID,
        parent_span_id AS parentSpanID,
        service_name AS serviceName,
@@ -274,17 +318,32 @@ LIMIT 200""",
        CAST(resource_attributes AS STRING) AS serviceTags,
        CASE WHEN status_code = 'STATUS_CODE_ERROR' THEN 2 ELSE 0 END AS statusCode
 FROM otel.otel_traces
-WHERE trace_id = '${{trace}}'
+WHERE trace_id = '${trace}'
 ORDER BY startTime ASC, duration DESC""",
 }
 
 # Template variables, by dashboard and name.
 VARIABLES = {
-    ("agents-logs.json", "service"): "SELECT DISTINCT service_name FROM otel.otel_logs ORDER BY 1",
-    ("agents-overview.json", "client"): "SELECT DISTINCT service_name FROM otel.otel_metrics_gauge ORDER BY 1",
-    ("agents-overview.json", "instance"): f"SELECT DISTINCT {AGENT} FROM otel.otel_metrics_gauge ORDER BY 1",
-    ("agents-overview.json", "platform"): f"SELECT DISTINCT {PLATFORM} FROM otel.otel_metrics_gauge ORDER BY 1",
-    ("agents-traces.json", "operation"): "SELECT DISTINCT span_name FROM otel.otel_traces WHERE parent_span_id = '' ORDER BY 1",
+    (
+        "agents-logs.json",
+        "service",
+    ): "SELECT DISTINCT service_name FROM otel.otel_logs ORDER BY 1",
+    (
+        "agents-overview.json",
+        "client",
+    ): "SELECT DISTINCT service_name FROM otel.otel_metrics_gauge ORDER BY 1",
+    (
+        "agents-overview.json",
+        "instance",
+    ): f"SELECT DISTINCT {AGENT} FROM otel.otel_metrics_gauge ORDER BY 1",
+    (
+        "agents-overview.json",
+        "platform",
+    ): f"SELECT DISTINCT {PLATFORM} FROM otel.otel_metrics_gauge ORDER BY 1",
+    (
+        "agents-traces.json",
+        "operation",
+    ): "SELECT DISTINCT span_name FROM otel.otel_traces WHERE parent_span_id = '' ORDER BY 1",
 }
 
 # Grafana SQL formats: ClickHouse's numbers -> the MySQL datasource's names.
@@ -315,21 +374,24 @@ def translate(name: str, dashboard: dict) -> dict:
             fmt = target.get("format")
             ref = target.get("refId", "A")
             target.clear()
-            target.update({
-                "refId": ref,
-                "datasource": dict(DATASOURCE),
-                "editorMode": "code",
-                "rawQuery": True,
-                "rawSql": PANELS[key],
-                "format": FORMATS.get(fmt, "table"),
-            })
+            target.update(
+                {
+                    "refId": ref,
+                    "datasource": dict(DATASOURCE),
+                    "editorMode": "code",
+                    "rawQuery": True,
+                    "rawSql": PANELS[key],
+                    "format": FORMATS.get(fmt, "table"),
+                }
+            )
         # Links into a ClickHouse dashboard become links into its Doris twin.
         for override in panel.get("fieldConfig", {}).get("overrides", []):
             for prop in override.get("properties", []):
                 if prop.get("id") == "links":
                     for link in prop["value"]:
                         link["url"] = link["url"].replace(
-                            "/d/opamp-agents-traces/", f"/d/{twin_uid('opamp-agents-traces')}/"
+                            "/d/opamp-agents-traces/",
+                            f"/d/{twin_uid('opamp-agents-traces')}/",
                         )
 
     for var in out.get("templating", {}).get("list", []):
@@ -351,7 +413,9 @@ def main() -> None:
         with open(os.path.join(DASHBOARDS, name), encoding="utf-8") as fh:
             dashboard = json.load(fh)
         twin = translate(name, dashboard)
-        with open(os.path.join(DASHBOARDS, twin_name(name)), "w", encoding="utf-8") as fh:
+        with open(
+            os.path.join(DASHBOARDS, twin_name(name)), "w", encoding="utf-8"
+        ) as fh:
             json.dump(twin, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         print(f"wrote dashboards/{twin_name(name)}")
