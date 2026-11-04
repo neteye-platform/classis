@@ -27,12 +27,14 @@ pub struct Resolved<'a> {
 ///
 /// What the core resolves — the program, the Agent type, the Endpoint port and the timings — is
 /// checked here, so a Server-delivered set carrying a value its kind supplies is refused before a
-/// running process is touched (ADR-0017), exactly as a bad plugin setting is.
+/// running process is touched (ADR-0017), exactly as a bad plugin setting is. So is a name whose
+/// directory would be one of the Client's own ([`ClientConfig::check_supervisor_dir`]).
 pub fn resolve<'a>(
     config: &ClientConfig,
     block: &SupervisorBlock,
     plugins: &'a [Box<dyn Plugin>],
 ) -> Result<Resolved<'a>, String> {
+    config.check_supervisor_dir(&block.name)?;
     let plugin = find_plugin(plugins, block)?;
     let (settings, program, program_path) = take_program(config, block, plugin)?;
     let service_name = effective_service_name(block, plugin, &program.path)?;
@@ -217,8 +219,8 @@ pub struct Timing {
     pub retain_previous: Duration,
 }
 
-/// The Agent type this Supervisor presents until — and unless — its Managed Process reports one of
-/// its own (ADR-0016): the block's, the kind's, else the program's file name.
+/// The Agent type this Supervisor presents, whatever its Managed Process reports (ADR-0055): the
+/// kind's, the block's, else the program's file name.
 ///
 /// The file-name fallback is what the operator already wrote in this very block; it is read from
 /// configuration and never parsed out of a program's output, where a name has no grammar to

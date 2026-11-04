@@ -1,0 +1,59 @@
+# The Server's image (ADR-0052): the binary the release built and checked, on a distroless glibc
+# base, and nothing else.
+#
+# No `RUN`: the image copies a binary that already exists, so a multi-architecture build needs no
+# emulation and the image holds exactly the bytes the release tested for its version and described
+# by its SBOM. The build context is a directory holding `server-linux-<arch>` for each platform
+# built, `amd64` and `arm64`, as `docker buildx` names them. A developer builds it the same way:
+#
+#     cargo build --release -p fleet-server --bin server
+#     mkdir -p image && cp target/release/server image/server-linux-amd64
+#     docker buildx build --platform linux/amd64 --load -t opamp-fleet-server:dev \
+#       -f packaging/container/Containerfile image
+#
+# The base carries glibc, libgcc_s, CA certificates and time zone data, and no shell and no package
+# manager. Debian 13's glibc is newer than the build runner's, so the binary built there loads. The
+# tag is named for the reader and the digest is what is pulled; a new digest arrives by a reviewed
+# commit.
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:83b9b50586253821cf63ffcec87d3d94265a093ad30da232039af962dd8f4edf
+
+ARG TARGETARCH
+# The release passes its version and commit; a local build says what it is.
+ARG VERSION=dev
+ARG REVISION=unknown
+
+LABEL org.opencontainers.image.title="opamp-fleet-server" \
+      org.opencontainers.image.source="https://github.com/mbrigl/opamp-fleet" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.licenses="Apache-2.0"
+# The base is named by the `FROM` line alone: the release derives the `base.name` and `base.digest`
+# annotations from it, so a new digest is written in one place.
+
+# Owned by root and not writable by the account the Server runs as. `--chmod`, because a binary
+# that travelled as a workflow artifact has lost its executable mode.
+COPY --chmod=0755 server-linux-${TARGETARCH} /usr/local/bin/server
+
+# Numeric, so nothing is looked up. Both planes listen above 1024, so no capability is needed.
+USER 65532:65532
+
+# The data directory. `WORKDIR` after `USER` creates it owned by 65532, which no `RUN` could do
+# here; a volume mounted on it starts with that owner.
+WORKDIR /var/lib/opamp-fleet
+VOLUME /var/lib/opamp-fleet
+# The working directory the Server runs in is `/`, which 65532 cannot write: the `server.toml` it
+# reads by default, and every other relative path, then never resolve into the volume it writes.
+WORKDIR /
+
+# Everything else, certificates, keys and every secret included, is mounted as a file and named
+# through the environment (ADR-0051). Off the loopback the Server refuses to start without TLS and
+# without `[rest.auth]`, so this image started with nothing mounted names what is missing and stops.
+ENV FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet \
+    FLEET_SERVER__LISTEN=0.0.0.0:4320 \
+    FLEET_SERVER__REST__LISTEN=0.0.0.0:4321
+
+# The Agent plane and the Operator plane. No HEALTHCHECK: there is no shell to run one and no health
+# endpoint to ask; an orchestrator probes 4320 over TCP.
+EXPOSE 4320 4321
+
+ENTRYPOINT ["/usr/local/bin/server"]

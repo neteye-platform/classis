@@ -437,6 +437,11 @@ Use these exact words in code, comments, documentation, and ADRs.
     does not fit stops the rollout for that Agent and says why; it chooses the
     blocks an Agent receives by their Selectors. Host-side parameters, secrets
     among them, are filled in on the host and reach the Server only masked.
+19. **G-19** — **The Server's artifacts can live outside its host.** The Server
+    keeps the artifacts of its Packages under its data directory or in an
+    S3-compatible object store the operator names. An Agent receives the same
+    verified bytes from either, through the Server, and the fleet never reaches
+    the store itself.
 
 ## Quality Goals
 

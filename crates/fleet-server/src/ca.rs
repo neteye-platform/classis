@@ -15,6 +15,7 @@ use rcgen::{
     KeyUsagePurpose, SanType, SerialNumber,
 };
 use x509_parser::prelude::{FromDer, X509Certificate};
+use zeroize::Zeroizing;
 
 use crate::config::ClientCaConfig;
 use crate::revocation::{CertId, Facts, Signed, SubjectValues};
@@ -44,7 +45,9 @@ impl ClientCa {
     pub fn from_config(config: &ClientCaConfig) -> Result<Self, String> {
         let cert_pem = std::fs::read_to_string(&config.cert_file)
             .map_err(|e| format!("cannot read {}: {e}", config.cert_file.display()))?;
+        // Wiped when it is dropped; what `rcgen` and `ring` keep of it is theirs (ADR-0057).
         let key_pem = std::fs::read_to_string(&config.key_file)
+            .map(Zeroizing::new)
             .map_err(|e| format!("cannot read {}: {e}", config.key_file.display()))?;
         let key = KeyPair::from_pem(&key_pem)
             .map_err(|e| format!("cannot read {}: {e}", config.key_file.display()))?;
@@ -717,8 +720,10 @@ impl BootstrapCa {
         let Some(key_file) = &enrolment.bootstrap_ca_key_file else {
             return Ok(None);
         };
+        // A certificate or a key, the key wiped when it is dropped (ADR-0057).
         let read = |path: &std::path::Path| {
             std::fs::read_to_string(path)
+                .map(Zeroizing::new)
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))
         };
         let cert_pem = read(&enrolment.bootstrap_ca_file)?;
@@ -805,9 +810,10 @@ impl crate::bootstrap::BootstrapSigner for BootstrapCa {
         let (_, parsed) = X509Certificate::from_der(certificate.der())
             .map_err(|e| format!("the bootstrap certificate does not parse: {e}"))?;
         let facts = facts(certificate.der())?;
-        // The key leaves only sealed with its certificate (ADR-0036 clause 8).
-        let pkcs12 =
-            fleet_core::pkcs12::file::seal(certificate.der(), &key.serialize_der(), password)?;
+        // The key leaves only sealed with its certificate (ADR-0036 clause 8); its DER is wiped
+        // once it is sealed (ADR-0057).
+        let key_der = Zeroizing::new(key.serialize_der());
+        let pkcs12 = fleet_core::pkcs12::file::seal(certificate.der(), &key_der, password)?;
         Ok(Pair {
             serial: facts.id.serial.clone(),
             id: facts.id,

@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::supervisor::ports::{parse_settings, Plugin, ProcessCommand, SupervisorContext};
-use crate::supervisor::process::{Preflight, ProcessSpec, Runner, VersionProbe};
+use crate::supervisor::process::{Preflight, ProcessSpec, Runner, Spawner, VersionProbe};
 
 /// The block's plugin-specific keys, parsed strictly — a typo fails startup, per ADR-0010.
 ///
@@ -54,7 +54,11 @@ const RETIRED: &[(&str, &str)] = &[
     ),
 ];
 
-pub struct CommandPlugin;
+/// The `command` kind. Its [`Spawner`] is the one the registry hands every plugin (ADR-0059).
+#[derive(Default)]
+pub struct CommandPlugin {
+    pub spawner: Spawner,
+}
 
 impl Plugin for CommandPlugin {
     fn kind(&self) -> &'static str {
@@ -144,6 +148,11 @@ impl Plugin for CommandPlugin {
             // Not this kind's to know (ADR-0017): an agent nobody wrote a wrapper for applies a
             // configuration by restarting, which is ADR-0017's generic behaviour.
             reload_signal: None,
+            // The Client itself, or the second service where a process account is registered
+            // (ADR-0059 clause 3): the registry says which.
+            spawner: self.spawner.clone(),
+            process_account_group: ctx.process_account_group,
+            supervisor_dir: ctx.supervisor_dir.clone(),
             events: ctx.events,
             commands: command_rx,
             // A Foreign Agent has its own configuration until told otherwise: it always runs.
@@ -208,7 +217,9 @@ mod tests {
             ("reload_signal", "reload_signal = \"HUP\""),
         ] {
             let table: toml::Table = toml::from_str(line).expect("table");
-            let err = CommandPlugin.check("agent", table).expect_err(key);
+            let err = CommandPlugin::default()
+                .check("agent", table)
+                .expect_err(key);
             assert!(err.contains(key), "{err}");
             assert!(err.contains("no longer a supervisor key"), "{err}");
         }

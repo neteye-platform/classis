@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod windows;
 mod windows_config;
 pub mod windows_rights;
+pub mod withdrawal;
 
 /// Whether an action targets the machine's service manager or the current user's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

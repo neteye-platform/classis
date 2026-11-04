@@ -321,9 +321,13 @@ pub fn run(
         println!("copied {}", copy.display());
     }
     if existing {
+        // The file may hold `[packages] archive_key`: the text read and the text written are wiped
+        // when they are dropped; what `toml_edit` keeps while it edits is its own (ADR-0057).
         let text = std::fs::read_to_string(path)
+            .map(zeroize::Zeroizing::new)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        replace(path, &edit(&text, &answers)?)?;
+        let edited = zeroize::Zeroizing::new(edit(&text, &answers)?);
+        replace(path, &edited)?;
     } else {
         write_new(path, &render(&answers))?;
     }
@@ -672,10 +676,14 @@ fn ask_bootstrap(
             });
         }
         loop {
-            let typed = Password::new()
-                .with_prompt(format!("Password of {}", cert.display()))
-                .interact()
-                .map_err(prompt_failed)?;
+            // `dialoguer` hands back a plain copy of what it held wiped; it moves into a buffer
+            // wiped on drop here (ADR-0057).
+            let typed = zeroize::Zeroizing::new(
+                Password::new()
+                    .with_prompt(format!("Password of {}", cert.display()))
+                    .interact()
+                    .map_err(prompt_failed)?,
+            );
             match crate::tls::pkcs12_identity(&cert, &typed) {
                 Ok(identity) => {
                     return Ok(Bootstrap::Pkcs12 {
@@ -707,17 +715,20 @@ pub fn is_pkcs12_path(path: &Path) -> bool {
 
 /// The password a password file holds: its first line, without its `\n` or `\r\n` (ADR-0029
 /// clause 10). The file is read once, at most 4 KiB of it, and left as it is. `flag` is the option
-/// that named it, `--bootstrap-password-file` here, for the error.
+/// that named it, `--bootstrap-password-file` here, for the error. The file's bytes and the
+/// password are held in buffers wiped when they are dropped (ADR-0057).
 ///
 /// # Errors
 /// Returns an error naming the flag when the file cannot be read or its first line is empty.
-pub fn read_password_file(path: &Path, flag: &str) -> Result<String, String> {
+pub fn read_password_file(path: &Path, flag: &str) -> Result<zeroize::Zeroizing<String>, String> {
     use std::io::Read as _;
-    let mut bytes = Vec::new();
+    const LIMIT: usize = 4096;
+    // Sized for all it may read, so it is never grown and left behind.
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(LIMIT));
     std::fs::File::open(path)
-        .and_then(|file| file.take(4096).read_to_end(&mut bytes))
+        .and_then(|file| file.take(LIMIT as u64).read_to_end(&mut bytes))
         .map_err(|e| format!("{flag} {}: {e}", path.display()))?;
-    let text = String::from_utf8(bytes)
+    let text = std::str::from_utf8(&bytes)
         .map_err(|_| format!("{flag} {}: not UTF-8 text", path.display()))?;
     let line = text.split('\n').next().unwrap_or_default();
     let line = line.strip_suffix('\r').unwrap_or(line);
@@ -727,7 +738,7 @@ pub fn read_password_file(path: &Path, flag: &str) -> Result<String, String> {
             path.display()
         ));
     }
-    Ok(line.to_string())
+    Ok(zeroize::Zeroizing::new(line.to_string()))
 }
 
 /// A path to a readable file, offering `default` when there is one.
@@ -1622,8 +1633,10 @@ mod tests {
         ] {
             std::fs::write(&file, content).expect("write");
             assert_eq!(
-                read_password_file(&file, "--bootstrap-password-file").as_deref(),
-                Ok(expected)
+                read_password_file(&file, "--bootstrap-password-file")
+                    .expect("read")
+                    .as_str(),
+                expected
             );
         }
         std::fs::write(&file, "\nsecret").expect("write");

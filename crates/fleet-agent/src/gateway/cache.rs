@@ -3,11 +3,14 @@
 //! passed on only to a downstream host whose Agent it relayed that offer to.
 //!
 //! What is kept here:
-//! - the **bindings**: each `instance_uid` to the host of the first report for it since the
-//!   Gateway started, as the Server binds on first report (ADR-0021 clause 7);
+//! - the **bindings**: each `instance_uid` to the host of the first report for it, as the Server
+//!   binds on first report (ADR-0021 clause 7), kept across restarts in the store beside the held
+//!   artifacts ([`store`](crate::gateway::store), ADR-0058 clause 3) and relied on only once the
+//!   store holds them;
 //! - the **offers**: per `instance_uid`, the Server-hosted artifacts its last recorded
 //!   `packages_available` named, indexed by host;
-//! - the **held** artifacts, one file per stored copy under `<state_dir>/gateway-packages`, verified
+//! - the **held** artifacts, one file per stored copy under `<state_dir>/gateway-packages` beside the
+//!   store, which is none of them, verified
 //!   against the offered hash before it is renamed into place, and the room reserved for the
 //!   fetches in flight and counted for the files being deleted;
 //! - what each artifact's fetch came to: in flight, failed (not repeated until the artifact newly
@@ -21,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -32,11 +35,13 @@ use opamp::proto::{DownloadableFile, ServerToAgent};
 use opamp::server::listen::PeerCertificate;
 use opamp::uid::InstanceUid;
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::ClientConfig;
-use crate::gateway::policy::{Bindings, Bound, Limits};
+use crate::gateway::policy::{Bindings, Bound, Change, End, Limits};
 use crate::gateway::revocations::{RevocationList, Verdict};
+use crate::gateway::store::{self, Journal};
+use crate::nofollow::HeldDir;
 use crate::packages::{Patience, Waits};
 use crate::shutdown::Shutdown;
 
@@ -131,6 +136,19 @@ pub fn speaker_of(der: &[u8]) -> Option<String> {
     })
 }
 
+/// Where a downstream certificate ends, as the Gateway keeps it for its host (ADR-0058 clause 3):
+/// its `notAfter`, and the certificate as the revocation list names it.
+#[must_use]
+pub fn end_of(der: &[u8]) -> Option<End> {
+    let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
+    let (issuer, serial) = crate::gateway::revocations::certificate_id(der)?;
+    Some(End {
+        not_after: cert.validity().not_after.timestamp(),
+        issuer,
+        serial,
+    })
+}
+
 /// A certificate's serial in hex, for a log line.
 fn serial_of(der: &[u8]) -> Option<String> {
     let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
@@ -206,10 +224,29 @@ impl RefusalLog {
     }
 }
 
+/// Answered once the changes it waits for are written and synced, with whether they were.
+pub type Ticket = tokio::sync::oneshot::Receiver<bool>;
+
+/// What a report's binding came to before the store is asked (ADR-0058 clause 3).
+pub enum Begun {
+    /// Bound to the reporting host, with nothing new to write.
+    Bound,
+    /// Not bound to the reporting host; logged.
+    Refused,
+    /// Bound once the store holds what the ticket waits for.
+    Writing(Ticket),
+    /// Undecided until the store's next write settles the host's moved end: ask again then.
+    Waiting(tokio::sync::watch::Receiver<u64>),
+}
+
 #[derive(Default)]
 struct Inner {
     /// Each `instance_uid` to the host of its first report (ADR-0026 clause 45).
     bindings: Bindings,
+    /// The changes to the bindings not yet handed to the store, in the order they were made.
+    queue: Vec<Change>,
+    /// Who waits for them.
+    waiting: Vec<tokio::sync::oneshot::Sender<bool>>,
     offers: HashMap<InstanceUid, Vec<Artifact>>,
     /// The `instance_uid`s with a current offer, by the host they are bound to.
     by_host: HashMap<String, HashSet<InstanceUid>>,
@@ -309,6 +346,67 @@ enum Answer {
     Nothing,
 }
 
+/// Removes `uid`'s current offer, recorded for `host`, whose binding went.
+fn drop_offer(inner: &mut Inner, uid: InstanceUid, host: &str) {
+    inner.offers.remove(&uid);
+    if let Some(offered) = inner.by_host.get_mut(host) {
+        offered.remove(&uid);
+        if offered.is_empty() {
+            inner.by_host.remove(host);
+        }
+    }
+}
+
+/// The cache that writes each store in this process. A Gateway restarted in the same process —
+/// when an offer moves its endpoint — opens its store while the cache it replaces may still be
+/// held by its last tasks; only one of them may write it.
+fn owners() -> MutexGuard<'static, Vec<(PathBuf, Weak<PackageCache>)>> {
+    static OWNERS: Mutex<Vec<(PathBuf, Weak<PackageCache>)>> = Mutex::new(Vec::new());
+    OWNERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Stops the cache that wrote the store in `dir` until now from writing it again: it waits for
+/// a write in progress and then holds no store, so its later reports bind nothing. Paths are
+/// compared as given, unresolved: a Gateway restarted in the same process opens its store under
+/// the same `state_dir` from the same configuration, and that is the case this guards.
+fn retire(dir: &Path) {
+    let retired: Vec<Arc<PackageCache>> = {
+        let mut owners = owners();
+        owners.retain(|(_, owner)| owner.strong_count() > 0);
+        owners
+            .iter()
+            .filter(|(owned, _)| owned == dir)
+            .filter_map(|(_, owner)| owner.upgrade())
+            .collect()
+    };
+    for cache in retired {
+        *cache
+            .journal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+
+/// How many lines of reports a store may hold per live line before it is rewritten whole: the
+/// order of reports is written once a minute, and an Agent reports more often, so these lines grow
+/// with the Agents carried rather than with the bindings made, and are not counted with them.
+const REPORT_LINES_PER_LIVE: usize = 8;
+
+/// The one task that writes a cache's store: whoever queues changes wakes it, and each wake
+/// writes everything queued by then in one append and one sync. It ends with the cache, whose
+/// drop wakes it a last time.
+async fn write_store(cache: Weak<PackageCache>, wake: Arc<tokio::sync::Notify>) {
+    loop {
+        wake.notified().await;
+        let Some(cache) = cache.upgrade() else {
+            return;
+        };
+        let _ = tokio::task::spawn_blocking(move || cache.flush()).await;
+    }
+}
+
 /// Deletes a file; `true` once it is gone.
 fn remove_file(path: &Path) -> bool {
     match std::fs::remove_file(path) {
@@ -324,6 +422,8 @@ struct Knobs {
     /// How long a fetch waits out the Server's `Retry-After`.
     patience: Patience,
     max_bindings: usize,
+    /// How the bindings' store is rewritten at start.
+    create_journal: fn(HeldDir, &[Change]) -> std::io::Result<Journal>,
 }
 
 impl Default for Knobs {
@@ -332,6 +432,7 @@ impl Default for Knobs {
             remove: remove_file,
             patience: Patience::default(),
             max_bindings: MAX_BINDINGS,
+            create_journal: Journal::create,
         }
     }
 }
@@ -350,6 +451,16 @@ pub struct PackageCache {
     /// Ends every fetch, waiting or not.
     shutdown: Shutdown,
     knobs: Knobs,
+    /// The bindings' store, written by one at a time and never while `inner` is locked; `None`
+    /// while it cannot be read.
+    journal: Mutex<Option<Journal>>,
+    /// Counts the store's writes, each announced once what it wrote is settled.
+    writes: tokio::sync::watch::Sender<u64>,
+    /// Wakes the one task that writes the store ([`write_store`]).
+    wake: Arc<tokio::sync::Notify>,
+    /// Why the store could not be read at start, while it cannot: the Gateway then carries no
+    /// downstream Agent (ADR-0058 clause 3).
+    unreadable: Option<String>,
     inner: Mutex<Inner>,
 }
 
@@ -359,6 +470,12 @@ struct Landing {
     cache: Arc<PackageCache>,
     hash: Vec<u8>,
     settled: bool,
+}
+
+impl Drop for PackageCache {
+    fn drop(&mut self) {
+        self.wake.notify_one();
+    }
 }
 
 impl Drop for Landing {
@@ -372,12 +489,95 @@ impl Drop for Landing {
     }
 }
 
+/// The Gateway's directory as it was found at start.
+enum Opened {
+    /// The bindings the store holds, and the store rewritten whole from them.
+    Store(Box<(Bindings, Journal)>),
+    /// Why the store cannot be read, or cannot be rewritten.
+    Unreadable(String),
+}
+
+/// Opens the Gateway's directory `dir` without following a link, empties it of every artifact an
+/// earlier run left (ADR-0026 clause 47) and keeps the store, reads the bindings from it and
+/// rewrites it whole from what they are with `create` (ADR-0058 clause 3). A store that cannot
+/// be read or rewritten is [`Opened::Unreadable`]: the Gateway does not rely on it.
+fn open_dir(
+    dir: &Path,
+    create: fn(HeldDir, &[Change]) -> std::io::Result<Journal>,
+) -> Result<Opened, String> {
+    let held = match HeldDir::create(dir, 0o700) {
+        Ok(held) => held,
+        Err(e) => return Ok(Opened::Unreadable(format!("{}: {e}", dir.display()))),
+    };
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("cannot empty {}: {e}", dir.display()));
+    for entry in entries? {
+        let entry = entry.map_err(|e| format!("cannot empty {}: {e}", dir.display()))?;
+        if entry.file_name() == store::NAME {
+            continue;
+        }
+        let path = entry.path();
+        let removed = match entry.file_type() {
+            Ok(kind) if kind.is_dir() => std::fs::remove_dir_all(&path),
+            _ => std::fs::remove_file(&path),
+        };
+        removed.map_err(|e| format!("cannot empty {}: {e}", dir.display()))?;
+    }
+    let path = dir.join(store::NAME);
+    let mut bindings = match store::load(&held).and_then(Bindings::replay) {
+        Ok(bindings) => bindings,
+        Err(e) => return Ok(Opened::Unreadable(format!("{}: {e}", path.display()))),
+    };
+    // What ended while the Gateway was down ends now, and the rewrite below leaves it out
+    // (ADR-0058 clause 4); the revocation list is asked once the Gateway holds one.
+    for (host, uids) in bindings.end(now(), None) {
+        log_ended(&host, uids.len());
+    }
+    match create(held, &bindings.snapshot()) {
+        Ok(journal) => Ok(Opened::Store(Box::new((bindings, journal)))),
+        Err(e) => Ok(Opened::Unreadable(format!(
+            "cannot rewrite {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+/// The Gateway's clock, which its handshake checks validity by, in seconds since the Unix epoch.
+pub(crate) fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+        })
+}
+
+/// Logs that a host's bindings ended with its certificate (ADR-0058 clause 4).
+fn log_ended(host: &str, count: usize) {
+    info!(
+        %host, bindings = count,
+        "ended the bindings of a host whose certificate has expired or is revoked"
+    );
+}
+
+/// Logs that the Gateway carries no downstream Agent while its store cannot be read, and what
+/// lets it start again: at start, and once an hour (ADR-0058 clause 3).
+pub fn log_unreadable(why: &str, store: &Path) {
+    error!(
+        reason = %why,
+        "the Gateway cannot read or rewrite the store of its bindings and carries no Agent behind \
+         it; remove {} and restart the Client to start with no binding",
+        store.display()
+    );
+}
+
 impl PackageCache {
-    /// The cache of the Gateway `config` arms, its directory emptied (ADR-0026 clause 47). The
-    /// directory itself is created by the first fetch.
+    /// The cache of the Gateway `config` arms, its directory emptied of artifacts (ADR-0026
+    /// clause 47) and its bindings read from the store (ADR-0058 clause 3).
     ///
     /// # Errors
-    /// Returns an error when a directory left by an earlier run cannot be emptied.
+    /// Returns an error when a directory left by an earlier run cannot be emptied. A store that
+    /// cannot be read or rewritten is no error: the cache then carries no downstream Agent
+    /// ([`PackageCache::unreadable`]).
     pub async fn open(config: Arc<ClientConfig>, shutdown: Shutdown) -> Result<Arc<Self>, String> {
         Self::open_with(config, shutdown, Knobs::default()).await
     }
@@ -396,12 +596,29 @@ impl PackageCache {
             .as_ref()
             .map_or(1, |gateway| gateway.max_carried_agents);
         let dir = config.state_dir.join(DIR);
-        match tokio::fs::remove_dir_all(&dir).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("cannot empty {}: {e}", dir.display())),
-        }
-        Ok(Arc::new(PackageCache {
+        let opened = dir.clone();
+        let create = knobs.create_journal;
+        let opened = tokio::task::spawn_blocking(move || {
+            retire(&opened);
+            open_dir(&opened, create)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let (bindings, journal, unreadable) = match opened {
+            Opened::Store(opened) => {
+                let (bindings, journal) = *opened;
+                info!(
+                    bindings = bindings.len(),
+                    "read the bindings of the Agents behind this Gateway"
+                );
+                (bindings, Some(journal), None)
+            }
+            Opened::Unreadable(why) => {
+                log_unreadable(&why, &dir.join(store::NAME));
+                (Bindings::default(), None, Some(why))
+            }
+        };
+        let cache = Arc::new(PackageCache {
             limit: capacity.min(config.max_artifact_size_bytes),
             capacity,
             dir,
@@ -410,8 +627,18 @@ impl PackageCache {
             per_host_bindings,
             shutdown,
             knobs,
-            inner: Mutex::new(Inner::default()),
-        }))
+            journal: Mutex::new(journal),
+            writes: tokio::sync::watch::Sender::new(0),
+            wake: Arc::default(),
+            unreadable,
+            inner: Mutex::new(Inner {
+                bindings,
+                ..Inner::default()
+            }),
+        });
+        owners().push((cache.dir.clone(), Arc::downgrade(&cache)));
+        tokio::spawn(write_store(Arc::downgrade(&cache), cache.wake.clone()));
+        Ok(cache)
     }
 
     /// The state, whether or not a task panicked while holding it: every update leaves it whole.
@@ -426,20 +653,24 @@ impl PackageCache {
     }
 
     /// Binds `uid` to `host` unless it is bound already: the first report wins, and every report
-    /// refreshes when it was last reported (ADR-0039 clause 6). `host` is the one a downstream
-    /// certificate speaks as ([`speaker_of`]). A host binds at most `max_carried_agents`; at the
-    /// global cap the least recently reported binding whose `instance_uid` has neither a route
-    /// (`routed`) nor a current offer makes room, and without one nothing is bound.
+    /// refreshes when it was last reported (ADR-0058 clause 2). `host` is the one a downstream
+    /// certificate speaks as ([`speaker_of`]), `end` where that certificate ends ([`end_of`]). A host
+    /// binds at most `max_carried_agents`, the Gateway at most its global cap; past either the
+    /// host's own least recently reported binding whose `instance_uid` has neither a route
+    /// (`routed`) nor a current offer makes room, never another host's, and without one nothing is
+    /// bound.
     ///
-    /// Whether `uid` is now bound to `host`: only then is its report forwarded and its reply
-    /// routed back (ADR-0039 clause 5). A report for an `instance_uid` bound to another host, or
-    /// one that could not be bound, is logged and answered `false`.
-    pub fn bind(
+    /// The first half of a bind: [`PackageCache::written`] waits for the ticket of a
+    /// [`Begun::Writing`], and [`PackageCache::finish_bind`] decides. A report for an `instance_uid`
+    /// bound to another host, or one that could not be bound, is logged and [`Begun::Refused`].
+    /// Beside it, the `instance_uid`s whose bindings made room, whichever the answer.
+    pub fn begin_bind(
         &self,
         uid: InstanceUid,
         host: &str,
+        end: &End,
         routed: impl Fn(&InstanceUid) -> bool,
-    ) -> bool {
+    ) -> (Begun, Vec<InstanceUid>) {
         let limits = Limits {
             per_host: self.per_host_bindings,
             total: self.knobs.max_bindings,
@@ -447,28 +678,277 @@ impl PackageCache {
         let mut guard = self.inner();
         let inner = &mut *guard;
         let offers = &inner.offers;
-        let bound = inner.bindings.bind(uid, host, limits, |uid| {
+        let outcome = inner.bindings.bind(uid, host, end, now(), limits, |uid| {
             !routed(uid) && !offers.contains_key(uid)
         });
-        if let Bound::Refused(why) = bound {
+        let evicted = outcome.evicted;
+        if outcome.bound == Bound::Waiting {
+            return (Begun::Waiting(self.writes.subscribe()), evicted);
+        }
+        if let Bound::Refused(why) = outcome.bound {
             if inner.refusals.note(host, Instant::now()) != Note::Count {
                 warn!(agent = %uid, %host, "not forwarding a report: not binding its instance_uid: {why}");
             }
-            return false;
+            return (Begun::Refused, evicted);
         }
-        match inner.bindings.host_of(&uid) {
-            Some(bound) if bound == host => true,
-            bound => {
-                let bound = bound.unwrap_or("none").to_string();
-                if inner.refusals.note(host, Instant::now()) != Note::Count {
-                    warn!(
-                        agent = %uid, %host, %bound,
-                        "not forwarding a report for an instance_uid bound to another host"
-                    );
-                }
+        if outcome.bound == Bound::Kept && inner.bindings.host_of(&uid) != Some(host) {
+            let bound = inner.bindings.host_of(&uid).unwrap_or("none").to_string();
+            if inner.refusals.note(host, Instant::now()) != Note::Count {
+                warn!(
+                    agent = %uid, %host, %bound,
+                    "not forwarding a report for an instance_uid bound to another host"
+                );
+            }
+            return (Begun::Refused, evicted);
+        }
+        if outcome.changes.is_empty() {
+            return (Begun::Bound, evicted);
+        }
+        if outcome
+            .changes
+            .iter()
+            .any(|change| store::line(change).is_none())
+        {
+            inner.bindings.ends_written(&outcome.changes, false);
+            let removals = outcome
+                .changes
+                .into_iter()
+                .filter(|change| matches!(change, Change::Unbound(_)));
+            inner.queue.extend(removals);
+            let changes = inner.bindings.abort(&uid);
+            inner.queue.extend(changes);
+            warn!(
+                agent = %uid, %host,
+                "not forwarding a report: its binding is too long to be stored"
+            );
+            return (Begun::Refused, evicted);
+        }
+        let ticket = self.enqueue(inner, outcome.changes);
+        (Begun::Writing(ticket), evicted)
+    }
+
+    /// Queues `changes` for the store and wakes its writer; the ticket answers once they are
+    /// written. Called under the lock, so the store takes them in the order they were made.
+    fn enqueue(&self, inner: &mut Inner, changes: impl IntoIterator<Item = Change>) -> Ticket {
+        let (done, ticket) = tokio::sync::oneshot::channel();
+        inner.queue.extend(changes);
+        inner.waiting.push(done);
+        self.wake.notify_one();
+        ticket
+    }
+
+    /// Whether the changes `ticket` waits for are written and synced (ADR-0058 clause 3): by the
+    /// store's one writer, off the async workers, with whatever else is queued by then.
+    pub async fn written(ticket: Ticket) -> bool {
+        ticket.await.unwrap_or(false)
+    }
+
+    /// The second half of a bind: whether `uid` is now bound to `host` and its report may be
+    /// forwarded and its reply routed back (ADR-0039 clause 5). A new binding the store could not
+    /// take, `written` false, is not made, and that is logged. Called under the same lock as the
+    /// route it decides on, so no binding gives way between the two.
+    pub fn finish_bind(&self, uid: InstanceUid, host: &str, written: bool) -> bool {
+        let mut inner = self.inner();
+        if written {
+            inner.bindings.commit(&uid);
+            return inner.bindings.holds(&uid, host);
+        }
+        let changes = inner.bindings.abort(&uid);
+        if !changes.is_empty() {
+            drop_offer(&mut inner, uid, host);
+            // Should the store hold the binding after all, its removal follows.
+            drop(self.enqueue(&mut inner, changes));
+        }
+        if inner.refusals.note(host, Instant::now()) != Note::Count {
+            warn!(agent = %uid, %host, "not forwarding a report: the bindings' store cannot be written");
+        }
+        false
+    }
+
+    /// Writes the queued changes and answers who waits for them. A store that cannot take an
+    /// append is rewritten whole from the bindings, which hold the queued changes too; so is one
+    /// that has grown to twice the lines it holds live, or whose lines of reports have outgrown
+    /// [`REPORT_LINES_PER_LIVE`] times them (ADR-0058 clause 3). Each call is announced once its
+    /// moved ends are settled.
+    fn flush(&self) {
+        let mut guard = self
+            .journal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (changes, waiting) = {
+            let mut inner = self.inner();
+            (
+                std::mem::take(&mut inner.queue),
+                std::mem::take(&mut inner.waiting),
+            )
+        };
+        if changes.is_empty() && waiting.is_empty() {
+            return;
+        }
+        let written = match guard.as_mut() {
+            None => {
+                self.inner().bindings.ends_written(&changes, false);
                 false
             }
+            Some(journal) => match journal.append(&changes) {
+                Ok(()) => {
+                    self.inner().bindings.ends_written(&changes, true);
+                    true
+                }
+                Err(e) => {
+                    debug!(error = %e, "cannot append to the bindings' store; rewriting it whole");
+                    self.compact(journal)
+                }
+            },
+        };
+        for waiter in waiting {
+            let _ = waiter.send(written);
         }
+        if let Some(journal) = guard.as_mut() {
+            let live = self.inner().bindings.live();
+            let grown = journal.lines() > 0 && journal.lines() >= 2 * live;
+            let reported = journal.reports() > REPORT_LINES_PER_LIVE * live.max(1);
+            if written && (grown || reported) {
+                self.compact(journal);
+            }
+        }
+        self.writes.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Rewrites the store whole from the bindings, the queued changes taken in with them. The
+    /// bindings are copied under the lock and ordered after it is released.
+    fn compact(&self, journal: &mut Journal) -> bool {
+        let (raw, moving, waiting) = {
+            let mut inner = self.inner();
+            inner.queue.clear();
+            (
+                inner.bindings.raw(),
+                inner.bindings.moving(),
+                std::mem::take(&mut inner.waiting),
+            )
+        };
+        let written = match journal.compact(&raw.changes()) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!(error = %e, "cannot write the bindings' store");
+                false
+            }
+        };
+        self.inner().bindings.compacted(&moving, written);
+        for waiter in waiting {
+            let _ = waiter.send(written);
+        }
+        written
+    }
+
+    /// Writes the order in which the bindings were reported since the last call (ADR-0058
+    /// clause 3): once a minute and at shutdown.
+    pub async fn write_reports(&self) {
+        let reports = self.inner().bindings.reports();
+        if reports.is_empty() {
+            return;
+        }
+        let changes = reports.changes();
+        let ticket = {
+            let mut inner = self.inner();
+            self.enqueue(&mut inner, changes)
+        };
+        if !Self::written(ticket).await {
+            warn!("cannot write the order of the bindings' reports");
+        }
+    }
+
+    /// Ends every binding of each host whose kept certificate end has passed by `now`, or, when
+    /// `revoked` is given, whose certificate it says the revocation list names (ADR-0058 clause
+    /// 3), each host logged with how many went. Their current offers go with them, and their
+    /// removals are queued for the store. Returns the `instance_uid`s whose bindings ended, whose
+    /// routes and places upstream the caller releases, and the ticket their removals are written
+    /// under.
+    pub fn end_certificates(
+        &self,
+        now: i64,
+        revoked: Option<&dyn Fn(&End) -> bool>,
+    ) -> (Vec<InstanceUid>, Option<Ticket>) {
+        let mut inner = self.inner();
+        let ended = inner.bindings.end(now, revoked);
+        if ended.is_empty() {
+            return (Vec::new(), None);
+        }
+        let mut uids = Vec::new();
+        for (host, held) in ended {
+            log_ended(&host, held.len());
+            for uid in &held {
+                drop_offer(&mut inner, *uid, &host);
+            }
+            uids.extend(held);
+        }
+        let removals: Vec<Change> = uids.iter().map(|uid| Change::Unbound(*uid)).collect();
+        let ticket = self.enqueue(&mut inner, removals);
+        (uids, Some(ticket))
+    }
+
+    /// Waits until the write under way, if any, has ended: a flush holds the journal's lock from
+    /// its append through the rewrite that may follow it, after it has answered who waited.
+    #[cfg(test)]
+    pub(crate) fn settled(&self) {
+        drop(
+            self.journal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    }
+
+    /// Makes every later write of the bindings' store fail.
+    #[cfg(test)]
+    pub(crate) fn refuse_writes(&self) {
+        self.inject(|faults| faults.all = true);
+    }
+
+    /// Sets where the bindings' store fails next.
+    #[cfg(test)]
+    fn inject(&self, set: impl FnOnce(&mut store::Faults)) {
+        if let Some(journal) = self
+            .journal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            set(&mut journal.faults);
+        }
+    }
+
+    /// A bind start to end, outside any route: what the tests of this module bind with.
+    #[cfg(test)]
+    async fn bind(
+        self: &Arc<Self>,
+        uid: InstanceUid,
+        host: &str,
+        routed: impl Fn(&InstanceUid) -> bool,
+    ) -> (bool, Vec<InstanceUid>) {
+        self.bind_until(uid, host, i64::MAX, routed).await
+    }
+
+    /// [`PackageCache::bind`] under a certificate whose `notAfter` is `not_after`.
+    #[cfg(test)]
+    async fn bind_until(
+        self: &Arc<Self>,
+        uid: InstanceUid,
+        host: &str,
+        not_after: i64,
+        routed: impl Fn(&InstanceUid) -> bool,
+    ) -> (bool, Vec<InstanceUid>) {
+        let end = End {
+            not_after,
+            issuer: "ab".repeat(32),
+            serial: "1".to_string(),
+        };
+        let (begun, evicted) = self.begin_bind(uid, host, &end, routed);
+        let written = match begun {
+            Begun::Refused | Begun::Waiting(_) => return (false, evicted),
+            Begun::Bound => true,
+            Begun::Writing(ticket) => Self::written(ticket).await,
+        };
+        (self.finish_bind(uid, host, written), evicted)
     }
 
     /// Records what a `ServerToAgent` relayed to `uid` offers, over a downstream connection whose
@@ -497,8 +977,9 @@ impl PackageCache {
             .collect();
         let start = {
             let mut inner = self.inner();
-            let bound = inner.bindings.host_of(&uid).map(str::to_string);
-            if bound.as_deref() != Some(host.as_str()) {
+            // Recorded only for a binding the store holds: never for one still being written.
+            if !inner.bindings.holds(&uid, &host) {
+                let bound = inner.bindings.host_of(&uid).map(str::to_string);
                 if inner.refusals.note(&host, Instant::now()) != Note::Count {
                     warn!(
                         agent = %uid, bound = bound.as_deref().unwrap_or("none"), relayed_for = %host,
@@ -538,7 +1019,7 @@ impl PackageCache {
     }
 
     /// The artifact at `path` in a current offer to an Agent bound to `host`.
-    fn offered_to(&self, host: &str, path: &str) -> Option<Artifact> {
+    pub(crate) fn offered_to(&self, host: &str, path: &str) -> Option<Artifact> {
         let inner = self.inner();
         inner
             .by_host
@@ -879,6 +1360,19 @@ impl PackageCache {
         Ok(len)
     }
 
+    /// Why the bindings' store could not be read at start, while the Gateway carries no downstream
+    /// Agent for it (ADR-0058 clause 3).
+    #[must_use]
+    pub fn unreadable(&self) -> Option<&str> {
+        self.unreadable.as_deref()
+    }
+
+    /// The store's path, for the log.
+    #[must_use]
+    pub fn store_path(&self) -> PathBuf {
+        self.dir.join(store::NAME)
+    }
+
     /// Whether `uid` is bound to a host (ADR-0039 clause 6).
     pub fn is_bound(&self, uid: &InstanceUid) -> bool {
         self.inner().bindings.host_of(uid).is_some()
@@ -952,10 +1446,22 @@ fn busy() -> Response {
         .into_response()
 }
 
+/// What every downstream request but an enrolling peer's is answered while the bindings' store
+/// cannot be read (ADR-0058 clause 3).
+pub const STORE_UNREADABLE: &str = "the Gateway cannot read the store of its bindings";
+
+fn store_unreadable() -> Response {
+    (StatusCode::SERVICE_UNAVAILABLE, STORE_UNREADABLE).into_response()
+}
+
 async fn serve(
     axum::extract::State(downloads): axum::extract::State<Arc<Downloads>>,
     request: Request,
 ) -> Response {
+    // No Agent is carried while the bindings' store cannot be read (ADR-0058 clause 3).
+    if downloads.cache.unreadable().is_some() {
+        return store_unreadable();
+    }
     let certificate = request
         .extensions()
         .get::<PeerCertificate>()
@@ -1226,9 +1732,9 @@ mod tests {
     }
 
     /// Relays an offer of `artifacts` to a new `instance_uid` bound to `h1`.
-    fn offer_to_new_agent(cache: &Arc<PackageCache>, artifacts: &[&Artifact]) -> InstanceUid {
+    async fn offer_to_new_agent(cache: &Arc<PackageCache>, artifacts: &[&Artifact]) -> InstanceUid {
         let uid = InstanceUid::default();
-        assert!(cache.bind(uid, "h1", |_| false));
+        assert!(cache.bind(uid, "h1", |_| false).await.0);
         cache.observe(uid, Some("h1".to_string()), &offer(uid, artifacts));
         uid
     }
@@ -1264,7 +1770,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let cache = open_cache(config(server, dir.path(), 1 << 20)).await;
         let one = artifact("1", &bytes);
-        offer_to_new_agent(&cache, &[&one]);
+        offer_to_new_agent(&cache, &[&one]).await;
         tokio::time::timeout(DEADLINE, async {
             while fetches(&count, "1") < 1 {
                 tokio::task::yield_now().await;
@@ -1287,9 +1793,10 @@ mod tests {
         assert_eq!(fetches(&count, "1"), 1);
     }
 
-    /// What an earlier run left in the cache directory is gone once the Gateway opens it, and the
-    /// directory the first fetch creates is the owner's alone.
-    /// Verifies: ADR-0026
+    /// What an earlier run left in the cache directory is gone once the Gateway opens it, the
+    /// bindings' store aside, which is none of the cache's artifacts; and the directory is the
+    /// owner's alone.
+    /// Verifies: ADR-0026, ADR-0058
     #[tokio::test]
     async fn the_cache_is_emptied_at_start_and_owner_only() {
         let bytes = b"the-binary".to_vec();
@@ -1300,26 +1807,35 @@ mod tests {
         .await;
         let dir = tempfile::tempdir().expect("tempdir");
         let left = dir.path().join(DIR);
-        std::fs::create_dir_all(&left).expect("dir");
+        std::fs::create_dir_all(left.join("staged-tree")).expect("dir");
         std::fs::write(left.join("left-over"), b"stale").expect("write");
+        let names = || {
+            let mut names: Vec<String> = std::fs::read_dir(&left)
+                .expect("dir")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            names.sort();
+            names
+        };
         let cache = open_cache(config(server, dir.path(), 1 << 20)).await;
-        assert!(!left.exists(), "emptied at start");
+        assert_eq!(names(), vec![store::NAME], "emptied at start");
 
         let one = artifact("1", &bytes);
-        offer_to_new_agent(&cache, &[&one]);
+        let uid = offer_to_new_agent(&cache, &[&one]).await;
         until(&cache, "held", |inner| inner.held.contains_key(&one.hash)).await;
-        let names: Vec<String> = std::fs::read_dir(&left)
-            .expect("dir")
-            .map(|entry| {
-                entry
-                    .expect("entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        assert_eq!(names.len(), 1);
+        let names = names();
+        assert_eq!(names.len(), 2);
         assert!(names[0].starts_with(&hex::encode(&one.hash)), "{names:?}");
+        assert_eq!(names[1], store::NAME);
+        drop(cache);
+        let cache = open_cache(config(server, dir.path(), 1 << 20)).await;
+        assert!(cache.is_bound(&uid), "the store outlives the emptying");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -1346,9 +1862,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let cache = open_cache(config(server, dir.path(), 16)).await;
         let (a, b) = (artifact("1", &a_bytes), artifact("2", &b_bytes));
-        let first = offer_to_new_agent(&cache, &[&a]);
+        let first = offer_to_new_agent(&cache, &[&a]).await;
         until(&cache, "a held", |inner| inner.held.contains_key(&a.hash)).await;
-        offer_to_new_agent(&cache, &[&b]);
+        offer_to_new_agent(&cache, &[&b]).await;
         until(&cache, "b held, a evicted", |inner| {
             inner.held.contains_key(&b.hash) && !inner.held.contains_key(&a.hash)
         })
@@ -1411,12 +1927,12 @@ mod tests {
         .await
         .expect("cache");
         let (a, b) = (artifact("1", &a_bytes), artifact("2", &b_bytes));
-        offer_to_new_agent(&cache, &[&a]);
+        offer_to_new_agent(&cache, &[&a]).await;
         until(&cache, "a held", |inner| inner.held.contains_key(&a.hash)).await;
         let a_file = cache.file(&a.hash, cache.inner().held[&a.hash].copy);
 
         // b needs a's room; a's deletion fails, so a stays counted and b gets no room.
-        offer_to_new_agent(&cache, &[&b]);
+        offer_to_new_agent(&cache, &[&b]).await;
         until(&cache, "b settled", |inner| inner.fetching.is_empty()).await;
         {
             let inner = cache.inner();
@@ -1427,7 +1943,7 @@ mod tests {
         }
 
         // A newer copy of a is stored; the next deletion removes the old copy only.
-        offer_to_new_agent(&cache, &[&a]);
+        offer_to_new_agent(&cache, &[&a]).await;
         until(&cache, "a held again", |inner| {
             inner.held.contains_key(&a.hash)
         })
@@ -1456,7 +1972,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let cache = open_cache(config(server, dir.path(), 1 << 20)).await;
         let one = artifact("1", &bytes);
-        offer_to_new_agent(&cache, &[&one]);
+        offer_to_new_agent(&cache, &[&one]).await;
         until(&cache, "held", |inner| inner.held.contains_key(&one.hash)).await;
         let file = cache.file(&one.hash, cache.inner().held[&one.hash].copy);
         std::fs::remove_file(file).expect("remove");
@@ -1479,7 +1995,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let cache = open_cache(config(server, dir.path(), 1 << 20)).await;
         let one = artifact("1", &bytes);
-        offer_to_new_agent(&cache, &[&one]);
+        offer_to_new_agent(&cache, &[&one]).await;
         until(&cache, "held", |inner| inner.held.contains_key(&one.hash)).await;
         let file = cache.file(&one.hash, cache.inner().held[&one.hash].copy);
         std::fs::remove_file(file).expect("remove");
@@ -1492,11 +2008,13 @@ mod tests {
         assert_eq!(fetches(&count, "1"), 2);
     }
 
-    /// One host reporting fresh `instance_uid`s binds no more than its share, and at the global cap
-    /// an idle binding makes room: another host's new Agent is still bound and its offer recorded.
-    /// Verifies: ADR-0026
+    /// One host reporting fresh `instance_uid`s binds no more than its share, and hosts that fill
+    /// the Gateway's total cannot free another host's binding to claim it: at the total a host
+    /// without an idle binding of its own binds nothing and every binding stays, while a host with
+    /// one gives it up for its new Agent, whose offer is then recorded.
+    /// Verifies: ADR-0058
     #[tokio::test]
-    async fn a_host_flooding_instance_uids_cannot_keep_another_hosts_agent_from_being_bound() {
+    async fn at_the_total_a_new_binding_never_takes_another_hosts_place() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config: Arc<ClientConfig> = Arc::new(
             toml::from_str(&format!(
@@ -1518,7 +2036,7 @@ mod tests {
         .expect("cache");
         let flood: Vec<InstanceUid> = (0..5).map(|_| InstanceUid::default()).collect();
         for uid in &flood {
-            cache.bind(*uid, "flood", |_| false);
+            cache.bind(*uid, "flood", |_| false).await;
         }
         assert_eq!(
             cache.inner().bindings.count_of("flood"),
@@ -1526,31 +2044,31 @@ mod tests {
             "its share and no more"
         );
         let other = InstanceUid::default();
-        cache.bind(other, "other", |_| false);
+        assert!(cache.bind(other, "other", |_| false).await.0);
         assert_eq!(cache.inner().bindings.len(), 4, "the global cap");
 
+        let shut_out = InstanceUid::default();
+        let (bound, evicted) = cache.bind(shut_out, "new-host", |_| false).await;
+        assert!(
+            !bound && evicted.is_empty(),
+            "no other host's binding made room"
+        );
+        let held = cache.inner().bindings.snapshot();
+        assert_eq!(
+            held.len(),
+            2 + 4,
+            "two hosts' ends, four bindings: nothing of the new host"
+        );
+
         let real = InstanceUid::default();
-        cache.bind(real, "real", |uid| *uid == other);
-        {
-            let inner = cache.inner();
-            assert_eq!(
-                inner.bindings.host_of(&real),
-                Some("real"),
-                "an idle binding made room"
-            );
-            assert!(
-                inner.bindings.host_of(&other).is_some(),
-                "a routed one did not"
-            );
-            assert!(
-                inner.bindings.host_of(&flood[0]).is_none(),
-                "the least recently reported did"
-            );
-        }
+        let (bound, evicted) = cache.bind(real, "other", |_| false).await;
+        assert!(bound);
+        assert_eq!(evicted, vec![other], "its own idle binding made room");
+        assert_eq!(cache.inner().bindings.count_of("flood"), 3);
         let one = artifact("1", b"x");
         cache.inner().refused.insert(one.hash.clone());
-        cache.observe(real, Some("real".to_string()), &offer(real, &[&one]));
-        assert_eq!(cache.offered_to("real", &one.path), Some(one));
+        cache.observe(real, Some("other".to_string()), &offer(real, &[&one]));
+        assert_eq!(cache.offered_to("other", &one.path), Some(one));
     }
 
     /// Past its grace a fetch must keep an average of 64 KiB/s since the grace ended.
@@ -1610,7 +2128,7 @@ mod tests {
         .await
         .expect("cache");
         let one = artifact("1", &bytes);
-        offer_to_new_agent(&cache, &[&one]);
+        offer_to_new_agent(&cache, &[&one]).await;
         tokio::time::timeout(DEADLINE, async {
             loop {
                 let waiting = count.load(Ordering::SeqCst) == 1
@@ -1659,7 +2177,7 @@ mod tests {
             .await
             .expect("cache");
         let one = artifact("1", b"x");
-        offer_to_new_agent(&cache, &[&one]);
+        offer_to_new_agent(&cache, &[&one]).await;
         tokio::time::timeout(DEADLINE, async {
             while count.load(Ordering::SeqCst) < 1 {
                 tokio::task::yield_now().await;
@@ -1704,7 +2222,7 @@ mod tests {
             .iter()
             .map(|version| artifact(version, version.as_bytes()))
             .collect();
-        offer_to_new_agent(&cache, &offered.iter().collect::<Vec<_>>());
+        offer_to_new_agent(&cache, &offered.iter().collect::<Vec<_>>()).await;
         let total = || count.lock().expect("count").values().sum::<usize>();
         tokio::time::timeout(DEADLINE, async {
             while total() < 4 || cache.slots.available_permits() > 0 {
@@ -1731,7 +2249,7 @@ mod tests {
         let cache = open_cache(config("127.0.0.1:9".parse().expect("addr"), dir.path(), 16)).await;
         let uid = InstanceUid::default();
         let one = artifact("1", b"x");
-        assert!(cache.bind(uid, "derived-host", |_| false));
+        assert!(cache.bind(uid, "derived-host", |_| false).await.0);
         cache.observe(uid, None, &offer(uid, &[&one]));
         let inner = cache.inner();
         assert_eq!(inner.bindings.host_of(&uid), Some("derived-host"));
@@ -1756,5 +2274,355 @@ mod tests {
         });
         let inner = cache.inner();
         assert!(inner.fetching.is_empty() && inner.reserved.is_empty());
+    }
+
+    /// A cache in `dir` whose hosts bind at most `per_host` `instance_uid`s.
+    async fn cache_binding(dir: &Path, per_host: usize) -> Arc<PackageCache> {
+        let config: Arc<ClientConfig> = Arc::new(
+            toml::from_str(&format!(
+                "endpoint = \"ws://127.0.0.1:9/v1/opamp\"\nstate_dir = {:?}\n\
+                 [gateway]\nlisten = \"127.0.0.1:9\"\nmax_carried_agents = {per_host}\n",
+                dir.display().to_string()
+            ))
+            .expect("config"),
+        );
+        open_cache(config).await
+    }
+
+    /// What the store under `dir` reads back to.
+    fn stored(dir: &Path) -> Vec<Change> {
+        let held = HeldDir::open(&dir.join(DIR)).expect("held");
+        Bindings::replay(store::load(&held).expect("load"))
+            .expect("replay")
+            .snapshot()
+    }
+
+    /// Waits for the store's writer to finish what it is writing: a rewrite runs after the report
+    /// that grew the store is answered.
+    fn settled(cache: &PackageCache) {
+        drop(
+            cache
+                .journal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    }
+
+    /// How many lines the store under `dir` holds, its first line not counted.
+    fn store_lines(dir: &Path) -> usize {
+        std::fs::read_to_string(dir.join(DIR).join(store::NAME))
+            .expect("read")
+            .lines()
+            .count()
+            - 1
+    }
+
+    /// The store is rewritten whole at start, to one line per binding and per host, and again once
+    /// it has grown to twice that; either way it reads back to the bindings the Gateway holds.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn the_store_is_compacted_at_start_and_at_twice_its_live_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        for _ in 0..3 {
+            assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        }
+        assert_eq!(store_lines(dir.path()), 4, "one end, three bindings");
+        // Each new binding past the host's share gives up its oldest: a removal and a binding.
+        assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        assert_eq!(store_lines(dir.path()), 6);
+        assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        settled(&cache);
+        assert_eq!(store_lines(dir.path()), 4, "eight lines for four live ones");
+        assert_eq!(stored(dir.path()), cache.inner().bindings.snapshot());
+
+        assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        let held = cache.inner().bindings.snapshot();
+        drop(cache);
+        let cache = cache_binding(dir.path(), 3).await;
+        assert_eq!(store_lines(dir.path()), 4, "rewritten at start");
+        assert_eq!(stored(dir.path()), held);
+        assert_eq!(cache.inner().bindings.snapshot(), held);
+    }
+
+    /// The order in which bindings were reported is written, and outlasts a restart: past its
+    /// share a host still gives up its least recently reported binding.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn the_order_of_reports_outlasts_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 2).await;
+        let [first, second] = [(); 2].map(|()| InstanceUid::default());
+        cache.bind(first, "h1", |_| false).await;
+        cache.bind(second, "h1", |_| false).await;
+        cache.bind(first, "h1", |_| false).await;
+        cache.write_reports().await;
+        drop(cache);
+
+        let cache = cache_binding(dir.path(), 2).await;
+        let (bound, evicted) = cache.bind(InstanceUid::default(), "h1", |_| false).await;
+        assert!(bound);
+        assert_eq!(
+            evicted,
+            vec![second],
+            "the least recently reported gave way"
+        );
+    }
+
+    /// While the store cannot be read, every download is answered `503`, an offered one too, and
+    /// the store is not rewritten.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn an_unreadable_store_answers_every_download_unavailable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = dir.path().join(DIR).join(store::NAME);
+        std::fs::create_dir_all(store.parent().expect("dir")).expect("dir");
+        HeldDir::open(&dir.path().join(DIR))
+            .expect("held")
+            .write(store::NAME, b"opamp-fleet-gateway-bindings 9\n", 0o600)
+            .expect("write");
+        let cache = open_cache(config("127.0.0.1:9".parse().expect("addr"), dir.path(), 16)).await;
+        assert!(cache
+            .unreadable()
+            .is_some_and(|why| why.contains("version 9")));
+        let revocations = RevocationList::new(Duration::from_secs(300));
+        revocations.replace(HashSet::new(), None);
+        let downloads = Arc::new(Downloads {
+            cache,
+            revocations,
+            members: crate::gateway::Members::default(),
+        });
+        let mut request = Request::new(Body::empty());
+        *request.uri_mut() = path("1").parse().expect("uri");
+        let response = serve(axum::extract::State(downloads), request).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            std::fs::read(&store).expect("read"),
+            b"opamp-fleet-gateway-bindings 9\n"
+        );
+    }
+
+    /// A store that fails an append is rewritten whole, and the binding is made: what the failed
+    /// append wrote is cut back, and the store reads back to the bindings held.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_failed_append_falls_back_to_a_rewrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        cache.inject(|faults| faults.append = true);
+        let uid = InstanceUid::default();
+        assert!(
+            cache.bind(uid, "h1", |_| false).await.0,
+            "bound by the rewrite"
+        );
+        assert_eq!(stored(dir.path()), cache.inner().bindings.snapshot());
+        assert_eq!(store_lines(dir.path()), 3);
+    }
+
+    /// A rewrite that fails once its new file is in place makes nothing: the report is refused,
+    /// and nothing is appended afterwards to a file that may no longer be the store; the next
+    /// report's binding is written by a rewrite and outlasts a restart.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_rewrite_that_fails_after_its_rename_binds_nothing_and_appends_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        cache.inject(|faults| {
+            faults.append = true;
+            faults.after_rename = true;
+        });
+        let refused = InstanceUid::default();
+        assert!(!cache.bind(refused, "h1", |_| false).await.0, "not written");
+        let next = InstanceUid::default();
+        assert!(cache.bind(next, "h1", |_| false).await.0);
+        drop(cache);
+        let cache = cache_binding(dir.path(), 3).await;
+        assert!(cache.is_bound(&next), "the binding outlasts a restart");
+        assert!(!cache.is_bound(&refused));
+    }
+
+    /// A store that cannot be rewritten at start is not relied on: the Gateway carries no
+    /// downstream Agent, as for one it cannot read.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_store_that_cannot_be_rewritten_at_start_carries_no_agent() {
+        fn full(_: HeldDir, _: &[Change]) -> std::io::Result<Journal> {
+            Err(std::io::Error::other("no space left"))
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = PackageCache::open_with(
+            config("127.0.0.1:9".parse().expect("addr"), dir.path(), 16),
+            shutdown(),
+            Knobs {
+                create_journal: full,
+                ..Knobs::default()
+            },
+        )
+        .await
+        .expect("the Gateway starts");
+        assert!(cache
+            .unreadable()
+            .is_some_and(|why| why.contains("cannot rewrite")));
+    }
+
+    /// An offer relayed while an `instance_uid`'s binding is still being written is not recorded,
+    /// and a binding the store could not take leaves no offer behind; once the store holds the
+    /// binding, its offers are recorded.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn an_offer_is_recorded_only_for_a_binding_the_store_holds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        let one = artifact("1", b"x");
+        cache.inner().refused.insert(one.hash.clone());
+        let uid = InstanceUid::default();
+        let end = End {
+            not_after: i64::MAX,
+            issuer: "ab".repeat(32),
+            serial: "1".to_string(),
+        };
+        let (begun, _) = cache.begin_bind(uid, "h1", &end, |_| false);
+        assert!(matches!(begun, Begun::Writing(_)));
+        cache.observe(uid, Some("h1".to_string()), &offer(uid, &[&one]));
+        assert_eq!(
+            cache.offered_to("h1", &one.path),
+            None,
+            "still being written"
+        );
+        assert!(!cache.finish_bind(uid, "h1", false));
+        assert_eq!(cache.offered_to("h1", &one.path), None);
+        assert!(cache.inner().offers.is_empty());
+
+        assert!(cache.bind(uid, "h1", |_| false).await.0);
+        cache.observe(uid, Some("h1".to_string()), &offer(uid, &[&one]));
+        assert_eq!(cache.offered_to("h1", &one.path), Some(one));
+    }
+
+    /// A report under a renewed certificate is forwarded only once the store holds the host's
+    /// moved end; when the store cannot take it the report is refused and the end the store holds
+    /// stands, also in memory.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_moved_end_the_store_cannot_take_is_undone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        let later = now() + 3600;
+        let uid = InstanceUid::default();
+        assert!(cache.bind_until(uid, "h1", later, |_| false).await.0);
+        cache.refuse_writes();
+        assert!(
+            !cache.bind_until(uid, "h1", later + 3600, |_| false).await.0,
+            "forwarded before its end was written"
+        );
+        let ends = |changes: Vec<Change>| -> Vec<i64> {
+            changes
+                .into_iter()
+                .filter_map(|change| match change {
+                    Change::Ends(_, end) => Some(end.not_after),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            ends(cache.inner().bindings.snapshot()),
+            vec![later],
+            "undone"
+        );
+        assert_eq!(ends(stored(dir.path())), vec![later]);
+    }
+
+    /// A Gateway restarted in the same process takes its store over from the cache it replaces,
+    /// which binds nothing more: nothing it writes can land beside or over the store.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_cache_that_replaces_another_alone_writes_the_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = cache_binding(dir.path(), 3).await;
+        let first = InstanceUid::default();
+        assert!(old.bind(first, "h1", |_| false).await.0);
+        let new = cache_binding(dir.path(), 3).await;
+        assert!(new.is_bound(&first));
+        let before = std::fs::read(dir.path().join(DIR).join(store::NAME)).expect("read");
+        let refused = InstanceUid::default();
+        assert!(
+            !old.bind(refused, "h1", |_| false).await.0,
+            "the replaced cache binds nothing"
+        );
+        settled(&old);
+        assert_eq!(
+            std::fs::read(dir.path().join(DIR).join(store::NAME)).expect("read"),
+            before,
+            "and writes nothing to the store"
+        );
+        let second = InstanceUid::default();
+        assert!(new.bind(second, "h1", |_| false).await.0);
+        settled(&new);
+        assert_eq!(stored(dir.path()), new.inner().bindings.snapshot());
+        drop((old, new));
+        let again = cache_binding(dir.path(), 3).await;
+        assert!(again.is_bound(&first) && again.is_bound(&second));
+    }
+
+    /// A host's report refreshes its own binding's order, and another host's report for it does
+    /// not: neither its order nor the reports the store is told of.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn only_the_bound_hosts_report_orders_its_binding() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 2).await;
+        let [first, second] = [(); 2].map(|()| InstanceUid::default());
+        cache.bind(first, "h1", |_| false).await;
+        cache.bind(second, "h1", |_| false).await;
+        assert!(!cache.bind(first, "h2", |_| false).await.0);
+        assert!(
+            cache.inner().bindings.reports().is_empty(),
+            "nothing reported"
+        );
+        let (bound, evicted) = cache.bind(InstanceUid::default(), "h1", |_| false).await;
+        assert!(bound);
+        assert_eq!(evicted, vec![first], "still the least recently reported");
+    }
+
+    /// The lines of reports, which grow with the Agents carried, do not count toward the rewrite
+    /// at twice the live lines; the store is rewritten once they pass their own bound.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn reports_are_rewritten_by_a_bound_of_their_own() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        let uid = InstanceUid::default();
+        assert!(cache.bind(uid, "h1", |_| false).await.0);
+        let live = 2;
+        for written in 1..=REPORT_LINES_PER_LIVE * live {
+            assert!(cache.bind(uid, "h1", |_| false).await.0);
+            cache.write_reports().await;
+            settled(&cache);
+            assert_eq!(store_lines(dir.path()), live + written, "no rewrite yet");
+        }
+        assert!(cache.bind(uid, "h1", |_| false).await.0);
+        cache.write_reports().await;
+        settled(&cache);
+        assert_eq!(store_lines(dir.path()), live, "rewritten past their bound");
+    }
+
+    /// The task that writes a cache's store ends once the cache is gone, so a Gateway restarted
+    /// in the same process leaves none behind.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn the_stores_writer_ends_with_its_cache() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = cache_binding(dir.path(), 3).await;
+        assert!(cache.bind(InstanceUid::default(), "h1", |_| false).await.0);
+        let wake = Arc::downgrade(&cache.wake);
+        drop(cache);
+        tokio::time::timeout(DEADLINE, async {
+            while wake.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the writer ended");
     }
 }

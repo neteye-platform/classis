@@ -65,15 +65,32 @@ pub const DIRECTORIES: [&str; 9] = [
     AUDIT,
 ];
 
-/// Opens the data directory (ADR-0037): creates it and every directory of the layout owner-only,
-/// and refuses one that holds anything the layout does not name. What lies inside each directory
-/// is its store's to check, when the store opens.
+/// Opens the data directory (ADR-0037): creates it and every directory of the layout owner-only —
+/// `blobs/` only with the filesystem blob store, `filesystem_blobs`: beside a bucket it is the
+/// place artifacts are copied from, never written to (ADR-0049 clause 7) — and refuses one that
+/// holds anything the layout does not name. What lies inside each directory is its store's to
+/// check, when the store opens.
 ///
 /// # Errors
 /// Returns an error naming the path when a directory cannot be created, or when the data
 /// directory holds a file or directory the layout does not name.
-pub fn open_data_dir(root: &Path) -> Result<(), String> {
+pub fn open_data_dir(root: &Path, filesystem_blobs: bool) -> Result<(), String> {
     create_private_dir(root)?;
+    check_layout(root)?;
+    for dir in DIRECTORIES {
+        if dir == BLOBS && !filesystem_blobs {
+            continue;
+        }
+        create_private_dir(&root.join(dir))?;
+    }
+    Ok(())
+}
+
+/// Refuses a data directory that holds anything the layout does not name, and creates nothing.
+///
+/// # Errors
+/// Returns an error naming the path of the first entry the layout does not name.
+pub fn check_layout(root: &Path) -> Result<(), String> {
     for (name, path) in entries(root)? {
         let known = if DIRECTORIES.contains(&name.as_str()) {
             path.is_dir()
@@ -84,8 +101,37 @@ pub fn open_data_dir(root: &Path) -> Result<(), String> {
             return Err(unknown(&path));
         }
     }
-    for dir in DIRECTORIES {
-        create_private_dir(&root.join(dir))?;
+    Ok(())
+}
+
+/// Opens the data directory of a Server whose records live in PostgreSQL (ADR-0050 clause 2): it
+/// holds `audit/` and, with the filesystem blob store, `blobs/`, and nothing else. A path of the
+/// filesystem layout fails naming it and `server migrate-to-postgres` — those records would
+/// otherwise be silently left behind. `blobs/` is accepted beside a bucket too, as the place the
+/// artifacts are copied from into it (ADR-0049 clause 7).
+///
+/// # Errors
+/// Returns an error naming the path when a directory cannot be created, or when the data
+/// directory holds a record of the filesystem store or anything else.
+pub fn open_data_dir_beside_database(root: &Path, filesystem_blobs: bool) -> Result<(), String> {
+    create_private_dir(root)?;
+    for (name, path) in entries(root)? {
+        if (name == AUDIT || name == BLOBS) && path.is_dir() {
+            continue;
+        }
+        if DIRECTORIES.contains(&name.as_str()) || name == REVOCATIONS || name == ENROLMENT {
+            return Err(format!(
+                "{} is a record of the filesystem store, and [database] store = \"postgres\" — \
+                 copy the records into the database with `server migrate-to-postgres --from \
+                 <data_dir> --data-dir <new>` and start the Server on the new data_dir",
+                path.display()
+            ));
+        }
+        return Err(unknown(&path));
+    }
+    create_private_dir(&root.join(AUDIT))?;
+    if filesystem_blobs {
+        create_private_dir(&root.join(BLOBS))?;
     }
     Ok(())
 }
@@ -253,6 +299,24 @@ fn rename_into_place(temp: &Path, path: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
+pub(crate) mod testing {
+    //! The failure the "fails part-way" tests inject into a filesystem adapter.
+
+    use std::path::Path;
+
+    /// Makes every write of the document `path` fail: a directory stands where its temporary
+    /// file goes ([`replace`](super::replace)). [`mend`] takes it away.
+    pub(crate) fn refuse(path: &Path) {
+        std::fs::create_dir(super::temp_of(path)).expect("stand in the way of the write");
+    }
+
+    /// Takes away what [`refuse`] put beside `path`.
+    pub(crate) fn mend(path: &Path) {
+        std::fs::remove_dir(super::temp_of(path)).expect("clear the way");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -264,7 +328,7 @@ mod tests {
     fn the_data_directory_has_one_layout_and_no_other() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("fleet-data");
-        open_data_dir(&root).expect("open an empty data directory");
+        open_data_dir(&root, true).expect("open an empty data directory");
         for name in DIRECTORIES {
             assert!(root.join(name).is_dir(), "{name} was not created");
             #[cfg(unix)]
@@ -277,9 +341,16 @@ mod tests {
                 assert_eq!(mode & 0o777, 0o700, "{name} is not owner-only");
             }
         }
+        let bucket = dir.path().join("beside-a-bucket");
+        open_data_dir(&bucket, false).expect("open");
+        assert!(!bucket.join(BLOBS).exists(), "no blobs/ beside a bucket");
+        assert!(bucket.join(AGENTS).is_dir());
+        std::fs::create_dir(bucket.join(BLOBS)).expect("an older Server's blobs/");
+        open_data_dir(&bucket, false).expect("blobs/ is part of the layout, there to copy from");
+
         std::fs::write(root.join(REVOCATIONS), "[]").expect("list");
         std::fs::write(root.join("enrolment.json.tmp"), "{").expect("leftover");
-        open_data_dir(&root).expect("the named files are part of the layout");
+        open_data_dir(&root, true).expect("the named files are part of the layout");
         assert!(
             !root.join("enrolment.json.tmp").exists(),
             "the leftover is removed"
@@ -292,7 +363,7 @@ mod tests {
             } else {
                 std::fs::create_dir(&path).expect("mkdir");
             }
-            let error = open_data_dir(&root).expect_err("a stray entry is refused");
+            let error = open_data_dir(&root, true).expect_err("a stray entry is refused");
             assert!(error.contains(stray), "{error}");
             assert!(error.contains("server migrate"), "{error}");
             if path.is_dir() {
@@ -303,7 +374,53 @@ mod tests {
         }
         std::fs::remove_dir(root.join(AGENTS)).expect("rmdir");
         std::fs::write(root.join(AGENTS), "").expect("a file where a directory belongs");
-        assert!(open_data_dir(&root).is_err());
+        assert!(open_data_dir(&root, true).is_err());
+    }
+
+    /// With the records in PostgreSQL, `data_dir` holds `audit/` and, with the filesystem blob
+    /// store, `blobs/`, and nothing else; a record of the filesystem store found there fails the
+    /// open naming it and `server migrate-to-postgres`, and anything else fails as a stray entry.
+    /// Verifies: ADR-0050
+    #[test]
+    fn a_data_dir_beside_the_database_holds_the_audit_and_the_blobs_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("fleet-data");
+        open_data_dir_beside_database(&root, true).expect("an empty data directory");
+        let mut made: Vec<String> = std::fs::read_dir(&root)
+            .expect("read")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8")
+            })
+            .collect();
+        made.sort();
+        assert_eq!(made, [AUDIT, BLOBS]);
+        let bucket = dir.path().join("with-a-bucket");
+        open_data_dir_beside_database(&bucket, false).expect("open");
+        assert!(!bucket.join(BLOBS).exists(), "no blobs/ beside a bucket");
+
+        for record in [AGENTS, CONFIGURATIONS, CERTIFICATES, REVOCATIONS, ENROLMENT] {
+            let path = root.join(record);
+            if record.ends_with(".json") {
+                std::fs::write(&path, "{}").expect("write");
+            } else {
+                std::fs::create_dir(&path).expect("mkdir");
+            }
+            let error = open_data_dir_beside_database(&root, true).expect_err("a record in files");
+            assert!(error.contains(record), "{error}");
+            assert!(error.contains("server migrate-to-postgres"), "{error}");
+            if path.is_dir() {
+                std::fs::remove_dir(&path).expect("clean");
+            } else {
+                std::fs::remove_file(&path).expect("clean");
+            }
+        }
+        std::fs::write(root.join("notes.txt"), "x").expect("write");
+        let error = open_data_dir_beside_database(&root, true).expect_err("a stray file");
+        assert!(error.contains("notes.txt"), "{error}");
     }
 
     /// Every record is written owner-only, whether or not the write is synced.

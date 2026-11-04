@@ -19,6 +19,7 @@ use rcgen::{
 };
 use time::{Duration, OffsetDateTime};
 use x509_parser::prelude::{FromDer, X509Certificate};
+use zeroize::Zeroizing;
 
 /// How long the server CA and the client CA live unless told otherwise (ADR-0028 clause 9).
 pub const CA_DAYS: u32 = 3650;
@@ -257,10 +258,10 @@ pub struct InitOptions {
 }
 
 /// One file a command writes: its name in the target directory, its contents, and whether it is a
-/// private key.
+/// private key. The contents are wiped when they are dropped, a key's as every file's (ADR-0057).
 struct File {
     name: &'static str,
-    contents: Vec<u8>,
+    contents: Zeroizing<Vec<u8>>,
     key: bool,
 }
 
@@ -281,7 +282,7 @@ struct Authority {
 /// A certificate a command signed.
 struct Made {
     cert_pem: String,
-    key_pem: String,
+    key_pem: Zeroizing<String>,
     serial: String,
     /// The life asked for reached past the CA's end and was cut to it.
     cut: bool,
@@ -482,7 +483,7 @@ fn p12_password(
     password_file: Option<&Path>,
     terminal: bool,
     file: &Path,
-) -> Result<String, String> {
+) -> Result<Zeroizing<String>, String> {
     if let Some(path) = password_file {
         return fleet_agent::config_init::read_password_file(path, "--password-file");
     }
@@ -492,9 +493,12 @@ fn p12_password(
                 .to_string(),
         );
     }
+    // `dialoguer` hands back a plain copy of what it held wiped; it moves into a buffer wiped on
+    // drop here (ADR-0057).
     dialoguer::Password::new()
         .with_prompt(format!("Password of {}", file.display()))
         .interact()
+        .map(Zeroizing::new)
         .map_err(|e| format!("cannot ask for the password: {e}"))
 }
 
@@ -517,7 +521,7 @@ pub fn p12_extract(file: &Path, password: &str, out: &Path) -> Result<Vec<String
         files: vec![
             File {
                 name: "bootstrap.pem",
-                contents: identity.cert_pem,
+                contents: Zeroizing::new(identity.cert_pem),
                 key: false,
             },
             File {
@@ -647,13 +651,13 @@ fn random_serial() -> Result<SerialNumber, String> {
 // ---------------------------------------------------------------------------------------------
 
 /// A self-signed CA (ADR-0028 clauses 5 and 27): `CA:TRUE` with a path length of 0,
-/// `keyCertSign` and `cRLSign`, named O, OU and CN. Returns its certificate and key as PEM, and
-/// the authority that signs with it.
+/// `keyCertSign` and `cRLSign`, named O, OU and CN. Returns its certificate and key as PEM, the
+/// key wiped when it is dropped (ADR-0057), and the authority that signs with it.
 fn authority(
     common_name: &str,
     organization: &Organization,
     days: u32,
-) -> Result<(String, String, Authority), String> {
+) -> Result<(String, Zeroizing<String>, Authority), String> {
     let key = KeyPair::generate().map_err(|e| format!("cannot make a key: {e}"))?;
     let (not_before, not_after, _) = life(days, None)?;
     let mut params = CertificateParams::default();
@@ -666,7 +670,7 @@ fn authority(
     let cert = params
         .self_signed(&key)
         .map_err(|e| format!("cannot make the {common_name}: {e}"))?;
-    let key_pem = key.serialize_pem();
+    let key_pem = Zeroizing::new(key.serialize_pem());
     Ok((
         cert.pem(),
         key_pem,
@@ -735,7 +739,7 @@ fn leaf(mut params: CertificateParams, ca: &Authority, days: u32) -> Result<Made
         .map_err(|e| format!("cannot sign with the {}: {e}", ca.common_name))?;
     Ok(Made {
         cert_pem: cert.pem(),
-        key_pem: key.serialize_pem(),
+        key_pem: Zeroizing::new(key.serialize_pem()),
         serial: hex::encode(serial.to_bytes()),
         cut,
     })
@@ -775,6 +779,7 @@ fn load_authority(dir: &Path, stem: &str) -> Result<Authority, String> {
     let cert_pem = std::fs::read_to_string(&cert_file)
         .map_err(|e| format!("cannot read {}: {e}", cert_file.display()))?;
     let key_pem = std::fs::read_to_string(&key_file)
+        .map(Zeroizing::new)
         .map_err(|e| format!("cannot read {}: {e}", key_file.display()))?;
     let key = KeyPair::from_pem(&key_pem)
         .map_err(|e| format!("cannot read {}: {e}", key_file.display()))?;
@@ -876,15 +881,16 @@ fn is_dns_name(name: &str) -> bool {
 fn cert(name: &'static str, contents: &str) -> File {
     File {
         name,
-        contents: contents.as_bytes().to_vec(),
+        contents: Zeroizing::new(contents.as_bytes().to_vec()),
         key: false,
     }
 }
 
+/// A key file, copied from a buffer that is itself wiped (ADR-0057).
 fn key(name: &'static str, contents: &str) -> File {
     File {
         name,
-        contents: contents.as_bytes().to_vec(),
+        contents: Zeroizing::new(contents.as_bytes().to_vec()),
         key: true,
     }
 }
@@ -1566,6 +1572,45 @@ mod tests {
         assert!(!out.join("bootstrap-key.pem").exists());
     }
 
+    /// The passwords and keys these tools read and write are held in buffers wiped when they are
+    /// dropped: were any of them a plain buffer again, this would not compile.
+    /// Verifies: ADR-0057
+    #[test]
+    fn the_tools_hold_passwords_and_keys_in_zeroizing_buffers() {
+        fn contents(file: File) -> Zeroizing<Vec<u8>> {
+            file.contents
+        }
+        fn made_key(made: Made) -> Zeroizing<String> {
+            made.key_pem
+        }
+        fn asks(file: &Path) -> Result<Zeroizing<String>, String> {
+            p12_password(Some(file), false, file)
+        }
+        fn makes() -> Zeroizing<Vec<u8>> {
+            crate::package::signing_key().expect("a key").0
+        }
+        fn creates() -> Zeroizing<String> {
+            authority("Test CA", &Organization::default(), 1)
+                .expect("a CA")
+                .1
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let password_file = dir.path().join("password");
+        std::fs::write(&password_file, "four\n").expect("written");
+        assert_eq!(asks(&password_file).expect("read").as_str(), "four");
+        assert!(!makes().is_empty());
+        assert_eq!(*contents(key("key.pem", "pem")), b"pem");
+        assert!(creates().starts_with("-----BEGIN PRIVATE KEY-----"));
+        let made = Made {
+            cert_pem: String::new(),
+            key_pem: Zeroizing::new("key".to_string()),
+            serial: String::new(),
+            cut: false,
+        };
+        assert_eq!(made_key(made).as_str(), "key");
+    }
+
     /// Verifies: ADR-0031
     #[test]
     fn the_password_comes_from_a_file_or_a_terminal_and_never_from_a_flag() {
@@ -1577,7 +1622,9 @@ mod tests {
         let password_file = dir.path().join("password");
         std::fs::write(&password_file, "four\r\nsecond line").expect("written");
         assert_eq!(
-            p12_password(Some(&password_file), false, &missing).expect("read"),
+            p12_password(Some(&password_file), false, &missing)
+                .expect("read")
+                .as_str(),
             "four"
         );
 

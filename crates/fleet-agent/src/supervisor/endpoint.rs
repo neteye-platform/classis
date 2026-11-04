@@ -17,6 +17,7 @@ use opamp::proto::{AgentToServer, ServerCapabilities, ServerToAgent};
 use opamp::server::listen::{Handle, Listener, HEADER_READ_TIMEOUT};
 use opamp::server::{Handler, Outbound, Rejection, Reply, RequestInfo, Settings, Transports};
 use tracing::{debug, info, warn};
+use zeroize::Zeroizing;
 
 use crate::shutdown::Shutdown;
 use crate::supervisor::ports::{EventSender, ProcessEvent};
@@ -36,7 +37,8 @@ pub struct Endpoint {
     /// How long a connection may take to send its request headers.
     header_read_timeout: Duration,
     /// What a connection must present as `Authorization: Bearer …` (ADR-0015); empty asks nothing.
-    token: String,
+    /// Wiped when it is dropped (ADR-0057).
+    token: Zeroizing<String>,
 }
 
 impl Endpoint {
@@ -61,13 +63,13 @@ impl Endpoint {
             events,
             max_message_size,
             header_read_timeout: HEADER_READ_TIMEOUT,
-            token: String::new(),
+            token: Zeroizing::default(),
         })
     }
 
     /// Asks every connection for `token` (ADR-0015).
     #[must_use]
-    pub fn with_token(mut self, token: String) -> Self {
+    pub fn with_token(mut self, token: Zeroizing<String>) -> Self {
         self.token = token;
         self
     }
@@ -96,7 +98,7 @@ impl Endpoint {
             name: self.name.clone(),
             events: self.events,
             shutdown: shutdown.clone(),
-            expected: (!self.token.is_empty()).then(|| format!("Bearer {}", self.token)),
+            expected: (!self.token.is_empty()).then(|| bearer(&self.token)),
         });
         // WebSocket-only, and on any path: this listener serves exactly one local process, so
         // there is nothing to route by.
@@ -132,22 +134,38 @@ struct Folding {
     name: String,
     events: EventSender,
     shutdown: Shutdown,
-    /// The `Authorization` value a connection must carry; `None` asks nothing.
-    expected: Option<String>,
+    /// The `Authorization` value a connection must carry; `None` asks nothing. Wiped when it is
+    /// dropped (ADR-0057).
+    expected: Option<Zeroizing<String>>,
 }
 
 /// A fresh token for one Supervisor start (ADR-0015): 32 bytes from the system's secure random
-/// source, hex.
+/// source, hex. The bytes and the token are held in buffers wiped when they are dropped, the token
+/// sized up front so it is never grown (ADR-0057).
 ///
 /// # Errors
 /// Returns an error when no secure random source is available.
-pub fn new_token() -> Result<String, String> {
+pub fn new_token() -> Result<Zeroizing<String>, String> {
     use ring::rand::SecureRandom as _;
-    let mut bytes = [0u8; 32];
+    use std::fmt::Write as _;
+    let mut bytes = Zeroizing::new(vec![0u8; 32]);
     ring::rand::SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| "no secure random source for the supervisor endpoint's token".to_string())?;
-    Ok(hex::encode(bytes))
+    let mut token = Zeroizing::new(String::with_capacity(bytes.len() * 2));
+    for byte in bytes.iter() {
+        write!(token, "{byte:02x}").expect("writing to a String");
+    }
+    Ok(token)
+}
+
+/// `Bearer <token>`, sized up front so the buffer is never grown and left behind (ADR-0057).
+fn bearer(token: &str) -> Zeroizing<String> {
+    const SCHEME: &str = "Bearer ";
+    let mut value = Zeroizing::new(String::with_capacity(SCHEME.len() + token.len()));
+    value.push_str(SCHEME);
+    value.push_str(token);
+    value
 }
 
 /// Compares in time that depends on the lengths alone, so an answer never tells how far a guess
@@ -249,7 +267,7 @@ pub fn start(
     events: EventSender,
     shutdown: Shutdown,
     max_message_size: usize,
-    token: String,
+    token: Zeroizing<String>,
 ) -> Result<SocketAddr, String> {
     let endpoint = Endpoint::bind(name.clone(), port, events, max_message_size)?.with_token(token);
     let addr = endpoint.local_addr()?;
@@ -281,7 +299,7 @@ mod tests {
             EventSender::new(0, event_tx),
             shutdown,
             opamp::frame::DEFAULT_MAX_MESSAGE_SIZE,
-            String::new(),
+            Zeroizing::default(),
         )
         .expect("endpoint starts");
 
@@ -361,7 +379,7 @@ mod tests {
             EventSender::new(0, event_tx),
             shutdown,
             opamp::frame::DEFAULT_MAX_MESSAGE_SIZE,
-            String::new(),
+            Zeroizing::default(),
         )
         .expect("endpoint starts");
         shutdown_tx.send(true).expect("signal shutdown");
@@ -464,7 +482,7 @@ mod tests {
         let mut right = url.as_str().into_client_request().expect("request");
         right.headers_mut().insert(
             "authorization",
-            format!("Bearer {token}").parse().expect("header"),
+            format!("Bearer {}", *token).parse().expect("header"),
         );
         tokio_tungstenite::connect_async(right)
             .await

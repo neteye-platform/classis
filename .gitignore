@@ -6,6 +6,7 @@
 /dist/
 /build/
 /target/
+/target*/
 
 # Local runtime state (default paths of server.toml / supervisor.toml).
 #

@@ -409,7 +409,9 @@ pub async fn process_connection_offer(
     let store = tracing::info_span!(parent: &span, "store").entered();
     let merged =
         crate::connection::merge(crate::connection::load(&config.state_dir).as_ref(), &offer);
-    if let Err(e) = crate::connection::store(&config.state_dir, &merged) {
+    if let Err(e) =
+        crate::connection::store(&config.state_dir, config.process_account_group, &merged)
+    {
         tracing::warn!(error = %e, "cannot persist the connection settings");
     }
     errors.extend(telemetry.apply(&merged, &engine.self_description(), config));

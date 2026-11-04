@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use clap::{Subcommand, ValueEnum};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 /// The commands of `opamp-fleetctl package` (ADR-0028 clause 15).
 #[derive(Subcommand)]
@@ -220,6 +221,9 @@ pub fn run(command: Command) -> Result<(), String> {
             program_name,
             archive_key,
         } => {
+            // Moved into a buffer wiped when it is dropped; what `clap` keeps of the command line
+            // is its own (ADR-0057).
+            let archive_key = archive_key.map(Zeroizing::new);
             if !program.is_file() {
                 return Err(format!(
                     "{} is not a file — a package delivers exactly one program, and an agent that \
@@ -243,7 +247,12 @@ pub fn run(command: Command) -> Result<(), String> {
                     }
                     pack_tar_gz(&program, &member, &out)?;
                 }
-                Format::SevenZ => pack_7z(&program, &member, &out, archive_key.as_deref())?,
+                Format::SevenZ => pack_7z(
+                    &program,
+                    &member,
+                    &out,
+                    archive_key.as_deref().map(String::as_str),
+                )?,
             }
             eprintln!(
                 "wrote {} holding {member:?} — a Supervisor whose program is named {member:?} \
@@ -379,18 +388,20 @@ pub(crate) fn sha256_file(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// A new package signing key (ADR-0026): the private key as PKCS#8 DER, and its public half in
-/// hex, the form `[packages] verification_key` takes. `keygen` and `pki init` make it alike.
+/// hex, the form `[packages] verification_key` takes. `keygen` and `pki init` make it alike. The
+/// private key is wiped when it is dropped; the `ring` document it is copied from is not
+/// (ADR-0057).
 ///
 /// # Errors
 /// Returns the message to print when no key can be made.
-pub(crate) fn signing_key() -> Result<(Vec<u8>, String), String> {
+pub(crate) fn signing_key() -> Result<(Zeroizing<Vec<u8>>, String), String> {
     let rng = ring::rand::SystemRandom::new();
     let pkcs8 =
         Ed25519KeyPair::generate_pkcs8(&rng).map_err(|_| "cannot generate a key".to_string())?;
     let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
         .map_err(|_| "the generated key is unusable".to_string())?;
     Ok((
-        pkcs8.as_ref().to_vec(),
+        Zeroizing::new(pkcs8.as_ref().to_vec()),
         hex::encode(keypair.public_key().as_ref()),
     ))
 }
@@ -413,7 +424,10 @@ pub(crate) fn require_semver(version: &str) -> Result<(), String> {
 }
 
 fn load_key(path: &PathBuf) -> Result<Ed25519KeyPair, String> {
-    let pkcs8 = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    // Wiped once `ring` holds the key (ADR-0057).
+    let pkcs8 = std::fs::read(path)
+        .map(Zeroizing::new)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     Ed25519KeyPair::from_pkcs8(&pkcs8)
         .map_err(|_| format!("{} is not a valid PKCS#8 Ed25519 key", path.display()))
 }

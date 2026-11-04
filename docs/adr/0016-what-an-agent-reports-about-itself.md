@@ -1,7 +1,9 @@
 # ADR-0016: An Agent reports its type, its operator's name and its host as the conventions define them, and its own telemetry over OTLP/HTTP to the destinations the Server names, in TLS 1.3 and in plaintext only to the loopback
 
 - **Status:** 🟢 accepted · clauses 8 and 9 superseded by
-  [ADR-0041](0041-a-managed-process-states-only-its-own-service-attributes.md)
+  [ADR-0041](0041-a-managed-process-states-only-its-own-service-attributes.md) ·
+  clause 1 superseded by
+  [ADR-0055](0055-an-agents-type-is-its-supervisors-and-a-process-never-chooses-it.md)
 - **Date:** 2026-10-03
 - **Deciders:** Markus Brigl
 - **Applies to:** AgentDescription building in

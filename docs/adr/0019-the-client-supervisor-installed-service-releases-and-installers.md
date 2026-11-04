@@ -8,6 +8,10 @@
   [ADR-0042](0042-the-linux-packages-run-the-client-under-its-own-account.md) ·
   clause 34 superseded by
   [ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)
+  · clause 9 superseded by
+  [ADR-0053](0053-the-state-directory-comes-from-the-registration-not-the-file.md)
+  · clauses 3 and 39 superseded by
+  [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl
 - **Applies to:** `crates/fleet-agent/src/cli.rs`,

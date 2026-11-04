@@ -15,9 +15,9 @@
 //! runs on, never another one. It checks a signature against the operator's public key when it
 //! holds one, and only reports what it found: the Agent's own check decides (ADR-0033).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use crate::blobs::BlobStore;
 use crate::deployments::Deployment;
@@ -413,6 +413,20 @@ pub trait PackageBackend: Send + Sync {
     fn remove(&self, id: &PackageId) -> Result<(), String>;
 }
 
+/// What happens to blobs outside the lock on the Packages. A request to the blob store may take as
+/// long as its store answers — an S3 bucket over the network — so none runs under that lock, which
+/// every offer and every listing waits for. Two rules keep an entry from naming a deleted blob:
+/// a blob an upload holds is never chosen for deletion, and an upload that finds its blob being
+/// deleted is refused, as one that finds it already gone is.
+#[derive(Default)]
+struct Life {
+    /// Blobs an upload has stored and not yet recorded, or given up, with how many uploads hold
+    /// each.
+    uploading: HashMap<String, usize>,
+    /// Blobs chosen for deletion, until the store has answered the deletion.
+    deleting: HashSet<String>,
+}
+
 /// The package store (ADR-0026, ADR-0037): every Package, held in memory for the control loop to
 /// read, its metadata persisted through a [`PackageBackend`] and its artifacts through a
 /// [`BlobStore`].
@@ -420,6 +434,9 @@ pub struct PackageStore {
     backend: Box<dyn PackageBackend>,
     blobs: Box<dyn BlobStore>,
     sets: RwLock<BTreeMap<PackageId, Package>>,
+    /// The blobs an upload or a deletion is working on while no lock on `sets` is held, so that
+    /// no round trip to the blob store runs under it and the two never cross ([`Life`]).
+    life: Mutex<Life>,
     /// The check against the operator's public key, `[packages] verification_key` (ADR-0033).
     /// Each entry's signature is reported by it; `None` reports every signature `unchecked`.
     key: Option<Box<dyn SignatureVerifier>>,
@@ -478,6 +495,7 @@ impl PackageStore {
             backend,
             blobs,
             sets: RwLock::new(BTreeMap::new()),
+            life: Mutex::new(Life::default()),
             key: None,
         };
         // A blob no entry names is deleted at startup (ADR-0037 clause 4): an upload whose entry
@@ -610,23 +628,43 @@ impl PackageStore {
     ) -> Result<(), String> {
         self.writable(id)?;
         let (sha256, size) = self.blobs.put(bytes)?;
-        let result = if size == 0 {
-            Err("the package artifact is empty; refusing to distribute it".to_string())
-        } else {
-            self.put_entry_record(
-                id,
-                Entry {
-                    platform: platform.clone(),
-                    content_hash: hex::decode(&sha256).expect("a blob's hash is hex"),
-                    size,
-                    // New bytes take the old signature with them: it covered the old hash
-                    // (ADR-0033).
-                    signature: None,
-                },
-            )
-        };
-        if result.is_err() {
-            self.collect(&self.sets.read().expect("sets lock"), &sha256);
+        // Whether the blob stays although no entry names it: when the store could not be asked
+        // whether it holds it, deleting it would be a guess too.
+        let mut keep = false;
+        let result = self.begin_upload(&sha256).and_then(|()| {
+            let recorded = if size == 0 {
+                Err("the package artifact is empty; refusing to distribute it".to_string())
+            } else {
+                // Asked outside the lock: no deletion of this blob starts while the upload holds
+                // it, and one that ran before has answered.
+                match self.blobs.exists(&sha256) {
+                    Ok(true) => self.put_entry_record(
+                        id,
+                        Entry {
+                            platform: platform.clone(),
+                            content_hash: hex::decode(&sha256).expect("a blob's hash is hex"),
+                            size,
+                            // New bytes take the old signature with them: it covered the old hash
+                            // (ADR-0033).
+                            signature: None,
+                        },
+                    ),
+                    Ok(false) => Err(REMOVED_WHILE_UPLOADED.to_string()),
+                    Err(e) => {
+                        keep = true;
+                        Err(format!(
+                            "{e} — the store could not say whether it holds the artifact; upload \
+                             it again once the store answers"
+                        ))
+                    }
+                }
+            };
+            self.end_upload(&sha256);
+            recorded
+        });
+        if result.is_err() && !keep {
+            let doomed = self.doom(&self.sets.read().expect("sets lock"), &sha256);
+            self.sweep(doomed);
         }
         result
     }
@@ -714,19 +752,18 @@ impl PackageStore {
     /// Writes one entry into the Package's map and its metadata — the single path every entry
     /// write converges on. Replacing the entry for a Platform the Package already holds is what
     /// "no duplicate entries" means in a map: the combination stays unique by construction. The
-    /// blob it names must still be stored — a deletion that collected it while the upload was
-    /// streaming is refused here rather than recorded — and a blob the replaced entry named is
-    /// deleted when no other entry names it.
+    /// caller holds the blob it names as an upload, and has found it stored; a blob the replaced
+    /// entry named is deleted when no other entry names it, once the lock is released.
     fn put_entry_record(&self, id: &PackageId, entry: Entry) -> Result<(), String> {
         let mut sets = self.sets.write().expect("sets lock");
-        if !self.blobs.exists(&hex::encode(&entry.content_hash)) {
-            return Err("the artifact was removed while it was uploaded; upload it again".into());
-        }
         let set = sets
             .get_mut(id)
             .ok_or_else(|| format!("no package set {id}"))?;
         let platform = entry.platform.clone();
         let previous = set.entries.insert(platform.clone(), entry);
+        // The metadata is written under the lock, as every write of a Package is: the store must
+        // hold what memory holds, in the order it changed. A PostgreSQL call is bounded
+        // (ADR-0050 clause 7); the blob store is not asked here.
         if let Err(e) = self.backend.put(set) {
             match previous {
                 Some(previous) => set.entries.insert(platform, previous),
@@ -734,9 +771,10 @@ impl PackageStore {
             };
             return Err(e);
         }
-        if let Some(previous) = previous {
-            self.collect(&sets, &hex::encode(previous.content_hash));
-        }
+        let doomed =
+            previous.and_then(|previous| self.doom(&sets, &hex::encode(previous.content_hash)));
+        drop(sets);
+        self.sweep(doomed);
         Ok(())
     }
 
@@ -757,7 +795,9 @@ impl PackageStore {
             set.entries.insert(platform.clone(), removed);
             return Err(e);
         }
-        self.collect(&sets, &hex::encode(removed.content_hash));
+        let doomed = self.doom(&sets, &hex::encode(removed.content_hash));
+        drop(sets);
+        self.sweep(doomed);
         Ok(true)
     }
 
@@ -772,20 +812,65 @@ impl PackageStore {
         }
         self.backend.remove(id)?;
         let removed = sets.remove(id).expect("checked above");
-        for entry in removed.entries.values() {
-            self.collect(&sets, &hex::encode(&entry.content_hash));
-        }
+        let doomed: Vec<String> = removed
+            .entries
+            .values()
+            .filter_map(|entry| self.doom(&sets, &hex::encode(&entry.content_hash)))
+            .collect();
+        drop(sets);
+        self.sweep(doomed);
         Ok(true)
     }
 
-    /// Deletes the blob `sha256` when no entry of `sets` names it (ADR-0037 clause 4). A failure
-    /// is logged and left to the next startup, which deletes every blob no entry names.
-    fn collect(&self, sets: &BTreeMap<PackageId, Package>, sha256: &str) {
-        if referenced(sets, sha256) {
-            return;
+    /// Marks an upload as holding `sha256`: no deletion of it starts until
+    /// [`end_upload`](Self::end_upload). Refused when one has started already — the bytes the
+    /// upload stored may be what it deletes.
+    fn begin_upload(&self, sha256: &str) -> Result<(), String> {
+        let mut life = self.life.lock().expect("blob life lock");
+        if life.deleting.contains(sha256) {
+            return Err(REMOVED_WHILE_UPLOADED.to_string());
         }
-        if let Err(e) = self.blobs.delete(sha256) {
-            tracing::warn!(blob = %sha256, error = %e, "cannot delete an artifact no entry names");
+        *life.uploading.entry(sha256.to_string()).or_default() += 1;
+        Ok(())
+    }
+
+    /// The upload holding `sha256` has recorded it, or given up.
+    fn end_upload(&self, sha256: &str) {
+        let mut life = self.life.lock().expect("blob life lock");
+        if let Some(count) = life.uploading.get_mut(sha256) {
+            *count -= 1;
+            if *count == 0 {
+                life.uploading.remove(sha256);
+            }
+        }
+    }
+
+    /// Chooses the blob `sha256` for deletion when no entry of `sets` names it and no upload
+    /// holds it (ADR-0037 clause 4); [`sweep`](Self::sweep) deletes it once the lock on `sets`
+    /// is released. Decided under that lock, so no entry naming it can be recorded meanwhile.
+    fn doom(&self, sets: &BTreeMap<PackageId, Package>, sha256: &str) -> Option<String> {
+        if referenced(sets, sha256) {
+            return None;
+        }
+        let mut life = self.life.lock().expect("blob life lock");
+        if life.uploading.contains_key(sha256) || !life.deleting.insert(sha256.to_string()) {
+            return None;
+        }
+        Some(sha256.to_string())
+    }
+
+    /// Deletes the blobs [`doom`](Self::doom) chose, with no lock held. A failure is logged and
+    /// left to the next startup, which deletes every blob no entry names.
+    fn sweep(&self, doomed: impl IntoIterator<Item = String>) {
+        for sha256 in doomed {
+            if let Err(e) = self.blobs.delete(&sha256) {
+                tracing::warn!(blob = %sha256, error = %e, "cannot delete an artifact no entry names");
+            }
+            self.life
+                .lock()
+                .expect("blob life lock")
+                .deleting
+                .remove(&sha256);
         }
     }
 
@@ -1005,6 +1090,10 @@ fn fits(description: Option<&AgentDescription>, id: &PackageId, platform: &Platf
     reported_agent_type(description) == Some(id.agent_type.as_str())
         && Platform::reported(description).as_ref() == Some(platform)
 }
+
+/// The refusal of an upload whose blob a deletion took, or is taking.
+const REMOVED_WHILE_UPLOADED: &str =
+    "the artifact was removed while it was uploaded; upload it again";
 
 /// Whether any entry of `sets` names the blob `sha256`.
 fn referenced(sets: &BTreeMap<PackageId, Package>, sha256: &str) -> bool {
@@ -2506,5 +2595,212 @@ mod tests {
         assert!(!store.offers(Some(&set), Some(&linux_agent), &set, &linux()));
         let windows_agent = agent("windows", "amd64", &[]);
         assert!(store.offers(Some(&set), Some(&windows_agent), &set, &windows()));
+    }
+
+    /// A blob store over files that can hold one request — `exists` or `delete` — until the test
+    /// lets it go, or fail every `exists`: a bucket that is slow, or does not answer.
+    struct Gated {
+        inner: crate::fs::FsBlobStore,
+        armed: std::sync::Arc<Mutex<Option<&'static str>>>,
+        entered: std::sync::Arc<std::sync::Barrier>,
+        leave: std::sync::Arc<std::sync::Barrier>,
+        unanswered: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Gated {
+        fn hold(&self, operation: &str) {
+            let mut armed = self.armed.lock().expect("armed");
+            if *armed == Some(operation) {
+                *armed = None;
+                drop(armed);
+                self.entered.wait();
+                self.leave.wait();
+            }
+        }
+    }
+
+    impl BlobStore for Gated {
+        fn put(&self, bytes: &mut dyn std::io::Read) -> Result<(String, u64), String> {
+            self.inner.put(bytes)
+        }
+        fn get(&self, sha256: &str) -> Result<Box<dyn std::io::Read + Send>, String> {
+            self.inner.get(sha256)
+        }
+        fn exists(&self, sha256: &str) -> Result<bool, String> {
+            if self.unanswered.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("the store does not answer".to_string());
+            }
+            self.hold("exists");
+            self.inner.exists(sha256)
+        }
+        fn delete(&self, sha256: &str) -> Result<(), String> {
+            self.hold("delete");
+            self.inner.delete(sha256)
+        }
+        fn list(&self) -> Result<Vec<(String, u64)>, String> {
+            self.inner.list()
+        }
+    }
+
+    /// A package store on [`Gated`] blobs, with the handles that steer them.
+    struct GatedStore {
+        store: std::sync::Arc<PackageStore>,
+        armed: std::sync::Arc<Mutex<Option<&'static str>>>,
+        entered: std::sync::Arc<std::sync::Barrier>,
+        leave: std::sync::Arc<std::sync::Barrier>,
+        unanswered: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        blobs: std::path::PathBuf,
+    }
+
+    fn gated(dir: &std::path::Path) -> GatedStore {
+        let armed = std::sync::Arc::new(Mutex::new(None));
+        let entered = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let leave = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let unanswered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let blobs = Gated {
+            inner: crate::fs::FsBlobStore::open(dir).expect("blobs"),
+            armed: armed.clone(),
+            entered: entered.clone(),
+            leave: leave.clone(),
+            unanswered: unanswered.clone(),
+        };
+        let store = PackageStore::with_backend(
+            Box::new(crate::fs::FsPackageBackend::open(dir).expect("backend")),
+            Box::new(blobs),
+        )
+        .expect("open");
+        GatedStore {
+            store: std::sync::Arc::new(store),
+            armed,
+            entered,
+            leave,
+            unanswered,
+            blobs: dir.join("blobs"),
+        }
+    }
+
+    /// Whether `read` answers within two seconds, run on a thread of its own.
+    fn answers(store: &std::sync::Arc<PackageStore>, read: fn(&PackageStore)) -> bool {
+        let (done, finished) = std::sync::mpsc::channel();
+        let store = store.clone();
+        std::thread::spawn(move || {
+            read(&store);
+            let _ = done.send(());
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_ok()
+    }
+
+    /// No request to the blob store runs under the lock every offer and listing waits for: while
+    /// an upload asks whether its blob is stored, and while a deletion deletes one, the Packages
+    /// are still read (ADR-0049 clause 1).
+    /// Verifies: ADR-0049
+    #[test]
+    fn a_slow_blob_store_holds_no_reader_of_the_packages() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gated = gated(dir.path());
+        let one = id("otelcol", "1.0.0");
+        gated.store.create(&one).expect("create");
+
+        *gated.armed.lock().expect("armed") = Some("exists");
+        let uploading = std::thread::spawn({
+            let (store, one) = (gated.store.clone(), one.clone());
+            move || store.put_entry(&one, &linux(), b"artifact".to_vec())
+        });
+        gated.entered.wait();
+        assert!(
+            answers(&gated.store, |store| {
+                store.list();
+            }),
+            "a listing waited for the store"
+        );
+        gated.leave.wait();
+        uploading
+            .join()
+            .expect("join")
+            .expect("the upload is recorded");
+
+        *gated.armed.lock().expect("armed") = Some("delete");
+        let deleting = std::thread::spawn({
+            let (store, one) = (gated.store.clone(), one.clone());
+            move || store.delete_entry(&one, &linux())
+        });
+        gated.entered.wait();
+        assert!(
+            answers(&gated.store, |store| {
+                store.list();
+            }),
+            "a listing waited for the store"
+        );
+        gated.leave.wait();
+        assert!(deleting.join().expect("join").expect("deleted"));
+        assert_eq!(std::fs::read_dir(&gated.blobs).expect("blobs").count(), 0);
+    }
+
+    /// An upload of bytes whose blob is being deleted — the last entry naming it went just
+    /// before — is refused rather than recorded on a blob the deletion then takes; no entry ever
+    /// names a blob that is not stored (ADR-0037 clause 4).
+    /// Verifies: ADR-0037
+    #[test]
+    fn an_upload_never_records_a_blob_a_deletion_takes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gated = gated(dir.path());
+        let (one, two) = (id("otelcol", "1.0.0"), id("otelcol", "2.0.0"));
+        gated.store.create(&one).expect("create");
+        gated.store.create(&two).expect("create");
+        gated
+            .store
+            .put_entry(&one, &linux(), b"artifact".to_vec())
+            .expect("entry");
+
+        *gated.armed.lock().expect("armed") = Some("delete");
+        let deleting = std::thread::spawn({
+            let (store, one) = (gated.store.clone(), one.clone());
+            move || store.delete_entry(&one, &linux())
+        });
+        gated.entered.wait();
+        let err = gated
+            .store
+            .put_entry(&two, &linux(), b"artifact".to_vec())
+            .expect_err("its blob is being deleted");
+        assert!(err.contains("removed while it was uploaded"), "{err}");
+        gated.leave.wait();
+        assert!(deleting.join().expect("join").expect("deleted"));
+        assert!(gated.store.artifact(&two, &linux()).is_none());
+        assert_eq!(std::fs::read_dir(&gated.blobs).expect("blobs").count(), 0);
+
+        gated
+            .store
+            .put_entry(&two, &linux(), b"artifact".to_vec())
+            .expect("once the deletion is done, the upload stores it again");
+        assert!(gated.store.artifact(&two, &linux()).is_some());
+    }
+
+    /// A store that cannot say whether it holds an uploaded blob fails the upload with its own
+    /// error, and the blob stays: neither "removed while it was uploaded" nor a deletion on a
+    /// guess (ADR-0049 clause 1).
+    /// Verifies: ADR-0049
+    #[test]
+    fn a_store_that_cannot_be_asked_fails_the_upload_and_keeps_the_blob() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gated = gated(dir.path());
+        let one = id("otelcol", "1.0.0");
+        gated.store.create(&one).expect("create");
+        gated
+            .unanswered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let err = gated
+            .store
+            .put_entry(&one, &linux(), b"artifact".to_vec())
+            .expect_err("the store does not answer");
+        assert!(err.contains("the store does not answer"), "{err}");
+        assert!(!err.contains("removed while it was uploaded"), "{err}");
+        assert!(gated.store.artifact(&one, &linux()).is_none());
+        assert_eq!(
+            std::fs::read_dir(&gated.blobs).expect("blobs").count(),
+            1,
+            "the blob is kept"
+        );
     }
 }

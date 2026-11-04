@@ -2471,7 +2471,7 @@ async fn an_audit_that_cannot_write_refuses_admission() {
         fn tail(&mut self) -> Result<Option<fleet_server::audit_log::Tail>, String> {
             Ok(None)
         }
-        fn append(&mut self, _: u64, _: &str) -> Result<(), String> {
+        fn append(&mut self, _: u64, _: &[&str]) -> Result<(), String> {
             Err("disk full".to_string())
         }
         fn current_bytes(&self) -> u64 {
@@ -2524,7 +2524,7 @@ async fn an_audit_that_cannot_write_issues_no_certificate() {
         fn tail(&mut self) -> Result<Option<fleet_server::audit_log::Tail>, String> {
             Ok(None)
         }
-        fn append(&mut self, _: u64, _: &str) -> Result<(), String> {
+        fn append(&mut self, _: u64, _: &[&str]) -> Result<(), String> {
             if self.0.load(Ordering::SeqCst) {
                 Err("disk full".to_string())
             } else {
@@ -2976,8 +2976,9 @@ impl fleet_server::audit_log::AuditStore for Lines {
     fn tail(&mut self) -> Result<Option<fleet_server::audit_log::Tail>, String> {
         Ok(None)
     }
-    fn append(&mut self, _: u64, line: &str) -> Result<(), String> {
-        self.0.lock().expect("lines").push(line.to_string());
+    fn append(&mut self, _: u64, lines: &[&str]) -> Result<(), String> {
+        let mut written = self.0.lock().expect("lines");
+        written.extend(lines.iter().map(|line| (*line).to_string()));
         Ok(())
     }
     fn current_bytes(&self) -> u64 {
@@ -3231,7 +3232,7 @@ async fn every_unavailable_reply_names_the_agent_it_answers() {
         fn tail(&mut self) -> Result<Option<fleet_server::audit_log::Tail>, String> {
             Ok(None)
         }
-        fn append(&mut self, _: u64, _: &str) -> Result<(), String> {
+        fn append(&mut self, _: u64, _: &[&str]) -> Result<(), String> {
             if self.0.load(std::sync::atomic::Ordering::SeqCst) {
                 Err("disk full".to_string())
             } else {

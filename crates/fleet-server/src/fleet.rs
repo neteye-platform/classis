@@ -1704,6 +1704,12 @@ impl AppState {
 
     /// Writes one record when its durable content changed since it was last written, and says
     /// whether the write failed — for an operator's act that must not be answered unwritten.
+    ///
+    /// The `written` lock — and the fleet lock every caller holds while it reads `record` — stays
+    /// held across the store's write. Releasing it would let two writes of one record race, and an
+    /// older state land after a newer one while `written` names the newer; and an act is answered
+    /// only once its record is written (ADR-0024 clause 5). What a store's write may take is
+    /// bounded instead: a PostgreSQL call fails after `postgres::CALL_TIMEOUT` (ADR-0050 clause 7).
     fn persist(&self, uid: &InstanceUid, record: &AgentRecord) -> Result<(), String> {
         let persisted = record.to_persisted();
         let digest = persisted.durable_digest();
@@ -2927,9 +2933,10 @@ pub struct HostAgentView {
 pub struct AgentView {
     pub instance_uid: String,
     /// The Agent *type* — the Baseline's "reverse FQDN that uniquely identifies the Agent type"
-    /// (ADR-0016). For a managed Collector this is the `dist.name` it was built with, so every
-    /// Collector of one distribution reports the same value. It answers "what is this", never
-    /// "which one is this": that is [`service_instance_name`](Self::service_instance_name).
+    /// (ADR-0055). For a Supervisor-backed Agent this is the type its Supervisor states, never one
+    /// its Managed Process reports, so every Agent of one configured type reports the same value.
+    /// It answers "what is this", never "which one is this": that is
+    /// [`service_instance_name`](Self::service_instance_name).
     pub service_name: String,
     /// The operator's name for this Agent — the `[[supervisor]]` block's `name` (ADR-0016). Empty
     /// for a foreign OpAMP client that reports no `service.instance.name`, which is why the UI

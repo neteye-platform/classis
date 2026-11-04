@@ -62,7 +62,9 @@
   // Runs inside the container on every start. The development observability stack runs on the host,
   // apart from this container (observability/compose.yaml); this puts its Collector on the
   // container's loopback, 127.0.0.1:4317 and :4318, because the Client sends own telemetry in
-  // plaintext to a loopback IP literal alone (ADR-0016). See observability/README.md.
+  // plaintext to a loopback IP literal alone (ADR-0016), the stack's rustfs on :9100, the S3
+  // store a development Server may use (ADR-0049), and its PostgreSQL on :5432, the database it may
+  // keep its records in (ADR-0050). See observability/README.md.
   "postStartCommand": ".devcontainer/forward-otlp.sh",
 
   "customizations": {
@@ -100,7 +102,9 @@
     // would offer to forward these ports back to the host, onto the ports the Collector already
     // holds there; labelled for the Ports view, ignored by the auto-forwarder.
     "4317": { "label": "OTLP/gRPC → host Collector", "onAutoForward": "ignore" },
-    "4318": { "label": "OTLP/HTTP → host Collector", "onAutoForward": "ignore" }
+    "4318": { "label": "OTLP/HTTP → host Collector", "onAutoForward": "ignore" },
+    "9100": { "label": "S3 API → host rustfs", "onAutoForward": "ignore" },
+    "5432": { "label": "PostgreSQL → host postgres", "onAutoForward": "ignore" }
   },
 
   "hostRequirements": {

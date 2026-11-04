@@ -1,5 +1,6 @@
-//! Entry point: load `server.toml`, bind the two listeners (plain or TLS) — the Agent plane and
-//! the Operator plane (ADR-0013) — and serve both until interrupted.
+//! Entry point: load the configuration from `server.toml` and the environment (ADR-0051), bind the
+//! two listeners (plain or TLS) — the Agent plane and the Operator plane (ADR-0013) — and serve
+//! both until interrupted.
 //!
 //! Both planes are served the same way whether or not TLS is configured, so that what bounds a
 //! connection before it becomes a request holds on all four surfaces (ADR-0013). Only the acceptor
@@ -9,7 +10,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fleet_server::config::ServerConfig;
+use fleet_server::config::{Layered, ServerConfig};
 use fleet_server::fleet::AppState;
 use fleet_server::listen;
 use opamp::server::listen::Handle;
@@ -20,8 +21,9 @@ fn usage() -> ! {
         "Usage: server [--config <server.toml>] [--version]\n       \
          server hash-credential --basic   (reads the password from standard input)\n       \
          server audit-verify <data_dir>/audit\n       \
-         server pki status --config <server.toml>\n       \
-         server migrate --config-dir <old> --packages-dir <old> --data-dir <new>"
+         server pki status [--config <server.toml>]\n       \
+         server migrate --config-dir <old> --packages-dir <old> --data-dir <new>\n       \
+         server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]"
     );
     std::process::exit(2);
 }
@@ -65,23 +67,47 @@ fn audit_verify(dir: Option<String>) -> ! {
     }
 }
 
-/// `server pki status --config <server.toml>` (ADR-0028 clause 12): when each certificate the
+/// The configuration every command that reads one reads (ADR-0051 clause 2): the file `--config`
+/// or `FLEET_SERVER_CONFIG` names, or `server.toml` in the working directory when it exists, with
+/// the environment over it. The keys the environment set are logged by name. Stops the process on
+/// an error.
+fn load_config(named: Option<PathBuf>) -> Layered {
+    let layered = fleet_server::config::config_file(
+        named,
+        std::env::var_os(fleet_server::config::CONFIG_FILE_VARIABLE),
+        std::path::Path::new("server.toml"),
+    )
+    .and_then(|file| {
+        let variables = fleet_server::config::server_variables()?;
+        ServerConfig::load_layered(file.as_deref(), variables)
+    })
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    if let Some(notice) = layered.environment_notice() {
+        // ADR-0051 clause 7.
+        info!("{notice}");
+    }
+    layered
+}
+
+/// `server pki status [--config <server.toml>]` (ADR-0028 clause 12): when each certificate the
 /// Server host depends on ends. The commands that make certificates are the operator tool's
 /// (ADR-0028); the Server binary makes none.
 fn pki(mut args: impl Iterator<Item = String>) -> ! {
     use fleet_server::pki;
-    let (Some("status"), Some("--config"), Some(path), None) = (
+    let named = match (
         args.next().as_deref(),
         args.next().as_deref(),
         args.next(),
         args.next(),
-    ) else {
-        usage()
+    ) {
+        (Some("status"), None, None, None) => None,
+        (Some("status"), Some("--config"), Some(path), None) => Some(PathBuf::from(path)),
+        _ => usage(),
     };
-    let config = ServerConfig::load(&PathBuf::from(path)).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let config = load_config(named).config;
     let endings = pki::status(&config).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);
@@ -157,6 +183,63 @@ fn migrate(mut args: impl Iterator<Item = String>) -> ! {
     }
 }
 
+/// `server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]`
+/// (ADR-0050 clause 15): copies the records of `data_dir` into the database the configuration
+/// names, and its audit record and filesystem blobs into a new, empty `data_dir`, leaving the old
+/// one as the backup. It is run while the Server is stopped; it takes the database's lock, so a
+/// Server still running against it stops the copy. Prints what it copied, and exits non-zero when
+/// it could not copy all of it, leaving the database without the Server's tables.
+fn migrate_to_postgres(mut args: impl Iterator<Item = String>) -> ! {
+    let (mut from, mut data_dir, mut config) = (None, None, None);
+    while let Some(flag) = args.next() {
+        let slot = match flag.as_str() {
+            "--from" => &mut from,
+            "--data-dir" => &mut data_dir,
+            "--config" => &mut config,
+            _ => usage(),
+        };
+        match args.next() {
+            Some(path) if slot.is_none() => *slot = Some(PathBuf::from(path)),
+            _ => usage(),
+        }
+    }
+    let (Some(from), Some(data_dir)) = (from, data_dir) else {
+        usage()
+    };
+    let config = load_config(config).config;
+    let Some(database) = config.database.postgres() else {
+        eprintln!(
+            "the configuration names no database — set [database] store = \"postgres\" and \
+             [database.postgres], then copy again"
+        );
+        std::process::exit(1);
+    };
+    match fleet_server::postgres::import::run(
+        &from,
+        &data_dir,
+        database,
+        config.blobs.s3().is_none(),
+    ) {
+        Ok(report) => {
+            for line in &report.lines {
+                println!("{line}");
+            }
+            println!(
+                "copied into the database {} and into {} — set data_dir to it in server.toml, keep [database] \
+                 store = \"postgres\", and start the Server; {} stays as the backup",
+                database.dbname,
+                data_dir.display(),
+                from.display()
+            );
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// What makes the entry `server.toml` keeps from a secret.
 type Hasher = fn(&str) -> Result<String, String>;
 
@@ -182,7 +265,10 @@ fn hash_credential(scheme: Option<String>) -> ! {
             std::process::exit(1);
         }
     };
-    match hash(&secret) {
+    let hashed = hash(&secret);
+    // `exit` runs no destructor: the secret is wiped before it (ADR-0057).
+    drop(secret);
+    match hashed {
         Ok(entry) => {
             println!("{entry}");
             std::process::exit(0);
@@ -195,8 +281,11 @@ fn hash_credential(scheme: Option<String>) -> ! {
 }
 
 /// One line from standard input, the trailing newline dropped. On a Unix terminal echo is off while
-/// it is typed, so the secret does not stand on the screen.
-fn read_secret() -> std::io::Result<String> {
+/// it is typed, so the secret does not stand on the screen. It is held in a buffer wiped when it is
+/// dropped, sized for any password a person types so it is not grown and left behind (ADR-0057).
+/// The copy in the buffer of the process-wide standard input, which the standard library keeps,
+/// is not wiped.
+fn read_secret() -> std::io::Result<zeroize::Zeroizing<String>> {
     use std::io::{BufRead as _, IsTerminal as _};
     let stdin = std::io::stdin();
     let terminal = stdin.is_terminal();
@@ -204,12 +293,14 @@ fn read_secret() -> std::io::Result<String> {
         eprint!("secret: ");
     }
     let _echo = terminal.then(EchoOff::new).flatten();
-    let mut line = String::new();
+    let mut line = zeroize::Zeroizing::new(String::with_capacity(4096));
     stdin.lock().read_line(&mut line)?;
     if terminal {
         eprintln!();
     }
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    let kept = line.trim_end_matches(['\r', '\n']).len();
+    line.truncate(kept);
+    Ok(line)
 }
 
 /// Terminal echo switched off for as long as it lives.
@@ -250,8 +341,9 @@ impl Drop for EchoOff {
     }
 }
 
-fn parse_args() -> PathBuf {
-    let mut config = PathBuf::from("server.toml");
+/// The file `--config` names, if it does.
+fn parse_args() -> Option<PathBuf> {
+    let mut config = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -259,8 +351,9 @@ fn parse_args() -> PathBuf {
             "audit-verify" => audit_verify(args.next()),
             "pki" => pki(args),
             "migrate" => migrate(args),
+            "migrate-to-postgres" => migrate_to_postgres(args),
             "--config" => match args.next() {
-                Some(path) => config = PathBuf::from(path),
+                Some(path) => config = Some(PathBuf::from(path)),
                 None => usage(),
             },
             "--version" => {
@@ -306,14 +399,7 @@ async fn main() {
     // One TLS provider for the whole process (ADR-0013): ring, never a system library.
     opamp::tls::install_ring_provider();
 
-    let config_path = parse_args();
-    let config = match ServerConfig::load(&config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let Layered { config, origin, .. } = load_config(parse_args());
 
     // The TLS material first: a Server that cannot serve it does not start, and admission needs
     // to know which CA issued what (ADR-0013, ADR-0021).
@@ -335,24 +421,27 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // One root for all state, its layout created owner-only and checked before any store opens
-    // (ADR-0037).
-    if let Err(e) = fleet_server::fs::open_data_dir(&config.data_dir) {
-        eprintln!("{e}");
-        std::process::exit(1);
+    // Where the records live (ADR-0050): the data directory, its layout created owner-only and
+    // checked before any store opens (ADR-0037), and with PostgreSQL the database, its lock taken
+    // and its schema applied.
+    let records = match fleet_server::Records::open(&config) {
+        Ok(records) => records,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if let fleet_server::Records::Postgres(database) = &records {
+        info!(database = %database.name(), "keeping the records in PostgreSQL");
     }
     let clock: Arc<dyn fleet_server::fleet::Clock> = Arc::new(fleet_server::clock::SystemClock);
     // ADR-0021: closed until an operator opens it; the window and its queue survive a restart
     // (ADR-0037 clause 9).
     let enrolment = match config.enrolment.as_ref().map(|section| {
         info!("hosts with a bootstrap certificate may enrol while an operator opens the window");
-        fleet_server::enrolment::Enrolment::open_on(
-            clock.clone(),
-            Box::new(fleet_server::fs::FsEnrolmentStore::open(&config.data_dir)),
+        fleet_server::enrolment::Enrolment::open_on(clock.clone(), records.enrolment()).map(
+            |enrolment| enrolment.with_max_pending_per_bootstrap(section.max_pending_per_bootstrap),
         )
-        .map(|enrolment| {
-            enrolment.with_max_pending_per_bootstrap(section.max_pending_per_bootstrap)
-        })
     }) {
         None => None,
         Some(Ok(enrolment)) => Some(Arc::new(enrolment)),
@@ -399,11 +488,11 @@ async fn main() {
                 if signer.is_some() {
                     info!("issuing bootstrap certificates on an operator's request");
                 }
-                fleet_server::bootstrap::BootstrapCertificates::on_disk(
+                fleet_server::bootstrap::BootstrapCertificates::on(
                     signer.map(|ca| {
                         Box::new(ca) as Box<dyn fleet_server::bootstrap::BootstrapSigner>
                     }),
-                    &config.data_dir,
+                    &records,
                     clock.clone(),
                 )
             },
@@ -441,19 +530,20 @@ async fn main() {
                 // ADR-0033.
                 info!("checking package signatures against [packages] verification_key");
             }
-            fleet_server::packages::PackageStore::open(config.data_dir.clone()).map(|store| {
-                store.with_verifier(key.map(|key| {
-                    Box::new(fleet_server::config::Ed25519Verifier::new(key))
-                        as Box<dyn fleet_server::packages::SignatureVerifier>
-                }))
-            })
+            fleet_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
+                .map(|store| {
+                    store.with_verifier(key.map(|key| {
+                        Box::new(fleet_server::config::Ed25519Verifier::new(key))
+                            as Box<dyn fleet_server::packages::SignatureVerifier>
+                    }))
+                })
         })
         .and_then(|store| {
             if !store.is_empty() {
                 // ADR-0026.
                 info!("offering software packages to the fleet");
             }
-            fleet_server::fleet::PackageOffering::new(&config.data_dir, store)
+            fleet_server::fleet::PackageOffering::on(&records, store)
         });
     let packages = match packages {
         Ok(offering) => Some(offering),
@@ -463,20 +553,15 @@ async fn main() {
         }
     };
     // What the client CA signed and what is revoked (ADR-0021), kept beside the fleet's records.
-    let revocations =
-        match fleet_server::fs::FsLedgerStore::open(&config.data_dir).and_then(|store| {
-            fleet_server::revocation::Revocations::open(
-                Box::new(store),
-                clock.clone(),
-                planes.3.clone(),
-            )
-        }) {
-            Ok(revocations) => Arc::new(revocations),
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-        };
+    let revocations = match records.ledger().and_then(|store| {
+        fleet_server::revocation::Revocations::open(store, clock.clone(), planes.3.clone())
+    }) {
+        Ok(revocations) => Arc::new(revocations),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     // The audit record (ADR-0022), opened before anything is decided.
     let audit_log = match fleet_server::fs::FsAuditStore::open(&config.data_dir).and_then(|store| {
         fleet_server::audit_log::AuditLog::start(
@@ -526,7 +611,7 @@ async fn main() {
         config.max_agents,
         clock.clone(),
     ));
-    let state = match AppState::new(config.data_dir.clone()) {
+    let state = match AppState::on(&records) {
         Ok(state) => Arc::new(
             state
                 .with_agent_rate(Some(agent_rate))
@@ -579,7 +664,7 @@ async fn main() {
             ))
         }),
         Err(e) => {
-            eprintln!("{}: {e}", config_path.display());
+            eprintln!("{origin}: {e}");
             std::process::exit(1);
         }
     };

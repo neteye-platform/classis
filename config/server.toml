@@ -9,6 +9,20 @@
 # next header, so a `[telemetry_offer]` sitting above `data_dir` would swallow it the moment
 # anyone uncommented it, and the Server would refuse to start with "unknown field `data_dir`".
 # Add new settings accordingly: a bare key goes in the first half, a section in the second.
+#
+# THE ENVIRONMENT OVER THIS FILE. Every key can also be set by a variable, FLEET_SERVER__ followed
+# by the key's path, its segments joined by __ and upper-cased; it wins over this file:
+#
+#   FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet       sets data_dir
+#   FLEET_SERVER__REST__TLS__CERT_FILE=ui.pem         sets [rest.tls] cert_file
+#
+# The value is TOML (30 is an integer, "30" a string), and what is not TOML is a string, so a path
+# needs no quotes. A variable that names no key fails startup, naming it, as an unknown key here
+# does. Secrets travel as paths to files, never as values: [rest.auth.basic_users] and
+# [telemetry_offer.headers] are reached from the environment only through basic_users_file and
+# headers_file. Without --config, FLEET_SERVER_CONFIG names this file; with neither, server.toml in
+# the working directory is read when it exists. The Server logs the name of every key the
+# environment set.
 
 # =============================================================================================
 # Settings
@@ -135,6 +149,47 @@ max_package_size_bytes = 1073741824
 # Client's own check is what decides. A malformed key fails startup.
 # [packages]
 # verification_key = "<hex-encoded Ed25519 public key>"
+
+# Where the artifacts' bytes are kept. Optional; the default, "fs", keeps one file per artifact
+# under data_dir/blobs/. "s3" keeps one object per artifact in a bucket of an S3-compatible store,
+# streamed through the Server both ways; the Server creates no bucket. The endpoint is https://,
+# http:// only to 127.0.0.1 or ::1. Without access_key_id and secret_access_key_file (set both or
+# neither; the file readable by its owner and at most its group) the Server uses its platform's workload
+# identity: a web identity token, ECS/EKS container credentials, or the instance metadata service.
+# No AWS_* variable changes the endpoint, bucket, region or TLS. On the first start with "s3", every
+# artifact the bucket lacks is copied from data_dir/blobs/, which is left in place.
+# [blobs]
+# store = "s3"
+#
+# [blobs.s3]
+# endpoint = "https://s3.example.org"
+# bucket = "<bucket>"
+# region = "<region>"
+# prefix = "fleet/"                     # optional: empty, or ending in /
+# ca_file = "/etc/opamp/s3-ca.pem"      # optional: one PEM root no public root signs
+# access_key_id = "<key id>"
+# secret_access_key_file = "/run/secrets/s3-secret-access-key"
+
+# Where the records are kept. Optional; the default, "fs", keeps one file per record under data_dir
+# as listed above. "postgres" keeps them in one PostgreSQL database instead; data_dir then holds the
+# audit record and, with the filesystem blob store, the artifacts, and nothing else. The Server
+# creates no database and no role: the role needs the right to create tables, and the Server applies
+# its own schema at startup. One Server per database. The connection is TLS 1.3 with the database's
+# certificate and host name verified, against the public roots or ca_file; tls = false is accepted
+# for host = "127.0.0.1" or "::1" alone. The password comes from password_file, readable by its
+# owner and at most its group; no PG* variable changes the connection. An existing data_dir is copied
+# into the database once, while the Server is stopped, by
+#   server migrate-to-postgres --from <data_dir> --data-dir <new>
+# [database]
+# store = "postgres"
+#
+# [database.postgres]
+# host = "db.example.org"
+# port = 5432
+# dbname = "fleet"
+# user = "fleet"
+# password_file = "/run/secrets/fleet-db-password"
+# ca_file = "/etc/opamp/db-ca.pem"      # optional: the roots the database's certificate is checked against
 
 # TLS, REQUIRED: the Agent plane serves HTTPS/WSS with this certificate and key, in TLS 1.3
 # only, and so does the Operator plane unless [rest.tls] below names its own. Without the
@@ -299,6 +354,9 @@ client_ca_file = "client-ca.pem"
 # [telemetry_offer.headers]
 # Authorization = "Bearer a-telemetry-token"
 #
+#     The headers may instead come from a file holding the same lines without the section header,
+#     headers_file = "/run/secrets/telemetry-headers.toml" under [telemetry_offer] — never both.
+#
 # (3) Metrics only — the smallest useful shape: one signal, no header, nothing else offered.
 # [telemetry_offer]
 # metrics_endpoint = "https://collector.example:4318/v1/metrics"
@@ -329,6 +387,11 @@ max_connections = 256
 # password is listed by its Argon2id hash: `server hash-credential --basic`.
 # [rest.auth.basic_users]
 # fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
+#
+# Or the same lines, without the section header, in a file readable by the Server's account alone
+# — never both:
+# [rest.auth]
+# basic_users_file = "/run/secrets/basic-users.toml"
 
 # The Operator plane's own certificate and key, OPTIONAL. Without the section the Operator plane
 # serves [tls]'s, which chains to the fleet's server CA — the one every Client trusts, and one a

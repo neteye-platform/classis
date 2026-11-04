@@ -16,6 +16,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use axum::http::{header, HeaderMap};
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 /// The least an Argon2id hash may cost: OWASP's minimum (`m=19456`, `t=2`, `p=1`).
 pub const MIN_MEMORY_KIB: u32 = 19_456;
@@ -110,11 +111,15 @@ impl Credentials {
     /// way: its next request waits for it rather than taking another slot, so wrong passwords from
     /// one address cannot hold every slot.
     pub async fn check(self: &Arc<Self>, peer: Option<IpAddr>, headers: &HeaderMap) -> Verdict {
-        let presented = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+        // The header carries the password until it is verified, so it is held in a buffer wiped
+        // when it is dropped (ADR-0057); the copy `hyper` keeps is its own.
+        let presented = Zeroizing::new(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_string(),
+        );
         let needs_hash = presented.starts_with("Basic ") && !self.is_remembered(&presented);
         if !needs_hash {
             return if self.verify(&presented) {
@@ -130,7 +135,11 @@ impl Credentials {
         verdict
     }
 
-    async fn hash_in_turn(self: &Arc<Self>, peer: Option<IpAddr>, presented: String) -> Verdict {
+    async fn hash_in_turn(
+        self: &Arc<Self>,
+        peer: Option<IpAddr>,
+        presented: Zeroizing<String>,
+    ) -> Verdict {
         let turn = match peer {
             Some(peer) => Some(self.turn_of(peer).lock_owned().await),
             None => None,
@@ -212,18 +221,21 @@ impl Credentials {
         if self.remembers(&key, now) {
             return true;
         }
-        let Some((user, password)) = base64::engine::general_purpose::STANDARD
+        // The decoded credential is held in a buffer wiped when it is dropped, and the user and
+        // the password are borrowed from it (ADR-0057).
+        let Ok(decoded) = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .and_then(|text| {
-                text.split_once(':')
-                    .map(|(user, password)| (user.to_string(), password.to_string()))
-            })
+            .map(Zeroizing::new)
         else {
             return false;
         };
-        let known = self.basic.get(&user);
+        let Some((user, password)) = std::str::from_utf8(&decoded)
+            .ok()
+            .and_then(|text| text.split_once(':'))
+        else {
+            return false;
+        };
+        let known = self.basic.get(user);
         // An unknown user costs the same verification, so the answer's timing does not tell which
         // users exist.
         let phc = known.unwrap_or(&self.dummy);

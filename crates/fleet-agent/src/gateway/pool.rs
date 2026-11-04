@@ -2,16 +2,18 @@
 //!
 //! Two rules do the work. The pool **grows lazily** to its configured cap — a Gateway in front of
 //! three Agents holds three connections, not ten — and an Agent is **stuck to its connection** by
-//! `instance_uid` for as long as that connection lives. Nothing in the protocol requires the
-//! stickiness; it keeps one Agent's `sequence_num` stream and its `ReportFullState` exchanges on a
-//! single socket, which is what makes a fleet debuggable.
+//! `instance_uid` for as long as that connection lives and the Gateway carries the Agent: while a
+//! downstream WebSocket that reported for it is open, or while its binding stands (ADR-0058). Its
+//! place goes the moment the Gateway stops carrying it, and its next report is placed anew.
+//! Nothing in the protocol requires the stickiness; it keeps one Agent's `sequence_num` stream and
+//! its `ReportFullState` exchanges on a single socket, which is what makes a fleet debuggable.
 //!
 //! The pool is WebSocket-only, and the configuration refuses anything else at startup: a polling
 //! upstream could not carry the Server's pushes to the Agents behind the Gateway.
 //!
 //! Any live connection carries any downstream Agent: every one is opened with this Gateway's own
 //! identity and nothing else, so nothing on it depends on the peer an Agent came through
-//! (ADR-0015 clause 7).
+//! (ADR-0058).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -248,6 +250,17 @@ impl Pool {
                 }
             }
         }
+    }
+
+    /// The connection an Agent is assigned to, by index.
+    #[cfg(test)]
+    pub(crate) fn connection_of(&self, uid: &InstanceUid) -> Option<usize> {
+        self.inner
+            .lock()
+            .expect("pool lock")
+            .assigned
+            .get(uid)
+            .copied()
     }
 
     /// The Agents assigned to a connection, and how many entries the connections' `carries` hold.

@@ -78,6 +78,11 @@ impl Pki {
         )
     }
 
+    /// The Gateway's own state directory, beside the files.
+    fn state_dir(&self) -> String {
+        self.dir.path().join("state").display().to_string()
+    }
+
     /// A plain-HTTP downstream peer: trusts the CA and presents the client certificate.
     fn http(&self) -> reqwest::Client {
         let mut identity = self.client_key_pem.clone().into_bytes();
@@ -157,12 +162,14 @@ async fn spawn_gateway_with_limit(
     let toml = format!(
         r#"
         endpoint = "ws://{server}/v1/opamp"
+        state_dir = {state:?}
         {limit}
         [gateway]
         listen = "{listen}"
         upstream_connections = {cap}
         {tls}
         "#,
+        state = pki.state_dir(),
         tls = pki.section(),
     );
     let config: ClientConfig = toml::from_str(&toml).expect("gateway config");
@@ -286,11 +293,13 @@ async fn a_downstream_connection_carries_no_more_than_its_agent_cap() {
     let toml = format!(
         r#"
         endpoint = "ws://{server}/v1/opamp"
+        state_dir = {state:?}
         [gateway]
         listen = "{listen}"
         max_carried_agents = 2
         {tls}
         "#,
+        state = pki.state_dir(),
         tls = pki.section(),
     );
     let config: ClientConfig = toml::from_str(&toml).expect("gateway config");

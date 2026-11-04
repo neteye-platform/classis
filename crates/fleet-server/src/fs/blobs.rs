@@ -97,8 +97,15 @@ impl BlobStore for FsBlobStore {
         Ok(Box::new(file))
     }
 
-    fn exists(&self, sha256: &str) -> bool {
-        self.path(sha256).is_ok_and(|path| path.is_file())
+    fn exists(&self, sha256: &str) -> Result<bool, String> {
+        let Ok(path) = self.path(sha256) else {
+            return Ok(false);
+        };
+        match std::fs::metadata(&path) {
+            Ok(meta) => Ok(meta.is_file()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+        }
     }
 
     fn delete(&self, sha256: &str) -> Result<(), String> {
@@ -182,7 +189,7 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
         store.delete(&first).expect("delete");
-        assert!(!store.exists(&first));
+        assert!(!store.exists(&first).expect("exists"));
         store.delete(&first).expect("deleting the absent is fine");
         assert!(store.get("../x").is_err(), "only a hash names a blob");
     }

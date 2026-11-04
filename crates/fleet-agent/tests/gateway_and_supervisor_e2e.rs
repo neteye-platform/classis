@@ -439,3 +439,87 @@ async fn a_gateway_that_cannot_bind_is_loud() {
     })
     .await;
 }
+
+/// A Gateway whose store of bindings cannot be read refuses every downstream Agent, and the host
+/// goes on: the Client's own Agent and the process it supervises reach the Server, while a
+/// WebSocket upgrade at the Gateway is answered `503` (ADR-0058 clause 3).
+/// Verifies: ADR-0058
+#[tokio::test]
+async fn an_unreadable_store_of_bindings_refuses_downstream_and_the_host_goes_on() {
+    let (addr, state, dir) = spawn_server().await;
+    let state_dir: PathBuf = dir.path().join("client-state");
+    let marker = dir.path().join("stub-marker");
+    let gateway_port = free_port();
+    let store = state_dir.join("gateway-packages").join("bindings");
+    std::fs::create_dir_all(store.parent().expect("dir")).expect("create the gateway's dir");
+    std::fs::write(&store, "opamp-fleet-gateway-bindings 99\n").expect("write the store");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the store");
+    }
+
+    let pki = Pki::new();
+    let toml = format!(
+        concat!(
+            "endpoint = \"ws://{addr}/v1/opamp\"\n",
+            "name = \"edge-host\"\n",
+            "state_dir = {state:?}\n",
+            "heartbeat_interval_secs = 1\n\n",
+            "[gateway]\n",
+            "listen = \"127.0.0.1:{gateway_port}\"\n",
+            "{gateway_tls}\n",
+            "[[supervisor]]\n",
+            "type = \"command\"\n",
+            "name = \"local-agent\"\n",
+            "command = {stub:?}\n",
+            "args = [\"--touch\", {marker:?}]\n",
+        ),
+        addr = addr,
+        state = state_dir.to_string_lossy(),
+        gateway_port = gateway_port,
+        gateway_tls = pki.section(),
+        stub = install_stub(&state_dir, "local-agent"),
+        marker = marker.to_string_lossy(),
+    );
+    let config_path = dir.path().join("supervisor.toml");
+    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
+        .expect("write supervisor.toml");
+    let _client = spawn_client(&config_path);
+
+    let agents = wait_until("both local agents", || {
+        let snapshot = state.snapshot();
+        (snapshot.len() == 2).then_some(snapshot)
+    })
+    .await;
+    assert!(
+        view(&agents, "edge-host").is_some(),
+        "the Client's own Agent"
+    );
+    assert!(
+        view(&agents, "local-agent").is_some(),
+        "and the process it supervises"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match pki.ws(gateway_port).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), 503);
+                break;
+            }
+            Ok(_) => panic!("a WebSocket upgrade was taken while the store cannot be read"),
+            Err(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(e) => panic!("the Gateway never answered: {e}"),
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(&store).expect("read the store"),
+        "opamp-fleet-gateway-bindings 99\n",
+        "the store is left for the operator"
+    );
+    assert!(marker.exists(), "the supervised process runs");
+}

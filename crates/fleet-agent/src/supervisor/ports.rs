@@ -18,13 +18,34 @@ use tokio::sync::mpsc;
 
 use crate::shutdown::Shutdown;
 
+/// The health status a Supervisor reports while the second service cannot be reached (ADR-0059
+/// clause 2).
+pub const UNREACHABLE: &str = "the second service cannot be reached";
+
+/// What a Supervisor reports while the second service is reached and refused: another account
+/// serves its socket, it is another build, or it refuses the Client (ADR-0059 clauses 4 and 5).
+/// Not an outage that ends by itself, so it is told apart from [`UNREACHABLE`].
+pub const REFUSED: &str =
+    "the second service is refused: another account, another build, or it refuses this Client";
+
+/// Why `health` says that the second service is not reached — [`UNREACHABLE`] or [`REFUSED`] —
+/// or `None` where it says nothing of the kind. While it says so, a configuration that is
+/// `APPLYING` and a package that is `Installing` wait for the service, and the Agent names it as the
+/// reason (ADR-0059 clause 2).
+#[must_use]
+pub fn waiting_reason(health: &ComponentHealth) -> Option<&str> {
+    let waits = !health.healthy && (health.status == UNREACHABLE || health.status == REFUSED);
+    waits.then_some(health.status.as_str())
+}
+
 /// What the supervision core asks of a Managed Process.
 #[derive(Debug)]
 pub enum ProcessCommand {
     /// A remote configuration was received and persisted — the entry files are already written
     /// to the adapter's [`config_dir`](SupervisorContext::config_dir). Apply it, which for a
     /// process means restarting on the new files, and answer with
-    /// [`ProcessEvent::ConfigApplied`].
+    /// [`ProcessEvent::ConfigApplied`] — where the start does not reach the second service, once
+    /// a start does (ADR-0059 clause 2).
     ApplyConfig {
         config: AgentRemoteConfig,
         /// The span of the apply this command is one half of (ADR-0016). The core opens it when the
@@ -37,7 +58,10 @@ pub enum ProcessCommand {
     /// does — a binary that will not stay up is rolled back to the previous one. Answered with
     /// [`ProcessEvent::PackageApplied`]. `staged` is the path of the verified artifact — a file,
     /// not its bytes, since a program is too big to carry through the core; `hash` is the package
-    /// hash the status refers to; `version` is what the Agent then reports it has.
+    /// hash the status refers to; `version` is what the Agent then reports it has. While the
+    /// second service cannot be reached, the package is staged and kept, never swapped in, and
+    /// the answer follows its swap once a start reaches the service; a newer package replaces it
+    /// unanswered (ADR-0059 clause 2).
     ApplyPackage {
         staged: PathBuf,
         version: String,
@@ -139,6 +163,23 @@ pub enum InstallTarget {
         program_path: PathBuf,
     },
 }
+
+/// The process account's primary group, where a process account is registered (ADR-0059 clause 6).
+/// What the Client shares with the Managed Processes belongs to this group, and nothing else does.
+///
+/// Resolved from the `--process-uid` of the Client's command line when it starts, never from the
+/// configuration file: the registration that names the process account is the only place it is
+/// stated (ADR-0059 clause 8).
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessAccountGroup(pub u32);
+
+/// On Windows the process account itself, by its SID, from the `--process-sid` of the Client's
+/// command line: what the Client shares with the Managed Processes is granted to it by ACL, where
+/// Unix gives it to the account's group (ADR-0059 clause 6). Made once per run.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessAccountGroup(pub &'static str);
 
 /// The package this Supervisor's Managed Process currently runs (ADR-0026), persisted so a
 /// restarted Client reports the version it has and is not re-offered it.
@@ -252,8 +293,9 @@ pub struct SupervisorContext {
     /// The Supervisor's name (the TOML `name`; the Agent's `service.name`).
     pub name: String,
     /// What the Supervisor Endpoint asks the Managed Process to present (ADR-0015); handed to the
-    /// process as [`ENDPOINT_TOKEN_ENV`](crate::supervisor::process::ENDPOINT_TOKEN_ENV).
-    pub endpoint_token: String,
+    /// process as [`ENDPOINT_TOKEN_ENV`](crate::supervisor::process::ENDPOINT_TOKEN_ENV). Wiped
+    /// when it is dropped (ADR-0057).
+    pub endpoint_token: zeroize::Zeroizing<String>,
     /// Everything this Supervisor owns: its state, its `program/`, its package staging
     /// (ADR-0017). Placed by `supervisor_dir`, so nothing may assume where it is.
     pub supervisor_dir: PathBuf,
@@ -279,7 +321,10 @@ pub struct SupervisorContext {
     pub retain_previous: Duration,
     /// The key that opens an encrypted `.7z` package artifact (ADR-0026); `None` when none is
     /// configured. Client-wide, like the package verification key.
-    pub archive_key: Option<String>,
+    pub archive_key: Option<zeroize::Zeroizing<String>>,
+    /// The process account's primary group, where a process account is registered: what the
+    /// Supervisor shares with its Managed Process belongs to it (ADR-0059 clause 6).
+    pub process_account_group: Option<ProcessAccountGroup>,
     /// The plugin-specific keys of the block, for the strict second-stage parse.
     pub settings: toml::Table,
     /// Where the adapter reports events.
@@ -373,6 +418,31 @@ impl KindDefaults {
             timing: None,
             endpoint_port: false,
         }
+    }
+}
+
+/// What [`PluginRegistry::purge`] answers, once for each Supervisor it was asked about.
+pub type Purged<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Result<(), String>>> + Send + 'a>>;
+
+/// The plugins a run starts its Supervisors with (ADR-0017 clause 2), as the composition root
+/// made them: every one starts its Managed Process the way the run does (ADR-0059 clause 3). The
+/// Engine keeps it, so a Supervisor that a Supervisor-set apply starts later is started the same
+/// way as those started with the Client.
+pub trait PluginRegistry: Send + Sync {
+    /// Every compiled-in plugin.
+    fn plugins(&self) -> Vec<Box<dyn Plugin>>;
+
+    /// Removes what the Managed Processes wrote in each of `removed` — a Supervisor's name and its
+    /// directory — that the Client cannot remove itself, before the purge deletes the rest
+    /// (ADR-0017 clause 34, ADR-0059 clause 5), all of them within one wait (ADR-0059 clause 2).
+    /// Nothing where the Client starts its programs itself.
+    ///
+    /// # Errors
+    /// Each answer, in the order of `removed`, is why something is left: the purge then leaves an
+    /// orphan, with a warning (ADR-0017 clause 36).
+    fn purge<'a>(&'a self, removed: &'a [(String, std::path::PathBuf)]) -> Purged<'a> {
+        Box::pin(std::future::ready(removed.iter().map(|_| Ok(())).collect()))
     }
 }
 
@@ -475,7 +545,7 @@ mod tests {
         let (_tx, shutdown) = shutdown_channel();
         let (event_tx, _events) = mpsc::channel(1);
         SupervisorContext {
-            endpoint_token: String::new(),
+            endpoint_token: zeroize::Zeroizing::default(),
             name: "fluent-bit".to_string(),
             config_dir: supervisor_dir.join("config"),
             supervisor_dir,
@@ -487,6 +557,7 @@ mod tests {
             apply_grace: Duration::from_secs(0),
             retain_previous: Duration::from_secs(0),
             archive_key: None,
+            process_account_group: None,
             settings: toml::Table::new(),
             events: EventSender::new(0, event_tx),
             shutdown,

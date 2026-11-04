@@ -80,7 +80,7 @@ pub fn run(config_dir: &Path, packages_dir: &Path, data_dir: &Path) -> Result<Re
             data_dir.display()
         ));
     }
-    fs::open_data_dir(data_dir)?;
+    fs::open_data_dir(data_dir, true)?;
     let mut report = Report::default();
     carry_register(config_dir, data_dir, &mut report)?;
     carry_bootstrap(config_dir, data_dir, &mut report)?;
@@ -770,7 +770,7 @@ fn assignment(
 
 /// Opens the new `data_dir` as the Server would, so what would not start fails here.
 fn check_opens(data_dir: &Path, report: &mut Report) {
-    let opened = fs::open_data_dir(data_dir)
+    let opened = fs::open_data_dir(data_dir, true)
         .and_then(|()| crate::fleet::AppState::new(data_dir.to_path_buf()).map(|_| ()))
         .and_then(|()| crate::packages::PackageStore::open(data_dir.to_path_buf()).map(|_| ()))
         .and_then(|()| fs::FsDeploymentBackend::open(data_dir)?.load().map(|_| ()))

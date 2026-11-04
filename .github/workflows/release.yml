@@ -17,6 +17,11 @@ name: Release
 # Every published asset is a subject of one build-provenance attestation, made and verified in
 # `publish` before the release exists, and each shipped program has a CycloneDX SBOM per target
 # beside its archive (ADR-0045).
+#
+# The Server ships as a multi-architecture image, `ghcr.io/mbrigl/opamp-fleet-server:<version>`,
+# built from packaging/container/Containerfile by copying the Server binaries the Linux rows built
+# and checked. `image` pushes it untagged; `publish` attests it, verifies it, and only then tags it
+# with the version (ADR-0052).
 
 on:
   workflow_dispatch:
@@ -48,6 +53,8 @@ env:
   ARTIFACT: supervisor
   # The operator tool's program and the stem of its archives (ADR-0028 clause 18).
   OPERATOR_TOOL: opamp-fleetctl
+  # The Server's image, tagged with the exact version and nothing else (ADR-0052 clause 6).
+  IMAGE: ghcr.io/mbrigl/opamp-fleet-server
 
 jobs:
   # A version with a known advisory is never tagged: the gate of audit.yml, over the lockfile the
@@ -190,7 +197,8 @@ jobs:
           # operator must type into `?version=` for a self-update to pass its probe.
           echo "full=$full" >> "$GITHUB_OUTPUT"
 
-  # ADR-0045: one CycloneDX SBOM per shipped program and target, from the lockfile the build uses.
+  # ADR-0045, ADR-0052 clause 7: one CycloneDX SBOM per shipped program and target, from the
+  # lockfile the build uses — the Server's for each architecture of its image.
   # A job of its own: the dependency graph of a target needs no runner of that target, and the tool
   # is installed once. It runs on a dry run too, with the top-level read-only token, no kept
   # credentials and no cache.
@@ -215,13 +223,17 @@ jobs:
           }
           # The rows of the build matrix: target, os, arch, operator_tool. One run per target
           # writes `<bin>_bin.cdx.json` beside the Cargo.toml of every workspace member, one per
-          # binary, with the default features the release builds with; the two that ship are kept
-          # and the rest (the Server, the test stubs) are removed before the next target.
+          # binary, with the default features the release builds with; the ones that ship are kept
+          # and the rest (the test stubs) are removed before the next target. The Server ships on
+          # Linux alone, in its image, and its SBOM is named after the binary in the image.
           while read -r triple os arch tool; do
             cargo cyclonedx --describe binaries --target "$triple" --format json --spec-version 1.5
             keep crates/fleet-agent supervisor "${ARTIFACT}_${v}_${os}_${arch}"
             if [ "$tool" = true ]; then
               keep crates/fleet-tools opamp-fleetctl "${OPERATOR_TOOL}_${v}_${os}_${arch}"
+            fi
+            if [ "$os" = linux ]; then
+              keep crates/fleet-server server "server_${v}_${os}_${arch}"
             fi
             rm -f crates/*/*_bin.cdx.json
           done <<'EOF'
@@ -285,6 +297,10 @@ jobs:
       - name: Build the operator tool
         if: matrix.operator_tool
         run: cargo build --release -p fleet-tools --bin opamp-fleetctl --target ${{ matrix.target }} --locked
+      # A target build: the Server, which ships in the image and nowhere else (ADR-0052 clause 2).
+      - name: Build the Server
+        if: matrix.os == 'linux'
+        run: cargo build --release -p fleet-server --bin server --target ${{ matrix.target }} --locked
       - name: The binary agrees with the name it will be given
         if: matrix.native
         run: |
@@ -303,6 +319,27 @@ jobs:
             echo "::error::this target's operator tool reports $reported, the release is $expected"
             exit 1
           fi
+      # Both Linux rows run natively, so each asserts its own Server; the image copies it unchanged.
+      - name: The Server agrees with the release
+        if: matrix.os == 'linux'
+        run: |
+          reported=$(./target/${{ matrix.target }}/release/server --version | awk '{print $NF}')
+          expected='${{ needs.version.outputs.full }}'
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::this target's Server reports $reported, the release is $expected"
+            exit 1
+          fi
+      # Named as the Containerfile copies it, `server-linux-<arch>`. Not a release asset: no checksum
+      # joins SHA256SUMS, and the image is how it ships.
+      - name: Stage the Server for the image
+        if: matrix.os == 'linux'
+        run: cp "target/${{ matrix.target }}/release/server" "server-linux-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.os == 'linux'
+        with:
+          name: server-linux-${{ matrix.arch }}
+          path: server-linux-${{ matrix.arch }}
+          if-no-files-found: error
       - name: Pack
         id: pack
         run: |
@@ -464,23 +501,161 @@ jobs:
           # `error` is guarding here.
           if-no-files-found: error
 
+  # ADR-0052 clause 9: the Server's image, built from the two binaries the Linux rows built and
+  # checked, by the Containerfile, which runs nothing — so neither platform needs emulation. The
+  # `amd64` image is checked here, on its own architecture; the `arm64` binary's version was
+  # asserted on its native runner, and the image copies it unchanged. A dry run stops after the
+  # check. A release pushes the image by digest and without a tag, and hands the index digest to
+  # `publish`, which tags it only once its attestation has verified.
+  image:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Pushing the untagged image to ghcr.io, and nothing more: only publish may attest.
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: server-linux-*
+          path: image
+          merge-multiple: true
+      # A builder of its own: the default `docker` driver neither builds for two platforms at once
+      # nor pushes an index by digest. Its BuildKit image is pinned by version and digest (ADR-0052
+      # clause 9), the release `buildx-stable-1` named when it was set; Dependabot does not read an
+      # image out of a shell step, so a new one arrives by a reviewed commit.
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          ls -l image
+          docker buildx create --name release --driver docker-container \
+            --driver-opt image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea \
+            --use
+          docker buildx build \
+            --file packaging/container/Containerfile \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION='${{ needs.version.outputs.version }}' \
+            --build-arg REVISION="$GITHUB_SHA" \
+            image
+          # The amd64 image again, from the builder's cache, into the runner's Docker to check it.
+          docker buildx build \
+            --file packaging/container/Containerfile \
+            --platform linux/amd64 \
+            --build-arg VERSION='${{ needs.version.outputs.version }}' \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --load --tag opamp-fleet-server:check \
+            image
+      - name: The image checks out
+        run: |
+          set -euo pipefail
+          img=opamp-fleet-server:check
+          inspect() { docker image inspect --format "$1" "$img"; }
+
+          reported=$(docker run --rm "$img" --version | awk '{print $NF}')
+          expected='${{ needs.version.outputs.full }}'
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::the image's Server reports $reported, the release is $expected"
+            exit 1
+          fi
+
+          user=$(inspect '{{.Config.User}}')
+          if [ "$user" != "65532:65532" ]; then
+            echo "::error::the image runs as '$user', not 65532:65532"
+            exit 1
+          fi
+
+          # No shell: one that resolves would run here.
+          if docker run --rm --entrypoint /bin/sh "$img" -c true 2>/dev/null; then
+            echo "::error::the image has a /bin/sh"
+            exit 1
+          fi
+
+          test "$(inspect '{{json .Config.Entrypoint}}')" = '["/usr/local/bin/server"]'
+          test "$(inspect '{{json .Config.ExposedPorts}}')" = '{"4320/tcp":{},"4321/tcp":{}}'
+          test "$(inspect '{{json .Config.Healthcheck}}')" = 'null'
+          test "$(inspect '{{index .Config.Labels "org.opencontainers.image.version"}}')" = '${{ needs.version.outputs.version }}'
+          test "$(inspect '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+
+          # The data directory belongs to the account the Server runs as. A container that never
+          # started has no volume mounted, so its export is the image's own filesystem.
+          docker create --name check "$img" > /dev/null
+          docker export check | tar --numeric-owner -tvf - > files.txt
+          docker rm -v check > /dev/null
+          if ! grep -E ' 65532/65532 .* var/lib/opamp-fleet/?$' files.txt; then
+            echo "::error::/var/lib/opamp-fleet is not owned by 65532"
+            exit 1
+          fi
+          echo "the image runs the Server ${reported} as 65532, with no shell"
+      - name: Push the image by digest
+        id: push
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username '${{ github.actor }}' --password-stdin
+          v='${{ needs.version.outputs.version }}'
+          base=$(sed -n 's/^FROM //p' packaging/container/Containerfile)
+          annotations=()
+          for kv in \
+            "org.opencontainers.image.source=$GITHUB_SERVER_URL/${{ github.repository }}" \
+            "org.opencontainers.image.version=$v" \
+            "org.opencontainers.image.revision=$GITHUB_SHA" \
+            "org.opencontainers.image.licenses=Apache-2.0" \
+            "org.opencontainers.image.base.name=${base%@*}" \
+            "org.opencontainers.image.base.digest=${base#*@}"; do
+            annotations+=(--annotation "index,manifest:$kv")
+          done
+          # No tag: the image is named by its digest until publish has verified it.
+          docker buildx build \
+            --file packaging/container/Containerfile \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$v" \
+            --build-arg REVISION="$GITHUB_SHA" \
+            "${annotations[@]}" \
+            --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file metadata.json \
+            image
+          docker logout ghcr.io
+          digest=$(jq -r '."containerimage.digest"' metadata.json)
+          case "$digest" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "::error::no index digest in the build's metadata: $digest"; exit 1 ;;
+          esac
+          echo "pushed $IMAGE@$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
   publish:
     # A dry run builds and packs everything and stops here, so it attests nothing (ADR-0045).
     if: needs.version.outputs.publish == 'true'
-    needs: [version, build, sbom]
+    needs: [version, build, sbom, image]
     runs-on: ubuntu-latest
-    # The only job that may attest (ADR-0045 clause 5). It checks out no code and builds nothing;
-    # its only actions are download-artifact and attest, and every other step is shell and gh.
+    # The only job that may attest (ADR-0045 clause 5, ADR-0052 clause 11). It checks out no code
+    # and builds nothing; its only actions are download-artifact and attest, and every other step,
+    # the registry login and the tagging included, is shell and gh.
     permissions:
       # Creating the release and uploading its assets.
       contents: write
+      # Pushing the image's attestation beside it, and tagging the image once it verifies.
+      packages: write
       # The short-lived Sigstore certificate the attestation is signed with.
       id-token: write
       # Storing the attestation in the repository's attestation store, and reading it back.
       attestations: write
     steps:
+      # What it publishes and attests, and nothing else: the Server's binaries reach the release
+      # inside the image alone.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: '{sbom,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'
           path: artifacts
           merge-multiple: true
       - name: Collect the checksums
@@ -501,6 +676,21 @@ jobs:
             artifacts/*.msi
             artifacts/*.cdx.json
             artifacts/SHA256SUMS
+      # The registry login the image's attestation is pushed with, and the image read back with.
+      - name: Log in to the registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username '${{ github.actor }}' --password-stdin
+      # ADR-0052 clause 10: the image's own attestation, over the index digest `image` pushed, stored
+      # in the registry beside it. No storage record: that needs a permission ADR-0052 does not grant,
+      # and GitHub keeps one for organisation-owned repositories alone.
+      - name: Attest the image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ needs.image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
       # Nothing is published that does not verify as an operator will verify it (ADR-0045 clause 7).
       - name: Every asset verifies
         env:
@@ -514,17 +704,44 @@ jobs:
               --deny-self-hosted-runners > /dev/null
             echo "verified $f"
           done
+      - name: The image verifies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "oci://${IMAGE}@${{ needs.image.outputs.digest }}" \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/release.yml" \
+            --deny-self-hosted-runners > /dev/null
+          echo "verified ${IMAGE}@${{ needs.image.outputs.digest }}"
+      # ADR-0052 clauses 6 and 9: the exact version, and only after the attestation verified. A single
+      # index as the source is copied as it is, so the tag names the attested digest — checked below.
+      - name: Tag the image
+        run: |
+          set -euo pipefail
+          digest='${{ needs.image.outputs.digest }}'
+          tag="${IMAGE}:${{ needs.version.outputs.version }}"
+          docker buildx imagetools create --tag "$tag" "${IMAGE}@${digest}"
+          tagged=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          if [ "$tagged" != "$digest" ]; then
+            echo "::error::$tag names $tagged, the attested image is $digest"
+            exit 1
+          fi
+          docker logout ghcr.io
+          echo "tagged $tag = $digest"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd artifacts
           cat > notes.md <<EOF
-          Client ${{ needs.version.outputs.version }} for Linux, macOS and Windows, and the operator tool
-          \`${{ env.OPERATOR_TOOL }}\` for Linux and macOS.
+          Client ${{ needs.version.outputs.version }} for Linux, macOS and Windows, the operator tool
+          \`${{ env.OPERATOR_TOOL }}\` for Linux and macOS, and the Server as the image
+          \`${{ env.IMAGE }}@${{ needs.image.outputs.digest }}\`, tagged
+          \`${{ needs.version.outputs.version }}\`, for \`linux/amd64\` and \`linux/arm64\`.
 
-          The assets come in four kinds, and picking the wrong one is the only way to get this wrong
-          (ADR-0019, ADR-0028, ADR-0045):
+          The assets come in five kinds, and picking the wrong one is the only way to get this wrong
+          (ADR-0019, ADR-0028, ADR-0045, ADR-0052):
 
           | you want to | take |
           |---|---|
@@ -532,6 +749,7 @@ jobs:
           | update a fleet from its Server | the \`${{ env.ARTIFACT }}_*.tar.gz\` |
           | make the fleet's certificates, a signing key and signed packages | the \`${{ env.OPERATOR_TOOL }}_*.tar.gz\` for your machine |
           | check what a binary is built from | the \`<stem>.cdx.json\` |
+          | run the Server | the image, by its digest |
 
           ## The operator tool
 
@@ -555,6 +773,30 @@ jobs:
           \`server pki status --config\`. A script that uploads a release's \`*_<version>_*.tar.gz\`
           now also catches the operator tool's archives: select \`${{ env.ARTIFACT }}_<version>_*.tar.gz\`.
 
+          ## The Server
+
+          The Server ships as an image and nowhere else: the binary the release built and checked for
+          this version, on \`gcr.io/distroless/cc-debian13:nonroot\`, with no shell, running as UID
+          and GID 65532 (ADR-0052). Deploy it by its digest, not by its tag:
+
+          \`\`\`console
+          docker run -d --name opamp-fleet-server \\
+            -p 4320:4320 -p 4321:4321 \\
+            -v opamp-fleet-data:/var/lib/opamp-fleet \\
+            -v /etc/opamp-fleet:/etc/opamp-fleet:ro \\
+            ${{ env.IMAGE }}@${{ needs.image.outputs.digest }} \\
+            --config /etc/opamp-fleet/server.toml
+          \`\`\`
+
+          Its data directory is the volume \`/var/lib/opamp-fleet\`, and both planes listen on
+          \`0.0.0.0\` inside the container, \`4320\` for the fleet and \`4321\` for operators. Off
+          the loopback the Server requires TLS and \`[rest.auth]\`, so an image started with nothing
+          mounted names what is missing and stops. Certificates, keys and every secret are mounted as
+          files. There is no \`HEALTHCHECK\`: probe \`4320\` over TCP. \`<stem>.cdx.json\` for
+          \`server_${{ needs.version.outputs.version }}_linux_<arch>\` is the SBOM of the binary in
+          the image of that architecture; the base is named by its digest in the image's
+          \`org.opencontainers.image.base.digest\` annotation.
+
           ## Verifying a download
 
           Every asset is a subject of one build-provenance attestation, made by this repository's
@@ -569,7 +811,13 @@ jobs:
           \`\`\`
 
           The same \`gh attestation verify <file>\`, with the same two options, checks any single asset
-          directly.
+          directly. The image carries an attestation of its own:
+
+          \`\`\`console
+          gh attestation verify oci://${{ env.IMAGE }}@${{ needs.image.outputs.digest }} \\
+            --repo ${{ github.repository }} \\
+            --signer-workflow ${{ github.repository }}/.github/workflows/release.yml
+          \`\`\`
 
           Each \`<stem>.cdx.json\` is the CycloneDX SBOM of the program in \`<stem>.tar.gz\` and of the
           installers of the same stem, for that target: every crate the binary is built from, from the
@@ -667,7 +915,8 @@ jobs:
           \`\`\`
 
           The installers carry no code signature: Windows will show an unknown publisher, and \`rpm\` reports no
-          signature. Every asset is attested, and \`SHA256SUMS\` covers every asset above.
+          signature. Every asset is attested, and \`SHA256SUMS\` covers every asset above; the image
+          is attested by its digest.
           EOF
           gh release create "version/${{ needs.version.outputs.version }}" \
             --repo "${{ github.repository }}" \

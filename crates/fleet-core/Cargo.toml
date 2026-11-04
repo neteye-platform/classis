@@ -27,3 +27,6 @@ x509-parser.workspace = true
 # (ADR-0039): the SHA-256 of its issuer and serial.
 sha2.workspace = true
 hex.workspace = true
+# The key a `bootstrap.p12` opens to is held in a buffer wiped on drop (ADR-0057). No TLS or
+# crypto backend comes with it (ADR-0013).
+zeroize.workspace = true

@@ -57,14 +57,15 @@ server --config /etc/opamp/server.toml
 server --version
 ```
 
-| Flag              | Meaning                                                                                                                                                                                                 |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--config <path>` | The TOML configuration file. Defaults to `server.toml` in the working directory. A missing file means the defaults, and the defaults hold no `[tls]`, so the Server refuses to start and names `[tls]`. |
-| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                    |
+| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--config <path>` | The TOML configuration file. Without it, the file `FLEET_SERVER_CONFIG` names; without both, `server.toml` in the working directory when it exists, and otherwise none — the Server then starts from its defaults and its environment ([Configuration from the environment](#configuration-from-the-environment)). A file named by `--config` or `FLEET_SERVER_CONFIG` that does not exist fails startup, naming the path. The defaults hold no `[tls]`, so a Server configured by nothing refuses to start and names `[tls]`. |
+| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Any other argument prints usage and exits with status 2. Logging goes to stderr
 and is controlled by the `RUST_LOG` environment variable (default `info`);
-everything else is in the configuration file.
+everything else is in the configuration file and the `FLEET_SERVER__…` variables
+over it. `server pki status` reads the same configuration, from the same places.
 
 Stopping the Server is `SIGTERM`/`Ctrl-C`. Configurations and packages are
 persisted to disk, so a restart resumes with the same fleet state; Agents
@@ -123,12 +124,113 @@ past the cap is closed on accept, before the TLS handshake, and the connections
 already held keep working. See
 [Bounds on every listener](#bounds-on-every-listener).
 
+### In a container
+
+The Server ships as an image and nowhere else:
+`ghcr.io/mbrigl/opamp-fleet-server`, for `linux/amd64` and `linux/arm64`, tagged
+with each release's exact version and with nothing else — there is no `latest`.
+Deploy it **by its digest**, which the release notes name, not by its tag: the
+attestation names the digest, and a tag is only a name for it. Verify the digest
+before you deploy it:
+
+```console
+$ gh attestation verify oci://ghcr.io/mbrigl/opamp-fleet-server@sha256:<digest> \
+    --repo mbrigl/opamp-fleet \
+    --signer-workflow mbrigl/opamp-fleet/.github/workflows/release.yml
+```
+
+The image holds the binary the release built and checked for its version, on
+`gcr.io/distroless/cc-debian13:nonroot` pinned by digest: glibc, CA certificates
+and time zone data, and no shell and no package manager. Its SBOM is the release
+asset `server_<version>_linux_<arch>.cdx.json` for the image's architecture; the
+base's own packages are not in it and are named by the
+`org.opencontainers.image.base.digest` annotation.
+
+| Property                                   | Value                                                                                                                                           |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entrypoint                                 | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                    |
+| User                                       | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                |
+| Data directory                             | `/var/lib/opamp-fleet`, a volume owned by `65532`                                                                                               |
+| Working directory                          | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                        |
+| Ports                                      | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                |
+| Environment it sets                        | `FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet`, `FLEET_SERVER__LISTEN=0.0.0.0:4320`, `FLEET_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
+| Configuration, certificates, keys, secrets | none; you mount them as files                                                                                                                   |
+
+Because both planes listen off the loopback inside the container, the Server
+requires `[tls]` and `[rest.auth]` there. The image carries neither, so started
+with nothing mounted it names the missing key and stops — it never serves in the
+clear or without authentication. Mount the certificates, the keys and every
+password or credential file read-only, and name their paths in the
+configuration. The image works with a read-only root filesystem; the Server
+writes under its data directory alone.
+
+```console
+$ docker run -d --name opamp-fleet-server --read-only \
+    -p 4320:4320 -p 4321:4321 \
+    -v opamp-fleet-data:/var/lib/opamp-fleet \
+    -v /etc/opamp-fleet:/etc/opamp-fleet:ro \
+    ghcr.io/mbrigl/opamp-fleet-server@sha256:<digest> \
+    --config /etc/opamp-fleet/server.toml
+```
+
+A bind mount for the data directory must be writable by UID `65532`. There is no
+`HEALTHCHECK` — the image has no shell to run one and the Server has no health
+endpoint — so probe a TCP connection to `4320` for liveness and readiness. The
+`debug` variant of the base, which has a shell, is for inspecting a problem
+locally; it is not published.
+
+To build the image yourself from a checkout, on a system whose glibc is no newer
+than Debian 13's, copy the binary under the name the Containerfile expects:
+
+```console
+$ cargo build --release -p fleet-server --bin server
+$ mkdir -p image && cp target/release/server image/server-linux-amd64
+$ docker buildx build --platform linux/amd64 --load -t opamp-fleet-server:dev \
+    -f packaging/container/Containerfile image
+```
+
 ## Configuration reference
 
 The full annotated example is [`config/server.toml`](../../config/server.toml).
 Every key is shown below with its default. `[tls]` with its `client_ca_file` is
 required; every other key is optional. An unknown key fails startup rather than
 being ignored.
+
+### Configuration from the environment
+
+Every key can also be set by an environment variable, which is how a container
+is configured without a file. The configuration is built from the defaults, then
+the file, then the variables, each later one winning per key. A variable is
+`FLEET_SERVER__` followed by the key's path, its segments joined by `__` and
+upper-cased:
+
+```console
+FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet
+FLEET_SERVER__TLS__CERT_FILE=/run/secrets/server.pem
+FLEET_SERVER__REST__LISTEN=0.0.0.0:4321
+FLEET_SERVER__CONNECTION_OFFER__HEARTBEAT_INTERVAL_SECS=30
+FLEET_SERVER__REST__AUTH__BASIC_USERS_FILE=/run/secrets/basic-users.toml
+```
+
+- **A value is a TOML value.** `30` is an integer, `true` a boolean,
+  `["a", "b"]` an array, and `{ … }` an inline table that sets the whole table.
+  A value that is not TOML is the string it is, so a path needs no quotes; a
+  string that looks like another type is quoted: `"1234"`.
+- **A variable is checked as strictly as a key.** One that names no key, has an
+  empty segment (`FLEET_SERVER__REST____TLS`), or holds a value of the wrong
+  type fails startup, naming the variable. So does any `FLEET_SERVER__…`
+  variable in the environment of a process that starts the Server.
+- **The environment carries paths to secrets, never secrets.** Every secret is a
+  file named by a `*_file` key. The two tables keyed by names you choose,
+  `[rest.auth.basic_users]` and `[telemetry_offer.headers]`, are reached from
+  the environment only through `basic_users_file` and `headers_file`; a variable
+  that sets either table fails startup, naming the file key.
+- **The log says which keys the environment set.** At startup the Server logs,
+  at `info`, the name of every key a variable set, and never its value. A key
+  set in both places takes the variable's value.
+
+`FLEET_SERVER_CONFIG`, with one underscore, names the file and sets no key. No
+other variable configures the Server.
 
 ### Top level
 
@@ -169,9 +271,10 @@ required on any other.
 fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
 ```
 
-| Key           | Default   | Meaning                                                                                                                                                                                                    |
-| ------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `basic_users` | _(empty)_ | Accepted Basic credentials, `user = "<Argon2id hash>"` — see [Credentials are kept as hashes](#credentials-are-kept-as-hashes). A section without one, or an entry that is not such a hash, fails startup. |
+| Key                | Default   | Meaning                                                                                                                                                                                                                                                                                                                                              |
+| ------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `basic_users`      | _(empty)_ | Accepted Basic credentials, `user = "<Argon2id hash>"` — see [Credentials are kept as hashes](#credentials-are-kept-as-hashes). A section without one, or an entry that is not such a hash, fails startup.                                                                                                                                           |
+| `basic_users_file` | _(none)_  | A TOML file holding the `basic_users` table — its lines are `user = "<Argon2id hash>"`, with no section header. Make it readable by the Server's account alone. Never beside `basic_users`: both fail startup, naming both. The one way the environment names the users ([Configuration from the environment](#configuration-from-the-environment)). |
 
 #### `[rest.tls]`
 
@@ -210,6 +313,144 @@ verification_key = "<hex-encoded Ed25519 public key>"
 | ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `verification_key` | unset   | The hex-encoded Ed25519 public key — the same value as the Clients' `[packages] verification_key`, as `opamp-fleetctl package keygen` prints it. With it, each entry's signature is checked when it is written and when the store is loaded, and reported `valid` or `invalid`; without it, `unchecked`. An `invalid` signature is stored and offered all the same: each Client's own check decides what is installed. A key that is not hex, or not 32 bytes, fails startup naming it. |
 
+### `[blobs]`
+
+Optional. Where the artifacts' bytes are kept: one file per artifact under
+`data_dir/blobs/`, the default, or one object per artifact in a bucket of an
+S3-compatible object store. Both are supported in production; the bytes pass
+through the Server in both directions, and no Agent ever reaches the store.
+
+```toml
+[blobs]
+store = "s3"
+
+[blobs.s3]
+endpoint = "https://s3.example.org"
+bucket = "fleet-artifacts"
+region = "eu-central-1"
+prefix = "fleet/"
+access_key_id = "<key id>"
+secret_access_key_file = "/run/secrets/s3-secret-access-key"
+```
+
+| Key                         | Default | Meaning                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store`                     | `"fs"`  | `"fs"` or `"s3"`. Any other value fails startup naming the key; so do `"s3"` without a `[blobs.s3]` section and a `[blobs.s3]` section beside `"fs"`.                                                                                                                                                                                     |
+| `s3.endpoint`               | —       | Required with `"s3"`. The store's URL, `https://`. `http://` is accepted to `127.0.0.1` or `::1` alone; any other fails startup naming the key.                                                                                                                                                                                           |
+| `s3.bucket`                 | —       | Required with `"s3"`. The bucket. The Server does not create it: one that does not exist or cannot be listed fails startup, naming it and the error.                                                                                                                                                                                      |
+| `s3.region`                 | —       | Required with `"s3"`. The region the requests are signed for; a store without regions takes any, such as `us-east-1`.                                                                                                                                                                                                                     |
+| `s3.prefix`                 | empty   | Where in the bucket the Server's keys live: empty, or ending in `/`. Artifacts are kept at `<prefix>blobs/<sha256>`, an upload in progress at `<prefix>staging/<random>`. Letters, digits, space and `- _ . / ! ' ( ) & $ @ = ; : + ,` only: any other character, which the S3 client would percent-encode, fails startup naming the key. |
+| `s3.ca_file`                | unset   | One PEM root for a store whose certificate no public root signs.                                                                                                                                                                                                                                                                          |
+| `s3.access_key_id`          | unset   | The key ID of a static key pair. Set together with `secret_access_key_file` or not at all; one without the other fails startup naming both.                                                                                                                                                                                               |
+| `s3.secret_access_key_file` | unset   | The file holding that key pair's secret, readable by the Server's account and at most its group (`0600`, or `0640`/`0440` as an orchestrator mounts a secret for a group); one others can read, or its group can write, fails startup naming the key. The secret is never written into `server.toml`.                                     |
+
+Without a key pair the Server uses its platform's workload identity, in this
+order: a web identity token (`AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN`),
+the container credentials of ECS or EKS
+(`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, or
+`AWS_CONTAINER_CREDENTIALS_FULL_URI` with
+`AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`), and the instance metadata service.
+Those are the only `AWS_*` variables it reads: endpoint, bucket, region, prefix
+and every TLS or HTTP option come from its configuration alone, so
+`AWS_ENDPOINT` or `AWS_ALLOW_HTTP` in its environment change nothing, and no
+proxy variable is honoured. The connection is TLS 1.3 on the public roots and
+`ca_file`.
+
+Every request to the store is bounded: a connection may take 10 seconds, and a
+request fails once the store is silent for 30 seconds — before its answer
+begins, the upload of one 8 MiB part included, or between two pieces of a
+download, which therefore runs as long as bytes keep coming. A request that
+failed is tried again at most twice, and not once a minute has passed since the
+first attempt. A store that stops answering fails the act that needs it, as a
+failed write does.
+
+In the bucket, a key under `<prefix>staging/` is an interrupted upload and is
+deleted at startup; any other key under `<prefix>` that is not `blobs/<sha256>`
+fails startup naming it. At startup the Server lists the bucket for each
+artifact's size and downloads nothing: unlike the filesystem store, it does not
+hash the artifacts again. An object altered in the bucket is served, and the
+Client's own hash and signature checks refuse it. The bucket, its credentials,
+policies, retention and backups are the operator's.
+
+**Switching to `"s3"`** copies what is missing: at the first start with `"s3"`,
+every artifact a Package entry names that the bucket lacks is read from
+`data_dir/blobs/`, hashed — a file whose content does not match its name fails
+the start, naming it — uploaded and logged. The files are left where they are,
+and the Server does not write to `data_dir/blobs/` again; removing them once the
+bucket holds every artifact is yours. A large `data_dir/blobs/` makes that first
+start as long as its upload. Nothing is copied back: switching from `"s3"` to
+`"fs"`, an entry whose artifact `data_dir/blobs/` lacks fails the start, naming
+the entry.
+
+### `[database]`
+
+Optional. Where the Server keeps its records: one file per record under
+`data_dir`, the default, or one PostgreSQL database. Both are supported in
+production. Either way the Server loads every record at startup and answers from
+memory; the database is the durable copy, written before an act is answered, and
+only this Server writes to it while it runs.
+
+```toml
+[database]
+store = "postgres"
+
+[database.postgres]
+host = "db.example.org"
+port = 5432
+dbname = "fleet"
+user = "fleet"
+password_file = "/run/secrets/fleet-db-password"
+```
+
+| Key                      | Default | Meaning                                                                                                                                                                                                                                                                                                                     |
+| ------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store`                  | `"fs"`  | `"fs"` or `"postgres"`. Any other value fails startup naming the key; so do `"postgres"` without a `[database.postgres]` section and a `[database.postgres]` section beside `"fs"`.                                                                                                                                         |
+| `postgres.host`          | —       | Required with `"postgres"`. The database's host name or IP address — what its certificate must name.                                                                                                                                                                                                                        |
+| `postgres.port`          | `5432`  | Its port.                                                                                                                                                                                                                                                                                                                   |
+| `postgres.dbname`        | —       | Required with `"postgres"`. The database. The Server does not create it.                                                                                                                                                                                                                                                    |
+| `postgres.user`          | —       | Required with `"postgres"`. The role the Server signs in as. The Server does not create it.                                                                                                                                                                                                                                 |
+| `postgres.password_file` | —       | Required with `"postgres"`. The file holding the role's password, readable by the Server's account and at most its group (`0600`, or `0640`/`0440` as an orchestrator mounts a secret for a group); one others can read, or its group can write, fails startup naming it. The password is never written into `server.toml`. |
+| `postgres.ca_file`       | unset   | A PEM file of the roots the database's certificate is verified against, for a database no public root signs. Without it, the public roots.                                                                                                                                                                                  |
+| `postgres.tls`           | `true`  | `false` connects without TLS, which is accepted when `host` is `127.0.0.1` or `::1` alone; any other host fails startup naming both keys.                                                                                                                                                                                   |
+
+A missing key fails startup naming it. The connection is TLS 1.3, the database's
+certificate verified and its host name checked — what libpq calls `verify-full`.
+Every setting comes from the configuration alone: `PGHOST`, `PGSSLMODE` and the
+other `PG*` variables in the Server's environment change nothing. A database
+that cannot be reached at startup stops the start, naming the host and the
+database; one lost while the Server runs fails the acts that need it, as a
+failed write does. Every call is bounded: it fails when no pooled connection is
+free within 5 seconds, when the database does not answer it within 15 seconds (a
+rollout gets 20 ms more per record it writes), and the database itself ends a
+statement after 10 seconds, a wait for a lock after 5 and a transaction left
+open by a client that went away after 60. TCP keepalives notice a database host
+that is gone within about half a minute.
+
+The role needs the right to create tables in its default schema: at every start
+the Server applies the migrations of its schema the database has not yet seen,
+in one transaction, and records them in the table `fleet_schema`. A migration
+only adds, so the Server before an upgrade runs on the schema after it. A
+database whose schema needs a newer Server stops the start, naming both
+versions, and is left unchanged. The Server creates tables and indexes, and
+nothing else: the database, the role, its rights and extensions, replication and
+backups are the operator's.
+
+One Server per database schema: the Server holds a lock on the schema it works
+in — its role's default — while it runs, and a second one started against the
+same database and schema stops, naming the database. The lock lives on a
+connection of its own; when that connection ends while the Server runs — the
+database restarted, the session was ended, the host is gone — the lock is gone
+with it, and the Server logs an error naming the database and refuses every
+write from then on, so it never writes beside a second Server. Restart it once
+the database answers.
+
+With `"postgres"`, `data_dir` holds the audit record (`audit/`) and, with the
+filesystem blob store, the artifacts (`blobs/`), and nothing else. A record of
+the filesystem store found there — `agents/`, `configurations/`,
+`revocations.json` and the rest — stops the start, naming it and
+`server migrate-to-postgres`. A backup takes the database and `data_dir`
+together.
+
 ### `[tls]`
 
 Required. The Agent plane serves HTTPS and WSS in TLS 1.3 with this certificate
@@ -238,6 +479,11 @@ metrics_endpoint = "https://collector.example:4318/v1/metrics"
 [telemetry_offer.headers]
 Authorization = "Bearer a-telemetry-token"
 ```
+
+The headers can instead come from a file,
+`headers_file = "/run/secrets/telemetry-headers.toml"`, holding the lines of the
+`headers` table with no section header. Never beside `headers`: both fail
+startup, naming both. It is the one way the environment names the headers.
 
 ### `[client_ca]`
 
@@ -326,21 +572,23 @@ endpoint = "wss://fleet.example:4320/v1/opamp"
 ## Where the Server keeps its state
 
 Everything the Server knows survives a restart under one directory, `data_dir`,
-in a fixed layout:
+in a fixed layout — or, with [`[database]`](#database) `store = "postgres"`, in
+the database, with only `audit/` and `blobs/` left under `data_dir`. With the
+filesystem store the layout is:
 
-| Path                                       | One file per          | Holds                                                                                    |
-| ------------------------------------------ | --------------------- | ---------------------------------------------------------------------------------------- |
-| `configurations/<name>.json`               | Configuration         | Its saved revision and every revision still rolled out somewhere                         |
-| `deployments/<name>.json`                  | Deployment            | Its Selector, its Packages and its Configurations                                        |
-| `packages/<agent type>@<version>.json`     | Package               | Its identity and entries, each naming its artifact by SHA-256 and carrying its signature |
-| `blobs/<sha256>`                           | artifact              | The bytes, named by their SHA-256 — identical bytes are stored once                      |
-| `agents/<instance_uid>.json`               | Agent                 | What it reported, its assignment, its labels                                             |
-| `hosts/<host>.json`                        | Host                  | What its certificate says, and which Agents it speaks for                                |
-| `certificates/<issuer>-<serial>.json`      | certificate           | The register of what the client CA signed                                                |
-| `revocations.json`                         | —                     | The revocation list                                                                      |
-| `bootstrap/<issuer>-<serial>.json`, `.p12` | bootstrap certificate | Its record, and its PKCS#12 file when one was made                                       |
-| `enrolment.json`                           | —                     | The enrolment window and its pending requests                                            |
-| `audit/audit-<first seq>.jsonl`            | audit file            | The audit record                                                                         |
+| Path                                       | One file per          | Holds                                                                                                                        |
+| ------------------------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `configurations/<name>.json`               | Configuration         | Its saved revision and every revision still rolled out somewhere                                                             |
+| `deployments/<name>.json`                  | Deployment            | Its Selector, its Packages and its Configurations                                                                            |
+| `packages/<agent type>@<version>.json`     | Package               | Its identity and entries, each naming its artifact by SHA-256 and carrying its signature                                     |
+| `blobs/<sha256>`                           | artifact              | The bytes, named by their SHA-256 — identical bytes are stored once; unused while [`[blobs]`](#blobs) keeps them in a bucket |
+| `agents/<instance_uid>.json`               | Agent                 | What it reported, its assignment, its labels                                                                                 |
+| `hosts/<host>.json`                        | Host                  | What its certificate says, and which Agents it speaks for                                                                    |
+| `certificates/<issuer>-<serial>.json`      | certificate           | The register of what the client CA signed                                                                                    |
+| `revocations.json`                         | —                     | The revocation list                                                                                                          |
+| `bootstrap/<issuer>-<serial>.json`, `.p12` | bootstrap certificate | Its record, and its PKCS#12 file when one was made                                                                           |
+| `enrolment.json`                           | —                     | The enrolment window and its pending requests                                                                                |
+| `audit/audit-<first seq>.jsonl`            | audit file            | The audit record                                                                                                             |
 
 `<issuer>` is the first 16 hex characters of the SHA-256 of the issuer's
 DER-encoded name, and `<serial>` the certificate's serial in lowercase hex. A
@@ -360,11 +608,42 @@ it written as `%XX` in its file name.
 - **Nothing else is read.** A file or directory the layout does not name, a file
   that does not parse, or one whose name disagrees with what it holds stops the
   start, naming the path — a store that merely looked empty would be worse.
-  Every artifact is hashed again at startup, and an artifact no Package entry
-  names is deleted then.
+  Every artifact is hashed again at startup — in a bucket, only listed — and an
+  artifact no Package entry names is deleted then.
 - **Backup** is a copy of `data_dir` taken while the Server is stopped;
   restoring it is putting the copy back. A copy taken while it runs may hold an
   Agent record or an audit line mid-write.
+
+## Moving the records into PostgreSQL
+
+An existing `data_dir` is copied into PostgreSQL once, while the Server is
+stopped, with the `server.toml` that names the database in
+[`[database]`](#database):
+
+```sh
+server migrate-to-postgres --from /var/lib/opamp-fleet/fleet-data \
+    --data-dir /var/lib/opamp-fleet/fleet-data-pg --config /etc/opamp-fleet/server.toml
+```
+
+- It refuses a database that holds any of the Server's tables, and a
+  `--data-dir` that is not empty, and checks the database before it creates
+  anything.
+- It reads every record of the old `data_dir` as a Server's start would, so a
+  record a start would refuse stops the copy, naming it, before anything is
+  written into the database. It only reads the old `data_dir`: what a start
+  would repair there — a missing directory, a leftover temporary file, a mode —
+  it leaves as it is.
+- It copies `audit/` and, with the filesystem blob store, `blobs/` into the new
+  `data_dir` byte for byte, so the audit chain still verifies; then it applies
+  the schema and writes every record in one transaction.
+- It copies rather than moves: the old `data_dir` stays as the backup. It prints
+  what it copied, and exits non-zero when it could not copy all of it, leaving
+  the database without the Server's tables and the new `data_dir` empty.
+
+Then set `data_dir` to the new directory and `[database] store = "postgres"`,
+and start the Server. With an S3 bucket in [`[blobs]`](#blobs), start once with
+`"s3"` on the old `data_dir` before the copy, so the bucket holds every
+artifact. Moving records back from PostgreSQL to files is not provided.
 
 ## Upgrading to one data directory
 
@@ -1091,8 +1370,9 @@ operator's press.
 ## Packages and Deployments: distributing software
 
 The Packages live in `data_dir/packages/` and their artifacts in
-`data_dir/blobs/`; the Server declares the capability only while the store holds
-a Package. Two objects, and the split is the whole of the model:
+`data_dir/blobs/` or the bucket of [`[blobs]`](#blobs); the Server declares the
+capability only while the store holds a Package. Two objects, and the split is
+the whole of the model:
 
 - A **Package** is _what_ an Agent type runs at a version. Its identity is the
   **Agent type and the version**, the version a SemVer 2.0.0 version, and it

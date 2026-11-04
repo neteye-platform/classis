@@ -1,0 +1,4 @@
+# Development credentials of the throwaway S3 store in observability/compose.yaml
+# (ADR-0049): published on purpose, valid for a container on 127.0.0.1 and nowhere else.
+.github/workflows/ci.yml:curl-auth-user:72
+observability/README.md:curl-auth-user:175

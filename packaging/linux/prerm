@@ -6,25 +6,27 @@
 # the staged versions, the `current` pointer, the PATH symlink, and on purge the data root —
 # happens in the post-removal (ADR-0019), after the package's own files are gone.
 #
-# An **upgrade** must fall straight through. dpkg calls `prerm upgrade <new>` and rpm `%preun 1`
-# before installing the replacement, whose post-install re-runs `service install`; unregistering
-# here would stop a managed host's Client in the middle of an `apt upgrade` and, because the
-# post-install never starts what it did not find running, leave it stopped.
+# An **upgrade** must fall straight through. dpkg calls `prerm upgrade <new>` before it installs
+# the replacement, whose post-install re-runs `service install`; rpm runs the old package's
+# `%preun` with the number of instances that remain — 1 or more on an upgrade — after the new
+# package's `%post` has registered it. Unregistering here would stop a managed host's Client in the
+# middle of an `apt upgrade`, or remove the unit an `rpm -U` has just registered.
 set -e
 
 case "${1-}" in
 # dpkg: everything that is not a real removal.
 upgrade | failed-upgrade | deconfigure) exit 0 ;;
-# rpm: "$1" is the number of instances that will remain — 1 means a replacement is coming.
-1) exit 0 ;;
+# rpm: "$1" is the number of instances that will remain — 0 is a removal, any other an upgrade.
+[1-9]*) exit 0 ;;
 esac
 
-if command -v systemctl >/dev/null 2>&1; then
-	systemctl stop opamp-fleet.service >/dev/null 2>&1 || true
-fi
-
+# `service stop`, then `service uninstall` (ADR-0042 clause 3): the stop takes the second service
+# down too where a process account is registered (ADR-0059), which a stop of the Client's unit
+# alone would leave running.
+#
 # Best-effort: a host whose service was never registered, or already unregistered by hand, must
 # still be able to remove the package. The payload path, not the PATH symlink (ADR-0019): the
 # symlink resolves through a layout an operator may have already deleted by hand, while the
 # payload is the file this package guarantees to still exist at this moment.
+/usr/libexec/opamp-fleet/supervisor service stop >/dev/null 2>&1 || true
 /usr/libexec/opamp-fleet/supervisor service uninstall || true

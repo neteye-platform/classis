@@ -25,7 +25,7 @@ repos:
       - id: check-merge-conflict
       # A throwaway key the PEM fuzz target starts from, and a test that sets a PEM header alone.
       - id: detect-private-key
-        exclude: ^(fuzz/seeds/pem/ec-key|crates/fleet-agent/src/telemetry\.rs)$
+        exclude: ^(fuzz/seeds/pem/ec-key|crates/fleet-agent/src/telemetry\.rs|crates/fleet-tools/src/pki\.rs)$
       - id: check-executables-have-shebangs
 
   - repo: https://github.com/pre-commit/pre-commit-hooks

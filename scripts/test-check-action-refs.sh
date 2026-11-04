@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-action-refs.sh. Verifies: ADR-0049
+# Self-test of scripts/check-action-refs.sh. Verifies: ADR-0060
 #
 # Each case builds a fixture under a temporary directory — one workflow with one 'uses:' line and
 # a renovate.json that extends the organisation preset and carries the cargo rule — runs the check
 # against it, and asserts the exit code and, for a failing case, the message that names the
-# violation. The baseline passes; every other case breaks one thing ADR-0049 decides, or writes a
+# violation. The baseline passes; every other case breaks one thing ADR-0060 decides, or writes a
 # reference in a form the check has to read like the plain one.
 #
 # Usage:
@@ -176,7 +176,7 @@ expect pass "a first-party action on a SHA with its release in a comment, Renova
 
 d="$(repo first-party-major-tag)"
 workflow "$d" "- uses: actions/checkout@v7"
-expect fail "a first-party action on its major tag" "$d" "'actions/checkout@v7' is not pinned to a full commit SHA — pin it to the 40-character lowercase SHA and name its ref in a comment, 'owner/action@<sha> # vX.Y.Z' (ADR-0049 clause 1)"
+expect fail "a first-party action on its major tag" "$d" "'actions/checkout@v7' is not pinned to a full commit SHA — pin it to the 40-character lowercase SHA and name its ref in a comment, 'owner/action@<sha> # vX.Y.Z' (ADR-0060 clause 1)"
 
 d="$(repo branch)"
 workflow "$d" "- uses: actions/checkout@main"
@@ -208,7 +208,7 @@ expect fail "a SHA whose comment names only a major" "$d" "carries '# v2', not '
 
 d="$(repo unprefixed-comment)"
 workflow "$d" "- uses: Swatinem/rust-cache@$S # 2.9.2"
-expect fail "a SHA whose comment has no leading v" "$d" "(ADR-0049 clause 2)"
+expect fail "a SHA whose comment has no leading v" "$d" "(ADR-0060 clause 2)"
 
 d="$(repo short-sha)"
 workflow "$d" "- uses: Swatinem/rust-cache@6323deb # v2.9.2"
@@ -232,7 +232,7 @@ expect pass "an action of the organisation on a SHA with its branch in a comment
 
 d="$(repo other-owner-branch)"
 workflow "$d" "- uses: other/repo@$S # main"
-expect fail "a branch comment for an owner outside the organisation" "$d" "carries '# main', not '# vX.Y.Z' — end the line in a comment naming the release tag the SHA was taken from, as three numbers; only an owner of neteye-platform may name a branch (ADR-0049 clause 2)"
+expect fail "a branch comment for an owner outside the organisation" "$d" "carries '# main', not '# vX.Y.Z' — end the line in a comment naming the release tag the SHA was taken from, as three numbers; only an owner of neteye-platform may name a branch (ADR-0060 clause 2)"
 
 d="$(repo org-owner-prefix)"
 workflow "$d" "- uses: neteye-platform-fork/repo@$S # main"
@@ -322,7 +322,7 @@ expect pass "an annotated tag whose peeled commit is the pinned one, inside a re
 
 d="$(repo resolve-tag-object)"
 workflow "$d" "- uses: owner/annotated@$T # v2.9.2"
-expect fail "the tag object's own ID pinned in place of its commit" "$d" "tag v2.9.2 of owner/annotated is $S, not the pinned commit (ADR-0049 clause 3)"
+expect fail "the tag object's own ID pinned in place of its commit" "$d" "tag v2.9.2 of owner/annotated is $S, not the pinned commit (ADR-0060 clause 3)"
 
 d="$(repo resolve-moved)"
 workflow "$d" "- uses: owner/moved@$S # v1.0.0"
@@ -346,7 +346,7 @@ expect pass "a branch that contains the pinned commit, as its head and as an anc
 
 d="$(repo resolve-branch-not-contained)"
 workflow "$d" "- uses: neteye-platform/repo-commons@$O # main"
-expect fail "a branch that does not contain the pinned commit" "$d" "branch main of neteye-platform/repo-commons does not contain the pinned commit (ADR-0049 clause 3)"
+expect fail "a branch that does not contain the pinned commit" "$d" "branch main of neteye-platform/repo-commons does not contain the pinned commit (ADR-0060 clause 3)"
 
 d="$(repo resolve-branch-missing)"
 workflow "$d" "- uses: neteye-platform/repo-commons@$H # develop"
@@ -374,11 +374,11 @@ expect fail "a renovate.json without the cargo rule" "$d" "has no packageRules e
 
 d="$(repo renovate-cargo-pin)"
 renovate "$d" "github>neteye-platform/repo-commons" '{ "matchManagers": ["cargo"], "rangeStrategy": "pin" }'
-expect fail "a cargo rule that pins" "$d" "(ADR-0049 clause 5)"
+expect fail "a cargo rule that pins" "$d" "(ADR-0060 clause 5)"
 
 d="$(repo renovate-split-rule)"
 renovate "$d" "github>neteye-platform/repo-commons" '{ "matchManagers": ["cargo"] }' '{ "rangeStrategy": "update-lockfile" }'
-expect fail "the two keys in two different rules" "$d" "(ADR-0049 clause 5)"
+expect fail "the two keys in two different rules" "$d" "(ADR-0060 clause 5)"
 
 d="$(repo renovate-reordered)"
 renovate "$d" "github>neteye-platform/repo-commons" '{ "description": "ranges", "rangeStrategy": "update-lockfile", "matchManagers": [ "cargo" ] }'

@@ -20,7 +20,8 @@ use opamp::uid::InstanceUid;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
-use crate::gateway::cache::PackageCache;
+use crate::gateway::cache::{Begun, PackageCache};
+use crate::gateway::policy::End;
 
 /// Who is waiting for an Agent's replies, and the host its certificate names.
 struct Route {
@@ -38,6 +39,9 @@ enum Downstream {
     /// a later one for the same Agent.
     Exchange(oneshot::Sender<ServerToAgent>, u64),
 }
+
+/// How often a report asks again while its host's moved end is being written.
+const ASKS: u32 = 3;
 
 pub struct Registry {
     routes: Mutex<HashMap<InstanceUid, Route>>,
@@ -57,68 +61,115 @@ impl Registry {
     }
 
     /// The package cache, which holds the bindings and logs the Gateway's refusals.
-    pub fn cache(&self) -> &PackageCache {
+    pub fn cache(&self) -> &Arc<PackageCache> {
         &self.cache
     }
 
-    /// A WebSocket peer whose certificate speaks as `speaker` claims an Agent, and gets it only
-    /// when the Agent's `instance_uid` is bound to `speaker`: then the route is its, and `false`
-    /// leaves the route where it was (ADR-0039 clause 5). Claiming again from the same host
-    /// replaces the route: an Agent that reconnects through a second socket is reachable on the
-    /// new one.
-    pub fn attach(
+    /// Ends the bindings of every host whose kept certificate end has passed by `now`, or, when
+    /// `revoked` is given, whose certificate it says the revocation list names, and removes their routes under the
+    /// same lock a bind takes, so no report binds an ended `instance_uid` anew before its old route
+    /// is gone (ADR-0058 clause 4). Returns what [`PackageCache::end_certificates`] does.
+    pub fn end_certificates(
+        &self,
+        now: i64,
+        revoked: Option<&dyn Fn(&End) -> bool>,
+    ) -> (Vec<InstanceUid>, Option<crate::gateway::cache::Ticket>) {
+        let mut routes = self.routes.lock().expect("registry lock");
+        let (ended, ticket) = self.cache.end_certificates(now, revoked);
+        for uid in &ended {
+            routes.remove(uid);
+        }
+        (ended, ticket)
+    }
+
+    /// Binds `uid` to `speaker` on its first report and, once the store holds what the binding
+    /// relies on (ADR-0058 clause 3), inserts the route `route` builds — only when `uid` is then
+    /// bound to `speaker`. Beside it, the `instance_uid`s whose bindings made room.
+    async fn bind_and_route(
+        &self,
+        uid: InstanceUid,
+        speaker: &str,
+        end: &End,
+        route: impl FnOnce() -> Route,
+    ) -> (bool, Vec<InstanceUid>) {
+        // A report binds its `instance_uid` to its host, the first one only (ADR-0039 clause 6);
+        // an `instance_uid` with a route here is never the binding that makes room. A report that
+        // relies on its host's end while another report's move of it is written asks again once
+        // that write is settled, a few times at most.
+        let mut asked = 0;
+        let (written, evicted) = loop {
+            let (begun, evicted) = {
+                let routes = self.routes.lock().expect("registry lock");
+                self.cache
+                    .begin_bind(uid, speaker, end, |uid| routes.contains_key(uid))
+            };
+            match begun {
+                Begun::Refused => return (false, evicted),
+                Begun::Bound => break (true, evicted),
+                Begun::Writing(ticket) => break (PackageCache::written(ticket).await, evicted),
+                Begun::Waiting(mut writes) if asked < ASKS => {
+                    asked += 1;
+                    if writes.changed().await.is_err() {
+                        return (false, evicted);
+                    }
+                }
+                Begun::Waiting(_) => {
+                    debug!(agent = %uid, host = %speaker, "not forwarding a report: its host's end is still being written");
+                    return (false, evicted);
+                }
+            }
+        };
+        let mut routes = self.routes.lock().expect("registry lock");
+        if !self.cache.finish_bind(uid, speaker, written) {
+            return (false, evicted);
+        }
+        routes.insert(uid, route());
+        (true, evicted)
+    }
+
+    /// A WebSocket peer whose certificate speaks as `speaker`, and ends at `end`, claims an Agent,
+    /// and gets it only when the Agent's `instance_uid` is bound to `speaker`: then the route is
+    /// its, and `false` leaves the route where it was (ADR-0039 clause 5). Claiming again from the
+    /// same host replaces the route: an Agent that reconnects through a second socket is reachable
+    /// on the new one. Beside it, the `instance_uid`s whose bindings made room for this one, whose
+    /// places upstream the caller releases.
+    pub async fn attach(
         &self,
         uid: InstanceUid,
         sink: mpsc::Sender<ServerToAgent>,
         host: Option<String>,
         speaker: &str,
-    ) -> bool {
-        // A report binds its `instance_uid` to its host, the first one only (ADR-0039 clause 6);
-        // an `instance_uid` with a route here is never the binding that makes room.
-        let mut routes = self.routes.lock().expect("registry lock");
-        if !self
-            .cache
-            .bind(uid, speaker, |uid| routes.contains_key(uid))
-        {
-            return false;
-        }
-        routes.insert(
-            uid,
-            Route {
-                downstream: Downstream::Socket(sink),
-                host,
-            },
-        );
-        true
+        end: &End,
+    ) -> (bool, Vec<InstanceUid>) {
+        self.bind_and_route(uid, speaker, end, || Route {
+            downstream: Downstream::Socket(sink),
+            host,
+        })
+        .await
     }
 
-    /// A plain-HTTP peer whose certificate speaks as `speaker` waits for exactly one reply for
-    /// this Agent, when the Agent's `instance_uid` is bound to `speaker` (ADR-0039 clause 5).
+    /// A plain-HTTP peer whose certificate speaks as `speaker`, and ends at `end`, waits for
+    /// exactly one reply for this Agent, when the Agent's `instance_uid` is bound to `speaker`
+    /// (ADR-0039 clause 5).
     /// Returns the number that [`Registry::abandon`] takes once the exchange ends without one, and
-    /// `None` for an `instance_uid` that is not the host's.
-    pub fn expect_once(
+    /// `None` for an `instance_uid` that is not the host's; beside it, as [`Registry::attach`]
+    /// does, the `instance_uid`s whose bindings made room.
+    pub async fn expect_once(
         &self,
         uid: InstanceUid,
         reply: oneshot::Sender<ServerToAgent>,
         host: Option<String>,
         speaker: &str,
-    ) -> Option<u64> {
-        let mut routes = self.routes.lock().expect("registry lock");
-        if !self
-            .cache
-            .bind(uid, speaker, |uid| routes.contains_key(uid))
-        {
-            return None;
-        }
+        end: &End,
+    ) -> (Option<u64>, Vec<InstanceUid>) {
         let exchange = self.exchanges.fetch_add(1, Ordering::Relaxed);
-        routes.insert(
-            uid,
-            Route {
+        let (bound, evicted) = self
+            .bind_and_route(uid, speaker, end, || Route {
                 downstream: Downstream::Exchange(reply, exchange),
                 host,
-            },
-        );
-        Some(exchange)
+            })
+            .await;
+        (bound.then_some(exchange), evicted)
     }
 
     /// An enrolling peer's plain-HTTP exchange waits for exactly one reply for `uid`, binding

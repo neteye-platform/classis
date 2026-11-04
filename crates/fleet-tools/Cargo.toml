@@ -57,6 +57,9 @@ serde_json.workspace = true
 # ADR-0027: the signing file is read strictly — unknown fields refused — which derive states in
 # one line per type rather than in hand-written checks over a `serde_json::Value`.
 serde.workspace = true
+# ADR-0057: the passwords and keys these tools read and write are held in buffers wiped on drop.
+# No TLS or crypto backend comes with it (ADR-0013).
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

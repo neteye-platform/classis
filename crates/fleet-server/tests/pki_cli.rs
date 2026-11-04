@@ -139,7 +139,7 @@ fn status_reads_the_server_hosts_certificates_and_the_server_makes_none() {
         let refused = server(made, dir.path());
         assert_eq!(refused.status.code(), Some(2), "{made:?} was not refused");
         let usage = text(&refused.stderr);
-        assert!(usage.contains("server pki status --config"), "{usage}");
+        assert!(usage.contains("server pki status [--config"), "{usage}");
         for gone in ["init", "server-cert", "bootstrap-c", "--offline-dir"] {
             assert!(!usage.contains(gone), "the usage names {gone}: {usage}");
         }
@@ -224,4 +224,152 @@ fn the_server_warns_at_startup_about_a_ca_that_is_ending_and_serves_on() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// `server pki status` reads the configuration every command reads (ADR-0051 clause 2): without
+/// `--config`, the file `FLEET_SERVER_CONFIG` names, or no file at all and its keys from
+/// `FLEET_SERVER__…` variables; and it logs the keys its environment set, never their values
+/// (clause 7).
+// Verifies: ADR-0051
+#[test]
+fn status_reads_its_configuration_without_config_from_the_variable_or_the_environment() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let elsewhere = dir.path().join("elsewhere.toml");
+    std::fs::write(&elsewhere, server_host_files(dir.path(), 3000)).expect("write");
+    let empty = tempfile::tempdir().expect("an empty working directory");
+
+    let named = Command::new(env!("CARGO_BIN_EXE_server"))
+        .args(["pki", "status"])
+        .current_dir(empty.path())
+        .env("FLEET_SERVER_CONFIG", &elsewhere)
+        .output()
+        .expect("run");
+    assert_eq!(named.status.code(), Some(0), "{}", text(&named.stderr));
+    assert!(
+        text(&named.stdout).contains("client-ca.pem"),
+        "{}",
+        text(&named.stdout)
+    );
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_server"))
+        .args(["pki", "status"])
+        .current_dir(empty.path())
+        .env("FLEET_SERVER_CONFIG", dir.path().join("missing.toml"))
+        .output()
+        .expect("run");
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        text(&missing.stderr).contains("missing.toml"),
+        "{}",
+        text(&missing.stderr)
+    );
+
+    // The same sections, every key a variable.
+    let document: toml::Table =
+        toml::from_str(&server_host_files(dir.path(), 3000)).expect("sections");
+    let mut variables = Vec::new();
+    for (section, keys) in &document {
+        for (key, value) in keys.as_table().expect("a section") {
+            variables.push((
+                format!(
+                    "FLEET_SERVER__{}__{}",
+                    section.to_uppercase(),
+                    key.to_uppercase()
+                ),
+                value.as_str().expect("a path").to_string(),
+            ));
+        }
+    }
+    let from_environment = Command::new(env!("CARGO_BIN_EXE_server"))
+        .args(["pki", "status"])
+        .current_dir(empty.path())
+        .env("RUST_LOG", "info")
+        .envs(variables.iter().map(|(name, value)| (name, value)))
+        .output()
+        .expect("run");
+    assert_eq!(
+        from_environment.status.code(),
+        Some(0),
+        "{}",
+        text(&from_environment.stderr)
+    );
+    assert!(text(&from_environment.stdout).contains("client-ca.pem"));
+    let log = text(&from_environment.stderr);
+    assert!(
+        log.lines()
+            .any(|line| line.contains("set from the environment")
+                && line.contains("tls.cert_file (FLEET_SERVER__TLS__CERT_FILE)")),
+        "{log}"
+    );
+    for (_, value) in &variables {
+        assert!(!log.contains(value.as_str()), "a value was logged: {log}");
+    }
+}
+
+/// The Server itself logs, at startup and before it serves, every key its environment set and
+/// none of their values (ADR-0051 clause 7).
+// Verifies: ADR-0051
+#[test]
+fn the_server_logs_the_keys_its_environment_set_before_it_serves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let agent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let operator = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let config = dir.path().join("server.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "listen = \"127.0.0.1:{}\"\n{}\n[rest]\nlisten = \"127.0.0.1:{}\"\n",
+            agent.local_addr().expect("addr").port(),
+            server_host_files(dir.path(), 3000),
+            operator.local_addr().expect("addr").port(),
+        ),
+    )
+    .expect("write server.toml");
+    drop((agent, operator));
+    let data = dir.path().join("data-from-the-environment");
+
+    let mut running = ServerUnderTest(
+        Command::new(env!("CARGO_BIN_EXE_server"))
+            .arg("--config")
+            .arg(&config)
+            .env("RUST_LOG", "info")
+            .env("FLEET_SERVER__DATA_DIR", &data)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start the server"),
+    );
+    let (lines, logged) = mpsc::channel();
+    let stderr = running.0.stderr.take().expect("stderr");
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut noticed = false;
+    loop {
+        match logged.recv_timeout(Duration::from_secs(30)) {
+            Ok(line) if line.contains("serving the REST API") => break,
+            Ok(line) if line.contains("set from the environment") => {
+                assert!(
+                    line.contains("data_dir (FLEET_SERVER__DATA_DIR)"),
+                    "the key is named: {line}"
+                );
+                assert!(
+                    !line.contains("data-from-the-environment"),
+                    "a value was logged: {line}"
+                );
+                noticed = true;
+            }
+            Ok(_) => {}
+            Err(_) => panic!("the server never came up"),
+        }
+    }
+    assert!(
+        noticed,
+        "the keys the environment set were not logged before serving"
+    );
+    assert!(data.is_dir(), "the variable's data_dir was used");
 }

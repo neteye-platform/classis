@@ -83,7 +83,7 @@ own `neteye-platform` repositories, which publish no tags, the branch
 commit: a tag must point to it, a branch must contain it. The organisation
 enforces the same pinning as a GitHub setting, which refuses a run that
 references an action by a tag. This is
-[ADR-0049](adr/0049-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md),
+[ADR-0060](adr/0060-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md),
 held by [`scripts/check-action-refs.sh`](../scripts/check-action-refs.sh).
 Renovate, on the organisation preset, raises every update; a branch comment says
 only that the commit was on the branch, not which state of it was reviewed.

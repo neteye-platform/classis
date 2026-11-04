@@ -1,4 +1,4 @@
-# ADR-0049: Every GitHub Action is pinned to a commit SHA, and Renovate on the organisation preset keeps it and every Cargo dependency current
+# ADR-0060: Every GitHub Action is pinned to a commit SHA, and Renovate on the organisation preset keeps it and every Cargo dependency current
 
 - **Status:** 🟡 proposed
 - **Date:** 2026-10-20
@@ -241,7 +241,7 @@ peel to the pinned SHA, or when a commented branch does not exist or does not
 contain the pinned SHA (clause 3).
 
 [`scripts/test-check-action-refs.sh`](../../scripts/test-check-action-refs.sh)
-will carry `Verifies: ADR-0049`. Its cases cover:
+will carry `Verifies: ADR-0060`. Its cases cover:
 
 - `actions/checkout@<sha> # v7.0.1` passes, and `actions/checkout@v7` fails with
   a message naming clause 1;

@@ -173,6 +173,7 @@ impl Fleet {
         let config: ClientConfig = toml::from_str(&format!(
             r#"
             endpoint = "wss://{server}/v1/opamp"
+            state_dir = {:?}
             [tls]
             ca_file = {:?}
             cert_file = {:?}
@@ -184,6 +185,7 @@ impl Fleet {
             key_file = {:?}
             client_ca_file = {:?}
             "#,
+            path("state"),
             path("ca.pem"),
             path("gateway-cert.pem"),
             path("gateway-cert-key.pem"),

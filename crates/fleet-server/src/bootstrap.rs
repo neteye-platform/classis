@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::fleet::Clock;
 use crate::revocation::{CertId, SubjectValues};
@@ -243,10 +244,17 @@ pub struct IssueRequest {
     pub password: Option<Password>,
 }
 
-/// A password, which no `Debug` and no log line shows (ADR-0029 clause 2).
-#[derive(Clone, Deserialize)]
-#[serde(transparent)]
-pub struct Password(pub String);
+/// A password, which no `Debug` and no log line shows (ADR-0029 clause 2), held in a buffer wiped
+/// when it is dropped (ADR-0057).
+#[derive(Clone)]
+pub struct Password(pub Zeroizing<String>);
+
+/// The string the request carries moves into the buffer; nothing is copied.
+impl<'de> Deserialize<'de> for Password {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|password| Password(Zeroizing::new(password)))
+    }
+}
 
 impl std::fmt::Debug for Password {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -350,6 +358,22 @@ pub trait BootstrapStore: Send + Sync {
     /// # Errors
     /// Returns an error when it cannot be removed.
     fn remove(&self, id: &CertId) -> Result<(), String>;
+
+    /// Persists the entry of a certificate just issued together with its PKCS#12 file (ADR-0029
+    /// clause 4, ADR-0050 clause 12): both or neither. An adapter that cannot make it one step
+    /// writes the file first and removes it again when the entry cannot be written, so no file is
+    /// kept that no entry names.
+    ///
+    /// # Errors
+    /// Returns an error when either cannot be written; neither is then kept.
+    fn put_with_p12(&self, entry: &Entry, file: &[u8]) -> Result<(), String> {
+        self.put_p12(&entry.id, file)?;
+        if let Err(e) = self.put(entry) {
+            let _ = self.remove_p12(&entry.id);
+            return Err(e);
+        }
+        Ok(())
+    }
 
     /// Keeps the PKCS#12 file of one entry, owner-only.
     ///
@@ -499,15 +523,11 @@ impl BootstrapCertificates {
             ca_key: signer.ca_key_fingerprint(),
             p12: true,
         };
-        // The file before the entry that says it is there (ADR-0029 clause 4), and gone again
-        // when the entry cannot be written: no file is kept that no entry ends.
+        // The entry and its file together (ADR-0029 clause 4, ADR-0050 clause 12): no file is
+        // kept that no entry ends.
         self.store
-            .put_p12(&entry.id, &pair.pkcs12)
+            .put_with_p12(&entry, &pair.pkcs12)
             .map_err(IssueError::Failed)?;
-        if let Err(e) = self.store.put(&entry) {
-            let _ = self.store.remove_p12(&entry.id);
-            return Err(IssueError::Failed(e));
-        }
         entries.insert(entry.id.clone(), entry);
         Ok(pair)
     }
@@ -1036,6 +1056,19 @@ mod tests {
         let (record, _, _) = fixture(u64::MAX);
         let pair = record.issue(&valid()).expect("issued");
         assert!(!format!("{pair:?}").contains("twelve chars"));
+    }
+
+    /// The password of an issuing request is held in a buffer wiped when it is dropped, read into it
+    /// from the request: were it a plain `String` again, this would not compile.
+    /// Verifies: ADR-0057
+    #[test]
+    fn a_bootstrap_password_is_held_in_a_zeroizing_buffer() {
+        fn held(password: Password) -> Zeroizing<String> {
+            password.0
+        }
+        let request = request(serde_json::json!({"password": "twelve chars"}));
+        let password = request.password.expect("a password");
+        assert_eq!(held(password).as_str(), "twelve chars");
     }
 
     /// An entry that cannot be written leaves no PKCS#12 file behind, which nothing would end.

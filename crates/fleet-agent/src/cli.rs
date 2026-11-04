@@ -31,7 +31,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "supervisor.toml")]
     pub config: PathBuf,
     /// Overrides the configuration file's state directory. `service install` bakes this into the
-    /// unit so an installed service never depends on a relative path.
+    /// unit so an installed service never depends on a relative path, and every later install
+    /// keeps the one the unit names unless this flag names another (ADR-0053). It is how an
+    /// operator names a state directory outside the data root and the layout root: one the file
+    /// names there is refused.
     #[arg(long, global = true)]
     pub state_dir: Option<PathBuf>,
     /// The subcommand to run. Absent means `run` (foreground daemon).
@@ -75,10 +78,18 @@ where
 {
     let matches = Cli::command().try_get_matches_from(args)?;
     let config_named = config_named(&matches);
-    Ok(Parsed {
-        cli: Cli::from_arg_matches(&matches)?,
-        config_named,
-    })
+    let cli = Cli::from_arg_matches(&matches)?;
+    // Clap sees a conflict only on the level a flag was written on; a global one written before
+    // `run` is caught here.
+    if let Some(Command::Run(run)) = &cli.command {
+        if run.agents.is_some() && (config_named || cli.state_dir.is_some()) {
+            return Err(Cli::command().error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--agents runs the second service, which reads neither --config nor --state-dir",
+            ));
+        }
+    }
+    Ok(Parsed { cli, config_named })
 }
 
 /// Whether `--config` was given on the command line. A global argument may be parsed at the level
@@ -125,6 +136,131 @@ pub struct RunArgs {
     /// watching, which is what turns on the log file (ADR-0019).
     #[arg(long, hide = true)]
     pub service: bool,
+    /// Run as the second service instead of the Client (ADR-0059): listen on this socket and
+    /// start, signal and stop programs for the Client alone. Hidden, because the registration
+    /// writes it and no operator types it.
+    /// It reads neither the configuration nor the state directory and is no Client, so the flags
+    /// that would say otherwise are refused alongside it rather than ignored. On Windows it is a
+    /// named pipe, and the service always runs under the SCM.
+    #[cfg_attr(
+        unix,
+        arg(
+            long,
+            hide = true,
+            value_name = "SOCKET",
+            requires = "client_uid",
+            conflicts_with_all = ["service", "config", "state_dir"]
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        arg(
+            long,
+            hide = true,
+            value_name = "PIPE",
+            requires = "client_sid",
+            conflicts_with_all = ["service", "config", "state_dir"]
+        )
+    )]
+    pub agents: Option<PathBuf>,
+    /// The uid of the Client's account, the one peer the second service serves (ADR-0059
+    /// clause 4). Never root's (ADR-0059 clause 1); the service refuses its own as well.
+    #[cfg(unix)]
+    #[arg(
+        long,
+        hide = true,
+        value_name = "UID",
+        requires = "agents",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub client_uid: Option<u32>,
+    /// The SID of the Client's account, the one client the second service serves on Windows
+    /// (ADR-0059 clause 4). The service refuses `LocalSystem` and its own.
+    #[cfg(windows)]
+    #[arg(
+        long,
+        hide = true,
+        value_name = "SID",
+        requires = "agents",
+        value_parser = parse_sid
+    )]
+    pub client_sid: Option<crate::win32::Sid>,
+    /// The second service's socket, through which the Client starts every Managed Process
+    /// (ADR-0059 clause 3). Hidden: `service install --process-account` writes it into the
+    /// Client's unit, and it is how the running Client learns that a process account is
+    /// registered. On Windows it is the second service's named pipe.
+    #[cfg_attr(
+        unix,
+        arg(
+            long,
+            hide = true,
+            value_name = "SOCKET",
+            requires = "process_uid",
+            conflicts_with = "agents"
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        arg(
+            long,
+            hide = true,
+            value_name = "PIPE",
+            requires = "process_sid",
+            conflicts_with = "agents"
+        )
+    )]
+    pub agents_socket: Option<PathBuf>,
+    /// The uid of the process account, the one the Client accepts as the socket's peer (ADR-0059
+    /// clause 4). Never root's.
+    #[cfg(unix)]
+    #[arg(
+        long,
+        hide = true,
+        value_name = "UID",
+        requires = "agents_socket",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub process_uid: Option<u32>,
+    /// The SID of the process account, the one the Client accepts as the owner of the second
+    /// service's pipe on Windows (ADR-0059 clause 4).
+    #[cfg(windows)]
+    #[arg(
+        long,
+        hide = true,
+        value_name = "SID",
+        requires = "agents_socket",
+        value_parser = parse_sid
+    )]
+    pub process_sid: Option<crate::win32::Sid>,
+}
+
+impl RunArgs {
+    /// `--agents` and the Client's account it serves: the second service, where this run is it.
+    #[must_use]
+    pub fn agents_service(&self) -> Option<(PathBuf, crate::supervisor::channel::Account)> {
+        #[cfg(unix)]
+        let client = self.client_uid;
+        #[cfg(windows)]
+        let client = self.client_sid.clone();
+        self.agents.clone().zip(client)
+    }
+
+    /// `--agents-socket` and the process account that serves it: the second service every Managed
+    /// Process of this Client is started through, where one is registered.
+    #[must_use]
+    pub fn agents_channel(&self) -> Option<(PathBuf, crate::supervisor::channel::Account)> {
+        #[cfg(unix)]
+        let process = self.process_uid;
+        #[cfg(windows)]
+        let process = self.process_sid.clone();
+        self.agents_socket.clone().zip(process)
+    }
+}
+
+/// A SID on the command line, written as the system writes it.
+#[cfg(any(windows, test))]
+fn parse_sid(text: &str) -> Result<crate::win32::Sid, String> {
+    crate::win32::Sid::parse(text)
 }
 
 /// Service-lifecycle actions (`service install|config|uninstall|start|stop|status`).
@@ -243,6 +379,24 @@ pub struct InstallArgs {
     /// stand in the process list and in the installer log (ADR-0019).
     #[arg(long, value_name = "ACCOUNT", conflicts_with = "user")]
     pub run_as: Option<String>,
+    // ADR-0059.
+    /// Run every Managed Process under this account, through a second service,
+    /// `<PRODUCT_NAME>-agents`, that runs under it and starts them on the Client's request.
+    ///
+    /// System scope only: under systemd on Linux, launchd on macOS and the SCM on Windows. On Linux
+    /// and macOS the account must exist, must be neither root nor the account the Client runs as,
+    /// and its primary group must be its own and a supplementary group of the Client's account,
+    /// with no other member; the Client must not run as root. On Windows it is a passwordless
+    /// form — `NT SERVICE\<PRODUCT_NAME>-agents`, a gMSA, or `LocalService` / `NetworkService` —
+    /// and the Client runs under an account of its own. A re-registration without the flag keeps
+    /// the account the second service's registration names.
+    #[arg(long, value_name = "ACCOUNT", conflicts_with = "user")]
+    pub process_account: Option<String>,
+    // ADR-0059.
+    /// Drop the process account: stop and deregister the second service, and let the Client
+    /// start its Managed Processes itself again.
+    #[arg(long, conflicts_with = "process_account")]
+    pub no_process_account: bool,
 }
 
 /// Arguments for `service config`: where the installed configuration is, named as `install`
@@ -375,6 +529,282 @@ mod tests {
             cli.state_dir,
             Some(PathBuf::from("/var/lib/opamp-fleet/state"))
         );
+    }
+
+    /// The second service is `run` with a flag, not a subcommand of its own (ADR-0059 clause 2),
+    /// and names the one uid it serves; neither half parses without the other.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn the_agents_service_is_run_with_its_socket_and_the_clients_uid() {
+        let cli = parse(&[
+            "client",
+            "run",
+            "--agents",
+            "/run/opamp-fleet-agents/agents.sock",
+            "--client-uid",
+            "998",
+        ]);
+        let Some(Command::Run(args)) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            args.agents,
+            Some(PathBuf::from("/run/opamp-fleet-agents/agents.sock"))
+        );
+        assert_eq!(args.client_uid, Some(998));
+        assert!(Cli::try_parse_from(["client", "run", "--agents", "/x.sock"]).is_err());
+        assert!(Cli::try_parse_from(["client", "run", "--client-uid", "998"]).is_err());
+    }
+
+    /// The second service is no Client: a flag that only means something to the Client is
+    /// refused next to `--agents`, not silently ignored, and root is never the Client's account
+    /// it serves (ADR-0059 clause 1).
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn the_agents_service_refuses_the_clients_flags_and_root() {
+        let agents = [
+            "client",
+            "run",
+            "--agents",
+            "/x.sock",
+            "--client-uid",
+            "998",
+        ];
+        for extra in [
+            &["--service"][..],
+            &["--config", "/etc/supervisor.toml"],
+            &["--state-dir", "/var/lib/x"],
+        ] {
+            let mut args = agents.to_vec();
+            args.extend_from_slice(extra);
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "{extra:?} was accepted"
+            );
+            // A global flag counts before the subcommand too.
+            if extra != ["--service"] {
+                let mut args = vec!["client"];
+                args.extend_from_slice(extra);
+                args.extend_from_slice(&agents[1..]);
+                assert!(parse_from(&args).is_err(), "{extra:?} was accepted");
+            }
+        }
+        assert!(
+            Cli::try_parse_from(["client", "run", "--agents", "/x.sock", "--client-uid", "0"])
+                .is_err()
+        );
+    }
+
+    /// The Client's unit names the second service's socket and the process account's uid; the
+    /// Client learns from them that a process account is registered (ADR-0059 clause 3). Neither
+    /// half parses without the other, root is never the process account, and the Client is not
+    /// the second service.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn the_client_is_told_the_second_services_socket_and_uid() {
+        let client = [
+            "client",
+            "--config",
+            "/var/lib/opamp-fleet/supervisor.toml",
+            "run",
+            "--service",
+            "--agents-socket",
+            "/run/opamp-fleet-agents/agents.sock",
+            "--process-uid",
+            "997",
+        ];
+        let parsed = parse_from(client).expect("the Client's command line");
+        let Some(Command::Run(args)) = parsed.cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            args.agents_socket,
+            Some(PathBuf::from("/run/opamp-fleet-agents/agents.sock"))
+        );
+        assert_eq!(args.process_uid, Some(997));
+        assert!(Cli::try_parse_from(["client", "run", "--agents-socket", "/x.sock"]).is_err());
+        assert!(Cli::try_parse_from(["client", "run", "--process-uid", "997"]).is_err());
+        assert!(Cli::try_parse_from([
+            "client",
+            "run",
+            "--agents-socket",
+            "/x.sock",
+            "--process-uid",
+            "0"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "client",
+            "run",
+            "--agents",
+            "/x.sock",
+            "--client-uid",
+            "998",
+            "--agents-socket",
+            "/x.sock",
+            "--process-uid",
+            "997"
+        ])
+        .is_err());
+    }
+
+    /// On Windows the second service is the pipe and the Client's SID, and the Client is told the
+    /// pipe and the process account's SID; each half needs the other, a SID is read as the system
+    /// writes it, and the two ends are never one run (ADR-0059 clauses 2 to 4).
+    /// Verifies: ADR-0059
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_two_ends_are_told_the_pipe_and_a_sid() {
+        let pipe = r"\\.\pipe\opamp-fleet-agents";
+        let cli = parse(&[
+            "client",
+            "run",
+            "--agents",
+            pipe,
+            "--client-sid",
+            "s-1-5-80-01-2-3-4-5",
+        ]);
+        let Some(Command::Run(args)) = cli.command else {
+            panic!("expected run");
+        };
+        let (agents, client) = args.agents_service().expect("the second service");
+        assert_eq!(agents, PathBuf::from(pipe));
+        assert_eq!(client.as_str(), "S-1-5-80-1-2-3-4-5");
+        assert!(Cli::try_parse_from(["client", "run", "--agents", pipe]).is_err());
+        assert!(
+            Cli::try_parse_from(["client", "run", "--agents", pipe, "--client-sid", "998"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "client",
+            "run",
+            "--agents",
+            pipe,
+            "--client-sid",
+            "S-1-5-18",
+            "--service"
+        ])
+        .is_err());
+
+        let cli = parse(&[
+            "client",
+            "run",
+            "--service",
+            "--agents-socket",
+            pipe,
+            "--process-sid",
+            "S-1-5-80-6-7-8-9-10",
+        ]);
+        let Some(Command::Run(args)) = cli.command else {
+            panic!("expected run");
+        };
+        let (socket, process) = args.agents_channel().expect("the channel");
+        assert_eq!(socket, PathBuf::from(pipe));
+        assert_eq!(process.as_str(), "S-1-5-80-6-7-8-9-10");
+        assert!(Cli::try_parse_from(["client", "run", "--agents-socket", pipe]).is_err());
+        assert!(Cli::try_parse_from([
+            "client",
+            "run",
+            "--agents",
+            pipe,
+            "--client-sid",
+            "S-1-5-80-1-2-3-4-5",
+            "--agents-socket",
+            pipe,
+            "--process-sid",
+            "S-1-5-80-6-7-8-9-10",
+        ])
+        .is_err());
+    }
+
+    /// A SID on either end's command line is read as the system writes it, and anything else is
+    /// refused before the run begins.
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_sid_on_the_command_line_is_read_canonically() {
+        assert_eq!(
+            parse_sid("s-1-5-80-01-2-3-4-5").expect("sid").as_str(),
+            "S-1-5-80-1-2-3-4-5"
+        );
+        assert!(parse_sid("NT SERVICE\\opamp-fleet").is_err());
+        assert!(parse_sid("998").is_err());
+    }
+
+    /// `--process-account` names the account at system scope only (ADR-0059 clause 1).
+    /// Verifies: ADR-0059
+    #[test]
+    fn the_process_account_conflicts_with_user() {
+        let cli = parse(&[
+            "client",
+            "service",
+            "install",
+            "--run-as",
+            "opamp-fleet",
+            "--process-account",
+            "opamp-fleet-agents",
+        ]);
+        let Some(Command::Service {
+            action: ServiceAction::Install(args),
+        }) = cli.command
+        else {
+            panic!("expected service install");
+        };
+        assert_eq!(args.process_account.as_deref(), Some("opamp-fleet-agents"));
+        assert!(Cli::try_parse_from([
+            "client",
+            "service",
+            "install",
+            "--user",
+            "--process-account",
+            "opamp-fleet-agents"
+        ])
+        .is_err());
+    }
+
+    /// `--no-process-account` drops the process account, and conflicts with naming one (ADR-0059
+    /// clause 1).
+    /// Verifies: ADR-0059
+    #[test]
+    fn no_process_account_conflicts_with_naming_one() {
+        let cli = parse(&["client", "service", "install", "--no-process-account"]);
+        let Some(Command::Service {
+            action: ServiceAction::Install(args),
+        }) = cli.command
+        else {
+            panic!("expected service install");
+        };
+        assert!(args.no_process_account);
+        assert!(Cli::try_parse_from([
+            "client",
+            "service",
+            "install",
+            "--no-process-account",
+            "--process-account",
+            "opamp-fleet-agents"
+        ])
+        .is_err());
+    }
+
+    /// The process account's flags are in the help: the Managed Processes' files are split from
+    /// the Client's (ADR-0059 clause 6), so the separation they name holds.
+    /// Verifies: ADR-0059
+    #[test]
+    fn the_process_account_flags_are_shown() {
+        let mut command = <Cli as clap::CommandFactory>::command();
+        let install = command
+            .find_subcommand_mut("service")
+            .and_then(|service| service.find_subcommand_mut("install"))
+            .expect("service install");
+        for flag in ["process_account", "no_process_account"] {
+            let arg = install
+                .get_arguments()
+                .find(|arg| arg.get_id() == flag)
+                .unwrap_or_else(|| panic!("no {flag}"));
+            assert!(!arg.is_hide_set(), "{flag} is hidden");
+        }
     }
 
     /// Verifies: ADR-0019

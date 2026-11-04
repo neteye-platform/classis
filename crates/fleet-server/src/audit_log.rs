@@ -1,6 +1,8 @@
 //! The audit record on disk (ADR-0022), the adapter behind [`crate::audit::Audit`]: one JSON line
 //! per security decision, each carrying the SHA-256 of the line before it, written by one task in
-//! the order the decisions were taken.
+//! the order the decisions were taken. What is queued together is written and synced together, up
+//! to [`WRITE_BATCH`] lines, so how fast the channel empties is not bound by how often the disk
+//! syncs.
 //!
 //! A decision is recorded through [`AuditLog::record`], which never waits on the disk: the entry goes
 //! through a bounded channel to the writer task. When the channel is full, or the last write failed,
@@ -33,6 +35,9 @@ pub const REFUSALS_PER_SECOND: u32 = 10;
 /// decision.
 pub const REFUSAL_SHARE: usize = CHANNEL_CAPACITY / 2;
 
+/// The lines the writer hands the store at most in one append, and so syncs together.
+pub const WRITE_BATCH: usize = 1024;
+
 /// The hash a chain starts from.
 pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -55,12 +60,13 @@ pub trait AuditStore: Send {
     /// Returns an error when the store cannot be read.
     fn tail(&mut self) -> Result<Option<Tail>, String>;
 
-    /// Appends one line, newline added, to the current file, starting one named after `seq` when
-    /// there is none.
+    /// Appends `lines` in order, each with its newline, to the current file, starting one named
+    /// after `seq`, the first line's, when there is none; flushed to disk once for all of them.
     ///
     /// # Errors
-    /// Returns an error when the line cannot be written and flushed.
-    fn append(&mut self, seq: u64, line: &str) -> Result<(), String>;
+    /// Returns an error when the lines cannot be written and flushed; then none of them is in the
+    /// store.
+    fn append(&mut self, seq: u64, lines: &[&str]) -> Result<(), String>;
 
     /// The size of the current file.
     fn current_bytes(&self) -> u64;
@@ -237,9 +243,13 @@ impl AuditLog {
             queued_refusals: queued_refusals.clone(),
             failing: failing.clone(),
             unrecorded: unrecorded.clone(),
+            batch: Vec::new(),
+            batch_bytes: 0,
+            batch_start_prev: String::new(),
         };
         if torn {
             writer.write(Entry::new("audit.chain_broken", "recorded"));
+            writer.commit();
         }
         // A thread of its own: the writes are blocking file I/O, and must not hold a runtime
         // worker that admission needs.
@@ -338,12 +348,29 @@ struct Writer {
     store: Box<dyn AuditStore>,
     limits: Limits,
     clock: Arc<dyn Clock>,
+    /// The `seq` and the hash of the last line given its place, the batch's included.
     seq: u64,
     prev: String,
     refusals: Arc<Mutex<Refusals>>,
     queued_refusals: Arc<AtomicUsize>,
     failing: Arc<AtomicBool>,
     unrecorded: Arc<AtomicU64>,
+    /// The lines given their place in the chain and not yet handed to the store.
+    batch: Vec<Line>,
+    /// Their size in the file, newlines included.
+    batch_bytes: u64,
+    /// The hash of the line before the batch, which the chain goes back to when the batch fails.
+    batch_start_prev: String,
+}
+
+/// One line of the batch.
+struct Line {
+    seq: u64,
+    text: String,
+    event: String,
+    outcome: String,
+    /// What goes unrecorded when the line is lost: its decision and the count it carries.
+    lost: u64,
 }
 
 impl Writer {
@@ -352,10 +379,21 @@ impl Writer {
         let mut last_tick = std::time::Instant::now();
         loop {
             match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(message) => self.handle(message),
+                Ok(message) => {
+                    self.handle(message);
+                    // What is queued already joins the batch, and the whole batch is synced once.
+                    for _ in 1..WRITE_BATCH {
+                        match rx.try_recv() {
+                            Ok(message) => self.handle(message),
+                            Err(_) => break,
+                        }
+                    }
+                    self.commit();
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     self.flush_window(u64::MAX);
+                    self.commit();
                     return;
                 }
             }
@@ -377,10 +415,12 @@ impl Writer {
             }
         }
         self.flush_window(second);
+        self.commit();
         // While writing fails nothing is let through, so the writer itself tries again; the first
         // entry that lands says how much went unrecorded.
         if self.failing.load(Ordering::SeqCst) {
             self.append(Entry::new("audit.resumed", "recorded"));
+            self.commit();
         }
     }
 
@@ -389,6 +429,7 @@ impl Writer {
             Message::Entry(entry) => self.take(entry),
             Message::Drain(done) => {
                 self.flush_window(u64::MAX);
+                self.commit();
                 let _ = done.send(!self.failing.load(Ordering::SeqCst));
             }
         }
@@ -422,8 +463,14 @@ impl Writer {
         );
     }
 
-    /// Gives the entry its place in the chain and appends it; rotates first when the file is full.
+    /// Gives the entry its place in the chain and adds it to the batch; rotates first when the file
+    /// is full.
     fn write(&mut self, entry: Entry) {
+        if self.store.current_bytes() + self.batch_bytes >= self.limits.max_file_bytes {
+            // The batch goes into the file it was counted against; whether that file is full is
+            // then up to what landed.
+            self.commit();
+        }
         if self.store.current_bytes() >= self.limits.max_file_bytes {
             match self.store.rotate(self.limits.keep_files) {
                 Ok(deleted) => {
@@ -462,18 +509,47 @@ impl Writer {
         }
         line.insert("prev".into(), self.prev.clone().into());
         let text = Value::Object(line).to_string();
-        match self.store.append(seq, &text) {
+        let prev = std::mem::replace(&mut self.prev, line_hash(&text));
+        if self.batch.is_empty() {
+            self.batch_start_prev = prev;
+        }
+        self.seq = seq;
+        self.batch_bytes += text.len() as u64 + 1;
+        self.batch.push(Line {
+            seq,
+            text,
+            // A retry that fails was no decision; the entries it carried the count of were.
+            lost: u64::from(entry.event != "audit.resumed") + unrecorded,
+            event: entry.event,
+            outcome: entry.outcome,
+        });
+        if self.batch.len() >= WRITE_BATCH {
+            self.commit();
+        }
+    }
+
+    /// Hands the batch to the store in one append. A line counts as written only once the store
+    /// has synced it; when the append fails, every line of the batch is lost as a single one is,
+    /// and the chain goes on from the line before the batch.
+    fn commit(&mut self) {
+        let batch = std::mem::take(&mut self.batch);
+        self.batch_bytes = 0;
+        let Some(first) = batch.first() else {
+            return;
+        };
+        let lines: Vec<&str> = batch.iter().map(|line| line.text.as_str()).collect();
+        match self.store.append(first.seq, &lines) {
             Ok(()) => {
-                self.seq = seq;
-                self.prev = line_hash(&text);
                 self.failing.store(false, Ordering::SeqCst);
-                info!(target: "audit", seq, event = %entry.event, outcome = %entry.outcome, "{text}");
+                for line in &batch {
+                    info!(target: "audit", seq = line.seq, event = %line.event, outcome = %line.outcome, "{}", line.text);
+                }
             }
             Err(e) => {
-                // A retry that fails was no decision; the entries it carried the count of were.
-                let lost = u64::from(entry.event != "audit.resumed");
-                self.unrecorded
-                    .fetch_add(lost + unrecorded, Ordering::SeqCst);
+                self.seq = first.seq - 1;
+                self.prev = std::mem::take(&mut self.batch_start_prev);
+                let lost: u64 = batch.iter().map(|line| line.lost).sum();
+                self.unrecorded.fetch_add(lost, Ordering::SeqCst);
                 if !self.failing.swap(true, Ordering::SeqCst) {
                     error!(error = %e, "cannot write the audit record — refusing what needs one");
                 }
@@ -557,7 +633,7 @@ mod tests {
                 })
             }))
         }
-        fn append(&mut self, seq: u64, line: &str) -> Result<(), String> {
+        fn append(&mut self, seq: u64, lines: &[&str]) -> Result<(), String> {
             if self.1.load(Ordering::SeqCst) {
                 return Err("disk full".into());
             }
@@ -566,7 +642,8 @@ mod tests {
                 files.retain(|(name, _)| !name.is_empty());
                 files.push((format!("audit-{seq}.jsonl"), Vec::new()));
             }
-            files.last_mut().expect("a file").1.push(line.to_string());
+            let file = &mut files.last_mut().expect("a file").1;
+            file.extend(lines.iter().map(|line| (*line).to_string()));
             Ok(())
         }
         fn current_bytes(&self) -> u64 {
@@ -624,9 +701,9 @@ mod tests {
         fn tail(&mut self) -> Result<Option<Tail>, String> {
             self.0.tail()
         }
-        fn append(&mut self, seq: u64, line: &str) -> Result<(), String> {
+        fn append(&mut self, seq: u64, lines: &[&str]) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(2));
-            self.0.append(seq, line)
+            self.0.append(seq, lines)
         }
         fn current_bytes(&self) -> u64 {
             self.0.current_bytes()
@@ -667,6 +744,140 @@ mod tests {
             .record(Entry::new("admission.admitted", "admitted"))
             .expect("queued");
         assert!(!audit.drain(Duration::from_secs(10)));
+    }
+
+    /// A store that counts its appends, each one sync to disk.
+    #[derive(Clone, Default)]
+    struct Counting(Memory, Arc<AtomicUsize>);
+
+    impl AuditStore for Counting {
+        fn tail(&mut self) -> Result<Option<Tail>, String> {
+            self.0.tail()
+        }
+        fn append(&mut self, seq: u64, lines: &[&str]) -> Result<(), String> {
+            self.1.fetch_add(1, Ordering::SeqCst);
+            self.0.append(seq, lines)
+        }
+        fn current_bytes(&self) -> u64 {
+            self.0.current_bytes()
+        }
+        fn rotate(&mut self, keep: usize) -> Result<Vec<(String, String)>, String> {
+            self.0.rotate(keep)
+        }
+    }
+
+    /// Entries that queue while the store is busy are synced together, in the order they were
+    /// queued, so a flood empties the channel at more than the disk's sync rate.
+    /// Verifies: ADR-0022
+    #[test]
+    fn entries_queued_together_are_synced_together_in_order() {
+        let counting = Counting::default();
+        let audit =
+            AuditLog::start(Box::new(counting.clone()), Limits::default(), clock()).expect("start");
+        // The writer waits on the store while the test holds it, and the entries queue.
+        let held = counting.0 .0.lock().expect("lock");
+        for n in 0..100 {
+            audit
+                .record(Entry::new("admission.admitted", "admitted").with("n", n))
+                .expect("record");
+        }
+        drop(held);
+        assert!(audit.drain(Duration::from_secs(10)));
+        // The writer may already be in an append of the first entry when the rest queue; the
+        // rest go together. A sync per line would be a hundred.
+        assert!(
+            counting.1.load(Ordering::SeqCst) <= 2,
+            "a hundred queued entries took a sync each"
+        );
+        let lines = counting.0.lines();
+        let order: Vec<(u64, u64)> = lines
+            .iter()
+            .map(|l| {
+                let value = serde_json::from_str::<Value>(l).expect("json");
+                (
+                    value["seq"].as_u64().expect("seq"),
+                    value["n"].as_u64().expect("n"),
+                )
+            })
+            .collect();
+        assert_eq!(order, (1..=100).zip(0..100).collect::<Vec<_>>());
+        assert_eq!(chain_of(&counting.0), Ok(100));
+    }
+
+    /// A batch is counted against the file it goes into: a file full before the batch ends is
+    /// closed there, never filled past its limit by more than the line that reached it.
+    /// Verifies: ADR-0022, ADR-0037
+    #[test]
+    fn a_batch_rotates_where_a_single_line_would() {
+        const MAX: u64 = 1_000;
+        let memory = Memory::default();
+        let limits = Limits {
+            max_file_bytes: MAX,
+            keep_files: 100,
+        };
+        let audit = AuditLog::start(Box::new(memory.clone()), limits, clock()).expect("start");
+        let held = memory.0.lock().expect("lock");
+        for n in 0..50 {
+            audit
+                .record(Entry::new("issuance.signed", "issued").with("n", n))
+                .expect("record");
+        }
+        drop(held);
+        assert!(audit.drain(Duration::from_secs(10)));
+        let files = memory.0.lock().expect("lock").clone();
+        let longest = files
+            .iter()
+            .flat_map(|(_, lines)| lines.iter().map(|l| l.len() as u64 + 1))
+            .max()
+            .expect("a line");
+        assert!(files.len() > 1, "the record never rotated");
+        for (name, lines) in &files {
+            let bytes: u64 = lines.iter().map(|l| l.len() as u64 + 1).sum();
+            assert!(bytes <= MAX + longest, "{name} holds {bytes} bytes");
+        }
+        assert_eq!(chain_of(&memory), Ok(50));
+    }
+
+    /// An append that fails loses every line of its batch, as it loses a single one: none of them
+    /// is kept, each is counted unrecorded, and the chain goes on from the line before them.
+    /// Verifies: ADR-0022
+    #[test]
+    fn a_failed_append_loses_every_line_of_its_batch() {
+        let memory = Memory::default();
+        let audit =
+            AuditLog::start(Box::new(memory.clone()), Limits::default(), clock()).expect("start");
+        audit
+            .record(Entry::new("admission.admitted", "admitted"))
+            .expect("record");
+        assert!(audit.drain(Duration::from_secs(10)));
+        let held = memory.0.lock().expect("lock");
+        for n in 0..5 {
+            audit
+                .record(Entry::new("admission.admitted", "admitted").with("n", n))
+                .expect("record");
+        }
+        memory.1.store(true, Ordering::SeqCst);
+        drop(held);
+        assert!(!audit.drain(Duration::from_secs(10)));
+        assert_eq!(
+            memory.lines().len(),
+            1,
+            "a line of the failed batch was kept"
+        );
+        memory.1.store(false, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while memory.lines().len() < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the writer never retried"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let lines = memory.lines();
+        assert!(lines[1].contains("audit.resumed"), "{lines:#?}");
+        assert!(lines[1].contains("\"seq\":2"), "{}", lines[1]);
+        assert!(lines[1].contains("\"unrecorded_before\":5"), "{}", lines[1]);
+        assert_eq!(chain_of(&memory), Ok(2));
     }
 
     /// Verifies: ADR-0022

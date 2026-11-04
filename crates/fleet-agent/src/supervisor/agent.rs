@@ -13,7 +13,6 @@ mod remote_config;
 
 use std::time::Duration;
 
-use opamp::attributes;
 use opamp::proto::{
     AgentCapabilities, AgentDescription, AgentRemoteConfig, AgentToServer, AvailableComponents,
     ComponentHealth, ConnectionSettingsOffers, ConnectionSettingsStatuses, EffectiveConfig,
@@ -133,9 +132,8 @@ struct Local {
     /// `[[supervisor]]` block's `name`, or the top-level one for the Client's own Agent. Never
     /// `service.name` — that is the type below.
     instance_name: String,
-    /// The Agent *type*, reported as `service.name`. A Managed Process that reports one of its own
-    /// replaces it in the fold; this is what stands until then, and permanently for a process that
-    /// reports nothing.
+    /// The Agent *type*, reported as `service.name`: the Supervisor's alone, which a Managed
+    /// Process reporting one of its own never replaces (ADR-0055).
     service_name: String,
     start_time_ns: u64,
     /// The last stored remote configuration; what `effective_config` echoes unless the Managed
@@ -186,7 +184,8 @@ struct Local {
     /// `server_offered_version`/`server_offered_hash` (the Baseline requires them while
     /// installing or after a failure).
     server_offered: Option<(String, Vec<u8>)>,
-    /// The last install failure for this Agent's package, reported alongside the status.
+    /// The last install failure for this Agent's package, reported alongside the status — or,
+    /// while it is `Installing`, why it waits for the second service (ADR-0059 clause 2).
     package_error: String,
     /// A failure in processing the *offer itself* rather than one package — the Baseline's
     /// `PackageStatuses.error_message`, "set if the Agent encountered an error when processing the
@@ -361,43 +360,35 @@ impl AgentState {
         &self.local.instance_name
     }
 
-    /// The Agent *type* this Agent is reported under — `service.name` (ADR-0016).
+    /// The Agent *type* this Agent is reported under — `service.name` (ADR-0055).
     ///
-    /// The Managed Process's own word where it gives one, the Supervisor's configured type
-    /// otherwise — the fold `describe` performs, mirrored here rather than repeated: what the
-    /// fleet view shows for an Agent and what its telemetry is labelled with must be the one
-    /// answer, and `describe` is too expensive to call per sample, since it reads the host's
-    /// addresses live.
-    ///
-    /// The two answers differ in exactly one case, deliberately. A process reporting
-    /// `service.name = ""` blanks the type in `describe`, because the fold replaces by key without
-    /// judging the value; here the empty string is not a value (ADR-0026), so the configured type
-    /// stands. A label nobody can read is worse than a stale one, and the Selector consequences of
-    /// the other reading are ADR-0026's own subject rather than this accessor's.
+    /// The Supervisor's, whatever its Managed Process reports: the same value `describe` reports,
+    /// so what the fleet view shows for an Agent and what its telemetry is labelled with are the
+    /// one answer.
     pub fn service_name(&self) -> &str {
-        self.local
-            .process_description
-            .as_ref()
-            .and_then(|reported| {
-                // Whichever list the process put it in, as the fold reads it (ADR-0041).
-                opamp::attributes::string_value(
-                    &reported.identifying_attributes,
-                    attributes::SERVICE_NAME,
-                )
-                .or_else(|| {
-                    opamp::attributes::string_value(
-                        &reported.non_identifying_attributes,
-                        attributes::SERVICE_NAME,
-                    )
-                })
-            })
-            .unwrap_or(&self.local.service_name)
+        &self.local.service_name
     }
 
     /// The Managed Process's health changed — derived or self-reported.
     pub fn set_process_health(&mut self, health: ComponentHealth) {
         self.local.process_health = Some(health);
         self.protocol.health_changed();
+        self.name_the_wait();
+    }
+
+    /// What waits for the second service says so (ADR-0059 clause 2): while the Supervisor's
+    /// health says that the service is not reached, a configuration that is `APPLYING` and a
+    /// package that is `Installing` name that as the reason, and nothing once it is reached.
+    fn name_the_wait(&mut self) {
+        let reason = self
+            .local
+            .process_health
+            .as_ref()
+            .and_then(crate::supervisor::ports::waiting_reason)
+            .unwrap_or_default()
+            .to_string();
+        self.config_waits(&reason);
+        self.package_waits(&reason);
     }
 
     /// The Managed Process reported its own effective configuration; report that instead of
@@ -800,10 +791,10 @@ mod tests {
 
     /// The defect ADR-0016 exists for: a Collector's `opampextension` reports the type it was built
     /// with, and folding that into the operator's name for the Supervisor would overwrite it — so
-    /// every Collector of one distribution would collapse onto one name in the fleet view. Both
-    /// values must survive, each in its own key, each won by the side that actually knows it.
-    /// Verifies: ADR-0041
-    // Verifies: ADR-0016
+    /// every Collector of one distribution would collapse onto one name in the fleet view. Neither
+    /// the type nor the name is the process's to state: both stay the Supervisor's (ADR-0055).
+    /// Verifies: ADR-0055
+    // Verifies: ADR-0016, ADR-0041
     #[test]
     fn a_process_reporting_its_type_does_not_take_the_operators_name_with_it() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -839,13 +830,13 @@ mod tests {
         let after = reported(&agent.describe());
         assert_eq!(
             after.get("service.name").map(String::as_str),
-            Some("otelcol-contrib"),
-            "the process states the better type and wins the type"
+            Some("otelcol"),
+            "the type stays the Supervisor's"
         );
         assert_eq!(
             after.get("service.instance.name").map(String::as_str),
             Some("otelcol-edge-01"),
-            "but it cannot rename the Supervisor the operator configured"
+            "and the process cannot rename the Supervisor the operator configured"
         );
     }
 
@@ -1090,46 +1081,123 @@ mod tests {
         assert_eq!(version_of(&supervised).as_deref(), Some("0.142.0"));
     }
 
-    /// The type the metrics are labelled with is the type the fleet view shows — the process's own
-    /// word where it gives one, the configured type otherwise. Two answers to "what is this Agent"
-    /// would be worse than none: a series labelled `otelcol` beside a fleet row reading
-    /// `otelcol-contrib` is a question, not a fact.
-    /// Verifies: ADR-0041
+    /// An Agent's type is its Supervisor's, and a Managed Process never chooses it: a process that
+    /// did would choose which type's Configurations are pinned to its Agent and which Deployment
+    /// claims it. Whichever list the process states another type in, the description carries the
+    /// Supervisor's, once, among the identifying attributes, while the same report's version is
+    /// the Agent's — and the accessor the telemetry label reads answers the same.
+    /// Verifies: ADR-0055
     #[test]
-    fn the_reported_type_is_the_processs_own_word_where_it_gives_one() {
+    fn the_type_is_the_supervisors_whatever_the_process_reports() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let storage = Storage::new(dir.path().join("supervised")).expect("storage");
-        let mut agent = AgentState::supervised(
-            "edge-01".to_string(),
-            "otelcol".to_string(),
-            storage,
-            crate::host::SystemHost,
-        )
-        .expect("agent");
+        let mut agent = supervised_agent(dir.path());
         assert_eq!(agent.service_name(), "otelcol");
 
         agent.set_process_description(AgentDescription {
-            identifying_attributes: vec![string_attr("service.name", "otelcol-contrib")],
-            non_identifying_attributes: vec![],
+            identifying_attributes: vec![
+                string_attr("service.name", "other"),
+                string_attr("service.version", "0.142.0"),
+            ],
+            non_identifying_attributes: vec![string_attr("service.name", "other")],
         });
-        assert_eq!(agent.service_name(), "otelcol-contrib");
-        assert_eq!(
-            reported(&agent.describe()).get("service.name").cloned(),
-            Some("otelcol-contrib".to_string()),
-            "the accessor mirrors the fold rather than diverging from it"
+
+        let description = agent.describe();
+        let named = |list: &[KeyValue]| {
+            list.iter()
+                .filter(|kv| kv.key == "service.name")
+                .map(
+                    |kv| match kv.value.as_ref().and_then(|v| v.value.as_ref()) {
+                        Some(opamp::proto::any_value::Value::StringValue(s)) => s.clone(),
+                        other => format!("{other:?}"),
+                    },
+                )
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named(&description.identifying_attributes), ["otelcol"]);
+        assert!(
+            named(&description.non_identifying_attributes).is_empty(),
+            "the type is reported once"
         );
-
-        // The one case where the two part company, asserted so that it is a decision rather than a
-        // surprise: an empty string is not a value here (ADR-0026), while the fold replaces by key
-        // without judging the value.
-        agent.set_process_description(AgentDescription {
-            identifying_attributes: vec![string_attr("service.name", "")],
-            non_identifying_attributes: vec![],
-        });
-        assert_eq!(agent.service_name(), "otelcol");
         assert_eq!(
-            reported(&agent.describe()).get("service.name").cloned(),
-            Some(String::new())
+            reported(&description)
+                .get("service.version")
+                .map(String::as_str),
+            Some("0.142.0"),
+            "the version stays the process's word"
+        );
+        assert_eq!(agent.service_name(), "otelcol");
+    }
+
+    /// The operator learns of a type the process reports and the Supervisor drops, once per value
+    /// the process starts to report: a report repeated every few seconds must not flood the log,
+    /// and a process stating the Supervisor's own type has nothing to warn about. The warning
+    /// names the Supervisor, both values and the block key that would present the process's.
+    /// Verifies: ADR-0055
+    #[test]
+    fn a_differing_reported_type_is_warned_about_once_per_value() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut agent = supervised_agent(dir.path());
+        let mut warned = Vec::new();
+        let mut log = String::new();
+        for name in ["other", "other", "another", "otelcol"] {
+            let ((), said) = crate::test_support::capture_logs(|| {
+                agent.set_process_description(AgentDescription {
+                    identifying_attributes: vec![string_attr("service.name", name)],
+                    non_identifying_attributes: vec![],
+                });
+            });
+            warned.push(
+                said.lines()
+                    .filter(|line| line.contains("reports another Agent type"))
+                    .count(),
+            );
+            log.push_str(&said);
+        }
+        assert_eq!(warned, [1, 0, 1, 0], "warnings per report");
+
+        let lines: Vec<&str> = log
+            .lines()
+            .filter(|line| line.contains("reports another Agent type"))
+            .collect();
+        for (line, reported) in lines.iter().zip(["other", "another"]) {
+            assert!(line.contains("WARN"), "{line}");
+            assert!(line.contains("edge-01"), "names the Supervisor: {line}");
+            assert!(
+                line.contains(&format!("reported=\"{reported}\"")),
+                "names the reported value: {line}"
+            );
+            assert!(line.contains("type=otelcol"), "names the type: {line}");
+            assert!(
+                line.contains("`service_name`"),
+                "names the block key: {line}"
+            );
+        }
+        assert_eq!(agent.service_name(), "otelcol");
+    }
+
+    /// The reported type is the process's word, so it reaches the log escaped and cut short: a
+    /// value carrying a line break cannot forge a log line, and a long one cannot fill the log.
+    /// Verifies: ADR-0055
+    #[test]
+    fn a_reported_type_reaches_the_log_escaped_and_bounded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut agent = supervised_agent(dir.path());
+        let forged = format!("x\nINFO forged line{}", "y".repeat(10_000));
+        let ((), log) = crate::test_support::capture_logs(|| {
+            agent.set_process_description(AgentDescription {
+                identifying_attributes: vec![string_attr("service.name", &forged)],
+                non_identifying_attributes: vec![],
+            });
+        });
+        assert_eq!(log.lines().count(), 1, "{log}");
+        assert!(
+            !log.lines().any(|line| line.starts_with("INFO forged")),
+            "{log}"
+        );
+        assert!(
+            log.len() < 1_000,
+            "the whole value reached the log: {}",
+            log.len()
         );
     }
 
@@ -1151,7 +1219,7 @@ mod tests {
 
         // The extension's self-report: everything but the version, which it happens not to state.
         agent.set_process_description(AgentDescription {
-            identifying_attributes: vec![string_attr("service.name", "otelcol-contrib")],
+            identifying_attributes: vec![string_attr("service.namespace", "telemetry")],
             non_identifying_attributes: vec![string_attr("service.team", "abc")],
         });
         // The probe, after a swap: the version and nothing else.
@@ -1178,8 +1246,8 @@ mod tests {
             "the probed version survives"
         );
         assert_eq!(
-            value(&described.identifying_attributes, "service.name").as_deref(),
-            Some("otelcol-contrib"),
+            value(&described.identifying_attributes, "service.namespace").as_deref(),
+            Some("telemetry"),
             "and does not erase what the extension reported"
         );
         assert_eq!(
@@ -1280,7 +1348,8 @@ mod tests {
         );
         assert_eq!(
             after.get("service.name").map(String::as_str),
-            Some("otelcol-contrib")
+            Some("otelcol"),
+            "the type is the Supervisor's (ADR-0055)"
         );
         assert_eq!(
             after.get("service.version").map(String::as_str),
@@ -1339,22 +1408,23 @@ mod tests {
         assert_eq!(unset.get("channel"), None, "outside service.*, dropped");
     }
 
-    /// An admitted key replaces the Supervisor's value in the list the Supervisor states it in,
-    /// so it is reported once and a Selector and the fleet row read the same value.
-    /// Verifies: ADR-0041
+    /// An admitted key the process states in both lists is reported once, among the identifying
+    /// attributes, with its identifying value: the Server reads `service.version` from there, so a
+    /// version left among the non-identifying ones would be no version at all.
+    /// Verifies: ADR-0055
     #[test]
-    fn an_admitted_key_replaces_the_supervisors_value_in_the_supervisors_list() {
+    fn a_key_stated_in_both_lists_is_reported_once_among_the_identifying_attributes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut agent = supervised_agent(dir.path());
         agent.set_process_description(AgentDescription {
-            identifying_attributes: vec![],
-            non_identifying_attributes: vec![string_attr("service.name", "otelcol-contrib")],
+            identifying_attributes: vec![string_attr("service.version", "0.142.0")],
+            non_identifying_attributes: vec![string_attr("service.version", "0.141.0")],
         });
 
         let description = agent.describe();
-        let named = |list: &[KeyValue]| {
+        let versions = |list: &[KeyValue]| {
             list.iter()
-                .filter(|kv| kv.key == "service.name")
+                .filter(|kv| kv.key == "service.version")
                 .map(
                     |kv| match kv.value.as_ref().and_then(|v| v.value.as_ref()) {
                         Some(opamp::proto::any_value::Value::StringValue(s)) => s.clone(),
@@ -1363,15 +1433,10 @@ mod tests {
                 )
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            named(&description.identifying_attributes),
-            ["otelcol-contrib"]
-        );
-        assert!(named(&description.non_identifying_attributes).is_empty());
-        assert_eq!(
-            agent.service_name(),
-            "otelcol-contrib",
-            "the accessor reads it as the fold does"
+        assert_eq!(versions(&description.identifying_attributes), ["0.142.0"]);
+        assert!(
+            versions(&description.non_identifying_attributes).is_empty(),
+            "the key is reported once"
         );
     }
 
@@ -2333,6 +2398,120 @@ mod tests {
         );
     }
 
+    /// The health a Supervisor reports while the second service is not reached, for the reason
+    /// `status` names.
+    fn waiting_for(status: &str) -> ComponentHealth {
+        ComponentHealth {
+            healthy: false,
+            status: status.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// A configuration that waits for the second service stays `APPLYING` and names why, as the
+    /// Supervisor's health says it — down or refused; once a start reaches the service the reason
+    /// goes, and the acknowledgement closes it. A health that comes after it changes nothing.
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_configuration_that_waits_for_the_second_service_stays_applying_and_says_why() {
+        use crate::supervisor::ports::{REFUSED, UNREACHABLE};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut agent = supervised_agent(dir.path());
+        let _ = agent.next_report();
+        agent.set_process_health(waiting_for(UNREACHABLE));
+        let _ = agent.next_report();
+        agent.handle(&ServerToAgent {
+            remote_config: Some(remote_config(b"x: 1\n", b"hash-1")),
+            ..Default::default()
+        });
+        let status = agent.next_report().remote_config_status.expect("a status");
+        assert_eq!(status.status, RemoteConfigStatuses::Applying as i32);
+        assert_eq!(
+            status.error_message, UNREACHABLE,
+            "it waits from its receipt"
+        );
+
+        agent.set_process_health(waiting_for(REFUSED));
+        let status = agent.next_report().remote_config_status.expect("a status");
+        assert_eq!(status.status, RemoteConfigStatuses::Applying as i32);
+        assert_eq!(status.last_remote_config_hash, b"hash-1");
+        assert_eq!(status.error_message, REFUSED);
+
+        agent.set_process_health(ComponentHealth {
+            healthy: true,
+            status: "running".to_string(),
+            ..Default::default()
+        });
+        let status = agent.next_report().remote_config_status.expect("a status");
+        assert_eq!(status.status, RemoteConfigStatuses::Applying as i32);
+        assert!(status.error_message.is_empty(), "{status:?}");
+
+        agent.config_applied(b"hash-1".to_vec(), Ok(()));
+        let status = agent.next_report().remote_config_status.expect("a status");
+        assert_eq!(status.status, RemoteConfigStatuses::Applied as i32);
+        assert!(status.error_message.is_empty(), "{status:?}");
+
+        agent.set_process_health(waiting_for(UNREACHABLE));
+        assert!(
+            agent.next_report().remote_config_status.is_none(),
+            "an applied configuration waits for nothing"
+        );
+    }
+
+    /// A package that waits for the second service stays `Installing` and names why, as the
+    /// Supervisor's health says it; a package still downloading does not, and the outcome
+    /// replaces the reason.
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_package_that_waits_for_the_second_service_stays_installing_and_says_why() {
+        use crate::supervisor::ports::UNREACHABLE;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut agent = supervised_agent(dir.path());
+        agent.accept_packages();
+        agent.local.installing = Some(PackageDownload {
+            name: "otelcol".to_string(),
+            version: "2.0.0".to_string(),
+            hash: b"new".to_vec(),
+            download_url: String::new(),
+            content_hash: Vec::new(),
+            signature: Vec::new(),
+            headers: Vec::new(),
+        });
+        agent.package_downloading(PackageDownloadDetails::default());
+        let status = |agent: &mut AgentState| {
+            agent
+                .next_report()
+                .package_statuses
+                .expect("statuses")
+                .packages["otelcol"]
+                .clone()
+        };
+
+        agent.set_process_health(waiting_for(UNREACHABLE));
+        let downloading = status(&mut agent);
+        assert_eq!(
+            downloading.status,
+            opamp::proto::PackageStatusEnum::Downloading as i32
+        );
+        assert!(downloading.error_message.is_empty(), "{downloading:?}");
+
+        agent.package_downloaded();
+        let waiting = status(&mut agent);
+        assert_eq!(
+            waiting.status,
+            opamp::proto::PackageStatusEnum::Installing as i32
+        );
+        assert_eq!(waiting.error_message, UNREACHABLE);
+
+        agent.package_applied(b"new".to_vec(), Ok("2.0.0".to_string()));
+        let installed = status(&mut agent);
+        assert_eq!(
+            installed.status,
+            opamp::proto::PackageStatusEnum::Installed as i32
+        );
+        assert!(installed.error_message.is_empty(), "{installed:?}");
+    }
+
     /// Verifies: ADR-0026
     #[test]
     fn a_failed_package_reports_installed_failed_and_keeps_the_old_version() {
@@ -2712,27 +2891,9 @@ mod tests {
     /// Verifies: ADR-0017
     #[test]
     fn an_ignored_remote_config_is_logged_once_per_hash() {
-        #[derive(Clone, Default)]
-        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Captured {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("lock").extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let captured = Captured::default();
-        let writer = captured.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-
         let dir = tempfile::tempdir().expect("tempdir");
         let mut agent = listed_supervisor(dir.path());
-        tracing::subscriber::with_default(subscriber, || {
+        let ((), log) = crate::test_support::capture_logs(|| {
             for hash in [b"aaaa", b"aaaa", b"bbbb", b"aaaa", b"bbbb"] {
                 agent.handle(&ServerToAgent {
                     remote_config: Some(remote_config(b"x: 1\n", hash)),
@@ -2740,7 +2901,6 @@ mod tests {
                 });
             }
         });
-        let log = String::from_utf8(captured.0.lock().expect("lock").clone()).expect("utf-8");
         let ignored: Vec<&str> = log
             .lines()
             .filter(|line| line.contains("ignoring a remote configuration"))
@@ -2857,27 +3017,9 @@ mod tests {
     /// Verifies: ADR-0017
     #[test]
     fn a_set_ignored_by_a_host_that_keeps_it_is_logged_once_per_hash() {
-        #[derive(Clone, Default)]
-        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Captured {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("lock").extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let captured = Captured::default();
-        let writer = captured.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-
         let dir = tempfile::tempdir().expect("tempdir");
         let mut agent = own_agent_of_a_host_that_keeps_its_set(dir.path());
-        tracing::subscriber::with_default(subscriber, || {
+        let ((), log) = crate::test_support::capture_logs(|| {
             for hash in [b"aaaa", b"aaaa", b"bbbb", b"bbbb", b"aaaa"] {
                 agent.handle(&ServerToAgent {
                     remote_config: Some(remote_config(b"[[supervisor]]\n", hash)),
@@ -2885,7 +3027,6 @@ mod tests {
                 });
             }
         });
-        let log = String::from_utf8(captured.0.lock().expect("lock").clone()).expect("utf-8");
         let ignored: Vec<&str> = log
             .lines()
             .filter(|line| line.contains("ignoring a supervisor set"))

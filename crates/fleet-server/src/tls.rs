@@ -235,10 +235,16 @@ fn operator_identity(operator: &RestTlsConfig) -> Result<Identity, String> {
 fn identity(cert_file: &Path, key_file: &Path) -> Result<Identity, String> {
     let cert_pem = read(cert_file)?;
     opamp::tls::certificates(&cert_pem).map_err(|e| in_file(cert_file, &e))?;
-    let key_pem = read(key_file)?;
+    // Read, and parsed, in buffers wiped when they are dropped; `opamp` takes the key as its own
+    // buffer, so the copy is made here (ADR-0057 clause 3).
+    let key_pem = zeroize::Zeroizing::new(read(key_file)?);
     opamp::tls::private_key(&key_pem)
+        .map(zeroize::Zeroizing::new)
         .map_err(|_| format!("{} contains no private key", key_file.display()))?;
-    Ok(Identity { cert_pem, key_pem })
+    Ok(Identity {
+        cert_pem,
+        key_pem: key_pem.to_vec(),
+    })
 }
 
 fn authorities_of(role: &str, cas: &[Ca]) -> Vec<Authority> {

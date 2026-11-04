@@ -129,9 +129,11 @@ makes no bootstrap certificate: the Server issues those.
 
 ## 2. Configure and start the Server
 
-A release ships the Client and the operator tool, not the Server, so build the
-Server from a checkout, on a Linux machine, then copy it to the Server host and
-give it an account of its own:
+A release ships the Server as a container image, not as a binary of its own
+([In a container](server.md#in-a-container)); the configuration below is the
+same there, mounted into the container. To run it as a process on the host
+instead, build the Server from a checkout, on a Linux machine, then copy it to
+the Server host and give it an account of its own:
 
 ```sh
 cargo build --release -p fleet-server                 # writes target/release/server

@@ -1,6 +1,9 @@
 # ADR-0039: Through a Gateway a CSR proves the certificate it rests on, a report is forwarded only for its host's Agents, and an enrolment is relayed over plain HTTP
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clause 2 superseded by
+  [ADR-0050](0050-the-servers-records-may-live-in-postgresql.md) · clause 6
+  superseded by
+  [ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)
 - **Date:** 2026-10-19
 - **Deciders:** Markus Brigl
 - **Applies to:** the CSR handling on a member connection in

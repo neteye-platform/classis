@@ -69,6 +69,8 @@ struct Held {
     /// Server's register names it.
     revoked: HashSet<(String, String)>,
     etag: Option<String>,
+    /// Counts the lists taken, so a change of the list is told from a fetch that confirmed it.
+    version: u64,
 }
 
 /// The list as this Gateway holds it, shared by every downstream connection.
@@ -106,6 +108,23 @@ impl RevocationList {
         }
     }
 
+    /// Whether the list held, however old, names the certificate of `issuer` and `serial`, as the
+    /// Server's register names one (ADR-0058 clause 4).
+    #[must_use]
+    pub fn lists(&self, issuer: &str, serial: &str) -> bool {
+        self.held
+            .read()
+            .expect("revocation list lock")
+            .revoked
+            .contains(&(issuer.to_string(), serial.to_string()))
+    }
+
+    /// Which list is held: it changes whenever a new list is taken.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.held.read().expect("revocation list lock").version
+    }
+
     /// Fires whenever a session should judge itself again: after every fetch, successful or not,
     /// so that a list going stale ends the sessions too.
     #[must_use]
@@ -117,6 +136,7 @@ impl RevocationList {
         let mut held = self.held.write().expect("revocation list lock");
         held.revoked = revoked;
         held.etag = etag;
+        held.version += 1;
         held.fetched = Some(Instant::now());
     }
 
