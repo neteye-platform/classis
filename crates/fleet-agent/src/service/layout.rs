@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::nofollow::HeldDir;
+
 /// The platform's binary filename inside a version directory (ADR-0019).
 ///
 /// It is two contracts at once: the program a service unit is registered against, and the archive
@@ -152,15 +154,32 @@ impl Layout {
     /// # Errors
     /// Returns an error if the pointer cannot be inspected or repaired.
     pub fn heal_current(&self, running_dir: &Path) -> Result<bool, String> {
-        let points_at_us = std::fs::canonicalize(self.current())
-            .ok()
-            .zip(std::fs::canonicalize(running_dir).ok())
-            .is_some_and(|(current, running)| current == running);
-        if points_at_us {
+        if self.names(running_dir) {
             return Ok(false);
         }
         self.set_current(running_dir)?;
         Ok(true)
+    }
+
+    /// Whether `current` resolves, and to a version directory other than `version_dir`: a
+    /// self-update switched it. A pointer or a directory that cannot be resolved — one the account
+    /// asking may not resolve among them — is no evidence of a switch.
+    #[must_use]
+    pub fn names_another(&self, version_dir: &Path) -> bool {
+        std::fs::canonicalize(self.current())
+            .ok()
+            .zip(std::fs::canonicalize(version_dir).ok())
+            .is_some_and(|(current, version)| current != version)
+    }
+
+    /// Whether `current` resolves to `version_dir`. A pointer or a directory that cannot be
+    /// resolved names nothing.
+    #[must_use]
+    pub fn names(&self, version_dir: &Path) -> bool {
+        std::fs::canonicalize(self.current())
+            .ok()
+            .zip(std::fs::canonicalize(version_dir).ok())
+            .is_some_and(|(current, version)| current == version)
     }
 }
 
@@ -245,6 +264,80 @@ fn plain(path: PathBuf) -> PathBuf {
     path
 }
 
+/// What a `service` verb knows of where an installed Client lives before it reads the
+/// configuration: its two roots, and the state directory an administrator named — by
+/// `--state-dir`, or by the registration an earlier install wrote (ADR-0053 clause 3).
+#[derive(Debug, Clone)]
+pub struct Roots {
+    /// The absolute `--state-dir` this command was given.
+    pub named: Option<PathBuf>,
+    /// The state directory the service's system registration carries.
+    pub registered: Option<PathBuf>,
+    /// The data root, holding `supervisor.toml` and by default the state directory.
+    pub data: PathBuf,
+    /// The layout root, holding `versions/` and `current`.
+    pub layout: PathBuf,
+}
+
+/// Whether `dir` lies beneath one of `roots`, through real directories only: the test a directory
+/// taken from `supervisor.toml` passes before `service install` or `service config` acts on it.
+///
+/// The file belongs to the service's account (ADR-0042 clause 2), and the install runs as root or
+/// an Administrator, creates what it names, restricts it on Windows and hands it over to that
+/// account. A directory the file names is therefore that account's word, and it is taken only where
+/// the install's own roots already are (ADR-0053 clause 4): lexically beneath one of them, with no
+/// `.` or `..` after the root, and with every component below the root that exists a directory and
+/// not a symbolic link or junction — a link the account planted there would carry what the install
+/// does out of the root. The roots are the operator's, named by flag or by platform default, and
+/// are not inspected. The spelling is compared, not a resolved path: a directory named by another
+/// spelling of a root is refused, never followed.
+///
+/// # Errors
+/// Returns why `dir` is not beneath any of `roots`.
+pub fn beneath(dir: &Path, roots: &[&Path]) -> Result<(), String> {
+    let mut why = None;
+    for root in roots {
+        let Ok(rest) = dir.strip_prefix(root) else {
+            continue;
+        };
+        match through_directories(root, rest) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                why.get_or_insert(e);
+            }
+        }
+    }
+    Err(why.unwrap_or_else(|| {
+        let roots: Vec<String> = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect();
+        format!("it is not beneath {}", roots.join(" or "))
+    }))
+}
+
+/// Walks `rest` down from `root`, refusing a `.`, a `..` and anything that exists and is not a
+/// directory reached without a link; what does not exist yet ends the walk.
+fn through_directories(root: &Path, rest: &Path) -> Result<(), String> {
+    let mut at = root.to_path_buf();
+    for component in rest.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(format!(
+                "it steps out of {} with `.` or `..`",
+                root.display()
+            ));
+        };
+        at.push(name);
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => return Err(format!("{} is a link or not a directory", at.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("cannot inspect {}: {e}", at.display())),
+        }
+    }
+    Ok(())
+}
+
 /// Writes a version directory's manifest: the full version string and the content hash of the
 /// binary beside it, headed by a comment naming what wrote it.
 pub(crate) fn write_manifest(
@@ -253,10 +346,15 @@ pub(crate) fn write_manifest(
     version: &str,
     sha256: &str,
 ) -> std::io::Result<()> {
-    std::fs::write(
-        dir.join(MANIFEST_FILENAME),
-        format!("# Written by {written_by}.\nversion = \"{version}\"\nsha256 = \"{sha256}\"\n"),
+    HeldDir::open(dir)?.write(
+        MANIFEST_FILENAME,
+        manifest(written_by, version, sha256).as_bytes(),
+        0o644,
     )
+}
+
+fn manifest(written_by: &str, version: &str, sha256: &str) -> String {
+    format!("# Written by {written_by}.\nversion = \"{version}\"\nsha256 = \"{sha256}\"\n")
 }
 
 /// Stage the running executable into its version directory, write the manifest, and point
@@ -267,6 +365,12 @@ pub(crate) fn write_manifest(
 /// can arrive through the `PATH` symlink (ADR-0019) and then *runs from* the staged file, and
 /// Linux refuses to write over a running executable (`ETXTBSY`).
 ///
+/// The layout root belongs to the service's account (ADR-0054), and this runs as root. So
+/// `versions/` and the version directory are each opened without following a link at their name,
+/// and the program and the manifest are written whole to new temporary names and renamed into
+/// place, the program executable from its creation: a link the account put anywhere below the root
+/// is refused or replaced, never written through.
+///
 /// # Errors
 /// Returns an error if the executable cannot be read or the layout cannot be written.
 pub fn stage_current_exe(layout: &Layout) -> Result<PathBuf, String> {
@@ -275,27 +379,38 @@ pub fn stage_current_exe(layout: &Layout) -> Result<PathBuf, String> {
     let sha256 = hex::encode(Sha256::digest(&bytes));
 
     let version = fleet_core::version::current();
-    let dir = layout.version_dir(&version_dir_name(version));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let name = version_dir_name(version);
+    std::fs::create_dir_all(&layout.root)
+        .map_err(|e| format!("cannot create {}: {e}", layout.root.display()))?;
+    let dir = HeldDir::open_root(&layout.root)
+        .and_then(|root| root.dir("versions", 0o755))
+        .and_then(|versions| versions.dir(&name, 0o755))
+        .map_err(|e| format!("cannot create {}: {e}", layout.version_dir(&name).display()))?;
 
-    let binary = dir.join(BINARY_FILENAME);
+    let binary = dir.path().join(BINARY_FILENAME);
     // Compared with the staged file itself, never trusted from the manifest beside it: the manifest
     // says what was staged, the file is what would run.
-    let already_staged = std::fs::read(&binary).is_ok_and(|staged| staged == bytes);
+    let already_staged = dir
+        .read(BINARY_FILENAME)
+        .is_ok_and(|staged| staged == bytes);
     if !already_staged {
-        std::fs::write(&binary, &bytes)
+        dir.write(BINARY_FILENAME, &bytes, 0o755)
             .map_err(|e| format!("cannot write {}: {e}", binary.display()))?;
-        crate::install::make_executable(&binary)?;
     }
 
-    write_manifest(&dir, "`supervisor service install`", version, &sha256).map_err(|e| {
+    dir.write(
+        MANIFEST_FILENAME,
+        manifest("`supervisor service install`", version, &sha256).as_bytes(),
+        0o644,
+    )
+    .map_err(|e| {
         format!(
             "cannot write {}: {e}",
-            dir.join(MANIFEST_FILENAME).display()
+            dir.path().join(MANIFEST_FILENAME).display()
         )
     })?;
 
-    layout.set_current(&dir)?;
+    layout.set_current(dir.path())?;
     Ok(layout.current_binary())
 }
 
@@ -490,6 +605,45 @@ mod tests {
         assert_eq!(std::fs::canonicalize(layout.current()).expect("resolve"), b);
         // Second run: nothing to do.
         assert!(!layout.heal_current(&b).expect("heal again"));
+    }
+
+    /// What tells the second service that a self-update left it behind (ADR-0059 clause 2):
+    /// `current` names one version directory, and no other.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn current_names_the_version_it_points_at_and_no_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layout = Layout::new(dir.path().canonicalize().expect("canonical tempdir"));
+        let a = layout.version_dir("supervisor-1.0.0-aaaaaaa");
+        let b = layout.version_dir("supervisor-2.0.0-bbbbbbb");
+        std::fs::create_dir_all(&a).expect("create a");
+        std::fs::create_dir_all(&b).expect("create b");
+        assert!(!layout.names(&a), "no pointer names nothing");
+        layout.set_current(&a).expect("point at a");
+        assert!(layout.names(&a));
+        assert!(!layout.names(&b));
+    }
+
+    /// Only a `current` that resolves to another version is evidence of a switch: one that does
+    /// not resolve — missing, or dangling — is none, so the second service does not end on it
+    /// (ADR-0059 clause 2).
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn a_pointer_that_does_not_resolve_names_no_other_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layout = Layout::new(dir.path().canonicalize().expect("canonical tempdir"));
+        let a = layout.version_dir("supervisor-1.0.0-aaaaaaa");
+        let b = layout.version_dir("supervisor-2.0.0-bbbbbbb");
+        std::fs::create_dir_all(&a).expect("create a");
+        std::fs::create_dir_all(&b).expect("create b");
+        assert!(!layout.names_another(&a), "no pointer");
+        layout.set_current(&b).expect("point at b");
+        assert!(layout.names_another(&a), "a switch to b");
+        assert!(!layout.names_another(&b), "its own");
+        std::fs::remove_dir(&b).expect("remove b");
+        assert!(!layout.names_another(&a), "a dangling pointer");
     }
 
     #[test]

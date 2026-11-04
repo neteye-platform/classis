@@ -6,6 +6,8 @@
   [ADR-0036](0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md)
   · clause 4 superseded by
   [ADR-0037](0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)
+  · clause 13 superseded by
+  [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-14
 - **Deciders:** Markus Brigl
 - **Applies to:** the bootstrap-certificate routes of the Operator plane in

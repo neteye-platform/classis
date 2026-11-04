@@ -28,7 +28,7 @@ pub const SETTINGS_FILE: &str = "connection-settings.pb";
 /// once; a failed rewrite is warned about and never fails the load.
 pub fn load(state_dir: &Path) -> Option<ConnectionSettingsOffers> {
     let path = state_dir.join(SETTINGS_FILE);
-    let bytes = std::fs::read(&path).ok()?;
+    let bytes = crate::nofollow::read(&path).ok()?;
     match ConnectionSettingsOffers::decode(bytes.as_slice()) {
         Ok(mut stored) => {
             if let Some(headers) = stored.opamp.as_mut().and_then(|s| s.headers.take()) {
@@ -38,7 +38,8 @@ pub fn load(state_dir: &Path) -> Option<ConnectionSettingsOffers> {
                     headers = %keys.join(", "),
                     "persisted connection headers dropped; this Client sends none"
                 );
-                if let Err(e) = store(state_dir, &stored) {
+                // The file was just read from the state directory, which is left as it is.
+                if let Err(e) = crate::storage::write_private(&path, &stored.encode_to_vec()) {
                     warn!(
                         file = %path.display(),
                         error = %e,
@@ -61,9 +62,27 @@ pub fn load(state_dir: &Path) -> Option<ConnectionSettingsOffers> {
 /// and which certificate it presents — so it is written no wider than its owner, and the state
 /// directory holding it no wider than `0700`. On Windows the directory ACL under `%ProgramData%`
 /// protects it (ADR-0019); there is no mode to set.
-pub fn store(state_dir: &Path, settings: &ConnectionSettingsOffers) -> std::io::Result<()> {
-    crate::storage::create_private_dir(state_dir)?;
-    crate::storage::write_private(&state_dir.join(SETTINGS_FILE), &settings.encode_to_vec())
+///
+/// `group` is the process account's group where a process account is registered: the state
+/// directory stays passed through by it (ADR-0059 clause 6).
+pub fn store(
+    state_dir: &Path,
+    group: Option<crate::storage::ProcessAccountGroup>,
+    settings: &ConnectionSettingsOffers,
+) -> std::io::Result<()> {
+    // Never through a link at the directory's name or the file's: an install enrols as root in a
+    // directory that belongs to the service's account (ADR-0054).
+    crate::storage::create_shared_dir(
+        state_dir,
+        state_dir,
+        group,
+        crate::storage::Shared::Traversed,
+    )?;
+    crate::nofollow::HeldDir::open(state_dir)?.write(
+        SETTINGS_FILE,
+        &settings.encode_to_vec(),
+        0o600,
+    )
 }
 
 /// Folds a verified offer over what was already in force.
@@ -416,7 +435,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(load(dir.path()).is_none(), "fresh state dir holds nothing");
         let settings = offer_with(b"h1", "wss://x/v1/opamp", Some("issued"), 20);
-        store(dir.path(), &settings).expect("store");
+        store(dir.path(), None, &settings).expect("store");
         let restored = load(dir.path()).expect("restored");
         assert_eq!(restored.hash, b"h1");
         assert_eq!(
@@ -437,6 +456,7 @@ mod tests {
         let state_dir = dir.path().join("state");
         store(
             &state_dir,
+            None,
             &offer_with(b"h1", "wss://x/v1/opamp", Some("issued"), 20),
         )
         .expect("store");

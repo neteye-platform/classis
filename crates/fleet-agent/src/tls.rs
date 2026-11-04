@@ -9,6 +9,7 @@ use std::path::Path;
 
 use opamp::client::ClientTls;
 use opamp::tls::Identity;
+use zeroize::Zeroizing;
 
 use crate::config::ClientConfig;
 
@@ -65,9 +66,11 @@ pub fn client_tls_for(
                     key.display()
                 ));
             }
+            // `opamp` takes the key as its own buffer; the copy is made here and the one read
+            // is wiped (ADR-0057 clause 3).
             Some(Identity {
                 cert_pem: cert.to_vec(),
-                key_pem: key_file(&key)?,
+                key_pem: key_in(&key, state_file(&key)?)?.to_vec(),
             })
         }
         // An identity opened from a `bootstrap.p12` stands in for the configured one until the
@@ -75,12 +78,20 @@ pub fn client_tls_for(
         None => match (&config.bootstrap_identity, config.is_enrolled()) {
             (Some(bootstrap), false) => Some(Identity {
                 cert_pem: bootstrap.cert_pem.clone(),
-                key_pem: bootstrap.key_pem.clone(),
+                key_pem: bootstrap.key_pem.to_vec(),
             }),
             _ => match config.client_identity() {
+                // The pair the Server issued lies in the state directory, read without following a
+                // link; a pair the operator named in `[tls]` may be reached through one.
+                Some((cert, key)) if cert.parent() == Some(config.state_dir.as_path()) => {
+                    Some(Identity {
+                        cert_pem: certificates_in(&cert, state_file(&cert)?)?,
+                        key_pem: key_in(&key, state_file(&key)?)?.to_vec(),
+                    })
+                }
                 Some((cert, key)) => Some(Identity {
                     cert_pem: certificates_file(&cert)?,
-                    key_pem: key_file(&key)?,
+                    key_pem: key_file(&key)?.to_vec(),
                 }),
                 None => None,
             },
@@ -103,15 +114,24 @@ pub fn trust(config: &ClientConfig) -> Result<ClientTls, String> {
 
 /// A PEM file of certificates, parsed here so that a bad one is named by its path.
 pub(crate) fn certificates_file(path: &Path) -> Result<Vec<u8>, String> {
-    let pem = read(path)?;
+    certificates_in(path, read(path)?)
+}
+
+fn certificates_in(path: &Path, pem: Vec<u8>) -> Result<Vec<u8>, String> {
     opamp::tls::certificates(&pem).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(pem)
 }
 
-/// A PEM file holding a private key, parsed here so that a bad one is named by its path.
-pub(crate) fn key_file(path: &Path) -> Result<Vec<u8>, String> {
-    let pem = read(path)?;
+/// A PEM file holding a private key, parsed here so that a bad one is named by its path. The key
+/// is held, and parsed, in buffers wiped when they are dropped (ADR-0057).
+pub(crate) fn key_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, String> {
+    key_in(path, read(path)?)
+}
+
+fn key_in(path: &Path, pem: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, String> {
+    let pem = Zeroizing::new(pem);
     opamp::tls::private_key(&pem)
+        .map(Zeroizing::new)
         .map_err(|_| format!("{} contains no private key", path.display()))?;
     Ok(pem)
 }
@@ -139,7 +159,10 @@ pub fn pkcs12_identity(
         return Err(invalid(format!("larger than {limit} bytes")));
     }
     let file = std::fs::File::open(path).map_err(|e| invalid(format!("cannot read it: {e}")))?;
-    let mut bytes = Vec::new();
+    // Read at its final size, so no grown buffer is left behind unwiped (ADR-0057).
+    let mut bytes = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(meta.len()).unwrap_or_default(),
+    ));
     file.take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| invalid(format!("cannot read it: {e}")))?;
@@ -147,27 +170,45 @@ pub fn pkcs12_identity(
         OpenError::WrongPassword => OpenError::WrongPassword,
         OpenError::Invalid(why) => invalid(why),
     })?;
+    let mut cert_pem = pem_block("CERTIFICATE", &opened.certificate_der);
+    let mut key_pem = pem_block("PRIVATE KEY", &opened.private_key_der);
     Ok(crate::config::BootstrapIdentity {
-        cert_pem: pem_block("CERTIFICATE", &opened.certificate_der).into_bytes(),
-        key_pem: pem_block("PRIVATE KEY", &opened.private_key_der).into_bytes(),
+        cert_pem: std::mem::take(&mut *cert_pem).into_bytes(),
+        // The buffer moves; nothing is copied.
+        key_pem: Zeroizing::new(std::mem::take(&mut *key_pem).into_bytes()),
     })
 }
 
-/// `der` as one PEM block.
-fn pem_block(label: &str, der: &[u8]) -> String {
+/// `der` as one PEM block, in buffers wiped when they are dropped and sized up front, so none is
+/// grown and left behind (ADR-0057).
+fn pem_block(label: &str, der: &[u8]) -> Zeroizing<String> {
     use base64::Engine as _;
-    let body = base64::engine::general_purpose::STANDARD.encode(der);
-    let mut pem = format!("-----BEGIN {label}-----\n");
+    let body = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(der));
+    let (begin, end) = (
+        format!("-----BEGIN {label}-----\n"),
+        format!("-----END {label}-----\n"),
+    );
+    let lines = body.len().div_ceil(64);
+    let mut pem = Zeroizing::new(String::with_capacity(
+        begin.len() + body.len() + lines + end.len(),
+    ));
+    pem.push_str(&begin);
     for line in body.as_bytes().chunks(64) {
         pem.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
         pem.push('\n');
     }
-    pem.push_str(&format!("-----END {label}-----\n"));
+    pem.push_str(&end);
     pem
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+}
+
+/// A file of the state directory, never read through a link: an install reads it as root, and the
+/// directory belongs to the service's account (ADR-0054).
+fn state_file(path: &Path) -> Result<Vec<u8>, String> {
+    crate::nofollow::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -214,7 +255,7 @@ mod tests {
             client_tls(&config).expect("tls").identity,
             Some(Identity {
                 cert_pem: identity.cert_pem.clone(),
-                key_pem: identity.key_pem.clone(),
+                key_pem: identity.key_pem.to_vec(),
             })
         );
 
@@ -244,5 +285,55 @@ mod tests {
             pkcs12_identity(&large, "twelve chars"),
             Err(OpenError::Invalid(why)) if why.contains("larger than")
         ));
+    }
+
+    /// The Client's secrets are held in buffers wiped when they are dropped: the key of a
+    /// bootstrap identity, a key file, a bootstrap password, the Supervisor Endpoint token and
+    /// `[packages] archive_key`.
+    /// Were any of them a plain buffer again, this would not compile.
+    /// Verifies: ADR-0057
+    #[test]
+    fn the_clients_secrets_are_held_in_zeroizing_buffers() {
+        use crate::config::BootstrapIdentity;
+        fn bootstrap_key(identity: BootstrapIdentity) -> Zeroizing<Vec<u8>> {
+            identity.key_pem
+        }
+        fn archive_key(packages: crate::config::PackagesConfig) -> Option<Zeroizing<String>> {
+            packages.archive_key
+        }
+        let reads_key: fn(&Path) -> Result<Zeroizing<Vec<u8>>, String> = key_file;
+        let reads_password: fn(&Path, &str) -> Result<Zeroizing<String>, String> =
+            crate::config_init::read_password_file;
+        let makes_token: fn() -> Result<Zeroizing<String>, String> =
+            crate::supervisor::endpoint::new_token;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = rcgen::KeyPair::generate().expect("key");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&key_path, key.serialize_pem()).expect("write");
+        assert_eq!(
+            *reads_key(&key_path).expect("a key"),
+            key.serialize_pem().into_bytes()
+        );
+        let password_path = dir.path().join("password");
+        std::fs::write(&password_path, "twelve chars\n").expect("write");
+        assert_eq!(
+            reads_password(&password_path, "--flag")
+                .expect("a password")
+                .as_str(),
+            "twelve chars"
+        );
+        assert_eq!(makes_token().expect("a token").len(), 64);
+        let identity = BootstrapIdentity {
+            cert_pem: Vec::new(),
+            key_pem: Zeroizing::new(b"key".to_vec()),
+        };
+        assert_eq!(*bootstrap_key(identity), b"key");
+        let packages: crate::config::PackagesConfig =
+            toml::from_str("archive_key = \"a-long-secret\"\n").expect("parses");
+        assert_eq!(
+            archive_key(packages).expect("a key").as_str(),
+            "a-long-secret"
+        );
     }
 }

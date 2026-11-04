@@ -76,6 +76,10 @@ flate2.workspace = true
 tar.workspace = true
 sevenz-rust2.workspace = true
 zip.workspace = true
+# ADR-0057: the Client's keys, the password and bytes of a `bootstrap.p12` and the Supervisor
+# Endpoint token are held in buffers wiped on drop. No TLS or crypto backend comes with it
+# (ADR-0013).
+zeroize.workspace = true
 
 # ADR-0017: the graceful SIGTERM → wait → kill stop of Managed Processes. Not compiled on Windows,
 # which has no SIGTERM equivalent (there, kill is the stop).
@@ -157,6 +161,9 @@ post_trans_script = "../../packaging/linux/posttrans"
 # Virtual time, so a bound measured in minutes is tested in milliseconds.
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
+# ADR-0059: a test reads the process account back from a plist as `service-manager` writes it,
+# through the crate it writes with.
+plist = "1"
 # A test holds a TLS connection open mid-headers on the Gateway (H18), below what a client library
 # would let it do.
 rustls.workspace = true

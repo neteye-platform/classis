@@ -530,9 +530,10 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for SameOrigin {
 struct AgentResponse {
     instance_uid: String,
     /// The Agent *type* — the Baseline's "reverse FQDN that uniquely identifies the Agent type"
-    /// (ADR-0016). For a managed Collector this is the `dist.name` it was built with, so every
-    /// Collector of one distribution reports the same value. It answers "what is this", never
-    /// "which one is this": that is [`service_instance_name`](Self::service_instance_name).
+    /// (ADR-0055). For a Supervisor-backed Agent this is the type its Supervisor states, never one
+    /// its Managed Process reports, so every Agent of one configured type reports the same value.
+    /// It answers "what is this", never "which one is this": that is
+    /// [`service_instance_name`](Self::service_instance_name).
     service_name: String,
     /// The operator's name for this Agent — the `[[supervisor]]` block's `name` (ADR-0016). Empty
     /// for a foreign OpAMP client that reports no `service.instance.name`, which is why the UI
@@ -2486,9 +2487,10 @@ struct IssueBootstrapRequest {
     /// file of the certificate and its key under this password, to be downloaded until the
     /// certificate ends or is revoked; the key is never answered in PEM. The password is kept
     /// nowhere. Read as absent when it is missing, so the refusal names it.
+    // Wiped when it is dropped, from the moment it is read (ADR-0057).
     #[serde(default)]
-    #[schema(format = Password, required = true)]
-    password: Option<String>,
+    #[schema(value_type = Option<String>, format = Password, required = true)]
+    password: Option<crate::bootstrap::Password>,
 }
 
 /// The subject of a bootstrap certificate: these attributes only, `organization` and
@@ -2616,7 +2618,7 @@ async fn issue_bootstrap_certificate(
                     organization_identifier: subject.organization_identifier,
                 },
                 validity_days: request.validity_days,
-                password: request.password.map(crate::bootstrap::Password),
+                password: request.password,
             }
         }
         Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),

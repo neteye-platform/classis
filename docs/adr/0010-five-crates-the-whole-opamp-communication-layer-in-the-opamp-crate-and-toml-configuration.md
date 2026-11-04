@@ -1,6 +1,7 @@
 # ADR-0010: Five crates in one Cargo workspace on tokio and axum without its WebSocket — the whole OpAMP communication layer in the publishable `opamp` crate reading WebSocket frames itself, an internal shared crate by measurement — and TOML configuration
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clause 23 superseded by
+  [ADR-0051](0051-the-servers-configuration-may-come-from-its-environment.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl
 - **Applies to:** Cargo.toml, `crates/opamp/` (its manifest and `[features]`,

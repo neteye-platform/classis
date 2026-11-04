@@ -85,9 +85,10 @@ The first start pulls the ClickHouse datasource plugin, so give Grafana a few
 seconds longer than usual and make sure the machine has network access. Without
 it, Grafana starts with no datasource and every panel reports one.
 
-**Every port is published on every interface of the host**, as the stack has
-always been. On a machine that sits on a network you do not trust, bind them to
-the loopback instead:
+**Every port but the stores' is published on every interface of the host**, as
+the stack has always been; rustfs and PostgreSQL are on the host's loopback
+([below](#reaching-it-from-the-dev-container)). On a machine that sits on a
+network you do not trust, bind them to the loopback instead:
 
 ```sh
 OBSERVABILITY_BIND=127.0.0.1 docker compose -f observability/compose.yaml up -d
@@ -135,6 +136,73 @@ The host is reached by the name Podman and Docker Desktop both give it,
 `host.docker.internal`. Docker Engine on Linux gives it no name; set
 `OTLP_FORWARD_HOST` in the container's environment to the host's address on the
 bridge (usually `172.17.0.1`).
+
+**The stores are published on the host's loopback alone.** rustfs and PostgreSQL
+hold a fixed development key pair and password, so they are published on
+`STORES_BIND`, `127.0.0.1` by default, not on `OBSERVABILITY_BIND`. Whether the
+forwarder reaches a port bound there depends on how the container reaches the
+host:
+
+| Engine                   | `host.docker.internal` leads to                       | `STORES_BIND` to use                                                               |
+| ------------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Podman (rootless, pasta) | the host's loopback                                   | `127.0.0.1`, the default                                                           |
+| Docker Desktop           | the host, through its VM                              | `127.0.0.1`, the default                                                           |
+| Docker Engine on Linux   | no such name: `OTLP_FORWARD_HOST`, the bridge gateway | the bridge gateway, the same address as `OTLP_FORWARD_HOST` (usually `172.17.0.1`) |
+
+On Docker Engine a connection from a container arrives on the bridge, never on
+the host's loopback, so a port bound to `127.0.0.1` is out of its reach; the
+bridge gateway is reachable from the host's containers and not from the network:
+
+```sh
+STORES_BIND=172.17.0.1 docker compose -f observability/compose.yaml up -d
+```
+
+Check from inside the container with
+`curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9100/` — any HTTP
+status means the store is reached, a connection error that it is not.
+
+### The S3 store
+
+The stack carries rustfs, an S3-compatible store, for a development Server that
+keeps its artifacts in a bucket
+([ADR-0049](../docs/adr/0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md)).
+It is published on port 9100 and forwarded onto the Dev Container's loopback
+like the Collector, so `http://127.0.0.1:9100` is the same store on the host and
+in the container. The Server creates no bucket; create `fleet` once, with the
+development key pair of `compose.yaml`:
+
+```sh
+curl --aws-sigv4 aws:amz:us-east-1:s3 --user fleet-dev:fleet-dev-secret -X PUT \
+  -H "x-amz-content-sha256: $(printf '' | sha256sum | cut -d' ' -f1)" http://127.0.0.1:9100/fleet
+```
+
+Then point the Server at it with `[blobs] store = "s3"` and a `[blobs.s3]`
+section naming that endpoint, `bucket = "fleet"`, a `region`,
+`access_key_id = "fleet-dev"` and a `secret_access_key_file` holding the secret,
+mode `0600`. The same settings run the S3 store's tests:
+`FLEET_TEST_S3_ENDPOINT=http://127.0.0.1:9100 FLEET_TEST_S3_BUCKET=fleet
+FLEET_TEST_S3_ACCESS_KEY_ID=fleet-dev FLEET_TEST_S3_SECRET_ACCESS_KEY_FILE=<file>
+cargo test -p fleet-server s3::`.
+
+### The database
+
+The stack carries PostgreSQL for a development Server that keeps its records in
+a database
+([ADR-0050](../docs/adr/0050-the-servers-records-may-live-in-postgresql.md)). It
+is published on port 5432 and forwarded onto the Dev Container's loopback like
+the Collector, so `127.0.0.1:5432` is the same database on the host and in the
+container. The image creates the database and the role `fleet`, password
+`fleet`, on its first start; the Server creates its own tables. Point the Server
+at it with `[database] store = "postgres"` and a `[database.postgres]` section
+naming `host = "127.0.0.1"`, `dbname = "fleet"`, `user = "fleet"`, `tls = false`
+— plaintext, which the loopback alone allows — and a `password_file` holding
+`fleet`, mode `0600`. The same settings run the PostgreSQL store's tests:
+`FLEET_TEST_POSTGRES_HOST=127.0.0.1 FLEET_TEST_POSTGRES_PORT=5432
+FLEET_TEST_POSTGRES_DBNAME=fleet FLEET_TEST_POSTGRES_USER=fleet
+FLEET_TEST_POSTGRES_PASSWORD_FILE=<file> cargo test -p fleet-server postgres::`;
+each test works in a schema of its own and drops it.
+`FLEET_TEST_POSTGRES_CA_FILE` runs them over TLS against a database whose
+certificate that root signs.
 
 ## Pointing this Server's Agents at it
 
@@ -207,11 +275,11 @@ list rather than a filter.
 **`service.name` means two different things on the two levels.** On the Resource
 it is the _Client's_ type (`supervisor`); on the data point it is the type of
 the Agent the sample is _about_ — `otelcol`, `fluent-bit`, `supervisor` — the
-Managed Process's own word where it reports one and the configured type
-otherwise, which is the same value the fleet view shows. One Client reports all
-three side by side, so unlike the platform this differs _within_ a single export
-and cannot live on the Resource. The dashboard's **Client type** variable
-filters the former; the **Type** column and the series label carry the latter.
+type its Supervisor states, never one its Managed Process reports, which is the
+same value the fleet view shows. One Client reports all three side by side, so
+unlike the platform this differs _within_ a single export and cannot live on the
+Resource. The dashboard's **Client type** variable filters the former; the
+**Type** column and the series label carry the latter.
 
 The metric panels put all of it to work: a series is _grouped_ by
 `Attributes['service.instance.id']` and _labelled_ with a string built in SQL
@@ -431,3 +499,5 @@ ORDER BY l.Timestamp
 | 9000  | ClickHouse | Native protocol — what the Collector and Grafana speak         |
 | 8030  | Doris FE   | HTTP API and web UI; where the Collector's stream load starts  |
 | 9030  | Doris FE   | MySQL protocol — what Grafana, the Doris app and `mysql` speak |
+| 9100  | rustfs     | S3 API — the development store of the Server's artifacts       |
+| 5432  | PostgreSQL | The development database of the Server's records               |

@@ -23,6 +23,7 @@ pub mod policy;
 pub mod pool;
 pub mod registry;
 pub mod revocations;
+pub mod store;
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -69,6 +70,9 @@ struct Forwarding {
     revocations: RevocationList,
     /// Tells a member from an enrolling peer (ADR-0039 clause 4).
     members: Members,
+    /// The version of the revocation list the bindings were last held against (ADR-0058
+    /// clause 4), so an unchanged list is not asked about every host again.
+    list_checked: std::sync::atomic::AtomicU64,
 }
 
 /// What tells a downstream member from an **enrolling peer** (ADR-0039 clause 4). Without
@@ -258,6 +262,12 @@ pub async fn run_on_timed(
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot prepare the gateway endpoint {listen}: {e}"))?;
+    // Mutual TLS 1.3 and nothing less (ADR-0015); the load refused a Gateway without it.
+    let tls = gateway
+        .tls
+        .as_ref()
+        .ok_or("[gateway.tls] is required — a Gateway admits Agents over mutual TLS only")?;
+    let (server_tls, members) = server_tls(tls)?;
     let cache = cache::PackageCache::open(config.clone(), shutdown.clone()).await?;
     let registry = Arc::new(Registry::new(cache.clone()));
     let revocations = RevocationList::new(timings.revocation_max_age);
@@ -274,12 +284,8 @@ pub async fn run_on_timed(
         shutdown.clone(),
         timings.revocation_refresh,
     ));
-    // Mutual TLS 1.3 and nothing less (ADR-0015); the load refused a Gateway without it.
-    let tls = gateway
-        .tls
-        .as_ref()
-        .ok_or("[gateway.tls] is required — a Gateway admits Agents over mutual TLS only")?;
-    let (server_tls, members) = server_tls(tls)?;
+    tokio::spawn(write_reports(cache.clone(), shutdown.clone()));
+    let bindings = cache.clone();
     let downloads = Arc::new(cache::Downloads {
         cache,
         revocations: revocations.clone(),
@@ -291,7 +297,14 @@ pub async fn run_on_timed(
         max_agents: gateway.max_carried_agents,
         revocations,
         members,
+        list_checked: std::sync::atomic::AtomicU64::new(u64::MAX),
     });
+    // What the first list names ends now; what a later one names, when it comes (ADR-0058
+    // clause 4).
+    let mut changes = handler.revocations.subscribe();
+    changes.mark_unchanged();
+    handler.end_certificates(cache::now()).await;
+    tokio::spawn(keep_bindings(handler.clone(), changes, shutdown.clone()));
     // The receive and send limits the Baseline requires, enforced per hop; beside the OpAMP
     // endpoint, the download route the Agents behind this Gateway resolve their offers against
     // (ADR-0026 clause 45).
@@ -314,10 +327,56 @@ pub async fn run_on_timed(
         shutdown.requested().await;
         handle.graceful_shutdown(Some(DRAIN_GRACE));
     });
-    downstream
+    let served = downstream
         .serve(app)
         .await
-        .map_err(|e| format!("the gateway endpoint stopped: {e}"))
+        .map_err(|e| format!("the gateway endpoint stopped: {e}"));
+    bindings.write_reports().await;
+    served
+}
+
+/// Until `shutdown` fires: ends the bindings of hosts whose certificates ended whenever the
+/// revocation list changes and once an hour (ADR-0058 clause 4), and once an hour, while the
+/// bindings' store cannot be read, says so again (clause 2).
+async fn keep_bindings(
+    forwarding: Arc<Forwarding>,
+    mut changes: tokio::sync::watch::Receiver<u64>,
+    mut shutdown: Shutdown,
+) {
+    let every = std::time::Duration::from_secs(3600);
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+    loop {
+        let hourly = tokio::select! {
+            _ = tick.tick() => {
+                let cache = forwarding.registry.cache();
+                if let Some(why) = cache.unreadable() {
+                    cache::log_unreadable(why, &cache.store_path());
+                }
+                true
+            }
+            changed = changes.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                false
+            }
+            () = shutdown.requested() => return,
+        };
+        forwarding.end_bindings(cache::now(), hourly).await;
+    }
+}
+
+/// Writes the order of the bindings' reports once a minute until `shutdown` fires (ADR-0058
+/// clause 3); the Gateway writes it once more when its endpoint has drained.
+async fn write_reports(cache: Arc<cache::PackageCache>, mut shutdown: Shutdown) {
+    let every = std::time::Duration::from_secs(60);
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => cache.write_reports().await,
+            () = shutdown.requested() => return,
+        }
+    }
 }
 
 /// The material the downstream endpoint serves with (ADR-0039 clause 4), and what tells its members
@@ -354,9 +413,11 @@ fn server_tls(tls: &GatewayTlsConfig) -> Result<(ServerTls, Members), String> {
     }
     Ok((
         ServerTls {
+            // `opamp` takes the key as its own buffer; the copy is made here and the one read is
+            // wiped (ADR-0057 clause 3).
             identity: Identity {
                 cert_pem: crate::tls::certificates_file(&tls.cert_file)?,
-                key_pem: crate::tls::key_file(&tls.key_file)?,
+                key_pem: crate::tls::key_file(&tls.key_file)?.to_vec(),
             },
             client_auth: ClientAuth::Required { ca_pem },
         },
@@ -401,6 +462,9 @@ struct Downstream {
     /// The host that certificate speaks as, which the `instance_uid`s it reports for are bound to
     /// (ADR-0039 clause 6): the one it names, else the one the Server derives for it.
     speaker: String,
+    /// Where that certificate ends, which its reports move the host's kept end to (ADR-0058
+    /// clause 3).
+    end: policy::End,
     /// The certificate chains to the bootstrap CA alone (ADR-0039 clause 4): this peer may relay
     /// one enrolment request and nothing else, and binds nothing.
     enrolling: bool,
@@ -471,6 +535,17 @@ impl Handler for Forwarding {
         &self,
         request: &RequestInfo<'_>,
     ) -> Result<(Downstream, Option<Replies>), Rejection> {
+        // No Agent is carried while the bindings' store cannot be read; an enrolling peer's one
+        // plain-HTTP request binds nothing, so the exchange is let through to be judged
+        // (ADR-0058 clause 3).
+        if request.transport == Transport::WebSocket && self.registry.cache().unreadable().is_some()
+        {
+            return Err(Rejection {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                headers: Vec::new(),
+                message: cache::STORE_UNREADABLE.to_string(),
+            });
+        }
         // The one admission refusal beyond the handshake, and it is the Server's (ADR-0015 clause 14).
         let certificate = request
             .extensions
@@ -497,7 +572,9 @@ impl Handler for Forwarding {
         }
         // A certificate the revocation list could judge can be read, so this refuses nothing the
         // handshake and the list admitted; it only gives the binding its host (ADR-0039 clause 6).
-        let Some(speaker) = cache::speaker_of(&certificate) else {
+        let (Some(speaker), Some(end)) =
+            (cache::speaker_of(&certificate), cache::end_of(&certificate))
+        else {
             return Err(Rejection {
                 status: StatusCode::UNAUTHORIZED,
                 headers: Vec::new(),
@@ -551,6 +628,7 @@ impl Handler for Forwarding {
                 // An enrolling peer is offered nothing, so nothing is recorded for its host.
                 host: (!enrolling).then(|| cache::host_of(&certificate)).flatten(),
                 speaker,
+                end,
                 certificate,
                 enrolling,
             },
@@ -568,6 +646,10 @@ impl Handler for Forwarding {
             Transport::Http if downstream.enrolling => {
                 self.forward_enrolment(downstream, report).await
             }
+            Transport::Http if self.registry.cache().unreadable().is_some() => Reply::Refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                cache::STORE_UNREADABLE.to_string(),
+            ),
             Transport::Http => self.forward_exchange(downstream, report).await,
         }
     }
@@ -600,6 +682,39 @@ impl Handler for Forwarding {
 }
 
 impl Forwarding {
+    /// Ends the bindings of every host whose kept certificate end has passed by `now`, or whose
+    /// certificate the revocation list held names, with their routes, current offers and places
+    /// upstream, as a binding that makes room goes (ADR-0058 clauses 4 and 1), and
+    /// writes their removals.
+    async fn end_certificates(&self, now: i64) {
+        self.end_bindings(now, true).await;
+    }
+
+    /// [`Forwarding::end_certificates`], asking the revocation list about every host's end only
+    /// when `every`, or when the list changed since it was last asked: an ended end is found by
+    /// its order, a revoked one only by asking.
+    async fn end_bindings(&self, now: i64, every: bool) {
+        let version = self.revocations.version();
+        let changed = self
+            .list_checked
+            .swap(version, std::sync::atomic::Ordering::Relaxed)
+            != version;
+        let revoked = |end: &policy::End| self.revocations.lists(&end.issuer, &end.serial);
+        let (ended, ticket) = self.registry.end_certificates(
+            now,
+            (every || changed).then_some(&revoked as &dyn Fn(&policy::End) -> bool),
+        );
+        // An `instance_uid` bound anew since keeps the place its new route stands on.
+        self.pool.release(ended);
+        if let Some(ticket) = ticket {
+            if !cache::PackageCache::written(ticket).await {
+                warn!(
+                    "cannot write the removal of ended bindings; they end again at the next start"
+                );
+            }
+        }
+    }
+
     /// A socket's report goes upstream; whatever the Server answers comes back through the
     /// registry, so nothing is replied here.
     async fn forward_from_socket(
@@ -631,12 +746,19 @@ impl Forwarding {
         let Some(replies) = &downstream.replies else {
             return Reply::Nothing;
         };
-        if !self.registry.attach(
-            uid,
-            replies.clone(),
-            downstream.host.clone(),
-            &downstream.speaker,
-        ) {
+        let (attached, evicted) = self
+            .registry
+            .attach(
+                uid,
+                replies.clone(),
+                downstream.host.clone(),
+                &downstream.speaker,
+                &downstream.end,
+            )
+            .await;
+        // A binding that made room for this one takes its Agent's place upstream along.
+        self.pool.release(evicted);
+        if !attached {
             return Reply::Nothing;
         }
         if !carried {
@@ -712,11 +834,20 @@ impl Forwarding {
         };
         let (reply_tx, reply_rx) = oneshot::channel();
         // Forwarded only for an `instance_uid` bound to the host that sent it; the binding logs
-        // a refusal (ADR-0039 clause 5).
-        let Some(exchange) =
-            self.registry
-                .expect_once(uid, reply_tx, downstream.host.clone(), &downstream.speaker)
-        else {
+        // a refusal (ADR-0039 clause 5). A binding that made room for it takes its Agent's place
+        // upstream along: no socket going releases a plain-HTTP Agent's.
+        let (exchange, evicted) = self
+            .registry
+            .expect_once(
+                uid,
+                reply_tx,
+                downstream.host.clone(),
+                &downstream.speaker,
+                &downstream.end,
+            )
+            .await;
+        self.pool.release(evicted);
+        let Some(exchange) = exchange else {
             return Reply::Refuse(
                 StatusCode::FORBIDDEN,
                 "this instance_uid is not this host's to report for".into(),
@@ -794,8 +925,13 @@ mod tests {
 
     /// A Gateway's handler in front of a silent upstream, with a fresh, empty revocation list.
     async fn forwarding(state: &std::path::Path) -> Forwarding {
+        forwarding_to(state, silent_upstream().await).await
+    }
+
+    /// A Gateway's handler in front of the upstream at `server`, with a fresh, empty revocation
+    /// list.
+    async fn forwarding_to(state: &std::path::Path, server: std::net::SocketAddr) -> Forwarding {
         opamp::tls::install_ring_provider();
-        let server = silent_upstream().await;
         let config: Arc<ClientConfig> = Arc::new(
             toml::from_str(&format!(
                 "endpoint = \"ws://{server}/v1/opamp\"\nstate_dir = {:?}\n\
@@ -818,6 +954,7 @@ mod tests {
             max_agents: 10,
             revocations,
             members: Members::default(),
+            list_checked: std::sync::atomic::AtomicU64::new(u64::MAX),
         }
     }
 
@@ -834,6 +971,7 @@ mod tests {
             ended: Arc::default(),
             host: cache::host_of(&certificate),
             speaker: cache::speaker_of(&certificate).expect("a readable certificate"),
+            end: cache::end_of(&certificate).expect("a readable certificate"),
             certificate,
             enrolling: false,
         }
@@ -849,7 +987,7 @@ mod tests {
     /// A peer that goes takes its Agents' places on the upstream connections with it, so a peer
     /// coming back under ever new `instance_uid`s grows nothing; an Agent another socket of the
     /// same host carries by then keeps its place and its route.
-    /// Verifies: ADR-0015
+    /// Verifies: ADR-0015, ADR-0058
     #[tokio::test]
     async fn the_agents_a_departed_peer_carried_are_released_from_the_pool() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -906,6 +1044,85 @@ mod tests {
             instance_uid: uid.as_bytes().to_vec(),
             ..Default::default()
         }
+    }
+
+    /// One plain-HTTP exchange of `peer` for `uid`, answered as the Server would answer it.
+    async fn poll(forwarding: &Forwarding, peer: &Downstream, uid: InstanceUid) {
+        let answer = async {
+            while !forwarding.registry.routes(&uid) {
+                tokio::task::yield_now().await;
+            }
+            forwarding.registry.deliver(uid, reply_for(uid)).await;
+        };
+        let (reply, ()) = tokio::join!(forwarding.forward_exchange(peer, report(uid)), answer);
+        assert!(matches!(reply, Reply::Send(_)), "the exchange was answered");
+    }
+
+    /// A plain-HTTP peer that polls under ever new `instance_uid`s holds no more places on the
+    /// upstream connections than its host holds bindings: the place of an Agent whose binding made
+    /// room goes with it, and the Agents still bound keep theirs, on the same connection.
+    /// Verifies: ADR-0039, ADR-0058
+    #[tokio::test]
+    async fn a_polling_peer_under_new_instance_uids_holds_no_more_places_than_bindings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let forwarding = forwarding(dir.path()).await;
+        let peer = downstream(Transport::Http, None, certificate());
+        let uids: Vec<InstanceUid> = (0..10).map(|_| InstanceUid::default()).collect();
+        let mut placed = std::collections::HashMap::new();
+        for uid in &uids {
+            poll(&forwarding, &peer, *uid).await;
+            placed.insert(*uid, forwarding.pool.connection_of(uid).expect("a place"));
+        }
+
+        assert_eq!(
+            forwarding.pool.assignments(),
+            (uids[7..].iter().copied().collect(), 3),
+            "max_carried_agents is 3"
+        );
+        for uid in &uids[7..] {
+            poll(&forwarding, &peer, *uid).await;
+            assert_eq!(
+                forwarding.pool.connection_of(uid),
+                Some(placed[uid]),
+                "an Agent still bound kept its connection"
+            );
+        }
+    }
+
+    /// A WebSocket peer whose report makes room among its host's bindings frees the place of the
+    /// plain-HTTP Agent whose binding went.
+    /// Verifies: ADR-0039, ADR-0058
+    #[tokio::test]
+    async fn a_binding_a_socket_makes_room_with_frees_the_place_of_the_agent_it_displaced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let forwarding = forwarding(dir.path()).await;
+        let host = certificate();
+        let polled = InstanceUid::default();
+        poll(
+            &forwarding,
+            &downstream(Transport::Http, None, host.clone()),
+            polled,
+        )
+        .await;
+        let (tx, _rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(tx), host);
+        let carried: Vec<InstanceUid> = (0..3).map(|_| InstanceUid::default()).collect();
+        for uid in &carried {
+            forwarding
+                .forward_from_socket(&mut socket, report(*uid))
+                .await;
+        }
+
+        assert_eq!(
+            socket.carried.len(),
+            3,
+            "the socket's Agents were all bound"
+        );
+        assert_eq!(
+            forwarding.pool.assignments(),
+            (carried.iter().copied().collect(), 3),
+            "the displaced Agent's place went with its binding"
+        );
     }
 
     /// A second host reporting for an `instance_uid` bound to the first is not forwarded and takes
@@ -1279,6 +1496,612 @@ mod tests {
         assert!(
             error.contains("client_ca_file") && error.contains("bootstrap_ca_file"),
             "{error}"
+        );
+    }
+
+    /// A Server that answers nothing and, as each report arrives, records whether the bindings'
+    /// store under `state` names `uid`.
+    async fn store_watching_upstream(
+        state: std::path::PathBuf,
+        uid: InstanceUid,
+    ) -> (std::net::SocketAddr, Arc<Mutex<Vec<bool>>>) {
+        let seen: Arc<Mutex<Vec<bool>>> = Arc::default();
+        let recorded = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (state, seen) = (state.clone(), recorded.clone());
+                tokio::spawn(async move {
+                    use futures_util::StreamExt;
+                    if let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await {
+                        while socket.next().await.is_some() {
+                            let store =
+                                std::fs::read_to_string(state.join(cache::DIR).join(store::NAME))
+                                    .unwrap_or_default();
+                            seen.lock()
+                                .expect("seen")
+                                .push(store.contains(&format!("b {uid} ")));
+                        }
+                    }
+                });
+            }
+        });
+        (addr, seen)
+    }
+
+    /// A binding made before a Gateway restarts holds after it: another host's report for the
+    /// `instance_uid` is dropped over WebSocket and answered `403` over plain HTTP, and the host
+    /// it is bound to is carried again. A binding read at start holds no place upstream until its
+    /// Agent reports.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_binding_outlasts_a_gateway_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let uid = InstanceUid::default();
+        let owner = certificate();
+        {
+            let forwarding = forwarding(dir.path()).await;
+            let (tx, _rx) = mpsc::channel(64);
+            let mut socket = downstream(Transport::WebSocket, Some(tx), owner.clone());
+            forwarding
+                .forward_from_socket(&mut socket, report(uid))
+                .await;
+            assert!(socket.carried.contains(&uid));
+        }
+
+        let forwarding = forwarding(dir.path()).await;
+        assert!(
+            forwarding.pool.assignments().0.is_empty(),
+            "no place upstream before the Agent reports"
+        );
+        let (thief_tx, _thief_rx) = mpsc::channel(64);
+        let mut thief = downstream(Transport::WebSocket, Some(thief_tx), certificate());
+        forwarding
+            .forward_from_socket(&mut thief, report(uid))
+            .await;
+        assert!(!thief.carried.contains(&uid), "another host took it");
+        match forwarding
+            .forward_exchange(
+                &downstream(Transport::Http, None, certificate()),
+                report(uid),
+            )
+            .await
+        {
+            Reply::Refuse(status, _) => assert_eq!(status, StatusCode::FORBIDDEN),
+            _ => panic!("a plain-HTTP report for another host's Agent was not refused"),
+        }
+        let (owner_tx, _owner_rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(owner_tx), owner);
+        forwarding
+            .forward_from_socket(&mut socket, report(uid))
+            .await;
+        assert!(socket.carried.contains(&uid), "its own host is carried");
+        assert!(forwarding.registry.routes(&uid));
+    }
+
+    /// A report that makes a new binding reaches the Server only once the store holds the binding;
+    /// when the store cannot be written it binds nothing, is not forwarded, and takes no route.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_new_binding_is_stored_before_its_report_is_forwarded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let uid = InstanceUid::default();
+        let (server, seen) = store_watching_upstream(dir.path().to_path_buf(), uid).await;
+        let forwarding = forwarding_to(dir.path(), server).await;
+        let (tx, _rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(tx), certificate());
+        forwarding
+            .forward_from_socket(&mut socket, report(uid))
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while seen.lock().expect("seen").is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the report reached the Server");
+        assert_eq!(*seen.lock().expect("seen"), vec![true]);
+
+        forwarding.registry.cache().refuse_writes();
+        let refused = InstanceUid::default();
+        forwarding
+            .forward_from_socket(&mut socket, report(refused))
+            .await;
+        assert!(!socket.carried.contains(&refused), "not carried");
+        assert!(!forwarding.registry.cache().is_bound(&refused), "not bound");
+        assert!(!forwarding.registry.routes(&refused), "no route");
+        assert!(
+            !forwarding.pool.assignments().0.contains(&refused),
+            "not forwarded"
+        );
+        match forwarding
+            .forward_exchange(
+                &downstream(Transport::Http, None, certificate()),
+                report(refused),
+            )
+            .await
+        {
+            Reply::Refuse(status, _) => assert_eq!(status, StatusCode::FORBIDDEN),
+            _ => panic!("a report whose binding cannot be stored was forwarded"),
+        }
+    }
+
+    /// A request's view as the endpoint hands it to the handler: `certificate` presented, over
+    /// `transport`.
+    fn connecting(
+        forwarding: &Forwarding,
+        transport: Transport,
+        certificate: &[u8],
+    ) -> Result<(Downstream, Option<Replies>), Rejection> {
+        let headers = axum::http::HeaderMap::new();
+        let mut extensions = axum::http::Extensions::new();
+        extensions.insert(PeerCertificate(Some(
+            rustls::pki_types::CertificateDer::from(certificate.to_vec()),
+        )));
+        forwarding.on_connecting(&RequestInfo {
+            transport,
+            headers: &headers,
+            extensions: &extensions,
+            peer: None,
+        })
+    }
+
+    /// Damages the store under `state` in one of the ways that make it unreadable.
+    fn damage(state: &std::path::Path, how: &str) {
+        let dir = state.join(cache::DIR);
+        let path = dir.join(store::NAME);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let header = "opamp-fleet-gateway-bindings 1\n";
+        let write = |contents: &str| {
+            crate::nofollow::HeldDir::open(&dir)
+                .expect("held")
+                .write(store::NAME, contents.as_bytes(), 0o600)
+                .expect("write");
+        };
+        match how {
+            "an unparsable line before its last" => {
+                write(&format!("{header}garbage\nu {}\n", InstanceUid::default()));
+            }
+            "an unknown version" => write("opamp-fleet-gateway-bindings 2\n"),
+            "past its bound" => {
+                write(header);
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .expect("open")
+                    .set_len(store::MAX_BYTES + 1)
+                    .expect("grow");
+            }
+            "a directory" => std::fs::create_dir(&path).expect("dir"),
+            #[cfg(unix)]
+            "a link" => {
+                let target = state.join("elsewhere");
+                std::fs::write(&target, header).expect("write");
+                std::os::unix::fs::symlink(&target, &path).expect("link");
+            }
+            #[cfg(unix)]
+            "not 0600" => {
+                use std::os::unix::fs::PermissionsExt as _;
+                write(header);
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+                    .expect("chmod");
+            }
+            _ => unreachable!("{how}"),
+        }
+    }
+
+    /// While the store cannot be read the Gateway carries no downstream Agent: a WebSocket upgrade
+    /// and a member's plain-HTTP report are answered `503`, whatever damaged the store, and the
+    /// store is left as it was found. An enrolling peer's one request is still relayed upstream,
+    /// since it binds nothing.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn an_unreadable_store_refuses_every_downstream_agent() {
+        let mut ways = vec![
+            "an unparsable line before its last",
+            "an unknown version",
+            "past its bound",
+            "a directory",
+        ];
+        if cfg!(unix) {
+            ways.extend(["a link", "not 0600"]);
+        }
+        for how in ways {
+            let dir = tempfile::tempdir().expect("tempdir");
+            damage(dir.path(), how);
+            let store = dir.path().join(cache::DIR).join(store::NAME);
+            let before = std::fs::symlink_metadata(&store).expect("metadata");
+            let forwarding = forwarding(dir.path()).await;
+            assert!(
+                forwarding.registry.cache().unreadable().is_some(),
+                "{how} was read"
+            );
+            let member = certificate();
+            match connecting(&forwarding, Transport::WebSocket, &member) {
+                Err(rejection) => {
+                    assert_eq!(rejection.status, StatusCode::SERVICE_UNAVAILABLE, "{how}");
+                }
+                Ok(_) => panic!("{how}: a WebSocket upgrade was taken"),
+            }
+            let Ok((mut exchange, _)) = connecting(&forwarding, Transport::Http, &member) else {
+                panic!("{how}: a plain-HTTP exchange was not let through to be judged");
+            };
+            match forwarding
+                .on_message(&mut exchange, report(InstanceUid::default()))
+                .await
+            {
+                Reply::Refuse(status, _) => {
+                    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{how}");
+                }
+                _ => panic!("{how}: a report was forwarded"),
+            }
+
+            let presented = certificate();
+            let mut enrolling = Downstream {
+                enrolling: true,
+                host: None,
+                ..downstream(Transport::Http, None, presented.clone())
+            };
+            let uid = InstanceUid::default();
+            let request = enrolment(uid, proof_of(&presented));
+            let mut relayed = Box::pin(forwarding.on_message(&mut enrolling, request));
+            tokio::select! {
+                _ = &mut relayed => panic!("{how}: the enrolment was answered at the Gateway"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+            }
+            assert!(
+                forwarding.pool.assignments().0.contains(&uid),
+                "{how}: the enrolment went upstream"
+            );
+            drop(relayed);
+
+            let after = std::fs::symlink_metadata(&store).expect("metadata");
+            assert_eq!(
+                (after.len(), after.modified().ok()),
+                (before.len(), before.modified().ok()),
+                "{how}: the store was rewritten"
+            );
+        }
+    }
+
+    /// A last line without its newline is dropped as a write a crash cut off, and the bindings
+    /// before it hold: another host's report for one of them is refused.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_store_cut_off_mid_line_keeps_the_bindings_before_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let owner = certificate();
+        let (uid, other) = (InstanceUid::default(), InstanceUid::default());
+        let end = cache::end_of(&owner).expect("end");
+        let host = cache::speaker_of(&owner).expect("host");
+        let held =
+            crate::nofollow::HeldDir::create(&dir.path().join(cache::DIR), 0o700).expect("dir");
+        let lines: Vec<String> = [
+            policy::Change::Ends(host.clone(), end),
+            policy::Change::Bound(uid, host),
+        ]
+        .iter()
+        .map(|change| store::line(change).expect("line"))
+        .collect();
+        let contents = format!(
+            "opamp-fleet-gateway-bindings 1\n{}\n{}\nb {other} cut-of",
+            lines[0], lines[1]
+        );
+        held.write(store::NAME, contents.as_bytes(), 0o600)
+            .expect("write");
+
+        let forwarding = forwarding(dir.path()).await;
+        assert!(forwarding.registry.cache().unreadable().is_none());
+        assert!(forwarding.registry.cache().is_bound(&uid));
+        assert!(!forwarding.registry.cache().is_bound(&other), "dropped");
+        match forwarding
+            .forward_exchange(
+                &downstream(Transport::Http, None, certificate()),
+                report(uid),
+            )
+            .await
+        {
+            Reply::Refuse(status, _) => assert_eq!(status, StatusCode::FORBIDDEN),
+            _ => panic!("another host's report was forwarded"),
+        }
+    }
+
+    /// A certificate naming `host`, valid until `not_after`, with `serial`.
+    fn certificate_until(host: &str, not_after: time::OffsetDateTime, serial: &[u8]) -> Vec<u8> {
+        let key = rcgen::KeyPair::generate().expect("key");
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
+        params.subject_alt_names.push(rcgen::SanType::URI(
+            format!("urn:opamp-fleet:host:{host}")
+                .try_into()
+                .expect("uri"),
+        ));
+        params.not_before = not_after - time::Duration::days(60);
+        params.not_after = not_after;
+        params.serial_number = Some(rcgen::SerialNumber::from_slice(serial));
+        params.self_signed(&key).expect("cert").der().to_vec()
+    }
+
+    /// What the store under `state` reads back to.
+    fn stored(state: &std::path::Path) -> policy::Bindings {
+        let held = crate::nofollow::HeldDir::open(&state.join(cache::DIR)).expect("held");
+        policy::Bindings::replay(store::load(&held).expect("load")).expect("replay")
+    }
+
+    /// A Server's offer of one artifact to `uid`.
+    fn offer_for(uid: InstanceUid, path: &str) -> ServerToAgent {
+        ServerToAgent {
+            packages_available: Some(opamp::proto::PackagesAvailable {
+                packages: std::iter::once((
+                    "p".to_string(),
+                    opamp::proto::PackageAvailable {
+                        file: Some(opamp::proto::DownloadableFile {
+                            download_url: path.to_string(),
+                            content_hash: vec![7; 32],
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                all_packages_hash: vec![1; 32],
+            }),
+            ..reply_for(uid)
+        }
+    }
+
+    /// A host whose certificate the revocation list names loses every binding — a serial with a
+    /// leading zero among them, which the list names without it — with its route, its current offer
+    /// and its place upstream, in memory and in the store; another host's report then binds the
+    /// `instance_uid`. Another host's bindings stay.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_revoked_hosts_bindings_end_with_their_route_offer_and_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let forwarding = forwarding(dir.path()).await;
+        let in_a_year = time::OffsetDateTime::now_utc() + time::Duration::days(365);
+        let owner = certificate_until("revoked-host", in_a_year, &[0x0a, 0x01]);
+        let (issuer, serial) = revocations::certificate_id(&owner).expect("id");
+        assert_eq!(
+            serial, "a01",
+            "the list names a serial without its leading zero"
+        );
+
+        let (socketed, polled, kept) = (
+            InstanceUid::default(),
+            InstanceUid::default(),
+            InstanceUid::default(),
+        );
+        let (tx, _rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(tx), owner.clone());
+        forwarding
+            .forward_from_socket(&mut socket, report(socketed))
+            .await;
+        poll(
+            &forwarding,
+            &downstream(Transport::Http, None, owner.clone()),
+            polled,
+        )
+        .await;
+        let (other_tx, _other_rx) = mpsc::channel(64);
+        let mut other = downstream(
+            Transport::WebSocket,
+            Some(other_tx),
+            certificate_naming("other-host"),
+        );
+        forwarding
+            .forward_from_socket(&mut other, report(kept))
+            .await;
+        let path = "/api/v1/packages/otelcol/1.0.0/file";
+        forwarding
+            .registry
+            .deliver(socketed, offer_for(socketed, path))
+            .await;
+        let cache = forwarding.registry.cache();
+        assert!(cache.offered_to("revoked-host", path).is_some());
+        assert!(forwarding.pool.assignments().0.contains(&polled));
+
+        forwarding
+            .revocations
+            .replace(HashSet::from([(issuer, serial)]), None);
+        forwarding.end_certificates(cache::now()).await;
+
+        for uid in [socketed, polled] {
+            assert!(!cache.is_bound(&uid), "the binding ended");
+            assert!(!forwarding.registry.routes(&uid), "its route went");
+            assert!(
+                !forwarding.pool.assignments().0.contains(&uid),
+                "its place upstream went"
+            );
+            assert_eq!(stored(dir.path()).host_of(&uid), None, "and the store's");
+        }
+        assert!(
+            cache.offered_to("revoked-host", path).is_none(),
+            "its offer went"
+        );
+        assert!(cache.is_bound(&kept), "another host's binding stayed");
+        assert!(forwarding.registry.routes(&kept));
+
+        let (next_tx, _next_rx) = mpsc::channel(64);
+        let mut next = downstream(
+            Transport::WebSocket,
+            Some(next_tx),
+            certificate_naming("next-host"),
+        );
+        forwarding
+            .forward_from_socket(&mut next, report(socketed))
+            .await;
+        assert!(next.carried.contains(&socketed), "bound anew");
+    }
+
+    /// A host's bindings end once the latest `notAfter` it reported under has passed by the
+    /// Gateway's clock, at start too, and not before: a host that reports under a renewed
+    /// certificate keeps them past the old one's `notAfter`. A report under a certificate that has
+    /// expired binds nothing.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_hosts_bindings_end_with_the_last_certificate_it_reported_under() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let forwarding = forwarding(dir.path()).await;
+        let today = time::OffsetDateTime::now_utc();
+        let first = certificate_until("renewing-host", today + time::Duration::days(1), &[1]);
+        let renewed = certificate_until("renewing-host", today + time::Duration::days(30), &[2]);
+        let first_end = cache::end_of(&first).expect("end").not_after;
+        let renewed_end = cache::end_of(&renewed).expect("end").not_after;
+        let uid = InstanceUid::default();
+        let (tx, _rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(tx), first);
+        forwarding
+            .forward_from_socket(&mut socket, report(uid))
+            .await;
+        let (tx, _rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(tx), renewed);
+        forwarding
+            .forward_from_socket(&mut socket, report(uid))
+            .await;
+        assert!(socket.carried.contains(&uid));
+
+        forwarding.end_certificates(first_end + 1).await;
+        let cache = forwarding.registry.cache();
+        assert!(
+            cache.is_bound(&uid),
+            "renewed, so kept past the first notAfter"
+        );
+        forwarding.end_certificates(renewed_end + 1).await;
+        assert!(!cache.is_bound(&uid), "ended with the renewed one");
+        assert_eq!(stored(dir.path()).host_of(&uid), None);
+
+        let expired = certificate_until("late-host", today - time::Duration::days(1), &[3]);
+        let fresh = InstanceUid::default();
+        let (tx, _rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(tx), expired.clone());
+        forwarding
+            .forward_from_socket(&mut socket, report(fresh))
+            .await;
+        assert!(!socket.carried.contains(&fresh) && !cache.is_bound(&fresh));
+        match forwarding
+            .forward_exchange(
+                &downstream(Transport::Http, None, expired.clone()),
+                report(fresh),
+            )
+            .await
+        {
+            Reply::Refuse(status, _) => assert_eq!(status, StatusCode::FORBIDDEN),
+            _ => panic!("a report under an expired certificate was forwarded"),
+        }
+
+        // A binding whose host's end passed while the Gateway was down ends at start. The removals
+        // above may still be compacted after they were answered: the lines appended here would
+        // land in the file the rewrite replaces.
+        forwarding.registry.cache().settled();
+        drop(forwarding);
+        let soon = InstanceUid::default();
+        let passed = policy::End {
+            not_after: cache::now() - 1,
+            ..cache::end_of(&expired).expect("end")
+        };
+        let lines: String = [
+            policy::Change::Ends("gone-host".into(), passed),
+            policy::Change::Bound(soon, "gone-host".into()),
+        ]
+        .iter()
+        .map(|change| format!("{}\n", store::line(change).expect("line")))
+        .collect();
+        std::io::Write::write_all(
+            &mut std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.path().join(cache::DIR).join(store::NAME))
+                .expect("open"),
+            lines.as_bytes(),
+        )
+        .expect("append");
+        assert_eq!(stored(dir.path()).host_of(&soon), Some("gone-host"));
+        let restarted = forwarding_to(dir.path(), silent_upstream().await).await;
+        assert!(
+            !restarted.registry.cache().is_bound(&soon),
+            "ended at start"
+        );
+        assert_eq!(stored(dir.path()).host_of(&soon), None);
+    }
+
+    /// Ending a host's bindings takes their routes with them under the lock a bind takes: once
+    /// another host begins to bind the `instance_uid`, the ended host's socket receives none of
+    /// the Server's replies, even when that binding cannot be written. The new host's place
+    /// upstream is its own.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn an_ended_hosts_route_is_gone_before_another_host_binds_its_instance_uid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let forwarding = forwarding(dir.path()).await;
+        let in_a_year = time::OffsetDateTime::now_utc() + time::Duration::days(365);
+        let owner = certificate_until("ended-host", in_a_year, &[5]);
+        let uid = InstanceUid::default();
+        let (owner_tx, mut owner_rx) = mpsc::channel(64);
+        let mut socket = downstream(Transport::WebSocket, Some(owner_tx), owner.clone());
+        forwarding
+            .forward_from_socket(&mut socket, report(uid))
+            .await;
+        assert!(forwarding.registry.routes(&uid));
+
+        let id = revocations::certificate_id(&owner).expect("id");
+        forwarding.revocations.replace(HashSet::from([id]), None);
+        let revoked = |end: &policy::End| forwarding.revocations.lists(&end.issuer, &end.serial);
+        let (ended, _) = forwarding
+            .registry
+            .end_certificates(cache::now(), Some(&revoked));
+        assert_eq!(ended, vec![uid]);
+        assert!(!forwarding.registry.routes(&uid), "its route went with it");
+
+        let next = certificate_naming("next-host");
+        let (begun, _) = forwarding.registry.cache().begin_bind(
+            uid,
+            &cache::speaker_of(&next).expect("host"),
+            &cache::end_of(&next).expect("end"),
+            |_| false,
+        );
+        assert!(
+            matches!(begun, cache::Begun::Writing(_)),
+            "bound anew, pending"
+        );
+        assert!(!forwarding
+            .registry
+            .cache()
+            .finish_bind(uid, "next-host", false));
+        forwarding.registry.deliver(uid, reply_for(uid)).await;
+        assert!(owner_rx.try_recv().is_err(), "the ended host hears nothing");
+    }
+
+    /// Two Agents of a host that reports for the first time arrive together: the second waits
+    /// for the store to hold the host's end the first moved, and both are carried. A liveness
+    /// test: it holds too where the second report is forwarded at once, without waiting. That
+    /// nothing relies on an end the store does not hold is what
+    /// `policy::tests::a_moved_end_is_pending_until_written` tests.
+    /// Verifies: ADR-0058
+    #[tokio::test]
+    async fn a_report_waits_for_its_hosts_end_another_report_is_writing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let forwarding = forwarding(dir.path()).await;
+        let host = certificate();
+        let [first, second] = [(); 2].map(|()| InstanceUid::default());
+        let (tx, _rx) = mpsc::channel(64);
+        let mut one = downstream(Transport::WebSocket, Some(tx), host.clone());
+        let (tx, _rx) = mpsc::channel(64);
+        let mut other = downstream(Transport::WebSocket, Some(tx), host);
+        tokio::join!(
+            forwarding.forward_from_socket(&mut one, report(first)),
+            forwarding.forward_from_socket(&mut other, report(second)),
+        );
+        assert!(one.carried.contains(&first));
+        assert!(
+            other.carried.contains(&second),
+            "the second waited, then was bound"
+        );
+        assert_eq!(
+            stored(dir.path()).len(),
+            2,
+            "both bindings are in the store"
         );
     }
 }

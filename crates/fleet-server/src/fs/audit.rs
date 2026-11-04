@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::audit_log::{AuditStore, Tail};
 
 /// `audit-<first seq>.jsonl` files in a directory only the Server's account can enter, each
-/// owner-only, appended to one line at a time.
+/// owner-only, appended to whole lines at a time.
 pub struct FsAuditStore {
     dir: PathBuf,
     current: Option<(std::fs::File, u64)>,
@@ -190,19 +190,22 @@ impl AuditStore for FsAuditStore {
         Ok(None)
     }
 
-    fn append(&mut self, seq: u64, line: &str) -> Result<(), String> {
+    fn append(&mut self, seq: u64, lines: &[&str]) -> Result<(), String> {
         if self.current.is_none() {
             self.current = Some(open_append(&self.dir.join(format!("audit-{seq}.jsonl")))?);
         }
         let (file, size) = self.current.as_mut().expect("just opened");
-        // One write for the line and its newline, so a crash leaves a whole line or a torn last
-        // one, never two entries run together.
-        let mut bytes = Vec::with_capacity(line.len() + 1);
-        bytes.extend_from_slice(line.as_bytes());
-        bytes.push(b'\n');
+        // One write for the lines and their newlines, so a crash leaves whole lines and at most a
+        // torn last one, never two entries run together; one sync for all of them.
+        let mut bytes = Vec::with_capacity(lines.iter().map(|line| line.len() + 1).sum());
+        for line in lines {
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.push(b'\n');
+        }
         if let Err(e) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
-            // A write that failed partway leaves a fragment; cut the file back to its last whole
-            // line, so the next entry does not land on it.
+            // A write that failed partway leaves a fragment, and lines that were not synced are
+            // not written; cut the file back to the last whole line before them, so the next entry
+            // does not land on them.
             let _ = file.set_len(*size);
             return Err(format!("cannot append to the audit record: {e}"));
         }
@@ -247,8 +250,9 @@ mod tests {
         let root = dir.path().join("audit");
         {
             let mut store = FsAuditStore::open(dir.path()).expect("open");
-            store.append(1, "{\"seq\":1}").expect("append");
-            store.append(2, "{\"seq\":2}").expect("append");
+            store
+                .append(1, &["{\"seq\":1}", "{\"seq\":2}"])
+                .expect("append");
         }
         let mut store = FsAuditStore::open(dir.path()).expect("reopen");
         assert_eq!(
@@ -259,7 +263,7 @@ mod tests {
                 torn: false
             })
         );
-        store.append(3, "{\"seq\":3}").expect("append");
+        store.append(3, &["{\"seq\":3}"]).expect("append");
         assert_eq!(
             store.files().expect("files").len(),
             1,
@@ -279,7 +283,7 @@ mod tests {
             deleted,
             vec![("audit-1.jsonl".to_string(), "{\"seq\":3}".to_string())]
         );
-        store.append(4, "{\"seq\":4}").expect("append");
+        store.append(4, &["{\"seq\":4}"]).expect("append");
         assert_eq!(
             store.files().expect("files"),
             vec![root.join("audit-4.jsonl")]
@@ -306,7 +310,7 @@ mod tests {
         assert!(tail.torn);
         assert_eq!(tail.last_line, "{\"seq\":3,\"pr");
         store.rotate(16).expect("rotate");
-        store.append(3, "{\"seq\":3}").expect("append");
+        store.append(3, &["{\"seq\":3}"]).expect("append");
         let mut reopened = FsAuditStore::open(dir.path()).expect("reopen");
         assert_eq!(reopened.tail().expect("tail").expect("tail").last_seq, 3);
 
@@ -319,7 +323,7 @@ mod tests {
         )
         .expect("write");
         let mut store = FsAuditStore::open(&other).expect("open");
-        store.append(2, "{\"seq\":2}").expect("append");
+        store.append(2, &["{\"seq\":2}"]).expect("append");
         let text = std::fs::read_to_string(other.join("audit/audit-1.jsonl")).expect("read");
         assert_eq!(text, "{\"seq\":1}\n{\"seq\":2,\"pr\n{\"seq\":2}\n");
     }

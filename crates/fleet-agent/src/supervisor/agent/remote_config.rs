@@ -32,6 +32,24 @@ impl AgentState {
         });
     }
 
+    /// A configuration still `APPLYING` names `reason` as what it waits for, the second service,
+    /// or nothing once `reason` is empty (ADR-0059 clause 2). Any other status stays as it is.
+    pub(super) fn config_waits(&mut self, reason: &str) {
+        let Some(status) = self.protocol.remote_config_status() else {
+            return;
+        };
+        let applying = status.status == RemoteConfigStatuses::Applying as i32;
+        if !self.local.managed || !applying || status.error_message == reason {
+            return;
+        }
+        let hash = status.last_remote_config_hash.clone();
+        self.protocol.set_remote_config_status(config_status(
+            hash,
+            RemoteConfigStatuses::Applying,
+            reason.to_string(),
+        ));
+    }
+
     /// Takes an offered configuration in and reports `APPLYING`; the outcome closes the
     /// lifecycle through [`config_applied`](Self::config_applied). Success and failure alike
     /// carry the hash the status refers to (a rejected configuration is a report, not a silence).
@@ -74,10 +92,12 @@ impl AgentState {
             )
         };
         self.protocol.set_remote_config_status(status);
+        self.name_the_wait();
     }
 }
 
-/// A remote-configuration status for `hash`. `error_message` is empty except for `FAILED`.
+/// A remote-configuration status for `hash`. `error_message` is empty except for `FAILED`, and
+/// for `APPLYING` while the configuration waits for the second service.
 pub(super) fn config_status(
     hash: Vec<u8>,
     status: RemoteConfigStatuses,

@@ -85,6 +85,7 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("throttle", Core),
             ("api", Adapter),
             ("audit_log", Adapter),
+            ("bridge", Adapter),
             ("ca", Adapter),
             ("clock", Adapter),
             ("config", Adapter),
@@ -103,6 +104,17 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("listen", Adapter),
             ("migrate", Adapter),
             ("pki", Adapter),
+            ("postgres", Adapter),
+            ("postgres::agents", Adapter),
+            ("postgres::bootstrap", Adapter),
+            ("postgres::configs", Adapter),
+            ("postgres::deployments", Adapter),
+            ("postgres::enrolment", Adapter),
+            ("postgres::import", Adapter),
+            ("postgres::ledger", Adapter),
+            ("postgres::packages", Adapter),
+            ("postgres::schema", Adapter),
+            ("s3", Adapter),
             ("tls", Adapter),
             ("transport", Adapter),
         ],
@@ -144,9 +156,11 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("gateway::pool", Adapter),
             ("gateway::registry", Adapter),
             ("gateway::revocations", Adapter),
+            ("gateway::store", Adapter),
             ("host", Adapter),
             ("install", Adapter),
             ("logging", Adapter),
+            ("nofollow", Adapter),
             ("packages", Adapter),
             ("reconfigure", Adapter),
             ("service", Adapter),
@@ -156,15 +170,23 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("service::windows", Adapter),
             ("service::windows_config", Adapter),
             ("service::windows_rights", Adapter),
+            ("service::withdrawal", Adapter),
             ("storage", Adapter),
+            ("supervisor::channel", Adapter),
+            ("supervisor::channel::windows", Adapter),
             ("supervisor::collector", Adapter),
             ("supervisor::command", Adapter),
             ("supervisor::endpoint", Adapter),
             ("supervisor::process", Adapter),
             ("telemetry", Adapter),
+            // Test-only: the log capture the unit tests share, bound to `tracing_subscriber`.
+            ("test_support", Adapter),
             ("tls", Adapter),
             ("transport", Adapter),
             ("update::installer", Adapter),
+            ("win32", Adapter),
+            ("win32::acl", Adapter),
+            ("win32::files", Adapter),
         ],
     ),
     (
@@ -181,10 +203,11 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
     ),
 ];
 
-/// The external crates the core may name: data formats, codecs, and the logging facade — none of
-/// them reaches a file, a socket, a process, or a clock.
+/// The external crates the core may name: data formats, codecs, the logging facade, and the buffer
+/// a secret is wiped from on drop (ADR-0057) — none of them reaches a file, a socket, a process, or
+/// a clock.
 const CORE_CRATES: &[&str] = &[
-    "prost", "serde", "sha2", "hex", "base64", "uuid", "flate2", "tracing",
+    "prost", "serde", "sha2", "hex", "base64", "uuid", "flate2", "tracing", "zeroize",
 ];
 
 /// What the core may name of a technology, by path prefix. `tokio::sync` is channels, which need

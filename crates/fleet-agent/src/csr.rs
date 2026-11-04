@@ -15,8 +15,10 @@ use std::path::Path;
 
 use rcgen::{CertificateParams, KeyPair};
 use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 use crate::config::ClientConfig;
+use crate::nofollow::HeldDir;
 use crate::tls::{
     ISSUED_CERT_FILE, ISSUED_KEY_FILE, PENDING_CERT_FILE, PENDING_CSR_FILE, PENDING_KEY_FILE,
 };
@@ -73,21 +75,20 @@ pub fn accept(state_dir: &Path, cert_pem: &[u8]) -> Result<(), String> {
             pending.display()
         ));
     }
-    stage(&state_dir.join(PENDING_CERT_FILE), cert_pem)
+    // Whole or not at all, through a temporary name and a rename in the held directory, so a link
+    // the service's account put at either name is replaced rather than written through (ADR-0054).
+    // Owner-only, as every file of the Client's in a state directory the process account's group
+    // may pass through (ADR-0059 clause 6).
+    held(state_dir)?
+        .write(PENDING_CERT_FILE, cert_pem, 0o600)
         .map_err(|e| format!("cannot store the issued certificate: {e}"))?;
     recover(state_dir)
 }
 
-/// Writes `contents` to `path` through a temporary file, synced before it is renamed into place,
-/// so `path` holds either nothing or all of it.
-fn stage(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let tmp = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, path)
+/// The state directory, held without following a link at its name: an install enrols as root in a
+/// directory that belongs to the service's account (ADR-0054).
+fn held(state_dir: &Path) -> Result<HeldDir, String> {
+    HeldDir::open(state_dir).map_err(|e| format!("cannot open {}: {e}", state_dir.display()))
 }
 
 /// Completes a swap [`accept`] began, when one was cut short: a staged certificate goes into force
@@ -100,36 +101,51 @@ fn stage(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 /// # Errors
 /// Returns an error when a file of the swap cannot be renamed or removed.
 pub fn recover(state_dir: &Path) -> Result<(), String> {
-    let staged = state_dir.join(PENDING_CERT_FILE);
-    let Ok(cert_pem) = std::fs::read(&staged) else {
-        return Ok(());
+    // A state directory not made yet holds nothing to recover; one that is a link is refused.
+    let dir = match HeldDir::open(state_dir) {
+        Ok(dir) => dir,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("cannot open {}: {e}", state_dir.display())),
     };
-    let pending = state_dir.join(PENDING_KEY_FILE);
-    let in_force = state_dir.join(ISSUED_KEY_FILE);
-    if certifies(&cert_pem, &pending) {
-        std::fs::rename(&pending, &in_force)
+    let cert_pem = match dir.read(PENDING_CERT_FILE) {
+        Ok(cert_pem) => cert_pem,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(format!(
+                "cannot read {}: {e}",
+                state_dir.join(PENDING_CERT_FILE).display()
+            ))
+        }
+    };
+    if certifies(&dir, &cert_pem, PENDING_KEY_FILE) {
+        dir.rename(PENDING_KEY_FILE, ISSUED_KEY_FILE)
             .map_err(|e| format!("cannot put the issued key in force: {e}"))?;
-    } else if !certifies(&cert_pem, &in_force) {
+    } else if !certifies(&dir, &cert_pem, ISSUED_KEY_FILE) {
+        let staged = state_dir.join(PENDING_CERT_FILE);
         warn!(file = %staged.display(), "a staged certificate certifies no key on this host; dropping it");
-        return std::fs::remove_file(&staged)
+        return dir
+            .remove(PENDING_CERT_FILE)
             .map_err(|e| format!("cannot remove {}: {e}", staged.display()));
     }
-    std::fs::rename(&staged, state_dir.join(ISSUED_CERT_FILE))
+    dir.rename(PENDING_CERT_FILE, ISSUED_CERT_FILE)
         .map_err(|e| format!("cannot put the issued certificate in force: {e}"))?;
     // The request is answered — unless a later one is in flight beside it.
-    if !pending.exists() {
-        let _ = std::fs::remove_file(state_dir.join(PENDING_CSR_FILE));
+    if !state_dir.join(PENDING_KEY_FILE).exists() {
+        let _ = dir.remove(PENDING_CSR_FILE);
     }
     Ok(())
 }
 
-/// Whether the PEM certificate `cert_pem` is issued for the private key in `key_file`.
-fn certifies(cert_pem: &[u8], key_file: &Path) -> bool {
+/// Whether the PEM certificate `cert_pem` is issued for the private key in the file `key_name`.
+fn certifies(dir: &HeldDir, cert_pem: &[u8], key_name: &str) -> bool {
     use rcgen::PublicKeyData as _;
-    let Ok(key_pem) = std::fs::read_to_string(key_file) else {
+    let Ok(key_bytes) = dir.read(key_name).map(Zeroizing::new) else {
         return false;
     };
-    let Ok(key) = KeyPair::from_pem(&key_pem) else {
+    let Ok(key_pem) = std::str::from_utf8(&key_bytes) else {
+        return false;
+    };
+    let Ok(key) = KeyPair::from_pem(key_pem) else {
         return false;
     };
     let Ok((_, block)) = x509_parser::pem::parse_x509_pem(cert_pem) else {
@@ -146,8 +162,8 @@ fn certifies(cert_pem: &[u8], key_file: &Path) -> bool {
 #[must_use]
 pub fn pending_fingerprint(state_dir: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
-    let pem = std::fs::read_to_string(state_dir.join(PENDING_KEY_FILE)).ok()?;
-    let key = KeyPair::from_pem(&pem).ok()?;
+    let pem = Zeroizing::new(crate::nofollow::read(&state_dir.join(PENDING_KEY_FILE)).ok()?);
+    let key = KeyPair::from_pem(std::str::from_utf8(&pem).ok()?).ok()?;
     Some(hex::encode(Sha256::digest(key.public_key_raw())))
 }
 
@@ -156,7 +172,7 @@ fn pending(config: &ClientConfig) -> Option<Vec<u8>> {
     if !config.state_dir.join(PENDING_KEY_FILE).exists() {
         return None;
     }
-    std::fs::read(config.state_dir.join(PENDING_CSR_FILE)).ok()
+    crate::nofollow::read(&config.state_dir.join(PENDING_CSR_FILE)).ok()
 }
 
 /// Whether this Client should ask for a certificate: it has none, or the one it has is into its
@@ -182,7 +198,7 @@ fn needs_certificate(config: &ClientConfig) -> bool {
 ///
 /// Read with `x509-parser` — the parser rcgen itself uses, whose own X.509 entry point is private.
 fn renewal_due(cert_file: &Path) -> Result<bool, String> {
-    let pem = std::fs::read(cert_file)
+    let pem = crate::nofollow::read(cert_file)
         .map_err(|e| format!("cannot read {}: {e}", cert_file.display()))?;
     let (_, block) = x509_parser::pem::parse_x509_pem(&pem)
         .map_err(|e| format!("cannot read {}: {e}", cert_file.display()))?;
@@ -234,18 +250,31 @@ fn generate(config: &ClientConfig) -> Result<Vec<u8>, String> {
         .pem()
         .map_err(|e| format!("cannot encode the certificate request: {e}"))?;
 
-    crate::storage::create_private_dir(&config.state_dir)
-        .map_err(|e| format!("cannot create {}: {e}", config.state_dir.display()))?;
+    // Held without following a link at its name, and each file written whole over a link at its
+    // own: an install enrols as root in a directory that belongs to the service's account
+    // (ADR-0054). Passed through by the process group where one is registered (ADR-0059 clause 6).
+    crate::storage::create_shared_dir(
+        &config.state_dir,
+        &config.state_dir,
+        config.process_account_group,
+        crate::storage::Shared::Traversed,
+    )
+    .map_err(|e| format!("cannot create {}: {e}", config.state_dir.display()))?;
+    let dir = HeldDir::open(&config.state_dir)
+        .map_err(|e| format!("cannot open {}: {e}", config.state_dir.display()))?;
     // The key is written no wider than its owner, the mode set in the open call so it is never on
-    // disk at the umask default even briefly; a key file left at a wider mode by a prior enrolment
-    // is narrowed too. On Windows the state directory's ACL under `%ProgramData%` protects it
+    // disk at the umask default even briefly; it replaces a key file a prior enrolment left at a
+    // wider mode. On Windows the state directory's ACL under `%ProgramData%` protects it
     // (ADR-0019).
-    crate::storage::write_private(
-        &config.state_dir.join(PENDING_KEY_FILE),
-        key.serialize_pem().as_bytes(),
+    dir.write(
+        PENDING_KEY_FILE,
+        Zeroizing::new(key.serialize_pem()).as_bytes(),
+        0o600,
     )
     .map_err(|e| format!("cannot store the private key: {e}"))?;
-    std::fs::write(config.state_dir.join(PENDING_CSR_FILE), csr.as_bytes())
+    // Owner-only, as every file of the Client's in a state directory the process account's group
+    // may pass through (ADR-0059 clause 6).
+    dir.write(PENDING_CSR_FILE, csr.as_bytes(), 0o600)
         .map_err(|e| format!("cannot store the certificate request: {e}"))?;
     // What the operator matches in the enrolment queue (ADR-0021 clause 22): the same SHA-256 the
     // Server lists as the request's key fingerprint.
@@ -266,10 +295,11 @@ fn renewal_proof(config: &ClientConfig, new_key: &KeyPair) -> Option<String> {
     use base64::Engine as _;
     use rcgen::{PublicKeyData as _, SigningKey as _};
     use sha2::{Digest as _, Sha256};
-    let cert_pem = std::fs::read(config.state_dir.join(ISSUED_CERT_FILE)).ok()?;
-    let key_pem = std::fs::read_to_string(config.state_dir.join(ISSUED_KEY_FILE)).ok()?;
+    let dir = HeldDir::open(&config.state_dir).ok()?;
+    let cert_pem = dir.read(ISSUED_CERT_FILE).ok()?;
+    let key_pem = Zeroizing::new(dir.read(ISSUED_KEY_FILE).ok()?);
     let (_, block) = x509_parser::pem::parse_x509_pem(&cert_pem).ok()?;
-    let old_key = KeyPair::from_pem(&key_pem).ok()?;
+    let old_key = KeyPair::from_pem(std::str::from_utf8(&key_pem).ok()?).ok()?;
     let new_key_sha256 = Sha256::digest(new_key.subject_public_key_info());
     let signature = old_key
         .sign(&fleet_core::renewal::statement(&new_key_sha256))
@@ -296,9 +326,11 @@ fn bootstrap_proof(config: &ClientConfig, new_key: &KeyPair) -> Option<String> {
         return None;
     }
     let identity = crate::tls::client_tls(config).ok()?.identity?;
+    // Read here only to sign: the key moves into a buffer wiped on drop (ADR-0057).
+    let key_pem = Zeroizing::new(identity.key_pem);
     let certificate = opamp::tls::certificates(&identity.cert_pem).ok()?;
     let leaf = certificate.first()?;
-    let key = KeyPair::from_pem(std::str::from_utf8(&identity.key_pem).ok()?).ok()?;
+    let key = KeyPair::from_pem(std::str::from_utf8(&key_pem).ok()?).ok()?;
     let new_key_sha256 = Sha256::digest(new_key.subject_public_key_info());
     let signature = key
         .sign(&fleet_core::bootstrap_proof::statement(&new_key_sha256))
@@ -380,6 +412,41 @@ mod tests {
             0o700,
             "the state directory must be owner-only"
         );
+    }
+
+    /// Where a process account is registered, its group passes through the state directory, and
+    /// the request and the certificate are the Client's alone: `0600`, beside the key.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn with_a_process_account_the_request_and_the_certificate_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_dir = dir.path().join("state");
+        let mut config = config(&state_dir);
+        // SAFETY: getegid(2) cannot fail and touches no memory.
+        let group = unsafe { libc::getegid() };
+        config.process_account_group = Some(crate::supervisor::ports::ProcessAccountGroup(group));
+        let signed = sign(request(&config).expect("a request"));
+        let mode = |name: &str| {
+            state_dir
+                .join(name)
+                .metadata()
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(
+            mode(""),
+            0o710,
+            "passed through by the process account's group"
+        );
+        assert_eq!(mode(PENDING_CSR_FILE), 0o600);
+        accept(&state_dir, signed.as_bytes()).expect("accept");
+        assert_eq!(mode(ISSUED_CERT_FILE), 0o600);
+        assert_eq!(mode(ISSUED_KEY_FILE), 0o600);
     }
 
     /// Signs `csr` the way a Server does.
@@ -634,7 +701,7 @@ mod tests {
         let from_p12 = ClientConfig {
             bootstrap_identity: Some(crate::config::BootstrapIdentity {
                 cert_pem: cert.pem().into_bytes(),
-                key_pem: key.serialize_pem().into_bytes(),
+                key_pem: zeroize::Zeroizing::new(key.serialize_pem().into_bytes()),
             }),
             ..config(&p12_state)
         };

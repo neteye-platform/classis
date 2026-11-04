@@ -29,7 +29,8 @@ true.
    │  └── Gateway (a Client) ◀── OpAMP, mTLS ── other Clients        register, audit record,
    │                                                                 artifacts by SHA-256
    ├── Supervisor Endpoint (loopback) ◀── a Collector's opampextension
-   ├── Managed Processes: Collector, any command
+   ├── Managed Processes: Collector, any command — where a process account is registered, under
+   │     it, started by the second service over a Unix socket or named pipe
    ├── package downloads: the Server's own origin, and no other
    ├── own-telemetry destinations: OTLP/HTTP, as the Server offers them
    └── service manager: systemd, launchd or the Windows SCM
@@ -55,6 +56,8 @@ true.
   [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)).
 - **The service manager** starts the Client and restarts it after a self-update
   ([ADR-0018](adr/0018-the-client-updates-itself-under-its-own-agent-type.md)).
+  Where a process account is registered, it also runs the second service, which
+  starts the Managed Processes under that account (ADR-0059).
 - **Upstream**, the opamp-spec release named as the Protocol Baseline in
   [`CONFORMANCE.md`](CONFORMANCE.md) fixes the wire format.
 
@@ -115,15 +118,32 @@ module has no role.
   what an assignment pins; `ConfigBackend` under the `ConfigStore` in `configs`;
   `DeploymentBackend` under the `DeploymentStore` in `deployments`;
   `PackageBackend` and `BlobStore` (`blobs`, artifact bytes by SHA-256) under
-  the `PackageStore` in `packages`; `BootstrapStore` under the
-  `BootstrapCertificates` in `bootstrap`; `EnrolmentStore` under the `Enrolment`
-  in `enrolment`; `LedgerStore` in `revocation`; `AuditStore` in `audit_log`.
-  The filesystem adapters are in `fs`, which also opens the data directory and
-  refuses anything its layout does not name. The core's constructors take the
-  ports — `AppState::with_stores`, `PackageStore::with_backend`,
-  `PackageOffering::with_deployments`, `BootstrapCertificates::open`,
-  `Enrolment::open_on` — and `lib.rs` wires the filesystem adapters in
-  `AppState::new`, `PackageStore::open`, `PackageOffering::new` and
+  the `PackageStore` in `packages`, the bytes in `data_dir` or, with
+  `[blobs] store = "s3"`, in one bucket of an S3-compatible store through the
+  adapter in `s3`, which bridges the synchronous port onto a runtime of its own
+  (`bridge`)
+  ([ADR-0049](adr/0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md));
+  `BootstrapStore` under the `BootstrapCertificates` in `bootstrap`;
+  `EnrolmentStore` under the `Enrolment` in `enrolment`; `LedgerStore` in
+  `revocation`; `AuditStore` in `audit_log`. The filesystem adapters are in
+  `fs`, which also opens the data directory and refuses anything its layout does
+  not name. With `[database] store = "postgres"` every port but the blob and the
+  audit port has its PostgreSQL adapter in `postgres` instead
+  (`postgres::agents`, `configs`, `deployments`, `packages`, `ledger`,
+  `bootstrap`, `enrolment`), each call one transaction; `postgres` holds the
+  connection they share — TLS 1.3 on _ring_, a pool on a `bridge` runtime of its
+  own, the advisory lock that keeps one Server per database — and applies the
+  schema embedded in `postgres::schema` as numbered migrations;
+  `postgres::import` is `server migrate-to-postgres`, which copies a `data_dir`
+  into the database offline
+  ([ADR-0050](adr/0050-the-servers-records-may-live-in-postgresql.md)). The
+  core's constructors take the ports — `AppState::with_stores`,
+  `PackageStore::with_backend`, `PackageOffering::with_deployments`,
+  `BootstrapCertificates::open`, `Enrolment::open_on` — and `lib.rs` chooses the
+  adapters by `[database]` in `Records`, which `AppState::on`,
+  `PackageStore::open_on`, `PackageOffering::on` and `BootstrapCertificates::on`
+  take, and wires the filesystem adapters in `AppState::new`,
+  `PackageStore::open`, `PackageOffering::new` and
   `BootstrapCertificates::on_disk`. `migrate` is the one module that reads the
   layout of an older Server, for `server migrate`, and nothing in the running
   Server calls it.
@@ -162,6 +182,12 @@ module has no role.
   local CA in `ca` implements for the CSR flow and the renewal proof (ADR-0021),
   and `Clock`, which `clock::SystemClock` implements. The `[connection_offer]`
   and `[telemetry_offer]` sections become the fleet's offers in `config`.
+- **Server configuration** — `config` builds one TOML document from the
+  defaults, `server.toml` when one is read, and the `FLEET_SERVER__…` variables
+  over it, and deserializes it once, so the environment is checked as strictly
+  as the file; `main.rs` reads the process environment and hands the variables
+  in
+  ([ADR-0051](adr/0051-the-servers-configuration-may-come-from-its-environment.md)).
 - **REST views** — what the REST API reads and returns is shaped in `api`, which
   derives its OpenAPI schema
   ([ADR-0023](adr/0023-configurations-and-the-rest-api.md)); the core's types —
@@ -176,7 +202,30 @@ module has no role.
   Plugins stays in `supervisor`, which knows the kinds and hands them to both,
   and which hands `delivered` the Supervisors' root as an absolute path too.
   When a failed process is started again or held is `supervisor::restart`'s
-  decision; the runner reads the clock and starts it. `supervisor::agent`, an
+  decision; the runner reads the clock and starts it. Who starts the program is
+  the runner's `Spawner`: the Client itself, or the second service of
+  [ADR-0059](adr/0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md),
+  `supervisor run --agents`, through `supervisor::channel`, which holds the
+  private protocol, the service and the Client's end of its socket — on Windows
+  of its named pipe, in `supervisor::channel::windows`, which runs each program
+  in a job object. The Windows system calls neither the standard library nor a
+  dependency offers — the SIDs, the pipe's security descriptor and its two ends'
+  identities, the job objects — are declared in `win32`. The registry hands
+  every plugin the one `Spawner` of the run, which `service::runtime` chooses
+  once from the Client's command line — the unit or plist
+  `service install --process-account` writes names the second service's socket
+  there — and hands `build_engine`. The Engine keeps that registry behind the
+  port `PluginRegistry` of `supervisor::ports`, so a Supervisor a Supervisor-set
+  apply starts later starts its program the same way, and a Supervisor it purges
+  has the same `Spawner` remove first what its programs wrote under their own
+  account, in the directory the purge first moved aside to a name no Supervisor
+  carries. What the Client changes where the process account writes, it reaches
+  through `storage::handle`, one directory handle at a time from a root of its
+  own — the state directory, the Supervisors' root, a Supervisor's directory —
+  beneath which no link is followed. On Windows that is `win32::files`, which
+  sets a DACL on one handle at a time and walks a tree itself, never into a
+  link, with the ACE inheritance rules in `win32::acl`; the install's hand-over
+  and its take-over of the data root walk the same way. `supervisor::agent`, an
   Agent's decisions, names three more ports there: `AgentStorage`, which
   `storage::Storage` implements on the state directory, `HighWaterMarks`, which
   `storage::HighWaterFile` implements on `state_dir` and every Supervisor of the
@@ -186,11 +235,19 @@ module has no role.
   answers each Server message in `handle` and leaves three channels and its
   description each to a submodule: `packages`, `remote_config`,
   `connection_settings`, and `description`, what the Agent reports about itself.
+  `storage`, `csr`, `connection`, `tls`, the staging in `service::layout` and
+  the re-owning in `service::run_as` reach the state directory and the layout
+  root through the adapter `nofollow`: a directory held open without following a
+  link at its name, read from and written to by name, each file written whole
+  and renamed into place, because a privileged install works in directories the
+  service's account owns
+  ([ADR-0054](adr/0054-no-privileged-install-step-follows-a-link-the-account-placed.md)).
 - **Client configuration** — `config` is what `supervisor.toml` may say and the
   rules it must meet
   ([ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md));
-  `config_file` reads it from disk, makes its directories absolute, and finds
-  the identity the state directory holds.
+  `config_file` reads it from disk, makes its directories absolute, finds the
+  identity the state directory holds, and redacts the text the Client reports as
+  its effective configuration.
 - **Client connection** — `tls` decides which CA and which identity are in
   force, and `transport` describes the upstream `Connection` from
   `supervisor.toml` and runs the Engine over it. The settings verification in
@@ -205,15 +262,34 @@ module has no role.
   serves it on the downstream download route to the hosts it was offered to
   ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
   Which host the Gateway takes to speak for an `instance_uid` is decided in the
-  core module `gateway::policy`; the cache holds the bindings. With a bootstrap
-  CA the Gateway tells an enrolling peer from a member and relays its one
-  plain-HTTP enrolment request without a binding
+  core module `gateway::policy`; the cache holds the bindings and keeps them
+  across restarts in the journal `gateway::store` reads and writes beside the
+  artifacts; while that journal cannot be read the Gateway carries no downstream
+  Agent
+  ([ADR-0058](adr/0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)).
+  With a bootstrap CA the Gateway tells an enrolling peer from a member and
+  relays its one plain-HTTP enrolment request without a binding
   ([ADR-0039](adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)).
 - **Client engine** — `engine` routes the Server's replies to the Agents over
   one connection
   ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
   The transports, the Gateway, telemetry and the service runtime are adapters
   around it.
+- **Client service** — `service::manager` registers, starts, stops and
+  deregisters the Client's service and, where a process account is named, the
+  second service `<PRODUCT_NAME>-agents` beside it, and writes both systemd
+  units itself
+  ([ADR-0059](adr/0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)).
+  `service::run_as` decides and checks the Client's account and the process
+  account, and hands the roots over, leaving what the process account owns. On
+  Windows `service::windows_config` sets the SCM's accounts, recovery actions
+  and required privileges, `service::windows_rights` restricts the data root,
+  `service::run_as` also grants the process account its share of the layout and
+  withdraws a former account's grants, and `service::withdrawal` keeps the
+  record of what an install left to finish — the former accounts to withdraw and
+  the services to start again — under
+  `HKLM\SOFTWARE\<PRODUCT_NAME>\WithdrawalPending`; the install lock that
+  serialises `service install`, `uninstall`, `start` and `stop` is in `win32`.
 - **Client self-update** — `update` is the Client updating itself
   ([ADR-0018](adr/0018-the-client-updates-itself-under-its-own-agent-type.md)).
   It owns the port `SelfUpdater` and `SelfUpdate`, the state the Engine keeps
@@ -298,17 +374,44 @@ From then on the Client renews at two thirds of the certificate's life, proving
 with the old key which certificate it renews. A revocation closes the sessions
 it concerns at once and follows every renewal.
 
+**A Supervisor starts its program.** Without a process account the runner starts
+the Managed Process, its version probe and a package's preflight as the Client.
+Where `service install --process-account` registered one, the Client's command
+line carries `--agents-socket` and the process account's uid (on Windows its
+SID), and `service::runtime` hands every Supervisor the `Spawner::Channel` of
+`supervisor::process`, over the `Channel` of `supervisor::channel`, instead:
+each start, signal, stop and purge is a request to the second service,
+`supervisor run --agents`, the same program from the same `current` under the
+process account, which streams the program's output and exit back. The second
+service admits one connection at a time, from the Client's account alone by the
+peer's credentials or the pipe client's token, and stops every program it
+started — by process group on Unix, by job object on Windows — when that
+connection closes. Before it writes anything, the Client accepts the connection
+only from the process the service manager runs as the second service, which
+`service::manager::agents_process` asks of systemd, launchd or the SCM
+([ADR-0059](adr/0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
+clause 4). Both ends refuse a peer of another build, and the one that `current`
+no longer names exits so its service manager starts it from the new version.
+While the second service is away, a delivered package is staged and waits, and
+the Supervisor retries with backoff
+([ADR-0059](adr/0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)).
+
 **Where state lives.** The Server keeps all of its state under one `data_dir`,
 one directory per domain and owner-only: `configurations/`, `deployments/`,
-`packages/` (metadata) and `blobs/` (the artifacts, named by SHA-256), `agents/`
-(each Agent's record, its labels inside), `hosts/`, `certificates/` (the
-register), `revocations.json`, `bootstrap/`, `enrolment.json` (the window and
-its queue) and `audit/`
+`packages/` (metadata) and `blobs/` (the artifacts, named by SHA-256, unless a
+bucket keeps them), `agents/` (each Agent's record, its labels inside),
+`hosts/`, `certificates/` (the register), `revocations.json`, `bootstrap/`,
+`enrolment.json` (the window and its queue) and `audit/`
 ([ADR-0037](adr/0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)).
-A restart restores the fleet from them and shows each Agent disconnected until
-it reports; an installation an older Server wrote is moved there once by
-`server migrate`. The Client keeps its state under `state_dir`: the issued
-certificate and key, the connection settings the Server offered, and per
-Supervisor a directory with `config/` and `program/`. An installed Client runs
-from `versions/<version>/` through the `current` pointer
+With `[database] store = "postgres"` the records are rows of one PostgreSQL
+database instead, and `data_dir` keeps `audit/` and, with the filesystem blob
+store, `blobs/`
+([ADR-0050](adr/0050-the-servers-records-may-live-in-postgresql.md)); the Server
+still loads every record at startup and answers from memory. A restart restores
+the fleet from them and shows each Agent disconnected until it reports; an
+installation an older Server wrote is moved there once by `server migrate`. The
+Client keeps its state under `state_dir`: the issued certificate and key, the
+connection settings the Server offered, and per Supervisor a directory with
+`config/` and `program/`. An installed Client runs from `versions/<version>/`
+through the `current` pointer
 ([ADR-0019](adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)).

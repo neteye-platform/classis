@@ -1,6 +1,7 @@
 # ADR-0041: A Managed Process states only its own `service.*` attributes, and never the host's, the Supervisor's or the operator's
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clause 1 superseded by
+  [ADR-0055](0055-an-agents-type-is-its-supervisors-and-a-process-never-chooses-it.md)
 - **Date:** 2026-10-19
 - **Deciders:** Markus Brigl
 - **Applies to:** the fold of a Managed Process's description and the operator

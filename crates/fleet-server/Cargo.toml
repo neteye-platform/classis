@@ -43,10 +43,21 @@ rcgen.workspace = true
 time.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
+# The S3 store of artifact bytes (ADR-0049): the client, and the HTTP client it is handed, built on
+# the TLS 1.3 *ring* configuration of `opamp::tls` and the public roots the Client trusts. The
+# Server sends no request for a package to anyone but its own bucket (ADR-0033).
+object_store.workspace = true
+reqwest.workspace = true
+webpki-roots.workspace = true
+# The record store in PostgreSQL (ADR-0050), over the same TLS 1.3 *ring* client.
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+# ADR-0057: the CA keys, the keys sealed into a PKCS#12 file, a bootstrap password and a Basic
+# password before it is verified are held in buffers wiped on drop. No TLS or crypto backend comes
+# with it (ADR-0013).
+zeroize.workspace = true
 
 [dev-dependencies]
-# The tests drive both planes over HTTP. The Server itself sends no request for a package
-# (ADR-0033), so it is no dependency of the binary.
-reqwest.workspace = true
 tokio-tungstenite.workspace = true
 tempfile = "3"

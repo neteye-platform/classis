@@ -13,6 +13,10 @@
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
   · clause 65 superseded by
   [ADR-0043](0043-a-package-version-is-semver-and-never-installed-below-the-high-water-mark.md)
+  · clause 67 superseded by
+  [ADR-0056](0056-a-repack-follows-no-link-out-of-its-tree.md) · clause 60
+  superseded by
+  [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl
 - **Applies to:** `crates/fleet-server/src/packages.rs`,

@@ -119,6 +119,20 @@ impl AgentState {
     pub fn package_downloaded(&mut self) {
         self.local.downloading = None;
         self.protocol.package_status_changed();
+        self.name_the_wait();
+    }
+
+    /// A package `Installing` names `reason` as what it waits for, the second service, or nothing
+    /// once `reason` is empty (ADR-0059 clause 2); the outcome replaces it. A package still
+    /// downloading, and a status other than `Installing`, stay as they are.
+    pub(super) fn package_waits(&mut self, reason: &str) {
+        let local = &mut self.local;
+        let installing = local.installing.is_some() && local.downloading.is_none();
+        if !installing || local.package_error == reason {
+            return;
+        }
+        local.package_error = reason.to_string();
+        self.protocol.package_status_changed();
     }
 
     /// Closes a package's lifecycle the Supervisor applied (ADR-0026): `Ok(version)` records it

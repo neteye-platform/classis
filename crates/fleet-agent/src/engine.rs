@@ -14,7 +14,7 @@ use tracing::{info, warn};
 
 use crate::supervisor::agent::PackageDownload;
 use crate::supervisor::agent::{AgentState, Handled};
-use crate::supervisor::ports::{HighWaterMarks, ProcessCommand, ProcessEvent};
+use crate::supervisor::ports::{HighWaterMarks, PluginRegistry, ProcessCommand, ProcessEvent};
 use crate::update::{SelfInstall, SelfUpdate, SelfUpdater};
 
 /// The Engine index of the Client's own Agent (ADR-0018). It is built first, so a Supervisor's
@@ -122,6 +122,9 @@ pub struct Engine {
     /// The high-water marks every Supervisor of this Client shares (ADR-0043 clause 8), kept so a
     /// Supervisor a set apply adds at runtime is held to the same marks.
     high_water: Option<Arc<dyn HighWaterMarks>>,
+    /// The plugins this Client's Supervisors were started with, kept so a Supervisor a set apply
+    /// adds at runtime starts its Managed Process the same way (ADR-0059 clause 3).
+    plugins: Option<Arc<dyn PluginRegistry>>,
 }
 
 impl Engine {
@@ -167,6 +170,7 @@ impl Engine {
             sampling: Arc::new(Mutex::new(Vec::new())),
             last_csr: None,
             high_water: None,
+            plugins: None,
         };
         // The Client's own Agent samples this process, and that is true from the start — only a
         // Managed Process's pid has to wait for the process to exist.
@@ -185,6 +189,17 @@ impl Engine {
     /// Engine not built by [`build_engine`](crate::supervisor::build_engine).
     pub fn high_water(&self) -> Option<Arc<dyn HighWaterMarks>> {
         self.high_water.clone()
+    }
+
+    /// Gives the Engine the plugins its Supervisors were started with (ADR-0059 clause 3).
+    pub fn set_plugins(&mut self, plugins: Arc<dyn PluginRegistry>) {
+        self.plugins = Some(plugins);
+    }
+
+    /// The plugins a Supervisor started at runtime is started with — `None` only for an Engine
+    /// not built by [`build_engine`](crate::supervisor::build_engine), which then starts none.
+    pub fn plugins(&self) -> Option<Arc<dyn PluginRegistry>> {
+        self.plugins.clone()
     }
 
     pub fn arm_self_update(&mut self, updater: impl SelfUpdater + 'static) {

@@ -8,8 +8,12 @@
 //! argument set by `service install`; a bare `run` never reaches here
 //! (`StartServiceCtrlDispatcher` fails with error 1063 when the process was *not* SCM-launched,
 //! which is why the path is a marker, not auto-detection).
+//!
+//! The second service (ADR-0059) enters the same shim through `run --agents`, which only its
+//! registration writes: it serves the Client on its named pipe until the SCM stops it.
 
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -35,6 +39,47 @@ static SPEC: OnceLock<RunSpec> = OnceLock::new();
 
 define_windows_service!(ffi_service_main, service_main);
 
+/// The pipe and the Client's account handed from [`run_agents_as_service`] to its `service_main`.
+static AGENTS: OnceLock<(PathBuf, crate::win32::Sid)> = OnceLock::new();
+
+define_windows_service!(ffi_agents_main, agents_main);
+
+/// Enter the SCM dispatcher as the second service (called from `main` for `run --agents`). Blocks
+/// until the service stops.
+///
+/// # Errors
+/// Returns an error if the dispatcher cannot be started — the process was not started by the SCM.
+pub fn run_agents_as_service(pipe: &Path, client: crate::win32::Sid) -> Result<(), String> {
+    let _ = AGENTS.set((pipe.to_path_buf(), client));
+    service_dispatcher::start(SERVICE_NAME, ffi_agents_main)
+        .map_err(|e| format!("cannot start the Windows service control dispatcher: {e}"))
+}
+
+/// The second service's SCM entry point.
+fn agents_main(_arguments: Vec<OsString>) {
+    let served = under_the_scm(|mut shutdown| {
+        let (pipe, client) = AGENTS
+            .get()
+            .cloned()
+            .ok_or_else(|| "the second service's pipe was not initialised".to_string())?;
+        let tokio_runtime = runtime::daemon_runtime()?;
+        let served = tokio_runtime.block_on(crate::supervisor::channel::windows::run(
+            &pipe,
+            client,
+            async move { shutdown.requested().await },
+        ))?;
+        Ok(match served {
+            crate::supervisor::channel::Served::Stopped => runtime::Exit::Normal,
+            // A Client of another build while `current` names another version: the recovery
+            // actions start the version `current` names, as for the Client's own update.
+            crate::supervisor::channel::Served::Superseded => runtime::Exit::RestartForUpdate,
+        })
+    });
+    if let Err(e) = served {
+        error!(error = %e, "the second service exited with an error");
+    }
+}
+
 /// Enter the SCM dispatcher (called from `main` when started with `run --service`). Blocks until
 /// the service stops.
 ///
@@ -49,12 +94,27 @@ pub fn run_as_service(spec: RunSpec) -> Result<(), String> {
 
 /// The SCM entry point. Errors cannot propagate out of here, so they are logged.
 fn service_main(_arguments: Vec<OsString>) {
-    if let Err(e) = run_service() {
+    let served = under_the_scm(|shutdown| {
+        let spec = SPEC
+            .get()
+            .cloned()
+            .ok_or_else(|| "the service spec was not initialised".to_string())?;
+        let tokio_runtime = runtime::daemon_runtime()?;
+        tokio_runtime.block_on(runtime::on_a_worker(runtime::run_until_shutdown(
+            spec, shutdown,
+        )))
+    });
+    if let Err(e) = served {
         error!(error = %e, "Windows service exited with an error");
     }
 }
 
-fn run_service() -> Result<(), String> {
+/// Runs `body` as the service the SCM started: registers the control handler, reports
+/// `StartPending`, then `Running` as `body` begins, and `Stopped` with its outcome. `body` is
+/// handed the shutdown that the SCM's stop fires.
+fn under_the_scm(
+    body: impl FnOnce(crate::shutdown::Shutdown) -> Result<runtime::Exit, String>,
+) -> Result<(), String> {
     // The control handler runs on an SCM thread; a watch channel carries the stop request into
     // the async runtime — the same `Shutdown` handle the transports select on.
     let (shutdown_tx, shutdown) = crate::shutdown::shutdown_channel();
@@ -92,12 +152,6 @@ fn run_service() -> Result<(), String> {
         ))
         .map_err(|e| format!("cannot report StartPending: {e}"))?;
 
-    let spec = SPEC
-        .get()
-        .cloned()
-        .ok_or_else(|| "the service spec was not initialised".to_string())?;
-    let tokio_runtime = runtime::daemon_runtime()?;
-
     // Now serving: accept Stop and Shutdown.
     status_handle
         .set_service_status(status(
@@ -106,9 +160,7 @@ fn run_service() -> Result<(), String> {
         ))
         .map_err(|e| format!("cannot report Running: {e}"))?;
 
-    let result = tokio_runtime.block_on(runtime::on_a_worker(runtime::run_until_shutdown(
-        spec, shutdown,
-    )));
+    let result = body(shutdown);
 
     // Report the *outcome*, not a blanket success. The SCM decides whether to run the recovery
     // actions from the exit code in this final status: a `Stopped` carrying `Win32(0)` is a clean
@@ -146,6 +198,16 @@ fn run_service() -> Result<(), String> {
 /// error code that means something else.
 const SERVICE_SPECIFIC_FAILURE: u32 = 1;
 
+/// How long a pending transition may take before the SCM treats the service as hung: a stop of
+/// the second service closes its programs (`CLOSE_GRACE`), drains their output (`OUTPUT_DRAIN`)
+/// and waits for their jobs to empty (`TREES_END`), each bounded; a little more on top.
+const WAIT_HINT: Duration = Duration::from_secs(
+    crate::supervisor::channel::CLOSE_GRACE.as_secs()
+        + crate::supervisor::channel::OUTPUT_DRAIN.as_secs()
+        + crate::supervisor::channel::TREES_END.as_secs()
+        + 5,
+);
+
 /// Build a `ServiceStatus` for the given state and accepted controls. The wait hint bounds how
 /// long the SCM grants for a pending transition; the shutdown path finishes well inside it
 /// (system shutdown grants ~5 s total — `WaitToKillServiceTimeout`).
@@ -159,7 +221,7 @@ fn status(current_state: ScmState, controls_accepted: ServiceControlAccept) -> S
         controls_accepted,
         exit_code: ServiceExitCode::Win32(0),
         checkpoint: 0,
-        wait_hint: Duration::from_secs(10),
+        wait_hint: WAIT_HINT,
         process_id: None,
     }
 }

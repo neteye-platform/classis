@@ -17,7 +17,7 @@ name: Checks
 # - Action references: every action a workflow uses, actions/* included, is pinned to a commit
 #   SHA with its ref in a comment, and that ref still leads to the pinned commit: a release tag,
 #   or, for the organisation's own repositories, a branch that contains it; Renovate, on the
-#   organisation preset, raises every update, and no Dependabot configuration is left (ADR-0049).
+#   organisation preset, raises every update, and no Dependabot configuration is left (ADR-0060).
 #   Checked by scripts/check-action-refs.sh --resolve, which reads the tags with git ls-remote and
 #   fetches the branches' commit graphs, after its own self-test has passed. The same job runs
 #   scripts/check-build-hardening.sh after its self-test: no checkout keeps the token, the release
@@ -168,6 +168,6 @@ jobs:
         with:
           persist-credentials: false
       # rustup honours rust-toolchain.toml (the pinned release + rustfmt + clippy) on first use.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build, test and lint the workspace
         run: bash scripts/check-rust.sh

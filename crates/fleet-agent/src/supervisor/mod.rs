@@ -7,6 +7,7 @@
 
 pub mod agent;
 pub mod block;
+pub mod channel;
 pub mod collector;
 pub mod command;
 pub mod delivered;
@@ -28,7 +29,8 @@ use crate::storage::{DroppedRemoteConfig, DroppedStoredSet, HighWaterFile, Stora
 
 use agent::AgentState;
 use block::{find_plugin, resolve, take_program, Resolved};
-use ports::{EventSender, HighWaterMarks, Plugin, ProcessEvent, SupervisorContext};
+use ports::{EventSender, HighWaterMarks, Plugin, PluginRegistry, ProcessEvent, SupervisorContext};
+use process::Spawner;
 
 pub use crate::engine::SELF_AGENT_INDEX;
 
@@ -40,11 +42,57 @@ pub const SELF_AGENT_OFFSET: usize = SELF_AGENT_INDEX + 1;
 /// line here — the supervision core stays untouched (goal 8). A wrapped kind is there only when
 /// its feature is, so what a build carries, reports (clause 18) and refuses as unknown all follow
 /// from this one list.
-fn registry() -> Vec<Box<dyn Plugin>> {
+///
+/// Every plugin is handed `spawner`, which starts its Managed Processes (ADR-0059 clause 3).
+fn registry(spawner: &Spawner) -> Vec<Box<dyn Plugin>> {
     vec![
-        Box::new(collector::CollectorPlugin),
-        Box::new(command::CommandPlugin),
+        Box::new(collector::CollectorPlugin {
+            spawner: spawner.clone(),
+        }),
+        Box::new(command::CommandPlugin {
+            spawner: spawner.clone(),
+        }),
     ]
+}
+
+/// The [`registry`] of a run: its plugins with the [`Spawner`] the composition root chose from the
+/// Client's command line and handed [`build_engine`] (ADR-0059 clause 3).
+pub struct Registry {
+    spawner: Spawner,
+}
+
+impl Registry {
+    /// The plugins, each starting its Managed Process through `spawner`.
+    #[must_use]
+    pub fn new(spawner: Spawner) -> Self {
+        Registry { spawner }
+    }
+}
+
+impl PluginRegistry for Registry {
+    fn plugins(&self) -> Vec<Box<dyn Plugin>> {
+        registry(&self.spawner)
+    }
+
+    fn purge<'a>(
+        &'a self,
+        removed: &'a [(String, std::path::PathBuf)],
+    ) -> crate::supervisor::ports::Purged<'a> {
+        Box::pin(async move {
+            self.spawner
+                .purge(removed)
+                .await
+                .into_iter()
+                .map(|result| result.map_err(|e| e.to_string()))
+                .collect()
+        })
+    }
+}
+
+/// The compiled-in plugins, for what reads a block — its kind, its program, its settings — and
+/// starts nothing.
+fn kinds() -> Vec<Box<dyn Plugin>> {
+    registry(&Spawner::Local)
 }
 
 /// The kinds this Client was compiled with, as attributes of its own Agent (ADR-0017 clause 18).
@@ -63,7 +111,7 @@ fn registry() -> Vec<Box<dyn Plugin>> {
 /// An operator's own attribute of the same name is left alone — configured values are the host's
 /// statement about itself, and this function only fills in what nothing else said.
 fn kind_attributes(mut attributes: BTreeMap<String, String>) -> BTreeMap<String, String> {
-    for plugin in registry() {
+    for plugin in kinds() {
         attributes
             .entry(format!("supervisor.kind.{}", plugin.kind()))
             .or_insert_with(|| "true".to_string());
@@ -71,13 +119,20 @@ fn kind_attributes(mut attributes: BTreeMap<String, String>) -> BTreeMap<String,
     attributes
 }
 
-/// Build the Engine from the configuration, starting one adapter task per Supervisor.
+/// Build the Engine from the configuration, starting one adapter task per Supervisor, each of whose
+/// Managed Processes `spawner` starts (ADR-0059 clause 3).
 ///
 /// # Errors
 /// Returns an error when an Agent's state cannot be restored, a `[[supervisor]]` block names an
 /// unknown plugin, or a plugin rejects its settings — startup fails loudly, nothing runs half.
-pub fn build_engine(config: &ClientConfig, shutdown: &Shutdown) -> Result<Engine, String> {
+pub fn build_engine(
+    config: &ClientConfig,
+    shutdown: &Shutdown,
+    spawner: Spawner,
+) -> Result<Engine, String> {
+    let plugins: Arc<dyn PluginRegistry> = Arc::new(Registry::new(spawner));
     report_orphaned_supervisor_dirs(config);
+    crate::reconfigure::reap_tombstones(&config.supervisors_root(), Arc::clone(&plugins));
     for notice in remote_config_disabled_notices(config) {
         warn!("{notice}");
     }
@@ -88,7 +143,7 @@ pub fn build_engine(config: &ClientConfig, shutdown: &Shutdown) -> Result<Engine
     // otherwise it would be invisible on exactly the hosts that manage something, and the Server
     // would have nobody to offer the Client's own package to. It is index 0 so the Supervisors that
     // follow keep a stable, obvious offset.
-    let storage = Storage::new(config.state_dir.clone())
+    let storage = Storage::client(config.state_dir.clone(), config.process_account_group)
         .map_err(|e| format!("cannot prepare {}: {e}", config.state_dir.display()))?;
     // A host that keeps its Supervisor set takes none from the Server, and the set stored from
     // before leaves rather than be reported as applied (ADR-0017 clauses 42 and 44).
@@ -146,19 +201,22 @@ pub fn build_engine(config: &ClientConfig, shutdown: &Shutdown) -> Result<Engine
         // The event channel is keyed by position in `agents`, and the self-Agent holds 0.
         let index = block_index + SELF_AGENT_OFFSET;
         agents.push(start_supervisor(
-            config, block, index, &event_tx, shutdown, &marks,
+            config, block, index, &event_tx, shutdown, &marks, &*plugins,
         )?);
     }
     let mut engine = Engine::with_processes(agents, events, event_tx);
     engine.set_high_water(marks);
+    engine.set_plugins(plugins);
     Ok(engine)
 }
 
 /// A directory under the Supervisor root that no `[[supervisor]]` block names is reported, never
-/// reaped (ADR-0017): it may be a purge a crash or an error cut short — or an operator's
-/// deliberate hand edit, a temporarily commented-out block whose identity and program are not the
-/// Client's to delete. The log line makes the leftover visible; removing it stays the operator's
-/// call.
+/// reaped (ADR-0059 clause 12): it may be a purge a crash cut short, or an operator's deliberate
+/// hand edit, a temporarily commented-out block whose identity and program are not the Client's
+/// to delete. The log line makes the leftover visible; removing it stays the operator's call. A
+/// tombstone a purge could not delete is named as one, and is reported until it is gone: its name
+/// records that the Client meant to remove it, and the start removes it again
+/// ([`crate::reconfigure::reap_tombstones`]).
 fn report_orphaned_supervisor_dirs(config: &ClientConfig) {
     let root = config.supervisors_root();
     let Ok(entries) = std::fs::read_dir(&root) else {
@@ -175,6 +233,18 @@ fn report_orphaned_supervisor_dirs(config: &ClientConfig) {
             .iter()
             .any(|block| name == std::ffi::OsStr::new(&block.name))
         {
+            continue;
+        }
+        if name
+            .to_str()
+            .and_then(crate::config::tombstone_of)
+            .is_some()
+        {
+            warn!(
+                path = %entry.path().display(),
+                "this is the tombstone of a removed supervisor's directory, which its purge could \
+                 not delete; removing it again"
+            );
             continue;
         }
         warn!(
@@ -202,7 +272,7 @@ fn declare_heartbeat(config: &ClientConfig, mut state: AgentState) -> AgentState
 /// # Errors
 /// Returns the same error `start_supervisor` would fail with, naming the block.
 pub fn validate_block(config: &ClientConfig, block: &SupervisorBlock) -> Result<(), String> {
-    let plugins = registry();
+    let plugins = kinds();
     let resolved = resolve(config, block, &plugins)?;
     resolved.plugin.check(&block.name, resolved.settings)
 }
@@ -225,7 +295,7 @@ pub fn check_delivered_block(
             .to_string_lossy()
             .into_owned(),
     ];
-    delivered::check(running, block, &registry(), &roots)
+    delivered::check(running, block, &kinds(), &roots)
 }
 
 /// The program a block resolves to, for callers that must inspect ownership rather than just
@@ -235,15 +305,15 @@ pub fn resolve_block_program(
     config: &ClientConfig,
     block: &SupervisorBlock,
 ) -> Result<crate::config::Program, String> {
-    let plugins = registry();
+    let plugins = kinds();
     let plugin = find_plugin(&plugins, block)?;
     let (_, program, _) = take_program(config, block, plugin)?;
     Ok(program)
 }
 
 /// Start one Supervisor at `index`: its state restored, its Endpoint bound, its adapter task
-/// running. Used at startup for every configured block and at runtime for a block an applied
-/// Supervisor set added or changed (ADR-0017).
+/// running, with its plugin from `plugins`. Used at startup for every configured block and at
+/// runtime for a block an applied Supervisor set added or changed (ADR-0017).
 ///
 /// # Errors
 /// Returns an error when the block's state cannot be restored, its Endpoint port cannot be
@@ -255,8 +325,9 @@ pub fn start_supervisor(
     event_tx: &mpsc::Sender<(usize, ProcessEvent)>,
     shutdown: &Shutdown,
     marks: &Arc<dyn HighWaterMarks>,
+    plugins: &dyn PluginRegistry,
 ) -> Result<EngineAgent, String> {
-    let plugins = registry();
+    let plugins = plugins.plugins();
     let Resolved {
         plugin,
         settings,
@@ -267,7 +338,19 @@ pub fn start_supervisor(
     } = resolve(config, block, &plugins)?;
 
     let supervisor_dir = config.supervisor_dir(&block.name);
-    let storage = Storage::new(supervisor_dir.clone())
+    // The Managed Process passes through the Supervisors' root on its way to its own directory
+    // (ADR-0059 clause 6). Left as it is made where no process account is registered.
+    if config.process_account_group.is_some() {
+        let root = config.supervisors_root();
+        crate::storage::create_shared_dir(
+            &root,
+            &root,
+            config.process_account_group,
+            crate::storage::Shared::Traversed,
+        )
+        .map_err(|e| format!("cannot prepare {}: {e}", root.display()))?;
+    }
+    let storage = Storage::supervised(supervisor_dir.clone(), config.process_account_group)
         .map_err(|e| format!("cannot prepare {}: {e}", supervisor_dir.display()))?;
     let config_dir = storage.config_dir();
 
@@ -318,7 +401,7 @@ pub fn start_supervisor(
     //
     // What the target itself needs — for a tree that is its root and nothing below it, since the
     // live tree arrives by renaming a directory over that name (ADR-0026).
-    install.prepare()?;
+    install.prepare(config.process_account_group)?;
     // Only a Client holding the operator's verification key takes packages: there is no unsigned
     // posture (ADR-0026). Without it the program stays as installed, and the startup notice says
     // why.
@@ -362,6 +445,7 @@ pub fn start_supervisor(
         apply_grace: timing.apply_grace,
         retain_previous: timing.retain_previous,
         archive_key: config.packages.as_ref().and_then(|p| p.archive_key.clone()),
+        process_account_group: config.process_account_group,
         settings,
         events: EventSender::new(index, event_tx.clone()),
         shutdown: stop,
@@ -565,7 +649,7 @@ mod tests {
         let mut expected = vec!["collector", "command"];
         expected.extend(WRAPPED.iter().filter(|(_, c)| *c).map(|(kind, _)| *kind));
         expected.sort_unstable();
-        let mut compiled: Vec<&str> = registry().iter().map(|plugin| plugin.kind()).collect();
+        let mut compiled: Vec<&str> = kinds().iter().map(|plugin| plugin.kind()).collect();
         compiled.sort_unstable();
         assert_eq!(compiled, expected);
 
@@ -607,7 +691,7 @@ mod tests {
                 .split_once("(known: ")
                 .and_then(|(_, rest)| rest.strip_suffix(')'))
                 .unwrap_or_else(|| panic!("{kind}: the refusal names the known kinds: {error}"));
-            let compiled: Vec<&str> = registry().iter().map(|plugin| plugin.kind()).collect();
+            let compiled: Vec<&str> = kinds().iter().map(|plugin| plugin.kind()).collect();
             assert_eq!(known, compiled.join(", "), "{kind} is not among them");
         }
     }
@@ -618,7 +702,7 @@ mod tests {
     #[test]
     fn the_fleets_timing_reaches_a_supervisor_that_says_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let plugins = registry();
+        let plugins = kinds();
         let mut config: ClientConfig =
             toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
         config.supervisor_defaults.stop_timeout_secs = 45;
@@ -655,7 +739,7 @@ mod tests {
         let config: ClientConfig =
             toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
         let block = &config.supervisors[0];
-        let plugins = registry();
+        let plugins = kinds();
         let plugin = find_plugin(&plugins, block).expect("the kind is known");
         let (_, program, _) = take_program(&config, block, plugin).expect("the block names it");
         assert!(program.path.ends_with("managed-agent"));
@@ -693,6 +777,50 @@ mod tests {
             ))
             .expect("parse"),
         )
+    }
+
+    /// Where a process account is registered, the Engine lays out the path to each Managed
+    /// Process for its group (ADR-0059 clause 6): the state directory, the Supervisors' root and
+    /// each Supervisor's directory passed through, `0710`, and `program/` read, `0750`. Without
+    /// one, those directories are what they were: `0700`, and `program/` and the root as they are
+    /// made.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_engine_lays_out_the_path_to_each_managed_process_for_the_process_accounts_group() {
+        use std::os::unix::fs::MetadataExt as _;
+        let mode = |path: &std::path::Path| {
+            let meta = std::fs::metadata(path).expect("metadata");
+            (meta.mode() & 0o7777, meta.gid())
+        };
+        // SAFETY: getegid(2) cannot fail and touches no memory.
+        let gid = unsafe { libc::getegid() };
+        let (_tx, shutdown) = shutdown_channel();
+
+        let shared = tempfile::tempdir().expect("tempdir");
+        let mut config = two_of_a_type(shared.path());
+        config.process_account_group = Some(crate::storage::ProcessAccountGroup(gid));
+        let _engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
+        assert_eq!(mode(&config.state_dir), (0o710, gid));
+        assert_eq!(mode(&config.supervisors_root()), (0o710, gid));
+        assert_eq!(mode(&config.supervisor_dir("a")), (0o710, gid));
+        assert_eq!(
+            mode(&config.supervisor_dir("a").join(crate::config::PROGRAM_DIR)),
+            (0o750, gid)
+        );
+
+        let private = tempfile::tempdir().expect("tempdir");
+        let reference = private.path().join("reference");
+        std::fs::create_dir(&reference).expect("a plain directory");
+        let config = two_of_a_type(private.path());
+        let _engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
+        assert_eq!(mode(&config.state_dir).0, 0o700);
+        assert_eq!(mode(&config.supervisor_dir("a")).0, 0o700);
+        assert_eq!(mode(&config.supervisors_root()), mode(&reference));
+        assert_eq!(
+            mode(&config.supervisor_dir("a").join(crate::config::PROGRAM_DIR)),
+            mode(&reference)
+        );
     }
 
     /// Writes the installed-package record of Supervisor `name`, as an install would have.
@@ -752,7 +880,7 @@ mod tests {
         let config = two_of_a_type(dir.path());
         installed(&config, "a", "0.110.0");
 
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
         let (downloads, why) = offer_to(&mut engine, 2, "0.109.0");
         assert!(!downloads, "nothing below the seeded mark is fetched");
         assert!(why.contains("0.110.0"), "{why}");
@@ -777,7 +905,8 @@ mod tests {
         let file = config.state_dir.join(crate::storage::HIGH_WATER_FILE);
         std::fs::write(&file, "{ not json").expect("write");
 
-        let mut engine = build_engine(&config, &shutdown).expect("the Client still starts");
+        let mut engine =
+            build_engine(&config, &shutdown, Spawner::Local).expect("the Client still starts");
         assert_eq!(engine.poll_reports().len(), 3, "and every Agent reports");
         for index in [1, 2] {
             let (downloads, why) = offer_to(&mut engine, index, "9.0.0");
@@ -795,7 +924,7 @@ mod tests {
 
         // A value that is not SemVer is just as unreadable.
         std::fs::write(&file, r#"{"managed-agent": "1.19"}"#).expect("write");
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
         assert!(!offer_to(&mut engine, 1, "9.0.0").0);
     }
 
@@ -809,7 +938,7 @@ mod tests {
         let (_tx, shutdown) = shutdown_channel();
         let config = two_of_a_type(dir.path());
         installed(&config, "a", "0.110.0");
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
         assert!(!offer_to(&mut engine, 2, "0.109.0").0, "held by the mark");
         drop(engine);
 
@@ -821,7 +950,7 @@ mod tests {
         std::fs::remove_file(config.supervisor_dir("a").join("installed-package.json"))
             .expect("remove the record");
 
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
         let (downloads, why) = offer_to(&mut engine, 2, "0.109.0");
         assert!(downloads, "the lowered mark takes 0.109.0: {why}");
     }
@@ -847,7 +976,7 @@ mod tests {
 
         let owned: ClientConfig =
             keyed(toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse"));
-        let mut engine = build_engine(&owned, &shutdown).expect("build");
+        let mut engine = build_engine(&owned, &shutdown, Spawner::Local).expect("build");
         assert!(
             accepts_packages(&mut engine),
             "the program is in this Client's own directory, which is what makes it updatable"
@@ -865,7 +994,7 @@ mod tests {
             Some(dir.path().join("other")),
         ))
         .expect("parse");
-        let Err(err) = build_engine(&machines, &shutdown) else {
+        let Err(err) = build_engine(&machines, &shutdown, Spawner::Local) else {
             panic!("a program on the machine must be refused at startup");
         };
         assert!(err.contains("only programs it installs"), "{err}");
@@ -881,7 +1010,7 @@ mod tests {
         let (_tx, shutdown) = shutdown_channel();
         let unkeyed: ClientConfig =
             toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
-        let mut engine = build_engine(&unkeyed, &shutdown).expect("build");
+        let mut engine = build_engine(&unkeyed, &shutdown, Spawner::Local).expect("build");
         assert!(
             !engine.installs_packages(),
             "something takes packages without a key"
@@ -904,7 +1033,7 @@ mod tests {
 
         let owned: ClientConfig =
             keyed(toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse"));
-        let engine = build_engine(&owned, &shutdown).expect("build");
+        let engine = build_engine(&owned, &shutdown, Spawner::Local).expect("build");
         assert!(
             engine.installs_packages(),
             "the program is package-updatable, so the Client installs packages"
@@ -918,7 +1047,7 @@ mod tests {
             "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\n[packages]\nself_update = false\n",
         )
         .expect("parse");
-        let engine = build_engine(&alone, &shutdown).expect("build");
+        let engine = build_engine(&alone, &shutdown, Spawner::Local).expect("build");
         assert!(
             !engine.installs_packages(),
             "no Supervisor and no self-update consent means nothing here takes a package"
@@ -928,7 +1057,7 @@ mod tests {
         // all still installs packages — its own.
         let bare: ClientConfig =
             keyed(toml::from_str("endpoint = \"ws://127.0.0.1:1/v1/opamp\"\n").expect("parse"));
-        let engine = build_engine(&bare, &shutdown).expect("build");
+        let engine = build_engine(&bare, &shutdown, Spawner::Local).expect("build");
         assert!(
             engine.installs_packages(),
             "the Client's own Agent consents by default"
@@ -950,7 +1079,7 @@ mod tests {
             state = dir.path().join("state").to_string_lossy(),
         );
         let parsed: ClientConfig = keyed(toml::from_str(&config).expect("parse"));
-        let mut engine = build_engine(&parsed, &shutdown).expect("build");
+        let mut engine = build_engine(&parsed, &shutdown, Spawner::Local).expect("build");
 
         assert!(
             accepts_packages(&mut engine),
@@ -974,7 +1103,7 @@ mod tests {
         let (_tx, shutdown) = shutdown_channel();
         let config: ClientConfig =
             toml::from_str(&config(dir.path(), "./managed-agent", None)).expect("parse");
-        let Err(err) = build_engine(&config, &shutdown) else {
+        let Err(err) = build_engine(&config, &shutdown, Spawner::Local) else {
             panic!("a path that is neither must not start");
         };
         assert!(err.contains("bare file name"), "{err}");
@@ -992,7 +1121,7 @@ mod tests {
             state = dir.path().join("state").to_string_lossy(),
         ))
         .expect("parse");
-        let Err(err) = build_engine(&config, &shutdown) else {
+        let Err(err) = build_engine(&config, &shutdown, Spawner::Local) else {
             panic!("a block without a program must not start");
         };
         assert!(err.contains("needs a `command`"), "{err}");
@@ -1012,12 +1141,87 @@ mod tests {
 
         let parsed: ClientConfig =
             toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
-        build_engine(&parsed, &shutdown).expect("build");
+        build_engine(&parsed, &shutdown, Spawner::Local).expect("build");
 
         assert!(
             orphan.join("instance-uid").is_file(),
             "an orphaned directory is reported, not deleted"
         );
+    }
+
+    /// The start removes a tombstone left behind again, beside the start rather than before it,
+    /// and leaves every other orphan in place (ADR-0059 clause 12, ADR-0017 clause 37).
+    /// Verifies: ADR-0059
+    #[tokio::test]
+    async fn a_start_removes_a_tombstone_left_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config: ClientConfig =
+            toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
+        let root = config.supervisors_root();
+        let tomb = root.join(crate::reconfigure::tombstone_name("gone"));
+        std::fs::create_dir_all(tomb.join("program")).expect("a tombstone");
+        std::fs::create_dir_all(root.join("orphan")).expect("an orphan");
+        let (_tx, shutdown) = crate::shutdown::shutdown_channel();
+
+        let _engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
+
+        let gone = async {
+            while tomb.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), gone)
+            .await
+            .expect("the tombstone is removed again");
+        assert!(root.join("orphan").is_dir(), "an orphan is the operator's");
+    }
+
+    /// A tombstone a purge could not delete is reported at startup as a removed Supervisor's that
+    /// is removed again, apart from the orphans the operator removes; the report itself deletes
+    /// nothing (ADR-0059 clause 12).
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_tombstone_left_behind_is_reported_at_startup() {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("lock").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config: ClientConfig =
+            toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
+        let tomb = config
+            .supervisors_root()
+            .join(crate::reconfigure::tombstone_name("gone"));
+        std::fs::create_dir_all(&tomb).expect("create");
+        std::fs::write(tomb.join("instance-uid"), "uid").expect("write");
+
+        tracing::subscriber::with_default(subscriber, || report_orphaned_supervisor_dirs(&config));
+
+        let log = String::from_utf8(captured.0.lock().expect("lock").clone()).expect("utf-8");
+        let reported: Vec<&str> = log
+            .lines()
+            .filter(|line| line.contains(&tomb.display().to_string()))
+            .collect();
+        assert_eq!(reported.len(), 1, "{log}");
+        assert!(
+            reported[0].contains("tombstone of a removed supervisor"),
+            "{log}"
+        );
+        assert!(reported[0].contains("removing it again"), "{log}");
+        assert!(tomb.join("instance-uid").is_file(), "reported, not deleted");
     }
 
     /// The self-Agent's effective configuration is its own file, not an echo of a stored offer:
@@ -1038,7 +1242,7 @@ mod tests {
         )
         .expect("write");
         let config = ClientConfig::load(&path).expect("load");
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
 
         let reports = engine.poll_reports();
         let effective = reports[SELF_AGENT_INDEX]
@@ -1101,7 +1305,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (_tx, shutdown) = shutdown_channel();
         let config = listed_config(dir.path(), "[\"agent\", \"later\"]", None);
-        build_engine(&config, &shutdown).expect("a name without a block starts");
+        build_engine(&config, &shutdown, Spawner::Local).expect("a name without a block starts");
         let notices = remote_config_disabled_notices(&config);
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("\"later\""), "{notices:?}");
@@ -1129,7 +1333,7 @@ mod tests {
         std::fs::write(config_dir.join("edited"), "operator: 1\n").expect("overwrite");
         std::fs::write(config_dir.join("local.yaml"), "mine: 1\n").expect("operator's file");
 
-        build_engine(&config, &shutdown).expect("build");
+        build_engine(&config, &shutdown, Spawner::Local).expect("build");
 
         assert!(!supervisor_dir.join("remote-config.pb").exists());
         assert!(!config_dir.join("fleet").exists());
@@ -1160,7 +1364,7 @@ mod tests {
         std::fs::remove_file(config_dir.join("fleet")).expect("remove");
         std::fs::create_dir(config_dir.join("fleet")).expect("in the way");
 
-        let Err(err) = build_engine(&config, &shutdown) else {
+        let Err(err) = build_engine(&config, &shutdown, Spawner::Local) else {
             panic!("started over a stored configuration it could not remove");
         };
         assert!(
@@ -1183,7 +1387,7 @@ mod tests {
         let config_dir = store_offer(&supervisor_dir);
         std::fs::write(supervisor_dir.join("remote-config.pb"), [0xff; 7]).expect("garble");
 
-        build_engine(&config, &shutdown).expect("build");
+        build_engine(&config, &shutdown, Spawner::Local).expect("build");
 
         assert!(!supervisor_dir.join("remote-config.pb").exists());
         for kept in [
@@ -1206,7 +1410,7 @@ mod tests {
         let config = listed_config(dir.path(), "[\"agent\"]", None);
         store_offer(&config.supervisor_dir("agent"));
 
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
         let report = &engine.poll_reports()[SELF_AGENT_OFFSET];
         assert!(report.remote_config_status.is_none(), "{report:?}");
         assert_eq!(
@@ -1221,7 +1425,7 @@ mod tests {
         let other = tempfile::tempdir().expect("tempdir");
         let unlisted = listed_config(other.path(), "[]", None);
         store_offer(&unlisted.supervisor_dir("agent"));
-        let mut engine = build_engine(&unlisted, &shutdown).expect("build");
+        let mut engine = build_engine(&unlisted, &shutdown, Spawner::Local).expect("build");
         let status = engine.poll_reports()[SELF_AGENT_OFFSET]
             .remote_config_status
             .clone()
@@ -1244,7 +1448,7 @@ mod tests {
             notices[0].contains("\"edge-1\"") && notices[0].contains("own Agent is not covered"),
             "{notices:?}"
         );
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
         let reports = engine.poll_reports();
         let own = reports[SELF_AGENT_INDEX].capabilities;
         assert_ne!(own & AgentCapabilities::AcceptsRemoteConfig as u64, 0);
@@ -1280,7 +1484,7 @@ mod tests {
         let config_dir = store_offer(&config.state_dir);
         std::fs::write(config_dir.join("edited"), "changed: 1\n").expect("change a copy");
 
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
 
         assert!(!config.state_dir.join("remote-config.pb").exists());
         assert!(!config_dir.join("fleet").exists());
@@ -1305,7 +1509,7 @@ mod tests {
         let other = tempfile::tempdir().expect("tempdir");
         let managed = kept_set_config(other.path(), true);
         store_offer(&managed.state_dir);
-        let mut engine = build_engine(&managed, &shutdown).expect("build");
+        let mut engine = build_engine(&managed, &shutdown, Spawner::Local).expect("build");
         let status = engine.poll_reports()[SELF_AGENT_INDEX]
             .remote_config_status
             .clone()
@@ -1324,7 +1528,8 @@ mod tests {
         let config = kept_set_config(dir.path(), false);
         std::fs::create_dir_all(config.state_dir.join("remote-config.pb")).expect("in the way");
 
-        let mut engine = build_engine(&config, &shutdown).expect("starts all the same");
+        let mut engine =
+            build_engine(&config, &shutdown, Spawner::Local).expect("starts all the same");
         let own = &engine.poll_reports()[SELF_AGENT_INDEX];
         assert!(own.remote_config_status.is_none(), "{own:?}");
     }
@@ -1342,7 +1547,7 @@ mod tests {
         std::fs::remove_file(config_dir.join("fleet")).expect("remove");
         std::fs::create_dir(config_dir.join("fleet")).expect("in the way");
 
-        build_engine(&config, &shutdown).expect("starts all the same");
+        build_engine(&config, &shutdown, Spawner::Local).expect("starts all the same");
         assert!(!config.state_dir.join("remote-config.pb").exists());
         assert!(
             !config_dir.join("ruleset").exists(),
@@ -1351,7 +1556,7 @@ mod tests {
 
         let (_tx, shutdown) = shutdown_channel();
         let managed = kept_set_config(dir.path(), true);
-        let mut engine = build_engine(&managed, &shutdown).expect("build");
+        let mut engine = build_engine(&managed, &shutdown, Spawner::Local).expect("build");
         let own = &engine.poll_reports()[SELF_AGENT_INDEX];
         assert!(own.remote_config_status.is_none(), "{own:?}");
         assert_ne!(
@@ -1371,7 +1576,7 @@ mod tests {
         let config_dir = store_offer(&config.state_dir);
         std::fs::write(config.state_dir.join("remote-config.pb"), [0xff; 7]).expect("garble");
 
-        let mut engine = build_engine(&config, &shutdown).expect("build");
+        let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
 
         assert!(!config.state_dir.join("remote-config.pb").exists());
         for kept in [
@@ -1392,30 +1597,12 @@ mod tests {
     /// Verifies: ADR-0017
     #[tokio::test]
     async fn the_removed_stored_set_is_logged_naming_its_hash() {
-        #[derive(Clone, Default)]
-        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Captured {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("lock").extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let captured = Captured::default();
-        let writer = captured.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-
         let dir = tempfile::tempdir().expect("tempdir");
         let (_tx, shutdown) = shutdown_channel();
         let config = kept_set_config(dir.path(), false);
         store_offer(&config.state_dir);
-        tracing::subscriber::with_default(subscriber, || {
-            let mut engine = build_engine(&config, &shutdown).expect("build");
+        let ((), log) = crate::test_support::capture_logs(|| {
+            let mut engine = build_engine(&config, &shutdown, Spawner::Local).expect("build");
             let uid = engine.poll_reports()[SELF_AGENT_INDEX].instance_uid.clone();
             for hash in [b"set-a", b"set-a", b"set-b", b"set-a"] {
                 engine.handle(&opamp::proto::ServerToAgent {
@@ -1432,7 +1619,6 @@ mod tests {
                 "a set reached the apply"
             );
         });
-        let log = String::from_utf8(captured.0.lock().expect("lock").clone()).expect("utf-8");
         let removed: Vec<&str> = log
             .lines()
             .filter(|line| line.contains("removed the stored supervisor set"))

@@ -605,7 +605,7 @@ impl Enrolment {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -673,7 +673,7 @@ mod tests {
         }
     }
 
-    fn requester() -> Requester {
+    pub(crate) fn requester() -> Requester {
         Requester {
             bootstrap_subject: "CN=bootstrap".to_string(),
             carried: Ok(SubjectValues::default()),

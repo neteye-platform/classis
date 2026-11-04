@@ -5,14 +5,14 @@ do, how to start it, and what every configuration key means. It is split the way
 a deployment is split — the Server is one machine, the Clients are all the
 others — so each half can be read on its own:
 
-| Part                                  | Read it to                                                                                                                                                                                                          |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[Setting up a fleet](setup.md)**    | go from nothing to a running fleet, in order: the three certificate authorities and the files they make, the Server's and the Client's configuration, enrolling a host, and living with the certificates afterwards |
-| **[A host's life](lifecycle.md)**     | follow one managed host from start to finish, in the UI: issuing its bootstrap certificate, installing the Client, enrolling it, renewal, and the updates of its agents and of the Client itself                    |
-| **[Server](server.md)**               | run the control plane: the two listeners, Configurations, packages and the deployments that aim them, the REST API, authentication, enrolment, TLS                                                                  |
-| **[Client](client.md)**               | run a managed host, end to end: how it is built, the OS service, the on-disk layout, Supervisors for Collectors and Foreign Agents, package updates, self-update, and Gateway Mode                                  |
-| **[Rollout walkthrough](rollout.md)** | both ends at once, end to end: build an artifact, sign it, upload it, aim it, and watch a Foreign Agent be installed and configured entirely from the Server                                                        |
-| **[Command-line tools](tools.md)**    | get software into the fleet: fetch a known agent's release and hand it to the Server, or build, hash, and sign an artifact out of any program                                                                       |
+| Part                                  | Read it to                                                                                                                                                                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[Setting up a fleet](setup.md)**    | go from nothing to a running fleet, in order: the three certificate authorities and the files they make, the Server's and the Client's configuration, enrolling a host, and living with the certificates afterwards                            |
+| **[A host's life](lifecycle.md)**     | follow one managed host from start to finish, in the UI: issuing its bootstrap certificate, installing the Client, enrolling it, renewal, and the updates of its agents and of the Client itself                                               |
+| **[Server](server.md)**               | run the control plane: the two listeners, Configurations, packages and the deployments that aim them, the REST API, authentication, enrolment, TLS                                                                                             |
+| **[Client](client.md)**               | run a managed host, end to end: how it is built, the OS service and the process account its Managed Processes may run under, the on-disk layout, Supervisors for Collectors and Foreign Agents, package updates, self-update, and Gateway Mode |
+| **[Rollout walkthrough](rollout.md)** | both ends at once, end to end: build an artifact, sign it, upload it, aim it, and watch a Foreign Agent be installed and configured entirely from the Server                                                                                   |
+| **[Command-line tools](tools.md)**    | get software into the fleet: fetch a known agent's release and hand it to the Server, or build, hash, and sign an artifact out of any program                                                                                                  |
 
 The two halves interlock in three places, and each is described on both sides:
 **authentication** (the Client presents a client certificate the Server accepts,
@@ -132,9 +132,9 @@ so the first step makes a development set of them.
    waiting, with a **roll out** control of its own.
 
    A Configuration reaches only the Agents of the Deployment that report its
-   `service_name`. A Collector put under the Client later reports a type of its
-   own and needs a Configuration of its own: content for several Agent types is
-   one Configuration per type.
+   `service_name`. A Collector put under the Client later has a type of its own
+   and needs a Configuration of its own: content for several Agent types is one
+   Configuration per type.
 
 For a deployment that crosses a network, with certificates of your own, follow
 [Setting up a fleet](setup.md). From here, [Server](server.md) covers targeting
@@ -214,11 +214,18 @@ certificate only through an enrolment an operator opens and approves. Software
 is installed only when it is signed with the operator's key and fetched from a
 source the operator allowed.
 
-**Configuration files.** Both ends read one hand-edited TOML file, named with
-`--config`. Most keys are optional; the TLS material is not. An unknown key is
-refused at startup rather than ignored, and there are no environment-variable
-fallbacks. The annotated examples in [`config/`](../../config/) are the
-reference copies: [`config/server.toml`](../../config/server.toml) and
+**Configuration files.** Both ends read a hand-edited TOML file. The Client's is
+the one `--config` names, `supervisor.toml` by default. The Server's is the one
+`--config` or else `FLEET_SERVER_CONFIG` names — a named file that does not
+exist stops the start — and otherwise `server.toml` in the working directory
+when there is one; its keys can also be set by `FLEET_SERVER__…` environment
+variables, checked as strictly as the file, so a Server may run from its
+environment alone
+([Configuration from the environment](server.md#configuration-from-the-environment)).
+The Client reads no setting from its environment. Most keys are optional; the
+TLS material is not. An unknown key is refused at startup rather than ignored.
+The annotated examples in [`config/`](../../config/) are the reference copies:
+[`config/server.toml`](../../config/server.toml) and
 [`config/supervisor.toml`](../../config/supervisor.toml).
 
 ## Not built yet

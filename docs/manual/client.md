@@ -319,7 +319,7 @@ opamp-fleet --version
 | Global flag         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--config <path>`   | The TOML configuration file. Defaults to `supervisor.toml`. A missing file means the defaults, which hold no client certificate, so `run` refuses to start. `service install` is the one place where "not given" means something else: there the file is `supervisor.toml` inside the data root, because a path resolved against this shell's working directory is not one the service manager shares. |
-| `--state-dir <dir>` | Overrides the configuration file's `state_dir`. `service install` bakes this into the unit, so an installed service never depends on a relative path.                                                                                                                                                                                                                                                  |
+| `--state-dir <dir>` | Overrides the configuration file's `state_dir`. `service install` bakes this into the unit, so an installed service never depends on a relative path, and every later `service install` keeps the state directory the unit names unless this flag names another. It is how to place the state directory outside the data root and the layout root.                                                     |
 
 There are no environment-variable fallbacks for configuration — the flags say
 only where the file is and which instance is meant. Logging goes to stderr and
@@ -342,24 +342,28 @@ opamp-fleet service stop
 opamp-fleet service uninstall      # deregisters; never deletes the install layout or state
 ```
 
-| Flag                 | Applies to                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--user`             | every `service` action              | Target the current user's service manager instead of the system one. Useful in development; the default is a system service that starts at boot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--root <dir>`       | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/opamp-fleet` for the layout, `/var/lib/opamp-fleet` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. macOS uses `/Library/Application Support/opamp-fleet`, Windows `%ProgramData%\opamp-fleet`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout). |
-| `--data-root <dir>`  | `service install`, `service config` | The data root — `supervisor.toml` and `state/` — when it is to differ from the layout root. A packaged install, the MSI included, passes neither flag and takes the platform defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--interactive`      | `service install`                   | Ask for the settings a fresh host cannot guess, write or edit the configuration file, and enrol a host that holds no certificate yet, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--endpoint <url>`   | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no siblings for the CA file or the client identity: it takes them from [beside the program](#files-beside-the-program), or they are files the operator names in the file.                                                                                                                                                                                                                                   |
-| `--run-as <account>` | `service install`                   | Run the service as this account, and hand its files over to it. Without it, a re-registration keeps the account the existing registration names. `--run-as root` chooses root. See [Running it under its own account](#running-it-under-its-own-account). System scope only — a `--user` service already runs as its user.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Flag                          | Applies to                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--user`                      | every `service` action              | Target the current user's service manager instead of the system one. Useful in development; the default is a system service that starts at boot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--root <dir>`                | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/opamp-fleet` for the layout, `/var/lib/opamp-fleet` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. macOS uses `/Library/Application Support/opamp-fleet`, Windows `%ProgramData%\opamp-fleet`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout). |
+| `--data-root <dir>`           | `service install`, `service config` | The data root — `supervisor.toml` and `state/` — when it is to differ from the layout root. A packaged install, the MSI included, passes neither flag and takes the platform defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `--interactive`               | `service install`                   | Ask for the settings a fresh host cannot guess, write or edit the configuration file, and enrol a host that holds no certificate yet, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--endpoint <url>`            | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no siblings for the CA file or the client identity: it takes them from [beside the program](#files-beside-the-program), or they are files the operator names in the file.                                                                                                                                                                                                                                   |
+| `--run-as <account>`          | `service install`                   | Run the service as this account, and hand its files over to it. Without it, a re-registration keeps the account the existing registration names. `--run-as root` chooses root. See [Running it under its own account](#running-it-under-its-own-account). System scope only — a `--user` service already runs as its user.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `--process-account <account>` | `service install`                   | Run every Managed Process under this account, through a second service that runs under it. Without it, a re-registration keeps the account the second service's registration names. See [Managed Processes under a process account](#managed-processes-under-a-process-account). System scope only.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--no-process-account`        | `service install`                   | Stop and deregister the second service; the Client starts its Managed Processes itself again. Mutually exclusive with `--process-account`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### Running it under its own account
 
-The system service — and every Managed Process its Supervisors spawn — runs as
-one account, and the install hands its files over to it: the configuration file,
-the state directory, **and the executable layout**. The layout too because the
-self-update runs _inside_ the service — a layout the account cannot write would
-silently end [server-driven updates](#updating-the-client-itself) for that host.
-The account is the most a Server-delivered command, such as a Telegraf
-`inputs.exec`, reaches on the host.
+The system service — and, unless a
+[process account](#managed-processes-under-a-process-account) is registered,
+every Managed Process its Supervisors spawn — runs as one account, and the
+install hands its files over to it: the configuration file, the state directory,
+**and the executable layout**. The layout too because the self-update runs
+_inside_ the service — a layout the account cannot write would silently end
+[server-driven updates](#updating-the-client-itself) for that host. The account
+is the most a Server-delivered command, such as a Telegraf `inputs.exec`,
+reaches on the host.
 
 Which account it is:
 
@@ -476,6 +480,363 @@ A drop-in that removes a directive the unit sets assigns it its default, for
 example `ProtectKernelTunables=no`. A `User=` in a drop-in governs the process,
 but the install hands the roots to the account the unit names; name the account
 with `--run-as` instead.
+
+### Managed Processes under a process account
+
+Without a process account, every Managed Process runs as the Client's account
+and can read what the Client can: its private key `client-key.pem`, every other
+Supervisor's `config/`, and the program it runs, which it can also rewrite. A
+**process account** separates them.
+`service install --process-account <account>` registers a **second service**,
+`opamp-fleet-agents`, that runs under that account and starts, signals and stops
+every program a Supervisor starts — the Managed Process, its version probe, and
+the preflight of a staged package — on the Client's request. The Client starts
+none of them itself.
+
+```text
+service manager ─┬─ opamp-fleet         Client, its own account   (supervisor run --service …)
+                 └─ opamp-fleet-agents  the process account        (supervisor run --agents …)
+                        ▲
+                        └── Unix socket / named pipe; only the Client's account is admitted
+```
+
+What the separation gives and what it does not:
+
+- A Managed Process, and anything it starts, cannot read the Client's key,
+  certificates, package state, logs or environment, nor write the program it
+  runs. A command a Configuration makes it run — a Telegraf `inputs.exec`, an
+  Icinga `CheckCommand` — runs as the process account.
+- All Managed Processes share the one process account, so they still read one
+  another's `config/` and environment.
+- None of them can take the second service's place through its socket or pipe,
+  as far as the platform tells processes apart: a process id that comes round
+  again is told apart on Linux 6.5 and later alone, and on Windows a Managed
+  Process can still open the second service's process with the rights its
+  account holds on it. A Managed Process can replace the socket in the directory
+  the process account owns, or on Windows create an instance of the pipe, but
+  before the Client writes anything on a connection it reads the process at the
+  other end and asks the service manager which process it runs as the second
+  service — systemd's `MainPID`, launchd's `pid`, the SCM's process id — and
+  speaks only to that one. Any other is told nothing: the Client closes the
+  connection, its Supervisors report that the second service cannot be reached,
+  and it tries again, on a new connection checked anew, as for a second service
+  that is down; it asks the service manager again at each of those tries, every
+  200 ms. The log names the socket or pipe and the process that served it:
+
+  ```text
+  ERROR fleet_agent::supervisor::channel: refused a peer that is not the second service, before writing anything to it; no program starts until the service manager's second service serves the socket socket=/run/opamp-fleet-agents/agents.sock peer_pid=4711 error=/run/opamp-fleet-agents/agents.sock is served by process 4711, not by the second service (process 812) unlogged=0
+  ```
+
+  Find the process with `ps -p <peer_pid>`, or on Windows
+  `tasklist /FI "PID eq <peer_pid>"`, end it, and restart the second service,
+  which binds its socket or pipe again. The same refusal, with the reason in
+  `error`, follows where the service manager cannot be asked: on Linux that
+  needs systemd's system bus, on macOS `launchctl print`.
+
+- A grant an agent needs names the process account, not the Client's: a
+  `sudoers` rule for Telegraf's `use_sudo`, the rights Icinga 2 needs on its
+  directories, a supplementary group such as `adm`. On Linux, what a Managed
+  Process needs from systemd — a capability for a port below 1024, a
+  supplementary group — goes into a drop-in for the second service,
+  `/etc/systemd/system/opamp-fleet-agents.service.d/`, which `service install`
+  never touches either.
+- A restart of the second service stops every Managed Process; the Client starts
+  them again once it reaches the service.
+
+The rules every platform holds the account to:
+
+- **The operator creates it.** The binary never creates an account, and an
+  install naming one that does not exist is refused before anything is written,
+  with the command that creates it.
+- **It is never root or `LocalSystem`, and never the Client's account.** A host
+  whose agents need root runs as root as a whole: `--run-as root` and no
+  `--process-account`, with no second service.
+- **The Client runs under an account of its own.** On Linux and macOS a Client
+  that runs as root is refused; on Windows one that runs as `LocalSystem` is.
+- **System scope only**: systemd on Linux, launchd on macOS, the SCM on Windows.
+  `--user` is refused with it.
+- **It is kept.** A re-registration without the flag — every package upgrade,
+  every MSI upgrade — keeps the account the second service's registration names:
+  `/etc/systemd/system/opamp-fleet-agents.service`,
+  `/Library/LaunchDaemons/opamp-fleet-agents.plist`, or the SCM's entry. The
+  install prints it:
+
+  ```console
+  # opamp-fleet service install
+  installed opamp-fleet
+    …
+    runs as:   opamp-fleet (kept from /etc/systemd/system/opamp-fleet.service)
+    processes: opamp-fleet-agents (kept from /etc/systemd/system/opamp-fleet-agents.service), started by opamp-fleet-agents
+  ```
+
+`service install`, `start`, `stop` and `uninstall` act on both services. The
+second service is started first and stopped last. The Client does not depend on
+it: while it is down the Client stays connected, its Supervisors report that
+their programs do not start, and they start again once it is back. A package
+offered meanwhile is staged and stays `Installing`, and a Configuration stays
+`APPLYING`, each naming the second service as the reason, until it is reached
+again. `service status` reports the Client; ask the service manager for the
+second service (`systemctl status opamp-fleet-agents`,
+`launchctl print system/opamp-fleet-agents`, `sc query opamp-fleet-agents`).
+
+Both services run the same program from the same `current` pointer, and a
+self-update restarts the one that is behind: two ends of different builds refuse
+each other, and the one whose version `current` no longer names exits and is
+started again by its service manager.
+
+#### On Linux
+
+The Client must run under its own account, which the `.deb` and `.rpm` make
+`opamp-fleet`. The process account needs a primary group of its own whose one
+member is the Client's account: the install refuses a group that is gid 0, that
+is the Client's primary group, that has another member, or that is another
+account's primary group, and a process account that is a member of the Client's
+primary group. Create it, put the Client's account into its group, and register:
+
+```console
+# useradd --system --user-group --no-create-home --shell /usr/sbin/nologin opamp-fleet-agents
+# usermod --append --groups opamp-fleet-agents opamp-fleet
+# opamp-fleet service install --process-account opamp-fleet-agents
+# opamp-fleet service stop && opamp-fleet service start
+```
+
+Adding a process account where there was none stops nothing; the Client that
+runs goes on starting its programs itself until it is restarted, which the last
+line does.
+
+What the install registers:
+
+- `/etc/systemd/system/opamp-fleet-agents.service`, `User=opamp-fleet-agents`,
+  running `run --agents /run/opamp-fleet-agents/agents.sock --client-uid <uid>`,
+  with `RuntimeDirectory=opamp-fleet-agents`, `RuntimeDirectoryMode=0750`,
+  `TimeoutStopSec=30`, `Restart=on-failure` and `ProtectControlGroups=yes`.
+  systemd creates the socket's directory at every start, owned by the process
+  account, and removes it at the stop.
+- In the Client's unit, `Wants=opamp-fleet-agents.service` and
+  `After=opamp-fleet-agents.service`, never `Requires=`, and
+  `--agents-socket <socket> --process-uid <uid>` on its command line.
+
+No data root or layout root may be, or lie in, the socket's directory. The
+second service admits only a peer whose uid is the Client's, serves one
+connection at a time, and when that connection closes stops every program it
+started, by its process group. Its programs get its own environment, with
+`HOME`, `USER` and `LOGNAME` of the process account, then the block's `env`,
+then the Supervisor Endpoint's token; they keep its umask.
+
+The second service's program marks itself not dumpable (`PR_SET_DUMPABLE`)
+before it parses its command line or sets up its log, so from then on no process
+of the process account can attach a debugger to it, read its memory or take its
+file descriptors, whatever `kernel.yama.ptrace_scope` says. It therefore writes
+no core dump, and the files under `/proc/<pid>/` belong to root. The programs it
+starts are dumpable as usual. Where Yama is absent or `ptrace_scope` is 0, the
+moment between its start and the mark remains open to a Managed Process that
+ends it and waits for systemd to start it again. A second service that is traced
+at its start does not listen: it exits with
+`the second service is traced by process <pid>`, and systemd starts it again.
+
+At its next start the Client lays out what it keeps for the process account's
+group; everything else under `state_dir`, its logs among them, stays its own:
+
+| Path                                                                                          | Owner : group                    | Mode                            |
+| --------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------- |
+| `state_dir`, the Supervisors' root, each Supervisor's directory                               | Client : process account's group | `0710`                          |
+| the Client's key, certificates, `remote-config.pb`, `instance-uid`, package state and staging | Client                           | `0600` / `0700`                 |
+| `program/` and its files, the preflight's staging                                             | Client : process account's group | `0750`, no group or other write |
+| `config/` and its files                                                                       | Client : process account's group | `0750` / `0640`                 |
+| a kind's data directories                                                                     | Client : process account's group | `2770`                          |
+
+A re-registration leaves what the process account owns, and what is in its
+group, as it is. A member of a `.tar.gz` package never lands writable by group
+or others, on every host: `0777` lands `0755`, `0666` lands `0644`.
+
+#### On macOS
+
+The same rules, with launchd: macOS 13 or later, the Client under an account of
+its own (not root), and the process account a role account whose name begins
+with `_`, with a primary group of its own that the Client's account joins:
+
+```console
+# dseditgroup -o create -i <gid> _opamp-fleet-agents
+# sysadminctl -addUser _opamp-fleet-agents -UID <uid> -GID <gid> -roleAccount
+# dseditgroup -o edit -a <client account> -t user _opamp-fleet-agents
+# opamp-fleet service install --run-as <client account> --process-account _opamp-fleet-agents
+# opamp-fleet service stop && opamp-fleet service start
+```
+
+`<gid>` and `<uid>` are ones no group or account holds. The install registers
+`/Library/LaunchDaemons/opamp-fleet-agents.plist` with `UserName` naming the
+process account, and creates the socket's directory
+`/Library/Application Support/opamp-fleet-agents/`, owned by the process account
+and its group, `0750`; the socket is `agents.sock` in it. The install refuses to
+create it where `/Library/Application Support` is writable by an account other
+than root, and it removes the directory with the second service's registration.
+Modes and ownership are those of the Linux table.
+
+#### On Windows
+
+The Client must run under an account of its own, so name it with `--run-as` on
+the same install; a registration that runs as `LocalSystem`, which is what the
+MSI's first install makes, is refused. The process account is passwordless, as
+`--run-as` is: the second service's own virtual account
+`NT SERVICE\opamp-fleet-agents` (recommended), a gMSA (`DOMAIN\name$`), which is
+looked up in its domain, or `NT AUTHORITY\LocalService` / `NetworkService`,
+which other services share and so separate less. From an elevated prompt:
+
+```console
+> opamp-fleet service install --run-as "NT SERVICE\opamp-fleet" ^
+    --process-account "NT SERVICE\opamp-fleet-agents"
+```
+
+Where the Client ran, the install starts it again afterwards, and the second
+service before it.
+
+What the install registers and sets:
+
+- The SCM entry `opamp-fleet-agents`, automatic start, under the process
+  account, running
+  `run --agents \\.\pipe\opamp-fleet-agents --client-sid <SID>`, with the
+  Client's recovery actions. Its required privileges are
+  `SeChangeNotifyPrivilege` alone, so no Managed Process holds
+  `SeImpersonatePrivilege`. The Client's entry does not depend on it:
+  `service start` starts the second service first, then the Client.
+- The named pipe `\\.\pipe\opamp-fleet-agents`, owned by the process account.
+  Only the Client's account may read and write data on it, and nobody may create
+  an instance of it but the process account; it rejects remote clients, and a
+  pipe of that name made by anyone first fails the second service's start. Each
+  end checks the other's account.
+- A job object per program. Every program, and everything it starts, ends with
+  its job when the Client's connection closes; a program that has a broker start
+  a process for it — a WMI process creation, a scheduled task — outlives that.
+  Windows has no signals: a kind that reloads by a signal is restarted instead.
+- ACL grants to the process account's SID. The install grants it read and
+  execute on the layout's `versions\`. At its next start the Client grants it
+  read and execute on `program/`, the preflight's staging and `config/`, and
+  modify without `DELETE` on a kind's data directories. It gets nothing on the
+  state directory or a Supervisor's directory, which it passes by
+  `SeChangeNotifyPrivilege` alone, and nothing on the Client's key or logs. The
+  Client's own account gets `WRITE_DAC` with its Modify, so it can make these
+  grants.
+
+**Every `service install` stops both services first**, with a process account or
+without one, and every MSI upgrade among them: the Managed Processes stop for as
+long as the install runs. Before it stops anything it writes which of the two
+ran to `HKLM\SOFTWARE\opamp-fleet\WithdrawalPending` (the value `Pending`), and
+once it has succeeded it starts again what ran, the second service first, and
+strikes the record. A first install finds nothing to stop and starts nothing. An
+install that fails after its stop leaves both stopped and says how the SCM
+reports them; the next `service install` that succeeds starts again what ran,
+and `opamp-fleet service start` starts both at once. Only this program's
+`service start` and `service stop` strike the record — `sc.exe` and the Services
+console do not.
+
+The record's key is created owned by the Administrators, with full control for
+`LocalSystem` and the Administrators and nothing for anyone else. An install
+that finds the key owned by anyone but `LocalSystem` or the Administrators, or
+carrying another DACL, changes nothing until an Administrator has looked at it
+and removed it.
+
+`service install`, `uninstall`, `start` and `stop` run one at a time, under the
+install lock: a second waits for the first, for up to 300 seconds, then fails.
+
+The MSI passes no `--process-account`: register one with `service install` after
+the MSI, and every later MSI upgrade keeps it. The MSI stops and unregisters the
+services only on a real removal from Add or Remove Programs or `msiexec /x`,
+never in the middle of an upgrade.
+
+#### Changing or dropping the process account
+
+`service install --process-account <other>` names another account;
+`service install --no-process-account` stops and deregisters the second service,
+and the Client starts its programs itself again:
+
+```console
+# opamp-fleet service install --no-process-account
+installed opamp-fleet
+  …
+  processes: started by the Client itself once it restarts; opamp-fleet-agents was stopped and removed
+```
+
+Either way the former account keeps nothing in the roots the install acts on —
+the layout root, the data root and the state directory, with a Supervisors' root
+that lies beneath them. A Supervisors' root outside them is yours: the install
+leaves it as it is and names it in a warning, and you grant or withdraw the
+process account's rights there yourself — on Linux and macOS by re-owning what
+the former account wrote (`chown -R`). The account itself is never removed;
+delete it once nothing else uses it.
+
+- **On Linux and macOS** the withdrawal is a change of owner: what the former
+  account owns, and what is in its group, goes to the Client's account and
+  group. An install that changes or drops the process account, or names another
+  `--run-as`, first stops the Client and then the second service, waiting up to
+  60 seconds for each process to end, and once it has succeeded starts again
+  what ran, the second service first. Where a service cannot be stopped, the
+  install starts again what it stopped and changes nothing but the configuration
+  it wrote. An install that fails after the stop leaves the services stopped and
+  names them; nothing records them, so no later install starts them —
+  `opamp-fleet service start` does.
+- **On Windows** every entry that allows the former account anything is removed
+  from the layout root, the data root, the state directory, `supervisor.toml`
+  and the fleet files copied beside it, and what it owns there is given to the
+  Administrators; an entry that denies it stays, and `LocalSystem` is never
+  withdrawn. The former accounts are resolved before anything changes — a gMSA
+  whose domain cannot be reached fails the install there — and written to the
+  record before the stop; an install that finds a withdrawal recorded completes
+  it.
+
+A file with a second hard link is never re-owned or withdrawn; the install names
+it in a warning.
+
+#### Uninstalling
+
+`service uninstall` deregisters both services and leaves the files on disk. Stop
+them first, as the `.deb` and `.rpm` removal does: `opamp-fleet service stop`,
+then `opamp-fleet service uninstall`. On macOS the socket's directory goes with
+the second service. On Windows `service uninstall` stops both itself and starts
+neither again; where it holds the install lock and both are stopped it completes
+a recorded withdrawal and removes the record, otherwise it says that the next
+`service install` or `service uninstall` completes it. It deregisters both
+services in every case.
+
+#### Before going back to an older release
+
+A release before the second service knows nothing of it: its `service install`
+rewrites the Client's registration without the second service, but neither
+stops, rewrites nor removes `opamp-fleet-agents`, withdraws nothing from the
+process account, and leaves a Windows record unread. The second service then
+runs a program that does not know `run --agents` and fails at every start.
+Before installing such a release, drop the process account with the release you
+run — `opamp-fleet service install --no-process-account` — and then install the
+older one.
+
+#### When the install refuses
+
+Every refusal comes before anything is written and names the way out. The ones
+you will meet:
+
+| Message about                                                                                 | What to do                                                                                                              |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `… does not exist on this host. Create it first (…)`                                          | Linux and macOS: create the account with the command it shows, or name another.                                         |
+| `… cannot be found on this host or its domain`                                                | Windows: name an account that exists, or a gMSA whose domain is reachable.                                              |
+| `… is root, and a process account never is` / `it is LocalSystem`                             | Run everything as root (`--run-as root`, no `--process-account`), or name an account of its own.                        |
+| `the Client runs as root` / `the Client runs as LocalSystem`                                  | Name the Client's account with `--run-as`; on Windows `NT SERVICE\opamp-fleet`.                                         |
+| `… is the account the Client runs as`                                                         | Name another account for the processes.                                                                                 |
+| `… has the primary group …, and the Client's account … is not in it`                          | Add the Client's account to the group with the command it shows.                                                        |
+| `… is a member of it beside the Client's account`, `… also the primary group of …`, `(gid 0)` | Give the process account a group of its own whose one member is the Client's account.                                   |
+| `… is a member of the primary group of the Client's account`                                  | Take the process account out of that group with the command it shows (`gpasswd --delete`, `dseditgroup -d`).            |
+| `… names no account for the second service`                                                   | The unit or plist was edited: name one with `--process-account`, or drop it with `--no-process-account`.                |
+| `a process account needs the second service, which only a system service under systemd …`     | Not available at user scope or under another service manager.                                                           |
+| `… is, or lies in, …, the directory of the second service's socket`                           | Name a data root and a layout root outside it.                                                                          |
+| `would need a password` / `belongs to another service`                                        | Use a passwordless form: `NT SERVICE\opamp-fleet-agents`, a gMSA, `LocalService`, `NetworkService`.                     |
+| `what the former account … was granted cannot be withdrawn`                                   | Windows: the former account, a gMSA among them, cannot be resolved. Run the install again once its domain is reachable. |
+| `… records what an install left to finish and cannot be read`                                 | Windows: the record's key is not the install's own. Look at it, remove it, and install again.                           |
+| `another install, uninstall, start or stop still holds the install lock`                      | Windows: wait for the other run, or end it.                                                                             |
+
+At run time, the Client logs
+`the second service is refused; no program starts until the process account
+serves this build on its socket`
+when the second service does not admit it: it serves another account than the
+one the Client runs as, or another build. `service install` again writes both
+registrations from one decision.
 
 ### Files beside the program
 
@@ -763,7 +1124,9 @@ program's:
 | **Windows** (SCM)   | `opamp-fleet`                 |
 
 So the same command works everywhere it exists: `systemctl status opamp-fleet`,
-`launchctl list opamp-fleet`, `sc query opamp-fleet`.
+`launchctl list opamp-fleet`, `sc query opamp-fleet`. Where a
+[process account](#managed-processes-under-a-process-account) is registered, the
+second service is `opamp-fleet-agents` on every platform.
 
 The name is fixed when the program is built, which is why there is no flag to
 change it. A second Client on one host is a second build with its own product
@@ -809,6 +1172,14 @@ turning the log off is spelled `enabled = false` and cannot be reached by typing
 a zero. If the directory cannot be written, the Client says so and runs anyway:
 a monitoring agent that refuses to start because of its own log file has turned
 a diagnostic into an outage.
+
+Where a process account is registered, a `dir` the process account's group
+passes through or writes is refused the same way, and the Client runs without a
+log file: the state directory itself, the Supervisors' root or anything above
+it, a Supervisor's directory or anything beneath it, and a path named with `..`.
+A directory beneath the state directory is kept the Client's alone, `0700`. The
+default `<state_dir>/logs` stays usable where `supervisor_dir` is the state
+directory itself, where no Supervisor can be named `logs`.
 
 This is a different thing from the Client's own telemetry (`ReportsOwnLogs`),
 which ships log records to a destination the **Server** offers. That needs a
@@ -974,8 +1345,12 @@ same_ Agent across restarts and upgrades; delete it and the Server sees a host
 it has never met, while the old row lingers. Nothing regenerates it, which is
 why the data root survives an uninstall.
 
-The state directory's location follows `state_dir` in the configuration file
-when that names an absolute path. Left alone, it is `<data-root>/state`.
+The state directory is the one `--state-dir` names, else the one the existing
+service registration names, so an upgrade never moves it. A first install takes
+`state_dir` from the configuration file when that names an absolute path beneath
+the data root or the layout root, and refuses one elsewhere: the service's
+account may rewrite the file, and the install hands the state directory over to
+that account. Left alone, it is `<data-root>/state`.
 
 Logs rotate daily and seven files are kept. On Linux and macOS the service's
 output also reaches the system journal; on Windows the file is the only copy,
@@ -1009,6 +1384,19 @@ program, packages, configuration and identity. A directory that no block names
 is reported at startup and never deleted on its own, so a typo in a name does
 not destroy an Agent's identity.
 
+Before it deletes a removed Agent's directory, the Client renames it to a
+tombstone, `.purge-<name>-<hex>`, beside the others, so an Agent added again
+under the same name starts in a fresh directory. `<hex>` is 17 lowercase
+hexadecimal digits or more; a directory named alike with a shorter suffix, such
+as `.purge-backup-20241001`, is no tombstone. A tombstone that could not be
+deleted — a file held open, or one the process account wrote that the second
+service could not remove — stays, with a warning, and nothing in it is used
+again. The Client removes it again at the next start, beside the start, and with
+the next removal of a Supervisor. Where a process account is registered, each
+try waits for the second service as long as a purge does; a try that does not
+reach it warns, and the next start or removal tries again. Until it is gone,
+each startup warns about it. No other directory that no block names is touched.
+
 `config/` is what `${config_dir}` expands to in a process's arguments, which is
 how a program is pointed at its own configuration without anyone writing an
 absolute path into a block. Where a Configuration carries a role rather than
@@ -1037,12 +1425,18 @@ structure by a different route.
 
 ### What an uninstall leaves behind
 
-| What you do                 | What goes                                             | What stays                                                               |
-| --------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------ |
-| `service uninstall`         | the service registration                              | everything on disk                                                       |
-| `apt remove` / `dnf remove` | the registration, the layout root, the `PATH` symlink | the data root: configuration, state, every Agent's identity              |
-| `apt purge`                 | all of the above                                      | nothing                                                                  |
-| MSI uninstall               | the registration and the installation folder          | everything under `%ProgramData%\<product>`: layout, configuration, state |
+| What you do                 | What goes                                                                                                                      | What stays                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `service uninstall`         | the service registration, and the second service's where a process account is registered; on macOS the directory of its socket | everything on disk                                                       |
+| `apt remove` / `dnf remove` | the registration, the layout root, the `PATH` symlink                                                                          | the data root: configuration, state, every Agent's identity              |
+| `apt purge`                 | all of the above                                                                                                               | nothing the package made                                                 |
+| MSI uninstall               | the registration and the installation folder                                                                                   | everything under `%ProgramData%\<product>`: layout, configuration, state |
+
+The process account stays in every case, after `apt purge` too: you created it,
+and you delete it once nothing else uses it. On Windows an uninstall that did
+not hold the install lock leaves `HKLM\SOFTWARE\opamp-fleet\WithdrawalPending`
+in place and says so; the next `service install` or `service uninstall`
+completes it (see [Uninstalling](#uninstalling)).
 
 The pattern is the same everywhere: **removing the program is not removing the
 host from the fleet.** A reinstall over a surviving data root comes back as the
@@ -1070,15 +1464,15 @@ key fails startup rather than being ignored, with one exception: a leftover
 
 ### Top level
 
-| Key                       | Default                           | Meaning                                                                                                                                                                                                                                                                                                   |
-| ------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `endpoint`                | `"wss://127.0.0.1:4320/v1/opamp"` | The Server's OpAMP endpoint. The scheme selects the transport: `wss://` for WebSocket, `https://` for polling, both TLS 1.3. `ws://` and `http://` are accepted only when the host is the IP literal `127.0.0.1` or `::1`; to any other host, the name `localhost` included, the Client refuses to start. |
-| `name`                    | `"Supervisor Agent"`              | The Agent's `service.instance.name` — your name for _this_ Client, shown in the fleet view and matchable by a Selector. Its `service.name` is the constant type `supervisor`, the same on every host.                                                                                                     |
-| `poll_interval_secs`      | `30`                              | How often the plain-HTTP transport polls. Ignored on WebSocket.                                                                                                                                                                                                                                           |
-| `heartbeat_interval_secs` | `30`                              | Heartbeat interval on WebSocket. `0` disables heartbeats and undeclares the capability; on plain HTTP every poll already is the periodic report.                                                                                                                                                          |
-| `max_message_size_bytes`  | `67108864` (64 MiB)               | The largest OpAMP message sent or accepted, in either direction — including on the Supervisor Endpoint. A message past it is never sent, and an oversized one from the Server is refused.                                                                                                                 |
-| `state_dir`               | `"client-state"`                  | Where the Client persists its own Agent's identity, its remote configuration, and any Server-offered connection settings. A self-update artifact is streamed here first, so it needs room for one agent binary.                                                                                           |
-| `supervisor_dir`          | `<state_dir>/supervisors`         | Where the per-Supervisor directories live. Set it when the programs must not live where the state does — `/var/lib` is often mounted `noexec`, and sized for state rather than for a few hundred megabytes of Collector.                                                                                  |
+| Key                       | Default                           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint`                | `"wss://127.0.0.1:4320/v1/opamp"` | The Server's OpAMP endpoint. The scheme selects the transport: `wss://` for WebSocket, `https://` for polling, both TLS 1.3. `ws://` and `http://` are accepted only when the host is the IP literal `127.0.0.1` or `::1`; to any other host, the name `localhost` included, the Client refuses to start.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `name`                    | `"Supervisor Agent"`              | The Agent's `service.instance.name` — your name for _this_ Client, shown in the fleet view and matchable by a Selector. Its `service.name` is the constant type `supervisor`, the same on every host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `poll_interval_secs`      | `30`                              | How often the plain-HTTP transport polls. Ignored on WebSocket.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `heartbeat_interval_secs` | `30`                              | Heartbeat interval on WebSocket. `0` disables heartbeats and undeclares the capability; on plain HTTP every poll already is the periodic report.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `max_message_size_bytes`  | `67108864` (64 MiB)               | The largest OpAMP message sent or accepted, in either direction — including on the Supervisor Endpoint. A message past it is never sent, and an oversized one from the Server is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `state_dir`               | `"client-state"`                  | Where the Client persists its own Agent's identity, its remote configuration, and any Server-offered connection settings. A self-update artifact is streamed here first, so it needs room for one agent binary.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `supervisor_dir`          | `<state_dir>/supervisors`         | Where the per-Supervisor directories live. Set it when the programs must not live where the state does — `/var/lib` is often mounted `noexec`, and sized for state rather than for a few hundred megabytes of Collector. Where it is the state directory itself, a Supervisor named after what the Client keeps there — `instance-uid`, `config`, `packages`, `logs`, `gateway-packages`, `supervisors` — is refused at startup and in a set the Server offers, and no Supervisor's directory may be the state directory or hold it. Outside the data root, the layout root and the state directory, `service install` creates and hands over nothing for it: create it yourself, writable by the service's account only. |
 
 > **Moving `supervisor_dir` on a running host leaves the old tree behind**,
 > `instance-uid` included, so every Supervisor re-registers as a **new** Agent
@@ -1117,16 +1511,20 @@ names to describe an Agent and where it runs: `service.name`,
 version and for a Supervisor-backed Agent is whatever the Managed Process
 reports about itself.
 
-A Managed Process states only its own `service.*` attributes: its type
-(`service.name`, a Collector's `dist.name`) and its version replace what the
-Supervisor reports. Everything else it reports is dropped — `host.*`, `os.*` and
-`supervisor.*`, and keys in a namespace of its own such as a Collector's
-`agent_description.non_identifying_attributes` and resource attributes. Where
-the Agent runs is the Supervisor's statement, since it decides which Selectors
-match and which artifact is offered. Within `service.*` the process cannot
-restate `service.instance.id`, `service.instance.name`, `service.namespace`
-while `service_namespace` is set, or a key `[attributes]` sets. To tag a
-Collector, use a Server label, or `[attributes]` for the whole host.
+A Managed Process states only its own `service.*` attributes, such as its
+version, which replaces what the Supervisor reports. It never states the Agent's
+type: `service.name` is the Supervisor's, taken from the block's `service_name`
+or the program's file name, and a type the process reports, such as a
+Collector's `dist.name`, is dropped with a warning in the Client log that names
+the Supervisor, both values and `service_name`. Everything else it reports is
+dropped — `host.*`, `os.*` and `supervisor.*`, and keys in a namespace of its
+own such as a Collector's `agent_description.non_identifying_attributes` and
+resource attributes. Where the Agent runs is the Supervisor's statement, since
+it decides which Selectors match and which artifact is offered. Within
+`service.*` the process cannot restate `service.instance.id`,
+`service.instance.name`, `service.namespace` while `service_namespace` is set,
+or a key `[attributes]` sets. To tag a Collector, use a Server label, or
+`[attributes]` for the whole host.
 
 The first two are the pair to keep apart: `service.name` is _what_ this Agent is
 — the type, shared by every Agent of that kind — and `service.instance.name` is
@@ -1334,19 +1732,33 @@ downstream, so a polling Client works as well as a WebSocket one.
 
 **Each Agent belongs to the host that first reported it.** An Agent's
 `instance_uid` is bound to the host of the certificate of the first report for
-it since the Gateway started — the host the certificate names
-(`urn:opamp-fleet:host:<id>`), or, for a certificate an operator made without
-one, the host the Server will give it at its first renewal, so its Agents stay
-bound across that renewal. A report for an `instance_uid` bound to another host
-is not forwarded: over WebSocket it is dropped, over plain HTTP it is answered
-`403`, and the log says so, the first five per host and minute one by one, the
-rest counted into one line. So one host behind a Gateway cannot take over
-another host's Agent, receive its configuration or its certificate, or speak in
-its name. A host binds at most `max_carried_agents` `instance_uid`s; past that a
-report for a new one takes the place of that host's own least recently reported
-Agent that has neither a connection nor an offer, and when it has none, the
-report is not forwarded. If a host locks another host's Agent out, restart the
-Gateway: the real host's next report then binds it. A certificate renewed
+it — the host the certificate names (`urn:opamp-fleet:host:<id>`), or, for a
+certificate an operator made without one, the host the Server will give it at
+its first renewal, so its Agents stay bound across that renewal. A report for an
+`instance_uid` bound to another host is not forwarded: over WebSocket it is
+dropped, over plain HTTP it is answered `403`, and the log says so, the first
+five per host and minute one by one, the rest counted into one line. So one host
+behind a Gateway cannot take over another host's Agent, receive its
+configuration or its certificate, or speak in its name. The binding outlasts a
+restart of the Gateway: it is written to the Gateway's directory before the
+report that made it is forwarded (see
+[What a Gateway keeps on disk](#what-a-gateway-keeps-on-disk)). A host binds at
+most `max_carried_agents` `instance_uid`s, and the Gateway at most 1 000 000;
+past either, a report for a new one takes the place of that host's own least
+recently reported Agent that has neither a connection nor an offer — never
+another host's — and when it has none, the report is not forwarded and the log
+says so.
+
+**A binding ends with its host's certificate.** The Gateway keeps, per host, the
+latest `notAfter` among the certificates the host reported under. Once that has
+passed by the Gateway's clock, or the revocation list the Gateway fetches names
+that certificate, every binding of the host ends, with its connection and its
+offer, and the log names the host and how many went; the Gateway checks at
+start, whenever it takes a new list, and once an hour. A report under an expired
+certificate binds nothing. A host that keeps renewing keeps its Agents. So an
+Agent moved to a new host behind the same Gateway is refused there until the old
+host's certificate expires; to free it at once, revoke the old host's
+certificate, which ends every binding that host holds. A certificate renewed
 through a Gateway is renewed with a renewal proof, which this Client always
 sends; the Server refuses a request without one there.
 
@@ -1434,17 +1846,15 @@ Agent:
   A downstream Client is served an artifact only when the Gateway relayed an
   offer of it to an Agent carried over a connection whose certificate names the
   same host (`urn:opamp-fleet:host:<id>`) as the requesting certificate. An
-  Agent's `instance_uid` belongs to the host of the first report for it since
-  the Gateway started, as above; an offer relayed for it over another host's
-  connection is not recorded, and the log says so. At the Gateway's cap of 1 000
-  000 a new one replaces the least recently reported binding that has neither a
-  connection nor an offer. An offer relayed over a certificate that names no
-  host serves nobody and is not fetched. Everything else is answered `404`, the
-  same answer whatever the reason, and logged with the host, the certificate's
-  serial and the path — the first five per host and minute one by one, the rest
-  counted into one line.
+  Agent's `instance_uid` belongs to the host of the first report for it, as
+  above; an offer relayed for it over another host's connection is not recorded,
+  and the log says so. An offer relayed over a certificate that names no host
+  serves nobody and is not fetched. Everything else is answered `404`, the same
+  answer whatever the reason, and logged with the host, the certificate's serial
+  and the path — the first five per host and minute one by one, the rest counted
+  into one line.
 - **Where, and how much.** `<state_dir>/gateway-packages`, owner-only, emptied
-  when the Gateway starts. `[gateway] package_cache_bytes` (default
+  of artifacts when the Gateway starts. `[gateway] package_cache_bytes` (default
   `10737418240`, 10 GiB; `0` fails startup) bounds what it holds and what it is
   fetching: before a fetch writes a byte it reserves the artifact's size. To
   make room it deletes artifacts no current offer names first, then the least
@@ -1460,6 +1870,36 @@ Agent whose install is still under way re-draws its offer when it reconnects.
 One that already reported a failed install and retries is answered `404` until
 the Server offers it another version; rolling out the same version again does
 not re-send the offer.
+
+### What a Gateway keeps on disk
+
+Beside the artifacts of its package cache, a Gateway keeps the bindings of the
+Agents behind it in `<state_dir>/gateway-packages/bindings`: each `instance_uid`
+with its host, each host's certificate end, and the order in which the bindings
+were last reported. The file is a journal: a new binding is appended and synced
+before the report that made it is forwarded, a removal is appended, the order of
+reports at most once a minute and at shutdown, and the whole file is rewritten
+when the Gateway starts and whenever it has grown to twice the bindings and
+hosts it holds. It is at most 512 MiB, `0600` and owned by the Client's account
+on Linux and macOS, and lies under the state directory's restricted ACL on
+Windows. The offers are kept in memory only (see above).
+
+**When the file cannot be read, the Gateway carries no Agent.** At start the
+Gateway refuses a file that is a link, is no regular file, on Linux and macOS is
+not `0600` or not owned by the Client's account, is larger than 512 MiB, names a
+format or version this Client does not read, or holds a line it cannot parse
+before its last, and one it cannot rewrite at start, as on a full disk; a last
+line cut off without its newline, as a crash leaves it, is dropped. While it
+refuses the file, the Gateway answers every WebSocket upgrade, every plain-HTTP
+report and every download from the Clients behind it `503`, and still relays an
+enrolling peer's one request. It does not change a file it cannot read — one it
+could read but not rewrite may already have been replaced by a copy of the same
+bindings — and it logs why at start and once an hour. The Client's own
+connection and its Supervisors go on. To recover, look at why the file was
+refused, then remove it and restart the Client: the Gateway starts with no
+binding, and each Agent behind it is bound again by the next report for it — by
+whichever host sends that report first, which is what the file was protecting. A
+missing file is an empty one.
 
 ### What a Gateway does not do
 
@@ -1531,7 +1971,8 @@ releases it to applies them as its new set:
   one collector does not cycle its neighbours.
 - **A removed Supervisor is purged**. Once the rewritten file no longer names
   it, its whole directory `<supervisor_dir>/<name>/` is deleted — identity,
-  written configuration, staged packages, and the Client-owned program. A
+  written configuration, staged packages, and the Client-owned program — by way
+  of a tombstone ([one directory per Agent](#one-directory-per-agent)). A
   changed Supervisor restarts under its name and keeps its directory; the
   program itself is never touched. Removal is destructive on the host: re-adding
   the same name later starts a genuinely fresh Agent, restoring service, not
@@ -1593,7 +2034,9 @@ The key is read from this file only, and the Server never writes
   Client's account — a Telegraf `inputs.exec`, an Icinga `CheckCommand`, the
   configuration a `command` Supervisor's program reads — is named in
   `remote_config_disabled`. Otherwise the Server can configure such a Supervisor
-  to rewrite this file, and the key changes at the next start. A signed Client
+  to rewrite this file, and the key changes at the next start. Where a
+  [process account](#managed-processes-under-a-process-account) is registered,
+  those commands run under it, and it cannot write this file. A signed Client
   build can still replace the Client itself where `[packages] self_update`
   consents, and that build reads the key.
 - **Switching it back on.** Set the key to `true`, or remove it, and restart the
@@ -1669,16 +2112,16 @@ list takes effect when the Client next starts.
 
 ### Keys every block accepts
 
-| Key                    | Default                      | Meaning                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                 | —                            | `"collector"` or `"command"` — one section each below. Required.                                                                                                                                                                                                                                                                                                |
-| `name`                 | —                            | This Agent's `service.instance.name` — your name for it — and the directory name it owns. Required; 1–32 lowercase letters, digits, and `-`. Must be unique in the file. A Managed Process can never overwrite it.                                                                                                                                              |
-| `service_name`         | the program's file name      | This Agent's `service.name`: the Agent **type** it presents. A Managed Process that reports a type of its own wins over it — a Collector with the `opampextension` states the `dist.name` it was built with — so set it for a process that reports nothing. Unlike `name` it may be a reverse FQDN, as the protocol recommends; only an empty value is refused. |
-| `endpoint_port`        | `0` (ephemeral)              | The port of the Supervisor Endpoint on `127.0.0.1`. The endpoint always comes up; pin the port when something is meant to connect to it.                                                                                                                                                                                                                        |
-| `stop_timeout_secs`    | global `[supervisors]` value | Graceful-stop budget before the process is killed. **Unwrapped kinds only.**                                                                                                                                                                                                                                                                                    |
-| `apply_grace_secs`     | global `[supervisors]` value | How long a restarted process must survive before a received configuration is acknowledged `APPLIED`. `0` acknowledges on start. **Unwrapped kinds only.**                                                                                                                                                                                                       |
-| `retain_previous_secs` | global `[updates]` value     | How long the version a successful update supersedes is kept before deletion. `0` deletes it on success. **Unwrapped kinds only.** See [Package updates: rollback and retention](#package-updates-rollback-and-retention).                                                                                                                                       |
-| `program_path`         | unset                        | Where the program sits _inside_ a package that is a whole directory tree, e.g. `bin/fluent-bit`. Unset means the package is a single file. **Unwrapped kinds only** — a wrapper knows its own tree. See [Agents that are more than one file](#agents-that-are-more-than-one-file).                                                                              |
+| Key                    | Default                      | Meaning                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                 | —                            | `"collector"` or `"command"` — one section each below. Required.                                                                                                                                                                                                                                                                                                                                           |
+| `name`                 | —                            | This Agent's `service.instance.name` — your name for it — and the directory name it owns. Required; 1–32 lowercase letters, digits, and `-`. Must be unique in the file. A Managed Process can never overwrite it.                                                                                                                                                                                         |
+| `service_name`         | the program's file name      | This Agent's `service.name`: the Agent **type** it presents. A Managed Process never overrides it: a type the process reports — a Collector with the `opampextension` states the `dist.name` it was built with — is dropped and named in a warning, so set this key to present that value as the type. Unlike `name` it may be a reverse FQDN, as the protocol recommends; only an empty value is refused. |
+| `endpoint_port`        | `0` (ephemeral)              | The port of the Supervisor Endpoint on `127.0.0.1`. The endpoint always comes up; pin the port when something is meant to connect to it.                                                                                                                                                                                                                                                                   |
+| `stop_timeout_secs`    | global `[supervisors]` value | Graceful-stop budget before the process is killed. **Unwrapped kinds only.**                                                                                                                                                                                                                                                                                                                               |
+| `apply_grace_secs`     | global `[supervisors]` value | How long a restarted process must survive before a received configuration is acknowledged `APPLIED`. `0` acknowledges on start. **Unwrapped kinds only.**                                                                                                                                                                                                                                                  |
+| `retain_previous_secs` | global `[updates]` value     | How long the version a successful update supersedes is kept before deletion. `0` deletes it on success. **Unwrapped kinds only.** See [Package updates: rollback and retention](#package-updates-rollback-and-retention).                                                                                                                                                                                  |
+| `program_path`         | unset                        | Where the program sits _inside_ a package that is a whole directory tree, e.g. `bin/fluent-bit`. Unset means the package is a single file. **Unwrapped kinds only** — a wrapper knows its own tree. See [Agents that are more than one file](#agents-that-are-more-than-one-file).                                                                                                                         |
 
 #### Wrapped and unwrapped kinds
 
@@ -1770,9 +2213,11 @@ say the same.
 A Collector **with** the `opampextension` reports its own description, health,
 and effective configuration through the Supervisor Endpoint instead of being
 watched from outside. Of its description, only its `service.*` attributes reach
-the Server (see [`[attributes]`](#attributes)). The extension ships only in the
-Contrib distribution. Pin `endpoint_port` and make sure the configuration the
-Server distributes carries the extension pointing at it:
+the Server, and not its type (see [`[attributes]`](#attributes)): the Agent's
+type is the block's `service_name`, else the program's file name, and a
+`dist.name` that differs is named in a warning in the Client log. The extension
+ships only in the Contrib distribution. Pin `endpoint_port` and make sure the
+configuration the Server distributes carries the extension pointing at it:
 
 ```toml
 [[supervisor]]
@@ -1804,9 +2249,9 @@ therefore cannot report in the Collector's name. A Collector configuration
 without the header loses its own reports, not its supervision.
 
 A Collector **without** the extension needs no `endpoint_port`: the endpoint
-still comes up on an ephemeral port, and nothing ever connects to it. Nothing
-reports an Agent type either, so state one with `service_name` — left out, the
-program's file name is used anyway.
+still comes up on an ephemeral port, and nothing ever connects to it. The Agent
+type is the block's either way: `service_name`, or the program's file name when
+it is left out.
 
 ```toml
 [[supervisor]]
@@ -2265,6 +2710,11 @@ name the key. The ones you are most likely to meet:
 | `[gateway.tls] is required`, or its `client_ca_file`       | A Gateway serves its Agents over mutual TLS only; give it `cert_file`, `key_file` and `client_ca_file`.                                                         |
 | `[packages] allowed_sources is removed`                    | The key no longer exists: a Client downloads only from its own Server's origin. Delete it.                                                                      |
 
+**Every Client behind a Gateway is answered `503`.** Either the Gateway holds no
+current revocation list, or it cannot read the file of its bindings; its log
+says which, the second at start and once an hour. See
+[What a Gateway keeps on disk](#what-a-gateway-keeps-on-disk).
+
 **A Foreign Agent runs but never gets new configuration.** Its command line is
 pointing somewhere the Client does not write. Use `${config_dir}` (see
 [Path placeholders](#path-placeholders)) and check that the file name matches
@@ -2284,6 +2734,9 @@ no signature, and the Server offers no unsigned entry.
 off this Client's own Server origin (see
 [Where a download may come from](#where-a-download-may-come-from)). This Server
 offers only paths, so the URL comes from a redirect or from a foreign Server.
+
+**An install refuses the process account, or no program starts behind it.** See
+[When the install refuses](#when-the-install-refuses).
 
 **Everything re-registered as new Agents after a move.** `supervisor_dir`
 changed, and the `instance-uid` files stayed behind in the old tree. That is

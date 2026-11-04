@@ -97,7 +97,7 @@ pub async fn enrol(
     // Read now, so a pair that is no certificate and key is named before anything connects.
     crate::tls::client_tls(&config)?;
 
-    let storage = Storage::new(config.state_dir.clone())
+    let storage = Storage::enrolling(config.state_dir.clone())
         .map_err(|e| format!("cannot prepare {}: {e}", config.state_dir.display()))?;
     // The Client's own Agent alone, taking nothing but the certificate: no Supervisor is started,
     // no remote configuration taken, and no package declared.

@@ -85,8 +85,9 @@ fn view<'a>(agents: &'a [AgentView], name: &str) -> Option<&'a AgentView> {
 }
 
 /// The extension's report reaches the Server on its Supervisor's Agent, but only its `service.*`
-/// attributes do: where the Agent runs and what kind of Agent it is stay the Supervisor's word.
-/// Verifies: ADR-0041
+/// attributes do: where the Agent runs and what kind of Agent it is stay the Supervisor's word,
+/// and so does the Agent's type, whatever `dist.name` the Collector states.
+/// Verifies: ADR-0041, ADR-0055
 // Verifies: G-16, ADR-0015
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_agent() {
@@ -194,6 +195,9 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
             identifying_attributes: vec![
                 string_attr("service.instance.id", "the-extensions-own-id"),
                 string_attr("service.instance.name", "the-extensions-own-name"),
+                // A `dist.name` that is not the block's type, which the Supervisor drops
+                // (ADR-0055).
+                string_attr("service.name", "otelcol-contrib"),
                 string_attr("service.version", "0.142.0"),
             ],
             // And, as a process the Supervisor does not vouch for may, another host and the
@@ -251,6 +255,10 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
     );
     let agents = state.snapshot();
     let agent = view(&agents, "otelcol").expect("the Supervisor's Agent");
+    assert_eq!(
+        agent.service_name, collector_type,
+        "the type stays the block's, not the process's"
+    );
     assert_eq!(
         agent.non_identifying_attributes.get("host.name"),
         host_name.as_ref(),

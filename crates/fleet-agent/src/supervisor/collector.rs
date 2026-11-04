@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::supervisor::ports::{parse_settings, Plugin, ProcessCommand, SupervisorContext};
-use crate::supervisor::process::{Preflight, ProcessSpec, Runner, VersionProbe};
+use crate::supervisor::process::{Preflight, ProcessSpec, Runner, Spawner, VersionProbe};
 
 /// The block's plugin-specific keys, parsed strictly — a typo fails startup, per ADR-0010.
 ///
@@ -80,7 +80,11 @@ fn collector_spec(
     })
 }
 
-pub struct CollectorPlugin;
+/// The Collector kind. Its [`Spawner`] is the one the registry hands every plugin (ADR-0059).
+#[derive(Default)]
+pub struct CollectorPlugin {
+    pub spawner: Spawner,
+}
 
 impl Plugin for CollectorPlugin {
     fn kind(&self) -> &'static str {
@@ -158,6 +162,11 @@ impl Plugin for CollectorPlugin {
             // The Collector has no reload convention — a configuration is applied by restart,
             // the generic behaviour (ADR-0017), which is also what the reference supervisor does.
             reload_signal: None,
+            // The Client itself, or the second service where a process account is registered
+            // (ADR-0059 clause 3): the registry says which.
+            spawner: self.spawner.clone(),
+            process_account_group: ctx.process_account_group,
+            supervisor_dir: ctx.supervisor_dir.clone(),
             events: ctx.events,
             commands: command_rx,
             build: Box::new(move || collector_spec(&binary, &config_dir, &extra_args, &env)),

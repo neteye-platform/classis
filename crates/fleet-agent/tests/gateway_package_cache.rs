@@ -418,7 +418,7 @@ async fn answer(response: reqwest::Response) -> (u16, Vec<(String, Vec<u8>)>, Ve
     )
 }
 
-/// The files held in the Gateway's cache directory.
+/// The files held in the Gateway's cache directory, beside the bindings' store.
 fn held(dir: &Path) -> Vec<String> {
     std::fs::read_dir(dir.join("state").join("gateway-packages"))
         .map(|entries| {
@@ -430,6 +430,7 @@ fn held(dir: &Path) -> Vec<String> {
                         .to_string_lossy()
                         .into_owned()
                 })
+                .filter(|name| name != fleet_agent::gateway::store::NAME)
                 .collect()
         })
         .unwrap_or_default()

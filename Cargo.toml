@@ -7,7 +7,7 @@ resolver = "2"
 members = ["crates/opamp", "crates/fleet-core", "crates/fleet-server", "crates/fleet-agent", "crates/fleet-tools"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -56,7 +56,7 @@ flate2 = "1"
 # `opamp-fleetctl package pack` build the artifact an operator has otherwise no supported way to
 # produce. Only `crates/fleet-tools` and the Client's own tests ask for it (ADR-0010); the
 # Client daemon never encodes, and does not enable it.
-sevenz-rust2 = { version = "0.23", default-features = false, features = ["aes256"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256"] }
 # Reading a `.zip` package artifact (ADR-0026 clause 66) — the container the GLPI Agent's portable Windows
 # build is published in. Default features pull C-binding codecs (bzip2, xz, zstd), so only
 # `deflate` is taken, which decompresses on the `flate2`/`miniz_oxide` chain already present;
@@ -67,6 +67,14 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # which is what ADR-0011 and ADR-0013 keep this build free of; the Client extracts one member and
 # never writes a path the archive chose.
 tar = "0.4"
+# The secrets the application crates hold in memory — private keys, passwords, a `bootstrap.p12`
+# being read, the Supervisor Endpoint token — are wiped when they are dropped (ADR-0057): `Zeroizing`
+# overwrites a buffer with volatile writes behind a compiler fence, which a hand-written overwrite
+# of memory about to be freed cannot promise. The default `alloc` feature and no derive. At least
+# 1.9.1, the first whose `Zeroizing` `Debug` shows no content. Already in the tree through
+# `dialoguer`, `der`, `pkcs8`, `pkcs12`, `rustls` and `rustls-pki-types`; it pulls no TLS or crypto
+# backend, so ADR-0013 holds. `opamp` does not name it (ADR-0010 clause 3).
+zeroize = "1.9.1"
 # Encoding Basic credentials into their Authorization header value (ADR-0021).
 base64 = "0.23"
 # Constant-time credential comparison on the Server (ADR-0021).
@@ -148,6 +156,18 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # presenting a client certificate (ADR-0021) to a Server with a publicly trusted one, which needs
 # a rustls config built by hand. Data, not code — and already in the tree via the TLS stack.
 webpki-roots = "1"
+# Artifact bytes in an S3-compatible bucket (ADR-0049). `aws-base`, `ring` and `reqwest` build the
+# S3 client on *ring*; the `aws` feature would pull `aws-lc-rs` (ADR-0013), and so would the
+# default `fs`, which nothing here needs. The HTTP client is the Server's own, handed in.
+object_store = { version = "0.14.2", default-features = false, features = ["aws-base", "ring", "reqwest"] }
+# The Server's records in PostgreSQL (ADR-0050). `tokio-postgres` speaks the protocol in plain SQL
+# and reads no `PG*` variable; `with-serde_json-1` maps `jsonb` to `serde_json::Value`, already in
+# the tree. `deadpool-postgres` pools the connections on the Tokio runtime. `tokio-postgres-rustls`
+# carries them over the TLS 1.3, *ring*-only client of `opamp::tls`: its `ring` feature, never
+# `aws-lc-rs` (ADR-0013).
+tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime", "with-serde_json-1"] }
+deadpool-postgres = { version = "0.14.2", default-features = false, features = ["rt_tokio_1"] }
+tokio-postgres-rustls = { version = "0.14.0", default-features = false, features = ["ring"] }
 # Server-side TLS listener; `-no-provider` so it uses the ring provider we install, not aws-lc-rs.
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 # The hyper timer the HTTP/1 header-read timeout needs to exist at all (ADR-0013): hyper defaults

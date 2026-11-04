@@ -2,6 +2,8 @@
 
 - **Status:** 🟢 accepted · clauses 11 and 13 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
+  · clause 7 superseded by
+  [ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)
 - **Date:** 2026-10-06
 - **Deciders:** Markus Brigl
 - **Applies to:** crates/fleet-agent/src/gateway/,

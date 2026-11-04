@@ -37,7 +37,7 @@ jobs:
         run: |
           test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
           go vet ./...
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Built as its own step so a compile failure is not reported as an interop failure.
       - name: Build
         run: cargo test -p fleet-agent --test interop_opamp_go --locked --no-run

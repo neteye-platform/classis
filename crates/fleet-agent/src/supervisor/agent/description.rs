@@ -1,17 +1,23 @@
 //! What an Agent reports about itself (ADR-0016): its configured attributes, the host's facts,
-//! and the `service.*` attributes of a Managed Process's own description folded in (ADR-0041).
+//! and the `service.*` attributes of a Managed Process's own description folded in (ADR-0055).
 
 use opamp::attributes::{self, string_array_attr, string_attr};
 use opamp::proto::{AgentDescription, KeyValue};
 use opamp::uid::InstanceUid;
+use tracing::warn;
 
 use super::{AgentState, Local};
 
+/// How much of a type a Managed Process reports reaches the warning about it (ADR-0055 clause 3):
+/// enough for any reverse FQDN, and no more of what a process can make as long as it likes.
+const LOGGED_TYPE_CHARS: usize = 128;
+
 impl AgentState {
     /// The Managed Process reported its own description (through the Supervisor Endpoint or the
-    /// version probe); fold its `service.*` attributes into ours — identity and where the Agent
-    /// runs stay the Supervisor's (goal 16, ADR-0041).
+    /// version probe); fold its `service.*` attributes into ours — identity, type and where the
+    /// Agent runs stay the Supervisor's (goal 16, ADR-0055).
     pub fn set_process_description(&mut self, description: AgentDescription) {
+        let before = reported_types(self.local.process_description.as_ref());
         // Merged per attribute, not replaced wholesale: two sources describe the same process —
         // the version probe, which reports `service.version` and nothing else, and the
         // opampextension, which reports everything else — and whichever speaks second must not
@@ -26,6 +32,27 @@ impl AgentState {
         }
         for attr in &description.non_identifying_attributes {
             upsert_attr(&mut merged.non_identifying_attributes, attr);
+        }
+        // The type is the Supervisor's, and the fold drops the process's `service.name` (ADR-0055
+        // clause 3). A value that differs is said once, when the process starts to report it, so
+        // an operator whose Collector states a `dist.name` learns where to set it, and a report
+        // repeated every few seconds does not flood the log. Only the merged report's values are
+        // compared, so nothing grows however many values a process cycles through. The value is
+        // the process's word, so the log carries it cut short and escaped, never as raw text
+        // that could forge a line of its own.
+        let after = reported_types(self.local.process_description.as_ref());
+        for reported in after.iter().filter(|value| !before.contains(value)) {
+            if *reported != self.local.service_name {
+                let shown: String = reported.chars().take(LOGGED_TYPE_CHARS).collect();
+                warn!(
+                    supervisor = %self.local.instance_name,
+                    reported = ?shown,
+                    r#type = %self.local.service_name,
+                    "the Managed Process reports another Agent type, which is ignored: the type \
+                     is the Supervisor's; set the block key `service_name` to present the \
+                     process's"
+                );
+            }
         }
         self.protocol.force_full();
     }
@@ -53,8 +80,8 @@ impl AgentState {
 impl Local {
     pub(super) fn describe(&self, uid: &InstanceUid) -> AgentDescription {
         // `service.name` is the Agent *type* — the Baseline's "reverse FQDN that uniquely
-        // identifies the Agent type" (ADR-0016). The instance name has its own key below, out of
-        // the way of the fold, so a Managed Process reporting its own type cannot destroy it.
+        // identifies the Agent type" (ADR-0055), and the Supervisor's alone: the fold below never
+        // lets a Managed Process restate it. The instance name has its own key below.
         let mut identifying_attributes =
             vec![string_attr(attributes::SERVICE_NAME, &self.service_name)];
         // The Baseline lists `service.namespace` second, among what identifies the Agent — it says
@@ -134,16 +161,16 @@ impl Local {
                 operators_keys.push(key.as_str());
             }
         }
-        // Fold in what the Managed Process reported about itself (ADR-0041 clause 1) — its
+        // Fold in what the Managed Process reported about itself (ADR-0055 clause 2) — its
         // `service.*` attributes alone. A process is code the Supervisor does not vouch for, and
         // where the Agent runs (`host.*`, `os.*`) and what kind of Agent it is (`supervisor.*`)
         // decide which Selectors match and which artifact is offered; those stay the
         // Supervisor's statement, and every key outside `service.*` is dropped. Within it, the
-        // Supervisor keeps its identity (`service.instance.id`, goal 16) and the operator's name
-        // (`service.instance.name`), and the operator keeps every value they set:
-        // `service.namespace` where `service_namespace` is set, and each `[attributes]` key added
-        // above. The process's `service.name` deliberately *does* win — a Collector's `dist.name`
-        // is a better type than anything this file can infer — and its `service.version` is the
+        // Supervisor keeps the type (`service.name`, which decides which Configurations are
+        // pinned to the Agent and which Deployment claims it), its identity
+        // (`service.instance.id`, goal 16) and the operator's name (`service.instance.name`), and
+        // the operator keeps every value they set: `service.namespace` where `service_namespace`
+        // is set, and each `[attributes]` key added above. The process's `service.version` is the
         // Agent's version.
         //
         // The rule is by *key*, in both lists: the Server resolves a Selector against the
@@ -154,21 +181,34 @@ impl Local {
         if let Some(reported) = &self.process_description {
             let admitted = |key: &str| {
                 key.starts_with(attributes::SERVICE_PREFIX)
+                    && key != attributes::SERVICE_NAME
                     && key != attributes::SERVICE_INSTANCE_ID
                     && key != attributes::SERVICE_INSTANCE_NAME
                     && !(key == attributes::SERVICE_NAMESPACE && self.namespace.is_some())
                     && !operators_keys.contains(&key)
             };
-            // The identifying list is folded last, so where a process states one key in both
-            // lists its identifying value is the one reported — as `service_name()` reads it.
-            let lists = [
-                (&reported.non_identifying_attributes, false),
-                (&reported.identifying_attributes, true),
-            ];
-            for (list, identifying) in lists {
-                for attr in list.iter().filter(|attr| admitted(&attr.key)) {
-                    fold_attr(&mut description, attr, identifying);
-                }
+            // Where a process states one key in both lists, its identifying statement is the one
+            // folded and the other is dropped: the key is reported once, among the identifying
+            // attributes the Server reads it from, with the identifying value.
+            for attr in reported
+                .identifying_attributes
+                .iter()
+                .filter(|attr| admitted(&attr.key))
+            {
+                fold_attr(&mut description, attr, true);
+            }
+            let stated_identifying = |key: &str| {
+                reported
+                    .identifying_attributes
+                    .iter()
+                    .any(|kv| kv.key == key)
+            };
+            for attr in reported
+                .non_identifying_attributes
+                .iter()
+                .filter(|attr| admitted(&attr.key) && !stated_identifying(&attr.key))
+            {
+                fold_attr(&mut description, attr, false);
             }
         }
         description
@@ -187,6 +227,25 @@ fn fold_attr(description: &mut AgentDescription, attr: &KeyValue, identifying: b
         &mut description.identifying_attributes
     };
     upsert_attr(list, attr);
+}
+
+/// The `service.name` values a Managed Process's merged report carries, in either list — what
+/// ADR-0055 clause 3 compares against the Supervisor's type. An empty string is no value.
+fn reported_types(reported: Option<&AgentDescription>) -> Vec<String> {
+    let mut types: Vec<String> = Vec::new();
+    for list in reported.into_iter().flat_map(|reported| {
+        [
+            &reported.identifying_attributes,
+            &reported.non_identifying_attributes,
+        ]
+    }) {
+        if let Some(value) = attributes::string_value(list, attributes::SERVICE_NAME) {
+            if !types.iter().any(|known| known == value) {
+                types.push(value.to_string());
+            }
+        }
+    }
+    types
 }
 
 fn upsert_attr(attrs: &mut Vec<KeyValue>, attr: &KeyValue) {

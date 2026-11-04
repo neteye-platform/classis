@@ -1,10 +1,11 @@
 //! `supervisor.toml` on disk (ADR-0010): reading the file, the directories it names made absolute
 //! against the working directory, and the identity the state directory holds. What the file must
-//! say is [`config`](crate::config)'s; this is only where it comes from.
+//! say is [`config`](crate::config)'s; this is only where it comes from, and how its text is
+//! redacted before it is reported.
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{redact_secrets, ClientConfig, LEGACY_CONFIG_FILE_NAME};
+use crate::config::{ClientConfig, LEGACY_CONFIG_FILE_NAME, SECRET_KEYS};
 
 impl ClientConfig {
     /// Loads the file, or the defaults when it does not exist. A file that exists but does not
@@ -19,7 +20,10 @@ impl ClientConfig {
                 ..default
             });
         }
+        // The file may hold `[packages] archive_key`: its text is wiped when it is dropped
+        // (ADR-0057).
         let text = std::fs::read_to_string(path)
+            .map(zeroize::Zeroizing::new)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let mut config: ClientConfig =
             toml::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
@@ -40,17 +44,72 @@ impl ClientConfig {
         config.checked(path)
     }
 
-    /// The state directory a service installed from this file runs with (ADR-0019): the one the
-    /// file names when it names an absolute one, and `<data root>/state` otherwise.
+    /// The state directory a service installed from this file runs with (ADR-0053 clause 3):
+    /// `--state-dir`, else the one the service's registration carries, else the absolute one the
+    /// file names, else `<data root>/state`.
+    ///
+    /// The file is the service account's to rewrite (ADR-0042 clause 2), and the install that reads
+    /// it runs as root or an Administrator and hands the state directory over to that account. So
+    /// a directory the file names is taken only beneath the data root or the layout root, and one
+    /// from any source that lies beneath them is reached through directories only, as
+    /// [`beneath`](crate::service::layout::beneath) decides (ADR-0053 clause 4). The flag and the
+    /// registration are an administrator's word and may name one outside them.
     ///
     /// Decided on the value as written, because [`state_dir`](Self::state_dir) is already resolved
     /// against the installing shell's working directory, which the service never shares. Meaningful
     /// only on a configuration returned by [`load`](Self::load).
-    pub fn service_state_dir(&self, data_root: &Path) -> PathBuf {
-        if self.state_dir_as_written.is_absolute() {
-            self.state_dir_as_written.clone()
-        } else {
-            data_root.join(crate::service::layout::STATE_DIR_NAME)
+    ///
+    /// # Errors
+    /// Returns a refusal naming the directory, why it is refused, and `--state-dir`.
+    pub fn service_state_dir(
+        &self,
+        roots: &crate::service::layout::Roots,
+    ) -> Result<PathBuf, String> {
+        let bounds = [roots.data.as_path(), roots.layout.as_path()];
+        let (dir, source) = self.state_dir_candidate(roots);
+        if source == StateDirSource::File || bounds.iter().any(|root| dir.starts_with(root)) {
+            crate::service::layout::beneath(&dir, &bounds).map_err(|why| {
+                let rule = if source == StateDirSource::File {
+                    "The configuration is the service account's to rewrite, so a state directory \
+                     is taken from it only beneath the data root or the layout root, and reached \
+                     there through directories only; name one with --state-dir"
+                } else {
+                    "Beneath the data root or the layout root a state directory is reached through \
+                     directories only, because the service's account owns what lies there; remove \
+                     the link, or name another with --state-dir"
+                };
+                format!(
+                    "refusing the state directory {} that {} names: {why}. {rule}",
+                    dir.display(),
+                    source.describe()
+                )
+            })?;
+        }
+        Ok(dir)
+    }
+
+    /// Where [`service_state_dir`](Self::service_state_dir) takes the state directory from, in the
+    /// words the install prints after it.
+    #[must_use]
+    pub fn service_state_dir_source(&self, roots: &crate::service::layout::Roots) -> &'static str {
+        self.state_dir_candidate(roots).1.describe()
+    }
+
+    /// The state directory ADR-0053 clause 3 names, before it is checked, and its source.
+    fn state_dir_candidate(
+        &self,
+        roots: &crate::service::layout::Roots,
+    ) -> (PathBuf, StateDirSource) {
+        match (&roots.named, &roots.registered) {
+            (Some(dir), _) => (dir.clone(), StateDirSource::Flag),
+            (None, Some(dir)) => (dir.clone(), StateDirSource::Registration),
+            (None, None) if self.state_dir_as_written.is_absolute() => {
+                (self.state_dir_as_written.clone(), StateDirSource::File)
+            }
+            (None, None) => (
+                roots.data.join(crate::service::layout::STATE_DIR_NAME),
+                StateDirSource::Default,
+            ),
         }
     }
 
@@ -101,6 +160,30 @@ impl ClientConfig {
     }
 }
 
+/// Where an installed Client's state directory comes from (ADR-0053 clause 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StateDirSource {
+    /// `--state-dir`.
+    Flag,
+    /// The service's system registration.
+    Registration,
+    /// The absolute `state_dir` of `supervisor.toml`.
+    File,
+    /// `<data root>/state`.
+    Default,
+}
+
+impl StateDirSource {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Flag => "--state-dir",
+            Self::Registration => "the service's registration",
+            Self::File => "the configuration",
+            Self::Default => "the default",
+        }
+    }
+}
+
 /// Refuses to carry on when the file this Client looks for is absent and a `client.toml` sits
 /// beside where it would be (ADR-0019 clause 29).
 ///
@@ -147,9 +230,174 @@ pub(crate) fn absolute(path: &Path) -> PathBuf {
     }
 }
 
+/// The file's text with every secret value replaced by `***`, for reporting it off the host —
+/// the Server persists effective configurations to disk, so a credential must never be in one.
+///
+/// The text is parsed with `toml_edit`, which keeps the operator's comments, ordering and layout —
+/// half of what a configuration file says — though line endings become `\n`, and a table written
+/// only as the parent of a masked one comes out written as its own. A secret key is found wherever
+/// and however it is written (a table, a dotted or quoted key, an inline table, an array of tables)
+/// and its whole value is replaced, a multi-line string to its closing quotes, together with a
+/// comment beside it. A leftover `[auth]` section, which the Client ignores (ADR-0021 clause 3),
+/// has every value masked, whatever its keys are called. Text that does not parse cannot be taken
+/// apart, so it is reported as a placeholder — over-redaction is the cheap failure here, a leaked
+/// credential the expensive one.
+pub fn redact_secrets(text: &str) -> String {
+    let Ok(mut doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return "# (configuration redacted: it does not parse)\n".to_owned();
+    };
+    if let Some(auth) = doc.get_mut("auth") {
+        mask_every_value_in_item(auth);
+    }
+    mask_secrets_in(doc.as_table_mut());
+    doc.to_string()
+}
+
+/// Masks every value under `item`, whatever its key: a section nothing reads may hold anything.
+fn mask_every_value_in_item(item: &mut toml_edit::Item) {
+    match item {
+        toml_edit::Item::Table(table) => {
+            table
+                .iter_mut()
+                .for_each(|(_, item)| mask_every_value_in_item(item));
+        }
+        toml_edit::Item::ArrayOfTables(tables) => tables.iter_mut().for_each(|table| {
+            table
+                .iter_mut()
+                .for_each(|(_, item)| mask_every_value_in_item(item));
+        }),
+        toml_edit::Item::Value(_) => *item = toml_edit::value("***"),
+        toml_edit::Item::None => {}
+    }
+}
+
+/// Masks every secret key of `table` and of every table nested in it.
+fn mask_secrets_in(table: &mut dyn toml_edit::TableLike) {
+    for (key, item) in table.iter_mut() {
+        if SECRET_KEYS.contains(&key.get()) {
+            *item = toml_edit::value("***");
+        } else {
+            mask_secrets_in_item(item);
+        }
+    }
+}
+
+fn mask_secrets_in_item(item: &mut toml_edit::Item) {
+    match item {
+        toml_edit::Item::Table(table) => mask_secrets_in(table),
+        toml_edit::Item::ArrayOfTables(tables) => {
+            tables.iter_mut().for_each(|table| mask_secrets_in(table));
+        }
+        toml_edit::Item::Value(value) => mask_secrets_in_value(value),
+        toml_edit::Item::None => {}
+    }
+}
+
+fn mask_secrets_in_value(value: &mut toml_edit::Value) {
+    match value {
+        toml_edit::Value::InlineTable(table) => mask_secrets_in(table),
+        toml_edit::Value::Array(array) => array.iter_mut().for_each(mask_secrets_in_value),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The file's text is reported off the host as the effective configuration, and the Server
+    /// persists what it receives — so a credential value must never survive the redaction, while
+    /// the operator's comments and layout must (they are half of what the file says). A leftover
+    /// `[auth]` section is masked whole, whatever its keys are called.
+    /// Verifies: ADR-0017, ADR-0021
+    #[test]
+    fn redaction_masks_credential_values_and_keeps_everything_else() {
+        let text = "# the fleet endpoint\nendpoint = \"wss://fleet:4320/v1/opamp\"\n\n\
+                    [auth]\n  bearer_token = \"s3cret\"\n\
+                    [packages]\narchive_key = \"p4ss\"\nverification_key = \"aabb\"\n";
+        let redacted = redact_secrets(text);
+        assert!(!redacted.contains("s3cret"), "{redacted}");
+        assert!(!redacted.contains("p4ss"), "{redacted}");
+        assert!(redacted.contains("  bearer_token = \"***\""), "{redacted}");
+        assert!(redacted.contains("archive_key = \"***\""), "{redacted}");
+        assert!(
+            redacted.contains("# the fleet endpoint"),
+            "comments stay: {redacted}"
+        );
+        assert!(
+            redacted.contains("endpoint = \"wss://fleet:4320/v1/opamp\""),
+            "{redacted}"
+        );
+        assert!(
+            redacted.contains("verification_key = \"aabb\""),
+            "the public half of the signing pair is no secret: {redacted}"
+        );
+
+        // An inline table hides a credential no better than a line of its own.
+        let inline = redact_secrets("auth = { username = \"op\", password = \"hunter2\" }\n");
+        assert!(!inline.contains("hunter2"), "{inline}");
+        let renamed = redact_secrets("[auth]\nPassword = \"hunter2\"\ntoken = \"t0ken\"\n");
+        assert!(!renamed.contains("hunter2"), "{renamed}");
+        assert!(!renamed.contains("t0ken"), "{renamed}");
+        assert!(renamed.contains("token = \"***\""), "{renamed}");
+    }
+
+    /// A secret is masked whatever TOML spelling carries it: a multi-line string, basic or
+    /// literal, must not leave its continuation lines behind, and a dotted key, a quoted key, an
+    /// inline table or an array of tables hides it no better. What is not secret stays as written.
+    /// Verifies: ADR-0017, ADR-0026
+    #[test]
+    fn redaction_masks_every_spelling_of_a_secret_value() {
+        let spellings = [
+            "[packages]\narchive_key = \"\"\"\nleak-basic\"\"\"\n",
+            "[packages]\narchive_key = '''\nleak-literal\n'''\n",
+            "[packages]\narchive_key = \"\"\"\\\n  leak-continued \\\n  \"\"\"\n",
+            "[packages]\narchive_key = 'leak-literal-single'\n",
+            "[packages]\narchive_key = \"leak\\u002descaped\"\n",
+            "[packages]\n\"archive_key\" = \"leak-quoted-key\"\n",
+            "packages.archive_key = \"leak-dotted\"\n",
+            "packages = { archive_key = \"\"\"leak-\ninline\"\"\" }\n",
+            "[auth]\nbearer_token = \"leak-commented\" # rotated monthly, was leak-old\n",
+            "[[x]]\npassword = '''\nleak-array\n'''\n",
+            "[auth.password]\nvalue = \"leak-table\"\n",
+        ];
+        for text in spellings {
+            let redacted = redact_secrets(text);
+            assert!(
+                !redacted.contains("leak"),
+                "{text:?} redacted to {redacted:?}"
+            );
+            assert!(
+                redacted.contains("***"),
+                "{text:?} redacted to {redacted:?}"
+            );
+            assert!(
+                redacted.parse::<toml_edit::DocumentMut>().is_ok(),
+                "the redacted text still parses: {redacted:?}"
+            );
+        }
+
+        let text = "# head\n[packages]\nverification_key = \"\"\"\naabb\"\"\" # public\n\
+                    archive_key = '''\nsecret\n'''\nself_update = false\n";
+        assert_eq!(
+            redact_secrets(text),
+            "# head\n[packages]\nverification_key = \"\"\"\naabb\"\"\" # public\n\
+             archive_key = \"***\"\nself_update = false\n"
+        );
+        assert_eq!(
+            redact_secrets("packages = { self_update = false, archive_key = '''\nsecret''' }\n"),
+            "packages = { self_update = false, archive_key = \"***\" }\n"
+        );
+    }
+
+    /// Text that does not parse cannot be taken apart, so it is reported as a placeholder.
+    /// Verifies: ADR-0017, ADR-0026
+    #[test]
+    fn redaction_replaces_text_that_does_not_parse_whole() {
+        let redacted = redact_secrets("archive_key = \"\"\"\nleak\nnot = closed\n");
+        assert!(!redacted.contains("leak"), "{redacted}");
+        assert!(!redacted.contains("closed"), "{redacted}");
+    }
 
     /// The client identity is all a Client needs to start: a file naming one passes with no
     /// `[auth]`, and a file without one is refused, naming `[tls] cert_file` and `key_file` — the
@@ -191,41 +439,168 @@ mod tests {
             .expect("a leftover [auth] beside a certificate");
     }
 
+    use crate::service::layout::Roots;
+
+    /// The roots under `dir`, with what an administrator named.
+    fn roots(dir: &Path, named: Option<&Path>, registered: Option<&Path>) -> Roots {
+        Roots {
+            named: named.map(Path::to_path_buf),
+            registered: registered.map(Path::to_path_buf),
+            data: dir.join("data"),
+            layout: dir.join("layout"),
+        }
+    }
+
     /// An installed service keeps its state in `<data root>/state` unless the file names an
-    /// absolute directory — whatever the working directory of the shell that installs. `load`
-    /// resolves a relative `state_dir` against that directory; the install must not take it.
-    /// Verifies: ADR-0019
+    /// absolute directory beneath the data root or the layout root — whatever the working
+    /// directory of the shell that installs. `load` resolves a relative `state_dir` against that
+    /// directory; the install must not take it.
+    /// Verifies: ADR-0053, ADR-0019
     #[test]
     fn an_installed_service_keeps_its_state_under_the_data_root_unless_named_absolutely() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let data_root = dir.path().join("data");
+        let roots = roots(dir.path(), None, None);
         let path = dir.path().join("supervisor.toml");
         let installed = |text: &str| {
             std::fs::write(&path, text).expect("write");
             ClientConfig::load(&path)
                 .expect("load")
-                .service_state_dir(&data_root)
+                .service_state_dir(&roots)
+                .expect("beneath the roots")
         };
 
         // The file the questionnaire writes names none: the default `client-state` is relative.
-        assert_eq!(installed(""), data_root.join("state"));
+        assert_eq!(installed(""), roots.data.join("state"));
         assert_eq!(
             installed("state_dir = \"elsewhere\"\n"),
-            data_root.join("state")
+            roots.data.join("state")
         );
         // Absent file, defaults: the same.
         assert_eq!(
             ClientConfig::load(&dir.path().join("absent.toml"))
                 .expect("defaults")
-                .service_state_dir(&data_root),
-            data_root.join("state")
+                .service_state_dir(&roots)
+                .expect("the default"),
+            roots.data.join("state")
         );
 
-        let named = dir.path().join("named-state");
+        for named in [roots.data.join("other/state"), roots.layout.join("state")] {
+            assert_eq!(
+                installed(&format!("state_dir = '{}'\n", named.display())),
+                named,
+                "an absolute state_dir beneath a root is kept"
+            );
+        }
+    }
+
+    /// `supervisor.toml` is the service account's to rewrite (ADR-0042 clause 2), and the install
+    /// that reads it runs as root or an Administrator and hands the state directory over to that
+    /// account. With nothing registered and no `--state-dir`, a state directory the file names
+    /// outside the data root and the layout root, or one that leaves them by `..`, is refused, so
+    /// the account cannot have another tree handed over to itself. The operator's `--state-dir`
+    /// names one anywhere.
+    /// Verifies: ADR-0053, ADR-0042
+    #[test]
+    fn a_state_directory_the_file_names_outside_the_installs_roots_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("supervisor.toml");
+        let outside = dir.path().join("elsewhere");
+        let loaded = |state_dir: &Path| {
+            std::fs::write(&path, format!("state_dir = '{}'\n", state_dir.display()))
+                .expect("write");
+            ClientConfig::load(&path).expect("load")
+        };
+
+        let unregistered = roots(dir.path(), None, None);
+        for state_dir in [
+            outside.clone(),
+            unregistered.data.join("..").join("elsewhere"),
+        ] {
+            let err = loaded(&state_dir)
+                .service_state_dir(&unregistered)
+                .expect_err("outside the roots");
+            assert!(err.contains(&state_dir.display().to_string()), "{err}");
+            assert!(err.contains("--state-dir"), "{err}");
+        }
+
         assert_eq!(
-            installed(&format!("state_dir = '{}'\n", named.display())),
-            named,
-            "an absolute state_dir is the operator's choice and is kept"
+            loaded(&outside)
+                .service_state_dir(&roots(dir.path(), Some(&outside), None))
+                .expect("named by the operator"),
+            outside,
+            "the operator's --state-dir is taken wherever it lies"
         );
+    }
+
+    /// A re-registration keeps the state directory its registration carries, whatever the file
+    /// now says — outside the roots, beneath them, or nothing — so an upgrade never moves it and
+    /// the service's account cannot move it. Only `--state-dir` names another.
+    /// Verifies: ADR-0053
+    #[test]
+    fn a_reregistration_keeps_the_registered_state_directory_whatever_the_file_says() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("supervisor.toml");
+        let registered = dir.path().join("relocated");
+        let kept = roots(dir.path(), None, Some(&registered));
+        for text in [
+            format!("state_dir = '{}'\n", dir.path().join("elsewhere").display()),
+            format!("state_dir = '{}'\n", kept.data.join("state").display()),
+            String::new(),
+        ] {
+            std::fs::write(&path, &text).expect("write");
+            assert_eq!(
+                ClientConfig::load(&path)
+                    .expect("load")
+                    .service_state_dir(&kept)
+                    .expect("registered"),
+                registered,
+                "{text}"
+            );
+        }
+
+        let moved = dir.path().join("moved");
+        assert_eq!(
+            ClientConfig::load(&path)
+                .expect("load")
+                .service_state_dir(&roots(dir.path(), Some(&moved), Some(&registered)))
+                .expect("named"),
+            moved,
+            "an administrator's --state-dir outranks the registration"
+        );
+    }
+
+    /// A link the service's account planted beneath the data root would carry the state directory
+    /// out of it, so a component that is a link is refused — the default `<data root>/state` and a
+    /// registered directory beneath the root included.
+    /// Verifies: ADR-0053, ADR-0042
+    #[cfg(unix)]
+    #[test]
+    fn a_state_directory_reached_through_a_link_beneath_the_root_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unregistered = roots(dir.path(), None, None);
+        let outside = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&unregistered.data).expect("data root");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::os::unix::fs::symlink(&outside, unregistered.data.join("link")).expect("link");
+        let path = dir.path().join("supervisor.toml");
+
+        let through = unregistered.data.join("link").join("state");
+        std::fs::write(&path, format!("state_dir = '{}'\n", through.display())).expect("write");
+        let err = ClientConfig::load(&path)
+            .expect("load")
+            .service_state_dir(&unregistered)
+            .expect_err("through a link");
+        assert!(err.contains("is a link"), "{err}");
+        ClientConfig::load(&path)
+            .expect("load")
+            .service_state_dir(&roots(dir.path(), None, Some(&through)))
+            .expect_err("registered, through a link");
+
+        std::fs::write(&path, "").expect("write");
+        std::os::unix::fs::symlink(&outside, unregistered.data.join("state")).expect("link");
+        ClientConfig::load(&path)
+            .expect("load")
+            .service_state_dir(&unregistered)
+            .expect_err("the default, planted as a link");
     }
 }

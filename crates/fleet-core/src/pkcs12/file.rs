@@ -15,6 +15,7 @@ use p12_keystore::{
     PrivateKey, PrivateKeyChain,
 };
 use pkcs5::pbes2::{EncryptionScheme, Kdf, Pbkdf2Prf};
+use zeroize::Zeroizing;
 
 use super::{ITERATIONS, MAX_FILE_BYTES};
 
@@ -48,11 +49,12 @@ pub fn seal(
         .map_err(|e| format!("cannot write the PKCS#12 file: {e}"))
 }
 
-/// What a file holds: the certificate and its key, DER, the key PKCS#8. Its `Debug` names neither.
+/// What a file holds: the certificate and its key, DER, the key PKCS#8 and wiped when it is dropped
+/// (ADR-0057). Its `Debug` names neither.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Identity {
     pub certificate_der: Vec<u8>,
-    pub private_key_der: Vec<u8>,
+    pub private_key_der: Zeroizing<Vec<u8>>,
 }
 
 impl fmt::Debug for Identity {
@@ -104,7 +106,8 @@ pub fn open(bytes: &[u8], password: &str) -> Result<Identity, OpenError> {
             archive.keys.len()
         )));
     };
-    let private_key_der = key.key.as_der().to_vec();
+    // `p12-keystore` keeps its own copy, which it does not wipe (ADR-0057 clause 4).
+    let private_key_der = Zeroizing::new(key.key.as_der().to_vec());
     let public = rcgen::KeyPair::try_from(private_key_der.as_slice())
         .map_err(|e| invalid(format!("its private key cannot be read: {e}")))?;
     let matching: Vec<&[u8]> = archive
@@ -259,7 +262,7 @@ mod tests {
         let file = seal(&certificate, &key, PASSWORD).expect("sealed");
         let opened = open(&file, PASSWORD).expect("opened");
         assert_eq!(opened.certificate_der, certificate);
-        assert_eq!(opened.private_key_der, key);
+        assert_eq!(*opened.private_key_der, key);
         assert_eq!(
             open(&file, "a wrong password"),
             Err(OpenError::WrongPassword)
@@ -268,6 +271,23 @@ mod tests {
             !format!("{opened:?}").contains(&format!("{:?}", &key[..8])),
             "Debug names no key"
         );
+    }
+
+    /// The key a file opens to is held in a buffer wiped when it is dropped: were it a plain
+    /// buffer again, this would not compile.
+    /// Verifies: ADR-0057
+    #[test]
+    fn the_key_a_file_opens_to_is_held_in_a_zeroizing_buffer() {
+        fn key_of(identity: Identity) -> Zeroizing<Vec<u8>> {
+            identity.private_key_der
+        }
+        let opens: fn(&[u8], &str) -> Result<Identity, OpenError> = open;
+        assert!(matches!(opens(b"", PASSWORD), Err(OpenError::Invalid(_))));
+        let identity = Identity {
+            certificate_der: Vec::new(),
+            private_key_der: Zeroizing::new(vec![1, 2, 3]),
+        };
+        assert_eq!(*key_of(identity), [1, 2, 3]);
     }
 
     /// The file is the scheme ADR-0029 clause 1 names: PBES2 with AES-256 and a SHA-256 MAC, at

@@ -125,6 +125,7 @@ fn gateway_toml(
     format!(
         r#"
         endpoint = "ws://{server}/v1/opamp"
+        state_dir = {:?}
         [gateway]
         listen = "{listen}"
         upstream_connections = {upstream_connections}
@@ -133,6 +134,7 @@ fn gateway_toml(
         key_file = {:?}
         {client_ca_line}
         "#,
+        dir.join("state").display().to_string(),
         cert_file.display().to_string(),
         key_file.display().to_string(),
     )

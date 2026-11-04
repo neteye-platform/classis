@@ -2,6 +2,8 @@
 
 - **Status:** 🟢 accepted · clause 34 superseded by
   [ADR-0043](0043-a-package-version-is-semver-and-never-installed-below-the-high-water-mark.md)
+  · clauses 21 and 37 superseded by
+  [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl
 - **Applies to:** crates/fleet-agent/src/supervisor/ (core, ports, process

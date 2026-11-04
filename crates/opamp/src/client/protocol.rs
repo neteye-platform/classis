@@ -131,6 +131,12 @@ impl AgentProtocol {
         self.send_config_status = true;
     }
 
+    /// The remote configuration's status as the next report states it.
+    #[must_use]
+    pub fn remote_config_status(&self) -> Option<&RemoteConfigStatus> {
+        self.remote_config_status.as_ref()
+    }
+
     /// A status restored from an earlier run: reported with the next full report, not owed now.
     pub fn restore_remote_config_status(&mut self, status: RemoteConfigStatus) {
         self.remote_config_status = Some(status);

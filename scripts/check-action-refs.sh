@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# GitHub Actions reference check for this repository (ADR-0049).
+# GitHub Actions reference check for this repository (ADR-0060).
 #
-# ADR-0049 pins every action to a commit SHA with its ref in a comment and lets Renovate, on the
+# ADR-0060 pins every action to a commit SHA with its ref in a comment and lets Renovate, on the
 # organisation preset, raise every update. This check reads the files the decision names and fails
 # on what would break it:
 #
@@ -66,7 +66,7 @@ workflows=("$ROOT/$WORKFLOWS"/*.yml "$ROOT/$WORKFLOWS"/*.yaml)
 shopt -u nullglob
 
 if ((${#workflows[@]} == 0)); then
-  add_error "$WORKFLOWS: no workflow found — ADR-0049 governs the action references there"
+  add_error "$WORKFLOWS: no workflow found — ADR-0060 governs the action references there"
 fi
 
 # 1. References.
@@ -87,12 +87,12 @@ for wf in "${workflows[@]}"; do
         # The tag sits on the last path segment; a registry port ('host:5000/image') is not one.
         image="${value#docker://}"
         [[ "${image##*/}" == *:* ]] \
-          || add_error "$rel:$n: '$value' carries no tag — an image is referenced with an explicit ':<tag>' (ADR-0049 clause 6)"
+          || add_error "$rel:$n: '$value' carries no tag — an image is referenced with an explicit ':<tag>' (ADR-0060 clause 6)"
         ;;
       *)
         owner="${value%%/*}"
         if ! [[ "$value" =~ $PINNED_RE ]]; then
-          add_error "$rel:$n: '$value' is not pinned to a full commit SHA — pin it to the 40-character lowercase SHA and name its ref in a comment, 'owner/action@<sha> # vX.Y.Z' (ADR-0049 clause 1)"
+          add_error "$rel:$n: '$value' is not pinned to a full commit SHA — pin it to the 40-character lowercase SHA and name its ref in a comment, 'owner/action@<sha> # vX.Y.Z' (ADR-0060 clause 1)"
         elif [[ "$comment" =~ $VERSION_COMMENT_RE ]]; then
           shas=$((shas + 1))
           pinned+=("$rel:$n|$value|tag|$comment")
@@ -102,7 +102,7 @@ for wf in "${workflows[@]}"; do
         else
           # The single quotes are part of the message, inside double quotes.
           # shellcheck disable=SC2016
-          add_error "$rel:$n: '$value' ${comment:+carries '# $comment', }not '# vX.Y.Z' — end the line in a comment naming the release tag the SHA was taken from, as three numbers; only an owner of $ORG_OWNER may name a branch (ADR-0049 clause 2)"
+          add_error "$rel:$n: '$value' ${comment:+carries '# $comment', }not '# vX.Y.Z' — end the line in a comment naming the release tag the SHA was taken from, as three numbers; only an owner of $ORG_OWNER may name a branch (ADR-0060 clause 2)"
         fi
         ;;
     esac
@@ -133,13 +133,13 @@ if ((RESOLVE)); then
           resolved[$key]="${peeled:-${plain:-missing}}"
         else
           resolved[$key]="unreachable"
-          add_error "$where: '$value': git ls-remote of $owner/$name failed — $(head -n 1 <<< "$out") (ADR-0049 clause 3)"
+          add_error "$where: '$value': git ls-remote of $owner/$name failed — $(head -n 1 <<< "$out") (ADR-0060 clause 3)"
           continue
         fi
       fi
       got="${resolved[$key]}"
       [[ "$got" == "unreachable" || "$got" == "$sha" ]] \
-        || add_error "$where: '$value': tag $ref of $owner/$name is $got, not the pinned commit (ADR-0049 clause 3)"
+        || add_error "$where: '$value': tag $ref of $owner/$name is $got, not the pinned commit (ADR-0060 clause 3)"
     else
       # One bare repository per repository and branch, holding that branch's commits and trees.
       key="$owner/$name branch $ref"
@@ -151,32 +151,32 @@ if ((RESOLVE)); then
           resolved[$key]="$dir"
         else
           resolved[$key]="unreachable"
-          add_error "$where: '$value': fetching branch $ref of $owner/$name failed — $(head -n 1 <<< "$out") (ADR-0049 clause 3)"
+          add_error "$where: '$value': fetching branch $ref of $owner/$name failed — $(head -n 1 <<< "$out") (ADR-0060 clause 3)"
           continue
         fi
       fi
       dir="${resolved[$key]}"
       [[ "$dir" == "unreachable" ]] && continue
       rgit -C "$dir" merge-base --is-ancestor "$sha" "refs/heads/$ref" >/dev/null 2>&1 \
-        || add_error "$where: '$value': branch $ref of $owner/$name does not contain the pinned commit (ADR-0049 clause 3)"
+        || add_error "$where: '$value': branch $ref of $owner/$name does not contain the pinned commit (ADR-0060 clause 3)"
     fi
   done
 fi
 
 # 2. Renovate.
 if [[ -f "$ROOT/$DEPENDABOT" ]]; then
-  add_error "$DEPENDABOT: exists — Renovate raises every update, and a second bot raises each one twice (ADR-0049 clause 4)"
+  add_error "$DEPENDABOT: exists — Renovate raises every update, and a second bot raises each one twice (ADR-0060 clause 4)"
 fi
 if [[ ! -f "$ROOT/$RENOVATE" ]]; then
-  add_error "$RENOVATE: not found — Renovate, from a renovate.json that extends $PRESET, raises every action and Cargo update (ADR-0049 clause 4)"
+  add_error "$RENOVATE: not found — Renovate, from a renovate.json that extends $PRESET, raises every action and Cargo update (ADR-0060 clause 4)"
 else
   config="$(tr '\n' ' ' < "$ROOT/$RENOVATE")"
   grep -qF "\"$PRESET\"" <<< "$config" \
-    || add_error "$RENOVATE: does not extend \"$PRESET\" — the organisation preset is the configuration this repository shares (ADR-0049 clause 4)"
+    || add_error "$RENOVATE: does not extend \"$PRESET\" — the organisation preset is the configuration this repository shares (ADR-0060 clause 4)"
   manager='"matchManagers"[[:space:]]*:[[:space:]]*\[[[:space:]]*"cargo"[[:space:]]*\]'
   strategy='"rangeStrategy"[[:space:]]*:[[:space:]]*"update-lockfile"'
   grep -qE "\{[^{}]*(${manager}[^{}]*${strategy}|${strategy}[^{}]*${manager})[^{}]*\}" <<< "$config" \
-    || add_error "$RENOVATE: has no packageRules entry with \"matchManagers\": [\"cargo\"] and \"rangeStrategy\": \"update-lockfile\" — without it the preset pins some Cargo requirements to '=x.y.z' and leaves the rest as ranges (ADR-0049 clause 5)"
+    || add_error "$RENOVATE: has no packageRules entry with \"matchManagers\": [\"cargo\"] and \"rangeStrategy\": \"update-lockfile\" — without it the preset pins some Cargo requirements to '=x.y.z' and leaves the rest as ranges (ADR-0060 clause 5)"
 fi
 
 if ((${#errors[@]})); then

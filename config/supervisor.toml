@@ -33,6 +33,11 @@ max_message_size_bytes = 67108864
 # endpoint and the intervals above; delete <state_dir>/connection-settings.pb to revert.
 # A package for the Client itself is streamed to <state_dir>/packages/ first, so this
 # directory needs room for one agent binary.
+# An installed service keeps the state directory its registration names, whatever this file says
+# later. On a first `service install` an absolute state_dir here is taken only beneath the data
+# root or the layout root, and one elsewhere is refused: the service's account may rewrite this
+# file, and the install hands the state directory over to it. `--state-dir <dir>` on
+# `service install` names one anywhere, and every later install keeps it.
 state_dir = "client-state"
 
 # The Client's own log on disk, written **only while it runs as a service** — in the
@@ -55,6 +60,8 @@ state_dir = "client-state"
 #
 # Set this when the programs must not live where the state does: /var/lib is often mounted
 # noexec, and it is sized for state rather than for a few hundred megabytes of Collector.
+# Outside the data root, the layout root and the state directory, `service install` creates and
+# hands over nothing for it: create it yourself, writable by the service's account only.
 # supervisor_dir = "/opt/opamp-fleet/supervisors"
 
 # Operator-defined attributes describing this *host*, reported by every Agent this Client presents
@@ -211,10 +218,11 @@ state_dir = "client-state"
 #   name           service.instance.name — *which* Agent this is. Yours, unique per block, also the
 #                  directory name, so it follows the usual name grammar (lowercase, digits, '-').
 #                  A Managed Process can never overwrite it.
-#   service_name   service.name — *what* this Agent is, the Agent type. Optional. A Managed Process
-#                  that reports its own type wins over it (a Collector with the opampextension
-#                  states the dist.name it was built with); with neither, the program's file name
-#                  is used. Unlike `name` it may be a reverse FQDN, as the protocol recommends.
+#   service_name   service.name — *what* this Agent is, the Agent type. Optional; left out, the
+#                  program's file name is used. A Managed Process can never overwrite it: a type
+#                  it reports (a Collector with the opampextension states the dist.name it was
+#                  built with) is dropped with a warning. Unlike `name` it may be a reverse FQDN,
+#                  as the protocol recommends.
 #
 # A Deployment aims at the type to reach every Agent of a kind, at the instance name to reach
 # exactly one:
@@ -276,8 +284,8 @@ state_dir = "client-state"
 # type = "collector"
 # name = "otelcol"
 # binary = "otelcol"
-# service_name = "otelcol"   # without the extension nothing reports a type, so state one here;
-#                            # left out, the program's file name ("otelcol") is used anyway.
+# service_name = "otelcol"   # the Agent type is this block's either way, with the extension or
+#                            # without; left out, the program's file name ("otelcol") is used.
 # [supervisor.env]           # optional environment for the process; same variable as in the
 #                            # block above, its own value here — the receiver port is offset so
 #                            # both collectors can run on one host (see config/examples/)

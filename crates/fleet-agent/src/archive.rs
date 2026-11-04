@@ -494,11 +494,13 @@ fn extract_tree_tar_gz_within(
         )?;
         // A tar carries its own modes, and a tree needs them: the program is made executable by
         // its caller either way, but a helper beside it is only executable if the archive said so.
+        // Never with write for group or others, on every host, so no account but the Client's can
+        // rewrite what a Supervisor runs (ADR-0059 clause 11).
         #[cfg(unix)]
         if let (Some(out_path), Ok(mode)) = (written, entry.header().mode()) {
             use std::os::unix::fs::PermissionsExt;
             let _ =
-                std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode & 0o777));
+                std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode & 0o755));
         }
         #[cfg(not(unix))]
         let _ = written;
@@ -1651,6 +1653,54 @@ mod tests {
         };
         assert_eq!(mode("bin/fluent-bit"), 0o755);
         assert_eq!(mode("etc/parsers.conf"), 0o644);
+    }
+
+    /// A member's mode lands without the group's and others' write bits, whatever the archive
+    /// said: `0777` lands `0755`, `0666` lands `0644`, `0775` lands `0755`.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_member_never_lands_writable_by_group_or_others() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("writable.tar.gz");
+        {
+            let file = File::create(&path).expect("create");
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(encoder);
+            for (name, mode, content) in [
+                ("app/bin/agent", 0o777, &b"the-program"[..]),
+                ("app/etc/agent.conf", 0o666, &b"settings"[..]),
+                ("app/bin/helper", 0o775, &b"a-helper"[..]),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_mode(mode);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, name, content)
+                    .expect("append");
+            }
+            builder
+                .into_inner()
+                .expect("finish tar")
+                .finish()
+                .expect("finish gzip");
+        }
+        let dest = dest(dir.path());
+
+        extract_tree_tar_gz(&path, Path::new("bin/agent"), &dest).expect("unpack");
+
+        let mode = |p: &str| {
+            std::fs::metadata(dest.join(p))
+                .expect("stat")
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(mode("bin/agent"), 0o755);
+        assert_eq!(mode("etc/agent.conf"), 0o644);
+        assert_eq!(mode("bin/helper"), 0o755);
     }
 
     // ── Zip (ADR-0026 clause 66) ──────────────────────────────────────────────────────────

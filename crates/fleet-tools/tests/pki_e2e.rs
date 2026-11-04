@@ -168,6 +168,7 @@ async fn a_fleet_made_by_pki_init_admits_an_enrolled_host() {
             config_path,
             state_dir: None,
             service: false,
+            agents: None,
         },
         shutdown,
     ));

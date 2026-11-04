@@ -133,7 +133,9 @@ fn load_marker(state_dir: &Path) -> Option<UpdateMarker> {
 
 fn store_marker(state_dir: &Path, marker: &UpdateMarker) -> Result<(), String> {
     let json = serde_json::to_vec_pretty(marker).expect("an UpdateMarker serializes");
-    std::fs::write(marker_path(state_dir), json)
+    // Owner-only, as every file of the Client's in a state directory the process account's group
+    // may pass through (ADR-0059 clause 6).
+    crate::storage::write_private(&marker_path(state_dir), &json)
         .map_err(|e| format!("cannot write the update marker: {e}"))
 }
 
@@ -142,7 +144,7 @@ fn store_marker(state_dir: &Path, marker: &UpdateMarker) -> Result<(), String> {
 /// installed version.
 pub struct Installer {
     state_dir: PathBuf,
-    archive_key: Option<String>,
+    archive_key: Option<zeroize::Zeroizing<String>>,
     probation: Option<UpdateMarker>,
 }
 
@@ -150,7 +152,7 @@ impl Installer {
     #[must_use]
     pub fn new(
         state_dir: PathBuf,
-        archive_key: Option<String>,
+        archive_key: Option<zeroize::Zeroizing<String>>,
         probation: Option<UpdateMarker>,
     ) -> Self {
         Installer {
@@ -168,7 +170,7 @@ impl SelfUpdater for Installer {
             staged,
             version,
             hash,
-            self.archive_key.as_deref(),
+            self.archive_key.as_deref().map(String::as_str),
         );
         // Whatever the outcome, the staged artifact has served its purpose.
         let _ = std::fs::remove_file(staged);
@@ -520,7 +522,7 @@ const OUTCOME_FILE: &str = "update-outcome.json";
 
 fn store_outcome(state_dir: &Path, outcome: &UpdateOutcome) {
     let json = serde_json::to_vec_pretty(outcome).expect("an UpdateOutcome serializes");
-    if let Err(e) = std::fs::write(state_dir.join(OUTCOME_FILE), json) {
+    if let Err(e) = crate::storage::write_private(&state_dir.join(OUTCOME_FILE), &json) {
         warn!(error = %e, "cannot record the self-update outcome; the Server will not hear it");
     }
 }
@@ -548,6 +550,28 @@ mod tests {
             package_hash_hex: "abcd".to_string(),
             attempts,
         }
+    }
+
+    /// The update marker and the outcome are the Client's alone, `0600`: the state directory they
+    /// lie in is passed through by the process account's group where one is registered.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn the_marker_and_the_outcome_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let written = marker(dir.path(), 1);
+        store_marker(dir.path(), &written).expect("store");
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(mode(&marker_path(dir.path())), 0o600);
+        finish(dir.path(), &written, None);
+        assert_eq!(mode(&dir.path().join(OUTCOME_FILE)), 0o600);
     }
 
     #[test]

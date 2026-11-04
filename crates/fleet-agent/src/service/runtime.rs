@@ -6,7 +6,11 @@
 //! `agent_disconnect` goodbye (the Baseline's final message) fires on every stop path, not only
 //! on Ctrl-C.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::shutdown::{shutdown_channel, Shutdown};
 
@@ -27,6 +31,19 @@ pub struct RunSpec {
     /// hidden `--service` marker `service install` writes into the command line on every platform,
     /// and the whole of the condition for writing the log file: it says no terminal is watching.
     pub service: bool,
+    /// The second service every Managed Process is started through, where a process account is
+    /// registered (ADR-0059 clause 3): from the hidden `--agents-socket` and `--process-uid` — on
+    /// Windows `--process-sid` — that `service install --process-account` writes into the command
+    /// line.
+    pub agents: Option<AgentsChannel>,
+}
+
+/// Where the second service listens — its socket, or its named pipe on Windows — and the account
+/// it must answer as: its uid, or its SID (ADR-0059 clause 4).
+#[derive(Debug, Clone)]
+pub struct AgentsChannel {
+    pub socket: PathBuf,
+    pub process: crate::supervisor::channel::Account,
 }
 
 /// How a daemon run ended, which decides how the process leaves.
@@ -106,7 +123,7 @@ pub fn run_foreground(spec: RunSpec) -> Result<(), String> {
             let _ = tx.send(true);
         });
         #[cfg(unix)]
-        tokio::spawn(ignore_sighup());
+        ignore_sighup();
         on_a_worker(run_until_shutdown(spec, shutdown)).await
     })?;
     if exit == Exit::RestartForUpdate {
@@ -135,7 +152,25 @@ fn start_log_file(config: &crate::config::ClientConfig) {
         .dir
         .clone()
         .unwrap_or_else(|| crate::logging::default_dir(&config.state_dir));
-    match crate::logging::open(&dir, config.logging.keep) {
+    let supervisors: Vec<&str> = config
+        .supervisors
+        .iter()
+        .map(|block| block.name.as_str())
+        .collect();
+    let private = match crate::logging::is_private(
+        &dir,
+        &config.state_dir,
+        &config.supervisors_root(),
+        &supervisors,
+        config.process_account_group.is_some(),
+    ) {
+        Ok(private) => private,
+        Err(e) => {
+            tracing::warn!(error = %e, "running without a log file");
+            return;
+        }
+    };
+    match crate::logging::open(&dir, config.logging.keep, private) {
         Ok(dir) => {
             tracing::info!(dir = %dir.display(), keep = config.logging.keep, "logging to file")
         }
@@ -261,6 +296,11 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
         // and the host would stay on a version that never reaches the Server to say so.
         Err(error) => return unreadable_config(&spec, error),
     };
+    // What the Client shares with the Managed Processes belongs to the process account's group
+    // (ADR-0059 clause 6), from before anything is written.
+    if let Some(agents) = &spec.agents {
+        config.process_account_group = Some(process_account_group(&agents.process)?);
+    }
     // A certificate swap a crash cut short is completed before the identity in force is read.
     crate::csr::recover(&config.state_dir)?;
     // Without a client certificate the Server refuses this Client; it says so and stops rather
@@ -292,7 +332,18 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
         crate::update::installer::Startup::RolledBack(_) => return Ok(Exit::RestartForUpdate),
     };
 
-    let mut engine = supervisor::build_engine(&config, &shutdown)?;
+    // A Client the self-update left behind ends as for its own update, through the shutdown that
+    // stops its Supervisors and says goodbye (ADR-0059 clause 2).
+    let left_behind = Arc::new(AtomicBool::new(false));
+    let spawner = match &spec.agents {
+        Some(agents) => {
+            let (spawner, told) = through_the_second_service(agents);
+            shutdown = or_left_behind(shutdown, told, Arc::clone(&left_behind));
+            spawner
+        }
+        None => supervisor::process::Spawner::Local,
+    };
+    let mut engine = supervisor::build_engine(&config, &shutdown, spawner)?;
     if config.self_update_package().is_some() {
         engine.arm_self_update(crate::update::installer::Installer::new(
             config.state_dir.clone(),
@@ -374,6 +425,9 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
             // the last records are worth having — a crash-and-restart is what they explain.
             RunOutcome::Shutdown => {
                 telemetry.shutdown();
+                if left_behind.load(Ordering::SeqCst) {
+                    return Ok(Exit::RestartForUpdate);
+                }
                 return Ok(Exit::Normal);
             }
             RunOutcome::RestartForUpdate => {
@@ -469,6 +523,107 @@ fn heal_torn_pointer() {
     }
 }
 
+/// The primary group of the process account `uid` names, from the password database: the group
+/// the Client shares what the Managed Processes read with (ADR-0059 clause 6). The registration
+/// names the account by its uid alone.
+///
+/// # Errors
+/// Returns an error when the database names no account for `uid`, or cannot be read: the Client
+/// does not start rather than share its files with a group it cannot name.
+#[cfg(unix)]
+fn process_account_group(uid: &u32) -> Result<crate::storage::ProcessAccountGroup, String> {
+    let uid = *uid;
+    match crate::service::run_as::account_of(uid) {
+        Ok(Some(account)) => Ok(crate::storage::ProcessAccountGroup(account.gid)),
+        Ok(None) => Err(format!(
+            "the process account (uid {uid}) the registration names does not exist; create it, or \
+             drop it with `service install --no-process-account`"
+        )),
+        Err(e) => Err(format!(
+            "cannot look up the process account (uid {uid}): {e}"
+        )),
+    }
+}
+
+/// On Windows the process account itself, by the SID the registration names: what the Client
+/// shares with the Managed Processes is granted to it (ADR-0059 clause 6).
+///
+/// # Errors
+/// Never; the SID was read when the command line was.
+#[cfg(windows)]
+fn process_account_group(
+    sid: &crate::win32::Sid,
+) -> Result<crate::storage::ProcessAccountGroup, String> {
+    // Once per run, for a value every Supervisor copies.
+    let sid: &'static str = Box::leak(sid.as_str().to_string().into_boxed_str());
+    Ok(crate::storage::ProcessAccountGroup(sid))
+}
+
+/// What resolves once the second service tells this Client that a self-update left it behind.
+type LeftBehind = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// Every Managed Process of this run is started by the second service (ADR-0059 clause 3). The
+/// channel connects at the first start; a Client that cannot reach the service reports it per
+/// Supervisor and never starts a program itself. Beside the spawner: what resolves once the
+/// service turns out to be the build `current` names while this Client is not.
+fn through_the_second_service(
+    agents: &AgentsChannel,
+) -> (supervisor::process::Spawner, LeftBehind) {
+    use crate::supervisor::channel::{Channel, ServiceProcess};
+    tracing::info!(
+        socket = %agents.socket.display(),
+        process = %agents.process,
+        "starting every Managed Process through the second service"
+    );
+    // A uid on Unix, a SID on Windows.
+    #[allow(clippy::clone_on_copy)]
+    let process = agents.process.clone();
+    // Each connection is also checked against the process the service manager runs as the second
+    // service (ADR-0059 clause 4).
+    watched(Channel::new(
+        &agents.socket,
+        process,
+        ServiceProcess::manager(),
+    ))
+}
+
+/// The spawner that starts every Managed Process through `channel`, and what resolves once the
+/// channel says that the self-update left this Client behind.
+fn watched(
+    channel: crate::supervisor::channel::Channel,
+) -> (supervisor::process::Spawner, LeftBehind) {
+    let watched = channel.clone();
+    (
+        supervisor::process::Spawner::Channel(channel),
+        Box::pin(async move { watched.left_behind().await }),
+    )
+}
+
+/// The run's shutdown where the second service starts its programs: `shutdown`, or `told`
+/// resolving — the self-update left this Client behind, and `left_behind` then says so, which
+/// ends the run for the restart that starts the version `current` names (ADR-0059 clause 2).
+fn or_left_behind(
+    mut shutdown: Shutdown,
+    told: LeftBehind,
+    left_behind: Arc<AtomicBool>,
+) -> Shutdown {
+    let (stop, run) = shutdown_channel();
+    tokio::spawn(async move {
+        tokio::select! {
+            () = shutdown.requested() => {}
+            () = told => {
+                tracing::info!(
+                    "the second service runs the version current names and this Client does \
+                     not; ending for the restart"
+                );
+                left_behind.store(true, Ordering::SeqCst);
+            }
+        }
+        let _ = stop.send(true);
+    });
+    run
+}
+
 /// Resolve to the platform shutdown signal: `SIGTERM` or `SIGINT` on Unix (what systemd and
 /// launchd send on stop), Ctrl-C on Windows (a console run; the SCM path never comes through
 /// here).
@@ -490,21 +645,90 @@ async fn shutdown_signal() {
 }
 
 /// daemon(7) reserves `SIGHUP` for a configuration reload. Until that exists it is explicitly
-/// ignored — the default disposition would terminate the daemon.
+/// ignored — the default disposition would terminate the daemon. The handler is in place when this
+/// returns; it must be called inside the runtime.
 #[cfg(unix)]
-async fn ignore_sighup() {
+pub(crate) fn ignore_sighup() {
     use tokio::signal::unix::{signal, SignalKind};
     let Ok(mut hangup) = signal(SignalKind::hangup()) else {
         return;
     };
-    while hangup.recv().await.is_some() {
-        tracing::debug!("SIGHUP ignored (reserved for a future configuration reload)");
-    }
+    tokio::spawn(async move {
+        while hangup.recv().await.is_some() {
+            tracing::debug!("SIGHUP ignored (reserved for a future configuration reload)");
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Client whose start meets a second service of another build, while `current` no longer
+    /// names its own version, ends its run as for its own update; one the operator stops ends as
+    /// stopped (ADR-0059 clause 2). From the start through the Spawner the run hands its
+    /// Supervisors to the end of the run's shutdown; what the run returns on it is the one line
+    /// after, reached only by a whole run against a Server.
+    /// Verifies: ADR-0059
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_client_left_behind_ends_its_run_for_the_restart() {
+        use crate::supervisor::channel::{peer, read_frame, write_frame, Channel, Reply, Request};
+        use crate::supervisor::process::Launch;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("agents.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        // The second service `current` names, which this Client is not.
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let _ = read_frame::<_, Request>(&mut stream).await;
+                let hello = Reply::Hello {
+                    version: "0.0.0-the-build-current-names".to_string(),
+                };
+                let _ = write_frame(&mut stream, &hello).await;
+            }
+        });
+        let (spawner, told) = watched(Channel::with_superseded(
+            &socket,
+            peer::own_uid(),
+            peer::this_process(),
+            || true,
+        ));
+        let (_operator, shutdown) = shutdown_channel();
+        let left_behind = Arc::new(AtomicBool::new(false));
+        let mut run = or_left_behind(shutdown, told, Arc::clone(&left_behind));
+        let started = spawner
+            .spawn(
+                "test",
+                Launch {
+                    program: PathBuf::from("/bin/true"),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    endpoint_token: None,
+                    working_dir: None,
+                    own_process_group: false,
+                },
+            )
+            .await;
+        assert!(started.is_err(), "started through another build");
+        tokio::time::timeout(std::time::Duration::from_secs(5), run.requested())
+            .await
+            .expect("the run ends");
+        assert!(left_behind.load(Ordering::SeqCst));
+
+        let (operator, shutdown) = shutdown_channel();
+        let left_behind = Arc::new(AtomicBool::new(false));
+        let mut run = or_left_behind(
+            shutdown,
+            Box::pin(std::future::pending()),
+            Arc::clone(&left_behind),
+        );
+        operator.send(true).expect("stop");
+        tokio::time::timeout(std::time::Duration::from_secs(5), run.requested())
+            .await
+            .expect("the run ends");
+        assert!(!left_behind.load(Ordering::SeqCst));
+    }
 
     /// A destination that comes into force while the connection holds is sampled from then on —
     /// not from the next reconnect, which on a healthy connection never comes.
@@ -576,6 +800,7 @@ mod tests {
             config_path: config.to_path_buf(),
             state_dir,
             service: false,
+            agents: None,
         };
         assert_eq!(
             recovery_state_dir(&spec(Some(flagged.clone()), &config_path)),
@@ -622,6 +847,7 @@ mod tests {
                 config_path: dir.path().join("supervisor.toml"),
                 state_dir: Some(state_dir.clone()),
                 service: true,
+                agents: None,
             },
             "supervisor \"x\": `main_config` is no longer a supervisor key".to_string(),
         );

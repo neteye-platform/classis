@@ -137,6 +137,329 @@ pub fn configure(
     Ok(())
 }
 
+/// The privileges the second service keeps (ADR-0059 clause 2): `SeChangeNotifyPrivilege` alone,
+/// which the SCM never removes anyway and which lets the Managed Processes pass through the
+/// Client's directories to what is shared with them. Every other privilege of its account —
+/// `SeImpersonatePrivilege` first, which a `LocalService`-like account holds — is removed from the
+/// service's token when it starts, and from every program it starts, whose token is a copy
+/// (SERVICE_REQUIRED_PRIVILEGES_INFO).
+#[cfg(windows)]
+pub const AGENTS_PRIVILEGES: &[&str] = &["SeChangeNotifyPrivilege"];
+
+/// Configure the second service as [`configure`] configures the Client — recovery actions, display
+/// name, description, the logon account `account` — and cut its privileges to
+/// [`AGENTS_PRIVILEGES`] (ADR-0059 clause 2).
+///
+/// # Errors
+/// Returns an error if the service cannot be opened or reconfigured. Never on Unix.
+#[cfg(not(windows))]
+pub fn configure_agents(
+    _service_name: &str,
+    _display_name: &str,
+    _description: &str,
+    _account: &str,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn configure_agents(
+    service_name: &str,
+    display_name: &str,
+    description: &str,
+    account: &str,
+) -> Result<(), String> {
+    use windows_service::service::ServiceAccess;
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    configure(service_name, display_name, description, Some(account))?;
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|e| format!("cannot open the service control manager: {e}"))?;
+    let service = manager
+        .open_service(service_name, ServiceAccess::CHANGE_CONFIG)
+        .map_err(|e| format!("cannot open the service {service_name}: {e}"))?;
+    // SAFETY: the handle of `service`, which lives across the call.
+    unsafe { crate::win32::set_required_privileges(service.raw_handle(), AGENTS_PRIVILEGES) }
+        .map_err(|e| format!("cannot set the required privileges of {service_name}: {e}"))
+}
+
+/// Rewrites the program, arguments and start type of the service `service_name`, which the SCM
+/// holds already, keeping its logon account: a re-registration, which `sc create` refuses for a
+/// service that exists. Its display name is set again by [`configure`].
+///
+/// # Errors
+/// Returns an error if the service cannot be opened or reconfigured.
+#[cfg(windows)]
+pub fn reregister(
+    service_name: &str,
+    program: &std::path::Path,
+    args: &[std::ffi::OsString],
+) -> Result<(), String> {
+    use windows_service::service::{
+        ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType,
+    };
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|e| format!("cannot open the service control manager: {e}"))?;
+    let service = manager
+        .open_service(service_name, ServiceAccess::CHANGE_CONFIG)
+        .map_err(|e| format!("cannot open the service {service_name}: {e}"))?;
+    service
+        .change_config(&ServiceInfo {
+            name: service_name.into(),
+            display_name: service_name.into(),
+            service_type: ServiceType::OWN_PROCESS,
+            start_type: ServiceStartType::AutoStart,
+            error_control: ServiceErrorControl::Normal,
+            executable_path: program.to_path_buf(),
+            launch_arguments: args.to_vec(),
+            dependencies: Vec::new(),
+            // Kept: `ChangeServiceConfigW` changes no account it is given none of.
+            account_name: None,
+            account_password: None,
+        })
+        .map_err(|e| format!("cannot re-register the service {service_name}: {e}"))
+}
+
+/// ERROR_SERVICE_DOES_NOT_EXIST.
+#[cfg(any(windows, test))]
+const NO_SERVICE: i32 = 1060;
+
+/// Whether `e` says that the SCM knows no such service.
+#[cfg(windows)]
+fn no_such_service(e: &windows_service::Error) -> bool {
+    matches!(e, windows_service::Error::Winapi(e) if e.raw_os_error() == Some(NO_SERVICE))
+}
+
+/// What an SCM refusal with the system error `code` says a service is doing: one the SCM does not
+/// know is stopped; every other refusal says nothing of it.
+#[cfg(any(windows, test))]
+fn activity_on_refusal(code: Option<i32>) -> Option<super::manager::Activity> {
+    (code == Some(NO_SERVICE)).then_some(super::manager::Activity::Stopped)
+}
+
+/// What the service `service_name` is doing, as the SCM reports it: one it does not know
+/// (`ERROR_SERVICE_DOES_NOT_EXIST`) is stopped.
+///
+/// # Errors
+/// Returns every other refusal of the SCM — access denied among them — which says nothing of what
+/// the service is doing.
+#[cfg(windows)]
+pub fn activity(service_name: &str) -> Result<super::manager::Activity, String> {
+    use super::manager::Activity;
+    use windows_service::service::{ServiceAccess, ServiceState};
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    let state = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .and_then(|manager| manager.open_service(service_name, ServiceAccess::QUERY_STATUS))
+        .and_then(|service| service.query_status())
+        .map(|status| status.current_state);
+    match state {
+        Ok(ServiceState::StartPending | ServiceState::ContinuePending) => Ok(Activity::Starting),
+        Ok(ServiceState::StopPending) => Ok(Activity::Stopping),
+        Ok(ServiceState::Stopped) => Ok(Activity::Stopped),
+        Ok(_) => Ok(Activity::Running),
+        Err(e) => {
+            let code = match &e {
+                windows_service::Error::Winapi(e) => e.raw_os_error(),
+                _ => None,
+            };
+            activity_on_refusal(code)
+                .ok_or_else(|| format!("cannot ask the SCM what {service_name} is doing: {e}"))
+        }
+    }
+}
+
+/// The process the SCM runs as the service `service_name` (`QueryServiceStatusEx`,
+/// `SERVICE_STATUS_PROCESS.dwProcessId`): `None` where it runs none, or knows no such service
+/// (ADR-0059 clause 4).
+///
+/// # Errors
+/// Returns every other refusal of the SCM.
+#[cfg(windows)]
+pub fn service_process(service_name: &str) -> Result<Option<u32>, String> {
+    use windows_service::service::ServiceAccess;
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    let status = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .and_then(|manager| manager.open_service(service_name, ServiceAccess::QUERY_STATUS))
+        .and_then(|service| service.query_status());
+    match status {
+        Ok(status) => Ok(status.process_id.filter(|pid| *pid != 0)),
+        Err(e) if no_such_service(&e) => Ok(None),
+        Err(e) => Err(format!(
+            "cannot ask the SCM for the process of {service_name}: {e}"
+        )),
+    }
+}
+
+/// What a look at a service tells a stop: whether it has stopped, and the process the SCM names.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Look {
+    stopped: bool,
+    pid: Option<u32>,
+}
+
+/// The service's process, to wait for: opened through `open`, then confirmed by looking again
+/// through `query` — the same process, and the service not stopped — since a process that ended
+/// before it was opened may have left its id to another. `None` where the service stopped
+/// meanwhile, or names no process; a process the service changed for another is looked at again.
+///
+/// # Errors
+/// Returns `()` where the process changed at every one of three looks — a service restarting
+/// faster than it can be stopped for certain — and why a process could not be opened or the SCM
+/// asked.
+#[cfg(any(windows, test))]
+fn confirmed_process<H>(
+    mut look: Look,
+    open: &mut dyn FnMut(u32) -> Result<Option<H>, String>,
+    query: &mut dyn FnMut() -> Result<Look, String>,
+) -> Result<Option<H>, Result<(), String>> {
+    for _ in 0..3 {
+        let Some(pid) = look.pid.filter(|pid| *pid != 0) else {
+            return Ok(None);
+        };
+        let opened = open(pid).map_err(Err)?;
+        look = query().map_err(Err)?;
+        if look.stopped {
+            return Ok(None);
+        }
+        if look.pid == Some(pid) {
+            return Ok(opened);
+        }
+    }
+    Err(Ok(()))
+}
+
+/// Stops the service `service_name` and waits up to `within` until it has stopped and its process
+/// has ended; whether it was running — or starting, stopping, pausing or paused — before. One the
+/// SCM does not know, or that is stopped, is passed over: the SCM names no process of a stopped
+/// service, so one that reported `SERVICE_STOPPED` before this asked is not waited for.
+///
+/// `SERVICE_STOPPED` is what the service reports before it ends, and its process "can be
+/// terminated at any time" after it (SetServiceStatus) — still running then, under the service's
+/// account. So the process is opened before the stop is sent, and its end is what the wait ends
+/// on. For the second service that end is also the end of every program it started: the last
+/// handle to each job closes with it, and the job kills what it holds (ADR-0059 clause 4).
+///
+/// # Errors
+/// Returns why the SCM cannot be asked or the service stopped, and that it, or its process, had
+/// not ended after `within`.
+#[cfg(windows)]
+pub fn stop_and_wait(service_name: &str, within: std::time::Duration) -> Result<bool, String> {
+    use windows_service::service::{ServiceAccess, ServiceState};
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    /// ERROR_SERVICE_CANNOT_ACCEPT_CTRL: starting or stopping.
+    const NOT_NOW: i32 = 1061;
+    /// ERROR_SERVICE_NOT_ACTIVE.
+    const NOT_ACTIVE: i32 = 1062;
+    let until = std::time::Instant::now() + within;
+    let late = || format!("{service_name} has not stopped after {}s", within.as_secs());
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|e| format!("cannot open the service control manager: {e}"))?;
+    let service = match manager.open_service(
+        service_name,
+        ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
+    ) {
+        Ok(service) => service,
+        Err(e) if no_such_service(&e) => return Ok(false),
+        Err(e) => return Err(format!("cannot open the service {service_name}: {e}")),
+    };
+    let query = || {
+        service
+            .query_status()
+            .map_err(|e| format!("cannot ask the SCM what {service_name} is doing: {e}"))
+    };
+    let mut status = query()?;
+    if status.current_state == ServiceState::Stopped {
+        return Ok(false);
+    }
+    // Running, starting, pausing or paused — and stopping, which a stop already under way found
+    // running: each is to run again once the change has succeeded.
+    let was_running = true;
+    // Its process, while it is the service's: opened, then confirmed by asking again — the same
+    // process, and the service not stopped — since a process that ended before it was opened may
+    // have left its id to another. Once the service has stopped, the SCM names none.
+    let look = |status: &windows_service::service::ServiceStatus| Look {
+        stopped: status.current_state == ServiceState::Stopped,
+        pid: status.process_id,
+    };
+    let process = confirmed_process(
+        look(&status),
+        &mut |pid| {
+            crate::win32::process_to_wait_for(pid)
+                .map_err(|e| format!("cannot open the process of {service_name}: {e}"))
+        },
+        &mut || query().map(|status| look(&status)),
+    )
+    .map_err(|failed| {
+        failed.map_or_else(std::convert::identity, |()| {
+            format!("{service_name} changed its process at every look, and is not stopped")
+        })
+    })?;
+    status = query()?;
+    loop {
+        match status.current_state {
+            ServiceState::Stopped => break,
+            ServiceState::StopPending | ServiceState::StartPending => {}
+            _ => match service.stop() {
+                Ok(_) => {}
+                Err(windows_service::Error::Winapi(e))
+                    if matches!(e.raw_os_error(), Some(NOT_NOW | NOT_ACTIVE)) => {}
+                Err(e) => return Err(format!("cannot stop {service_name}: {e}")),
+            },
+        }
+        if std::time::Instant::now() >= until {
+            return Err(late());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        status = query()?;
+    }
+    if let Some(process) = process {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if !crate::win32::ended_within(&process, left)
+            .map_err(|e| format!("cannot wait for the process of {service_name}: {e}"))?
+        {
+            return Err(late());
+        }
+    }
+    Ok(was_running)
+}
+
+/// The registration of the service `service_name` as the SCM holds it: its registry key, and the
+/// logon account it names (ADR-0059 clause 1). `None` where no such service is registered.
+///
+/// # Errors
+/// Returns an error if the SCM cannot be asked.
+#[cfg(windows)]
+pub fn logon_account(service_name: &str) -> Result<Option<super::manager::Registration>, String> {
+    use windows_service::service::ServiceAccess;
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|e| format!("cannot open the service control manager: {e}"))?;
+    let service = match manager.open_service(service_name, ServiceAccess::QUERY_CONFIG) {
+        Ok(service) => service,
+        Err(e) if no_such_service(&e) => return Ok(None),
+        Err(e) => return Err(format!("cannot open the service {service_name}: {e}")),
+    };
+    let config = service
+        .query_config()
+        .map_err(|e| format!("cannot read the configuration of {service_name}: {e}"))?;
+    Ok(Some(super::manager::Registration {
+        file: std::path::PathBuf::from(format!(
+            r"HKLM\SYSTEM\CurrentControlSet\Services\{service_name}"
+        )),
+        account: config
+            .account_name
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty()),
+    }))
+}
+
 /// Runs `sc.exe` with a trailing value argument — the shape both fields above are set with, so
 /// neither can be the one that forgets to check whether `sc.exe` actually accepted it.
 ///
@@ -164,4 +487,63 @@ fn sc(args: &[&str], value: &str, what: &str) -> Result<(), String> {
         output.status,
         String::from_utf8_lossy(&output.stdout).trim()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refusal of the SCM is read as a stopped service only where the SCM knows no such service
+    /// (1060); access denied, and every other refusal, says nothing of what it is doing.
+    /// Verifies: ADR-0059
+    #[test]
+    fn only_a_service_the_scm_does_not_know_is_stopped() {
+        assert_eq!(
+            activity_on_refusal(Some(1060)),
+            Some(super::super::manager::Activity::Stopped)
+        );
+        for code in [Some(5), Some(1062), Some(1061), None] {
+            assert_eq!(activity_on_refusal(code), None, "{code:?}");
+        }
+    }
+
+    /// A stop waits for the process it confirmed: the one opened, named again by the SCM and the
+    /// service not stopped. One that changed is looked at again, and one that changed at every one
+    /// of three looks fails the stop, so that a stop for a change starts again what it stopped
+    /// (ADR-0059 clauses 1 and 2).
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_stop_waits_for_the_process_it_confirmed_and_fails_on_one_that_keeps_changing() {
+        let running = |pid| Look {
+            stopped: false,
+            pid: Some(pid),
+        };
+        let mut opened = Vec::new();
+        let mut looks = vec![running(8), running(8)].into_iter();
+        let confirmed = confirmed_process(
+            running(7),
+            &mut |pid| {
+                opened.push(pid);
+                Ok(Some(pid))
+            },
+            &mut || Ok(looks.next().expect("a look")),
+        );
+        assert_eq!(confirmed, Ok(Some(8)), "the second process, confirmed");
+        assert_eq!(opened, [7, 8]);
+
+        let mut next = 10;
+        let restless = confirmed_process(running(9), &mut |pid| Ok(Some(pid)), &mut || {
+            next += 1;
+            Ok(running(next))
+        });
+        assert_eq!(restless, Err(Ok(())), "changed at every look");
+
+        let stopped = confirmed_process(running(9), &mut |pid| Ok(Some(pid)), &mut || {
+            Ok(Look {
+                stopped: true,
+                pid: None,
+            })
+        });
+        assert_eq!(stopped, Ok(None), "stopped meanwhile: nothing to wait for");
+    }
 }

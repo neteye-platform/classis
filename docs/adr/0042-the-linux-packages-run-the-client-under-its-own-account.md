@@ -1,6 +1,11 @@
 # ADR-0042: The Linux packages run the Client under its own account, a re-registration keeps the account it finds, and the Client writes its systemd unit with the sandboxing every supported agent tolerates
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clause 1 superseded by
+  [ADR-0053](0053-the-state-directory-comes-from-the-registration-not-the-file.md)
+  · clause 2 superseded by
+  [ADR-0054](0054-no-privileged-install-step-follows-a-link-the-account-placed.md)
+  · clause 6 superseded by
+  [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-19
 - **Deciders:** Markus Brigl
 - **Applies to:** `packaging/linux/postinst` and `packaging/linux/postrm`, the

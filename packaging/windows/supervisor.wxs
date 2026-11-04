@@ -238,11 +238,20 @@
       <Custom Action="RegisterService" After="RegisterServiceWithEndpoint"
               Condition="NOT REMOVE AND ENDPOINT=&quot;&quot;" />
 
-      <!-- Only a real uninstall. On a major upgrade the new package re-registers straight after. -->
+      <!--
+        Only a real removal, as the pre-removal of every package (ADR-0042 clause 3): on an upgrade
+        it falls straight through, because the successor re-runs `service install`. A major upgrade
+        removes the old product with REMOVE set to ALL as well (RemoveExistingProducts), and sets
+        UPGRADINGPRODUCTCODE while it does, which a removal from Add or Remove Programs does not;
+        REMOVE alone would unregister the services in the middle of every upgrade.
+
+        `service stop` stops the Client and then the second service, and waits for each until its
+        process has ended, the second service's programs with it.
+      -->
       <Custom Action="StopService" Before="UnregisterService"
-              Condition="REMOVE=&quot;ALL&quot;" />
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="UnregisterService" Before="RemoveFiles"
-              Condition="REMOVE=&quot;ALL&quot;" />
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
 
   </Package>

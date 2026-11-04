@@ -1,6 +1,7 @@
 # ADR-0045: Every release asset carries a build-provenance attestation, and every shipped program a CycloneDX SBOM per target
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clauses 2, 3, 4, 5 and 8 superseded by
+  [ADR-0052](0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)
 - **Date:** 2026-10-19
 - **Deciders:** Markus Brigl
 - **Applies to:** `.github/workflows/release.yml` (the `sbom` job, the
@@ -69,7 +70,7 @@ in the binary reports findings that do not apply.
 
 Constraints from other decisions:
 
-- [ADR-0049](0049-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md)
+- [ADR-0060](0060-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md)
   pins every action, first-party (`actions/*`) included, to a commit SHA with
   its release in a comment.
 - The release workflow installs every tool that writes what ships at an exact
@@ -129,7 +130,7 @@ target, and attest those SBOMs as release assets like the rest.
 4. **One build-provenance attestation covers every published asset.** After
    `SHA256SUMS` is assembled and before the release is created, the `publish`
    job runs `actions/attest` in provenance mode, pinned to a commit SHA
-   ([ADR-0049](0049-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md)).
+   ([ADR-0060](0060-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md)).
    The subjects are:
    - every file it then publishes: the `.tar.gz` archives, the `.deb`, `.rpm`
      and `.msi`, the `.cdx.json` SBOMs;

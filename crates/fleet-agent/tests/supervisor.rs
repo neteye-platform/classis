@@ -372,3 +372,81 @@ fn sigterm_stops_the_managed_process_and_the_client_cleanly() {
             .success()
     });
 }
+
+/// Where the Client's command line names the second service — as the unit `service install
+/// --process-account` writes does — the shipped Client starts its Managed Process through it, not
+/// itself (ADR-0059 clause 3): the stub's parent is the second service. Run without a second
+/// account: the service runs in this test, under this test's uid, which the Client is told is the
+/// process account's, and as this test's process, which a `systemctl` on the Client's `PATH`
+/// names as the one systemd runs as the second service (ADR-0059 clause 4).
+/// Verifies: ADR-0059
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_client_told_of_the_second_service_starts_its_program_through_it() {
+    use fleet_agent::supervisor::channel::{bind, serve};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("marker");
+    let config = write_config(dir.path(), &marker);
+    let socket = dir.path().join("agents.sock");
+    // SAFETY: getuid(2) cannot fail and touches no memory.
+    let uid = unsafe { libc::getuid() };
+    let listener = bind(&socket).expect("bind the second service's socket");
+    let service = tokio::spawn(serve(listener, uid, || false, std::future::pending()));
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).expect("bin/");
+    let systemctl = bin.join("systemctl");
+    std::fs::write(
+        &systemctl,
+        format!("#!/bin/sh\necho {}\n", std::process::id()),
+    )
+    .expect("write systemctl");
+    std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod systemctl");
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path)))
+            .expect("PATH");
+
+    let mut client = tokio::process::Command::new(env!("CARGO_BIN_EXE_supervisor"))
+        .env("PATH", path)
+        .arg("--config")
+        .arg(&config)
+        .args(["run", "--agents-socket"])
+        .arg(&socket)
+        .args(["--process-uid", &uid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn the client");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let stub = loop {
+        let pid = std::fs::read_to_string(&marker).ok().and_then(|marker| {
+            marker
+                .lines()
+                .find_map(|l| l.strip_prefix("pid=").and_then(|p| p.parse::<u32>().ok()))
+        });
+        if let Some(pid) = pid {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "the stub never ran");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let stat = std::fs::read_to_string(format!("/proc/{stub}/stat")).expect("the stub's stat");
+    let parent: u32 = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+        .and_then(|ppid| ppid.parse().ok())
+        .expect("the stub's parent");
+    assert_eq!(
+        parent,
+        std::process::id(),
+        "the stub was started by pid {parent}, not by the second service"
+    );
+    assert_ne!(Some(parent), client.id(), "the Client started it itself");
+
+    client.kill().await.expect("kill the client");
+    service.abort();
+}

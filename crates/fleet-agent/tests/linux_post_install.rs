@@ -1,6 +1,8 @@
-//! What the Linux post-install prints (`packaging/linux/postinst`), read as text the way
-//! `msi_exe_command.rs` reads the WiX source: the package is not built here, so the guidance it
-//! shows an operator is checked by `cargo test` on every platform.
+//! What the Linux maintainer scripts say and do (`packaging/linux/`), read as text the way
+//! `msi_exe_command.rs` reads the WiX source: the package is not built here, so the guidance the
+//! post-install shows an operator is checked by `cargo test` on every platform. The pre-removal is
+//! also run, on Unix, from a copy whose payload path names a stub that only records its arguments,
+//! so the test touches no installed service.
 
 use std::path::Path;
 
@@ -218,4 +220,85 @@ fn no_maintainer_script_removes_the_account() {
             }
         }
     }
+}
+
+/// The pre-removal stops and unregisters only on a real removal: dpkg's `remove` and rpm's `0`.
+/// An upgrade — dpkg's `upgrade`, `failed-upgrade` and `deconfigure`, and any rpm count above 0,
+/// which says how many instances stay — falls straight through, or an `apt upgrade` or an
+/// `rpm -U` beside a second instance would leave the Client stopped.
+/// Verifies: ADR-0042
+#[cfg(unix)]
+#[test]
+fn the_pre_removal_acts_only_on_a_real_removal() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const PAYLOAD: &str = "/usr/libexec/opamp-fleet/supervisor";
+    let original = maintainer_script("prerm");
+    assert!(
+        original.contains(PAYLOAD),
+        "the pre-removal names the payload"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let calls = dir.path().join("calls");
+    let stub = dir.path().join("supervisor");
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\necho \"$*\" >> '{}'\n", calls.display()),
+    )
+    .expect("write the stub");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let script = dir.path().join("prerm");
+    std::fs::write(
+        &script,
+        original.replace(PAYLOAD, &stub.display().to_string()),
+    )
+    .expect("write the copy");
+    for (argument, removal) in [
+        ("remove", true),
+        ("0", true),
+        ("upgrade", false),
+        ("failed-upgrade", false),
+        ("deconfigure", false),
+        ("1", false),
+        ("2", false),
+    ] {
+        // The stub's record shows whether the script went on past its fall-through.
+        let _ = std::fs::remove_file(&calls);
+        let status = std::process::Command::new("sh")
+            .arg(&script)
+            .arg(argument)
+            .status()
+            .expect("run the pre-removal");
+        assert!(status.success(), "{argument}: {status}");
+        let record = std::fs::read_to_string(&calls).unwrap_or_default();
+        let stopped = record.lines().any(|line| line == "service stop");
+        assert_eq!(
+            stopped, removal,
+            "{argument}: stopped the service = {stopped}\n{record}"
+        );
+        let unregistered = record.lines().any(|line| line == "service uninstall");
+        assert_eq!(unregistered, removal, "{argument}: {record}");
+    }
+}
+
+/// A removal runs `service stop`, then `service uninstall` (ADR-0042 clause 3), and stops nothing
+/// by its unit name: the stop takes down the second service too, where a process account is
+/// registered (ADR-0059).
+/// Verifies: ADR-0042, ADR-0059
+#[test]
+fn the_pre_removal_stops_both_services_before_it_deregisters() {
+    let commands = commands(&maintainer_script("prerm"));
+    let position = |needle: &str| {
+        commands
+            .iter()
+            .position(|c| c.starts_with(needle))
+            .unwrap_or_else(|| panic!("no {needle} in {commands:#?}"))
+    };
+    let stop = position("/usr/libexec/opamp-fleet/supervisor service stop");
+    let uninstall = position("/usr/libexec/opamp-fleet/supervisor service uninstall");
+    assert!(stop < uninstall, "{commands:#?}");
+    assert!(
+        !commands.iter().any(|c| c.contains("systemctl stop")),
+        "{commands:#?}"
+    );
 }

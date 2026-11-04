@@ -86,10 +86,11 @@ pub struct ClientConfig {
     /// signature is checked against. Set from the file at load; not itself a file key.
     #[serde(skip)]
     pub package_key: Option<Vec<u8>>,
-    /// The file's own text with secret values masked (see [`redact_secrets`]), kept from load so
-    /// the Client's own Agent can report it as its effective configuration — the file *is* what
-    /// this Client runs (a file that fails to load fails startup, so a running Client and its file
-    /// never disagree). `None` when no file exists and the defaults run.
+    /// The file's own text with secret values masked (see
+    /// [`redact_secrets`](crate::config_file::redact_secrets)), kept from load so the Client's own
+    /// Agent can report it as its effective configuration — the file *is* what this Client runs (a
+    /// file that fails to load fails startup, so a running Client and its file never disagree).
+    /// `None` when no file exists and the defaults run.
     #[serde(skip)]
     pub source: Option<String>,
     /// The path this configuration was loaded from — where an accepted Supervisor set is written
@@ -107,6 +108,11 @@ pub struct ClientConfig {
     /// certificate; set by the install, never by the file.
     #[serde(skip)]
     pub bootstrap_identity: Option<BootstrapIdentity>,
+    /// The process account's primary group, where a process account is registered (ADR-0059
+    /// clause 6): what the Client shares with the Managed Processes belongs to it. Set by the run
+    /// from the `--process-uid` its registration names, never by the file.
+    #[serde(skip)]
+    pub process_account_group: Option<crate::supervisor::ports::ProcessAccountGroup>,
     /// The largest OpAMP message the Client accepts or sends, on either transport and in either
     /// direction — the Supervisor Endpoint included. The Baseline requires the limit, recommends
     /// this default, and asks that it be configurable.
@@ -126,12 +132,12 @@ pub struct ClientConfig {
     pub supervisors: Vec<SupervisorBlock>,
 }
 
-/// A bootstrap certificate and its key as PEM, held in memory (ADR-0029 clause 7). Its `Debug`
-/// names neither.
+/// A bootstrap certificate and its key as PEM, held in memory (ADR-0029 clause 7), the key in a
+/// buffer wiped when it is dropped (ADR-0057). Its `Debug` names neither.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BootstrapIdentity {
     pub cert_pem: Vec<u8>,
-    pub key_pem: Vec<u8>,
+    pub key_pem: zeroize::Zeroizing<Vec<u8>>,
 }
 
 impl std::fmt::Debug for BootstrapIdentity {
@@ -158,13 +164,13 @@ pub struct SupervisorBlock {
     /// systems.
     pub name: String,
     /// The Agent *type* this Supervisor presents as `service.name` — the Baseline's "reverse FQDN
-    /// that uniquely identifies the Agent type" (ADR-0016). `None` falls back to the program's own
-    /// file name, and a Managed Process that reports a type of its own overrides both: a
-    /// Collector's `opampextension` states the `dist.name` it was built with, which is the truth
-    /// this key can only approximate.
+    /// that uniquely identifies the Agent type" (ADR-0055). `None` falls back to the program's own
+    /// file name. A Managed Process never overrides it: a type the process reports, such as the
+    /// `dist.name` a Collector's `opampextension` states, is dropped with a warning naming this
+    /// key.
     ///
-    /// Set it for a Managed Process that reports nothing — the core `otelcol` distribution, every
-    /// Foreign Agent — so a Selector can aim at what this Agent *is* (ADR-0026).
+    /// Set it where the file name is not the type — a Collector whose `dist.name` should be its
+    /// type, every Foreign Agent — so a Selector can aim at what this Agent *is* (ADR-0026).
     pub service_name: Option<String>,
     /// The Supervisor Endpoint's loopback port; `0` (the default) binds an ephemeral port. Pin
     /// it when the distributed configuration carries the `opampextension` pointing at it.
@@ -217,6 +223,23 @@ pub const TREE_DIR: &str = "tree";
 
 /// The subdirectory a downloaded artifact is staged in, per Supervisor.
 const PACKAGES_DIR: &str = "packages";
+
+/// The default Supervisors' root in the state directory, where `supervisor_dir` names none.
+const SUPERVISORS_DIR: &str = "supervisors";
+
+/// What the Client keeps in its state directory under a name a Supervisor could carry, with what
+/// it is: no Supervisor takes one of these names where `supervisor_dir` is the state directory
+/// ([`ClientConfig::check_supervisor_dir`]). The rest of what is kept there has a `.` in its name,
+/// which no Supervisor's name holds ([`parse_instance_name`]). Spelled here, in the core, and held
+/// to the adapters' own constants by a test of `storage`.
+pub(crate) const CLIENT_ENTRIES: [(&str, &str); 6] = [
+    ("instance-uid", "the Client's own identity"),
+    ("config", "the Client's own configuration entries"),
+    (PACKAGES_DIR, "the staging of the Client's self-update"),
+    ("logs", "the Client's default log directory"),
+    ("gateway-packages", "the Gateway's package cache"),
+    (SUPERVISORS_DIR, "the default Supervisors' root"),
+];
 
 /// Where a Supervisor's Managed Process lives — and, as the same fact, whether this Client may
 /// replace it (ADR-0017).
@@ -343,6 +366,29 @@ pub fn parse_instance_name(raw: &str) -> Result<InstanceName, String> {
         return Err(format!("{raw:?} is a reserved device name on Windows"));
     }
     Ok(InstanceName(raw.to_string()))
+}
+
+/// How the directory of a removed Supervisor is named while it is purged: beneath the Supervisors'
+/// root, by a name no Supervisor can carry — it starts with a dot — so that a Supervisor added
+/// again under the same name gets a fresh directory, whatever is still being removed from the old
+/// one (ADR-0017 clause 34).
+pub(crate) const TOMBSTONE: &str = ".purge-";
+
+/// How many digits a tombstone's nonce has at least: the nanoseconds since the Unix epoch, 16
+/// lowercase hexadecimal digits at least, and a counter, one at least
+/// ([`crate::reconfigure::tombstone_name`]).
+pub(crate) const TOMBSTONE_NONCE: usize = 17;
+
+/// The Supervisor whose tombstone `name` is ([`crate::reconfigure::tombstone_name`]), or `None`
+/// where it is none: its nonce is [`TOMBSTONE_NONCE`] lowercase hexadecimal digits at least, so a
+/// directory an operator named alike — `.purge-backup-20241001` — is never taken for one.
+pub(crate) fn tombstone_of(name: &str) -> Option<&str> {
+    let (supervisor, nonce) = name.strip_prefix(TOMBSTONE)?.rsplit_once('-')?;
+    let nonce_ok = nonce.len() >= TOMBSTONE_NONCE
+        && nonce
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    (nonce_ok && parse_instance_name(supervisor).is_ok()).then_some(supervisor)
 }
 
 impl TryFrom<toml::Table> for SupervisorBlock {
@@ -497,44 +543,7 @@ fn take_integer(table: &mut toml::Table, key: &str) -> Result<Option<i64>, Strin
 /// (ADR-0021 clause 3), but the file's text is reported as it stands, so its values stay masked.
 /// Paths and public keys are not on the list — a path locates a secret, it is not one, and the
 /// `verification_key` is the *public* half of the signing pair.
-const SECRET_KEYS: &[&str] = &["bearer_token", "password", "archive_key"];
-
-/// The file's text with every secret value replaced by `***`, for reporting it off the host —
-/// the Server persists effective configurations to disk, so a credential must never be in one.
-///
-/// Text-based on purpose: parsing and re-serialising would drop the operator's comments and
-/// ordering, which are half of what a configuration file says. A line assigning a secret key
-/// keeps its key with a masked value; any other non-comment line merely *mentioning* a secret
-/// key (an inline table, some spelling this scan does not know) is masked whole — over-redaction
-/// is the cheap failure here, a leaked credential the expensive one.
-pub fn redact_secrets(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let assigned_key = SECRET_KEYS.iter().find(|key| {
-            trimmed
-                .split_once('=')
-                .is_some_and(|(lhs, _)| lhs.trim() == **key)
-        });
-        if trimmed.starts_with('#') || trimmed.is_empty() {
-            out.push_str(line);
-        } else if let Some(key) = assigned_key {
-            let indent = &line[..line.len() - trimmed.len()];
-            out.push_str(indent);
-            out.push_str(key);
-            out.push_str(" = \"***\"");
-        } else if SECRET_KEYS.iter().any(|key| line.contains(key)) {
-            out.push_str("# (line redacted: it mentions a credential key)");
-        } else {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
-    if !text.ends_with('\n') {
-        out.pop();
-    }
-    out
-}
+pub(crate) const SECRET_KEYS: &[&str] = &["bearer_token", "password", "archive_key"];
 
 /// The `[packages]` block (ADR-0026): how downloaded package artifacts are verified, and whether
 /// this Client takes its own (ADR-0018). Where they come from is not configurable: always this
@@ -565,8 +574,18 @@ pub struct PackagesConfig {
     /// The key that opens an encrypted `.7z` package artifact (ADR-0026). Unset means artifacts are
     /// expected unencrypted; an encrypted one then fails to install, naming this key.
     ///
-    /// One secret for the fleet — a single archive serves every Agent.
-    pub archive_key: Option<String>,
+    /// One secret for the fleet — a single archive serves every Agent. Wiped when it is dropped
+    /// (ADR-0057).
+    #[serde(default, deserialize_with = "secret")]
+    pub archive_key: Option<zeroize::Zeroizing<String>>,
+}
+
+/// A secret of the file, moved into a buffer wiped when it is dropped as it is read (ADR-0057);
+/// what `toml` holds while it parses is its own.
+fn secret<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<zeroize::Zeroizing<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(|value| value.map(zeroize::Zeroizing::new))
 }
 
 impl Default for PackagesConfig {
@@ -940,6 +959,7 @@ impl Default for ClientConfig {
             path: None,
             state_dir_as_written: default_state_dir(),
             bootstrap_identity: None,
+            process_account_group: None,
             max_message_size_bytes: default_max_message_size(),
             max_artifact_size_bytes: default_max_artifact_size(),
             supervisors: Vec::new(),
@@ -1074,7 +1094,36 @@ impl ClientConfig {
     pub fn supervisors_root(&self) -> PathBuf {
         self.supervisor_dir
             .clone()
-            .unwrap_or_else(|| self.state_dir.join("supervisors"))
+            .unwrap_or_else(|| self.state_dir.join(SUPERVISORS_DIR))
+    }
+
+    /// Checks that the directory of the Supervisor `name` is none of the Client's own: not the
+    /// state directory or one that holds it, and, where `supervisor_dir` is the state directory
+    /// itself, none of the entries the Client keeps there ([`CLIENT_ENTRIES`]). A Supervisor
+    /// there would share that entry with the process account's group, and its purge would delete
+    /// it — a Supervisor named `logs` the Client's log, one named `instance-uid` its identity.
+    ///
+    /// # Errors
+    /// Returns the reason, naming the Supervisor and the entry its directory would be.
+    pub fn check_supervisor_dir(&self, name: &str) -> Result<(), String> {
+        let dir = self.supervisor_dir(name);
+        if self.state_dir.starts_with(&dir) {
+            return Err(format!(
+                "supervisor {name:?}: its directory {} would be the state directory or hold it; \
+                 choose another name",
+                dir.display()
+            ));
+        }
+        if self.supervisors_root() == self.state_dir {
+            if let Some((_, what)) = CLIENT_ENTRIES.iter().find(|(entry, _)| *entry == name) {
+                return Err(format!(
+                    "supervisor {name:?}: its directory {} would be {what}, which the Client keeps \
+                     in the state directory that supervisor_dir names too; choose another name",
+                    dir.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// One Supervisor's own directory: its state, its `program/`, and its package staging, under
@@ -2125,6 +2174,108 @@ mod tests {
         assert_eq!(clean.leftover_auth_notice(), None, "no section, no notice");
     }
 
+    /// Where `supervisor_dir` is the state directory, no Supervisor takes the name of an entry the
+    /// Client keeps there, and the refusal names the Supervisor and the entry; under the default
+    /// root the same names are Supervisors like any other. A Supervisor's directory is never the
+    /// state directory or one that holds it (ADR-0059 clause 6, ADR-0017 clause 21).
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_supervisor_never_takes_a_directory_of_the_clients() {
+        let state = Path::new("/var/lib/opamp-fleet/state");
+        let shared = ClientConfig {
+            state_dir: state.to_path_buf(),
+            supervisor_dir: Some(state.to_path_buf()),
+            ..ClientConfig::default()
+        };
+        let apart = ClientConfig {
+            state_dir: state.to_path_buf(),
+            ..ClientConfig::default()
+        };
+        for name in [
+            "instance-uid",
+            "config",
+            "packages",
+            "logs",
+            "gateway-packages",
+            "supervisors",
+        ] {
+            parse_instance_name(name).expect("a name a Supervisor could carry");
+            let error = shared
+                .check_supervisor_dir(name)
+                .expect_err("the Client's own entry");
+            assert!(error.contains(&format!("{name:?}")), "{error}");
+            assert!(error.contains("the Client keeps"), "{error}");
+            apart
+                .check_supervisor_dir(name)
+                .expect("a Supervisor beneath the default root");
+        }
+        assert!(shared
+            .check_supervisor_dir("logs")
+            .expect_err("logs")
+            .contains("default log directory"));
+        shared
+            .check_supervisor_dir("agent")
+            .expect("a name of its own");
+
+        let above = ClientConfig {
+            state_dir: state.to_path_buf(),
+            supervisor_dir: Some(PathBuf::from("/var/lib/opamp-fleet")),
+            ..ClientConfig::default()
+        };
+        let error = above
+            .check_supervisor_dir("state")
+            .expect_err("the state directory itself");
+        assert!(error.contains("\"state\""), "{error}");
+        above.check_supervisor_dir("agent").expect("beside it");
+    }
+
+    /// A tombstone name ([`crate::reconfigure::tombstone_name`]) names the Supervisor whose
+    /// directory it holds, and is no name a Supervisor can carry (ADR-0017 clause 34).
+    /// Verifies: ADR-0017
+    #[test]
+    fn a_tombstone_names_its_supervisor_and_no_supervisor_carries_one() {
+        for supervisor in ["agent", "a-b", "x1"] {
+            let tomb = crate::reconfigure::tombstone_name(supervisor);
+            assert_eq!(tombstone_of(&tomb), Some(supervisor), "{tomb}");
+            assert!(parse_instance_name(&tomb).is_err(), "{tomb}");
+            assert_ne!(
+                tomb,
+                crate::reconfigure::tombstone_name(supervisor),
+                "each is fresh"
+            );
+        }
+        for name in [
+            "agent",
+            ".purge-agent",
+            ".purge-agent-",
+            ".purge-agent-1G",
+            ".purge--1f",
+            ".purge-Agent-1f",
+            "purge-agent-1f",
+        ] {
+            assert_eq!(tombstone_of(name), None, "{name}");
+        }
+    }
+
+    /// Only the nonce a tombstone name is made with marks one: a directory an operator named
+    /// alike is no tombstone, so neither a start nor a purge removes it (ADR-0059 clause 12).
+    /// Verifies: ADR-0059
+    #[test]
+    fn a_directory_named_alike_is_no_tombstone() {
+        for name in [
+            ".purge-foo-abc",
+            ".purge-backup-20241001",
+            ".purge-agent-18f3a2b4c5d6e7f8",
+            ".purge-agent-18F3A2B4C5D6E7F80",
+        ] {
+            assert_eq!(tombstone_of(name), None, "{name}");
+        }
+        assert_eq!(
+            tombstone_of(".purge-agent-18f3a2b4c5d6e7f80"),
+            Some("agent")
+        );
+    }
+
     #[test]
     fn duplicate_supervisor_names_are_rejected() {
         let cfg: ClientConfig = toml::from_str(
@@ -2139,38 +2290,6 @@ mod tests {
         )
         .expect("parses; the duplicate is a semantic error");
         assert!(cfg.check_supervisor_names().is_err());
-    }
-
-    /// The file's text is reported off the host as the effective configuration, and the Server
-    /// persists what it receives — so a credential value must never survive the redaction, while
-    /// the operator's comments and layout must (they are half of what the file says).
-    #[test]
-    fn redaction_masks_credential_values_and_keeps_everything_else() {
-        let text = "# the fleet endpoint\nendpoint = \"wss://fleet:4320/v1/opamp\"\n\n\
-                    [auth]\n  bearer_token = \"s3cret\"\n\
-                    [packages]\narchive_key = \"p4ss\"\nverification_key = \"aabb\"\n";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("s3cret"), "{redacted}");
-        assert!(!redacted.contains("p4ss"), "{redacted}");
-        assert!(redacted.contains("  bearer_token = \"***\""), "{redacted}");
-        assert!(redacted.contains("archive_key = \"***\""), "{redacted}");
-        assert!(
-            redacted.contains("# the fleet endpoint"),
-            "comments stay: {redacted}"
-        );
-        assert!(
-            redacted.contains("endpoint = \"wss://fleet:4320/v1/opamp\""),
-            "{redacted}"
-        );
-        assert!(
-            redacted.contains("verification_key = \"aabb\""),
-            "the public half of the signing pair is no secret: {redacted}"
-        );
-
-        // A spelling the line scan cannot take apart — an inline table — is masked whole:
-        // over-redaction is the cheap failure, a leaked credential the expensive one.
-        let inline = redact_secrets("auth = { username = \"op\", password = \"hunter2\" }\n");
-        assert!(!inline.contains("hunter2"), "{inline}");
     }
 
     /// `load` is the single place the redaction happens, so everything downstream — the

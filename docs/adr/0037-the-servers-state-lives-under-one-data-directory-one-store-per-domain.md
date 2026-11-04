@@ -2,6 +2,10 @@
 
 - **Status:** 🟢 accepted · clause 10 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
+  · clauses 4 and 5 superseded by
+  [ADR-0049](0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md) ·
+  clauses 1, 2, 6, 7, 8, 9, 11 and 13 superseded by
+  [ADR-0050](0050-the-servers-records-may-live-in-postgresql.md)
 - **Date:** 2026-10-17
 - **Deciders:** Markus Brigl
 - **Applies to:** the storage ports in `crates/fleet-server/src/`

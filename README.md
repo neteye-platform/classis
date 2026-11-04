@@ -260,6 +260,22 @@ artifacts are named after. Each archive is also a ready package artifact: the
 same file an operator downloads is the one a fleet is handed for a Client
 [self-update](docs/manual/client.md#updating-the-client-itself).
 
+The **Server** ships as a container image and nowhere else
+([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)):
+`ghcr.io/mbrigl/opamp-fleet-server:<version>` for `linux/amd64` and
+`linux/arm64`, built by
+[`packaging/container/Containerfile`](packaging/container/Containerfile) from
+the Server binaries the release built and checked, on a distroless base pinned
+by digest, with no shell, running as UID 65532. The release pushes it by digest,
+attests the digest, verifies it, and only then tags it with the version; there
+is no `latest` tag, and the release notes name the digest to deploy. Its SBOMs
+are `server_<version>_linux_<arch>.cdx.json` beside the other assets. Check an
+image with
+`gh attestation verify oci://ghcr.io/mbrigl/opamp-fleet-server@<digest>
+--repo mbrigl/opamp-fleet
+--signer-workflow mbrigl/opamp-fleet/.github/workflows/release.yml`;
+running it is in [the Server's manual](docs/manual/server.md#in-a-container).
+
 ## Usage
 
 This section is a tour. The complete operator reference — every option and every
@@ -409,10 +425,11 @@ supervisor service uninstall                                   # never deletes l
 
 The **`Service smoke` workflow** exercises the real thing on an ephemeral runner
 — install, start, the Agent appearing in the fleet, its process killed and
-brought back by the manager, an explicit stop that stays stopped, uninstall. It
-runs nightly and on demand rather than per push (it installs a system service
-and waits on timers), currently on Windows, where the restart is the Client's
-own doing and nothing else asserts it. The test is
+brought back by the manager, an explicit stop that stays stopped, uninstall —
+and an install that enrols with a `bootstrap.p12` from `--fleet-files`, whose
+service then reaches the Server on the certificate it was issued. It runs weekly
+and on demand rather than per push (it installs a system service and waits on
+timers), on Linux, macOS and Windows. The test is
 `crates/fleet-agent/tests/service_smoke.rs`; it is `#[ignore]`d, so an ordinary
 `cargo test` never installs anything.
 
@@ -448,6 +465,7 @@ docs/HARDENING.md     # candidate hardening measures for the Client-Server link 
 docs/adr/             # Architecture Decision Records (+ template)
 crates/               # Cargo workspace: opamp (shared) · fleet-core · fleet-server · fleet-agent · fleet-tools (operator CLIs)
 config/               # annotated example configuration files (server.toml, supervisor.toml)
+packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
 scripts/check-docs.sh # documentation & protocol-baseline consistency checks
 interop/              # the Go side of the interop check against opamp-go (ADR-0011)
@@ -455,7 +473,7 @@ observability/        # the development observability stack — Collector, Click
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
 .githooks/            # git hooks: refuse a commit on main and a push while the checks are red
 .github/              # CI workflows, issue & pull request templates
-renovate.json         # Renovate: the organisation preset, with Cargo requirements kept as ranges (ADR-0049)
+renovate.json         # Renovate: the organisation preset, with Cargo requirements kept as ranges (ADR-0060)
 .devcontainer/        # Dev Container definition (base image + Features + the OTLP forwarder)
 .vscode/              # shared editor settings
 .editorconfig         # editor-neutral formatting baseline
@@ -554,15 +572,21 @@ repository move or transfer:
   requires the
   <!-- required-checks begin: check-docs.sh compares the workflow's jobs -->
   `docs`, `traceability`, `devcontainer`, `actions`, `sensors`, `shell`, `rust`,
-  `client-windows`, and `client-macos`
+  `client-windows`, `client-macos`, `s3-store`, and `postgres-store`
   <!-- required-checks end -->
-  jobs as required status checks — every job of the **Checks** workflow, and the
-  Client's Windows and macOS jobs of the **CI** workflow (rulesets list checks
+  jobs as required status checks — every job of the **Checks** workflow, the
+  Client's Windows and macOS jobs of the **CI** workflow, and its jobs that run
+  the S3 and PostgreSQL stores' tests against a real store (rulesets list checks
   by their job name) — and blocks force pushes and branch deletion;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
   otherwise carried by review alone;
 - enable **private vulnerability reporting** (see [`SECURITY.md`](SECURITY.md)).
+- after the first release that pushes the Server's image, set the package
+  **`opamp-fleet-server`** on `ghcr.io` to **public** and linked to this
+  repository: a package a workflow publishes for the first time is private, and
+  operators pull the image without an account
+  ([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)).
 
 ## Template
 

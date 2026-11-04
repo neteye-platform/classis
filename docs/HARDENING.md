@@ -130,17 +130,69 @@ the project already has:
   then speaks for any Agent.
 - **Key material and configuration readable by their owner alone** (ADR-0021
   clause 8, ADR-0019 clause 18): on Unix the private key, the stored connection
-  settings and `supervisor.toml` are written `0600` in `0700` directories. On
-  Windows a system-scope install gives the default data root under
-  `%ProgramData%` to the Administrators, whoever created it, drops every right
-  in it that the install does not grant, cuts it off from the read right every
-  local user inherits there, and leaves it to LocalSystem, the Administrators
-  and the service account. A data root named with `--root` or `--data-root`, a
-  state directory outside the data root, and a Supervisors' root outside both
-  that the install creates, is only cut off from inherited rights and left to
-  the same accounts; such a Supervisors' root that already exists is left as it
-  is, with a warning, and protecting it is the operator's. A local user acting
-  while the install runs is not covered.
+  settings and `supervisor.toml` are written `0600` in `0700` directories, a
+  state directory `0710` that the process account's group only passes through
+  where one is registered (ADR-0059). On Windows a system-scope install gives
+  the default data root under `%ProgramData%` to the Administrators, whoever
+  created it, drops every right in it that the install does not grant, cuts it
+  off from the read right every local user inherits there, and leaves it to
+  LocalSystem, the Administrators and the service account. A data root named
+  with `--root` or `--data-root`, a state directory outside the data root, and a
+  Supervisors' root outside both that the install creates beneath the layout
+  root, is only cut off from inherited rights and left to the same accounts; a
+  Supervisors' root that already exists, or that lies outside the data root, the
+  layout root and the state directory, is left as it is, with a warning, and
+  protecting it is the operator's. A local user acting while the install runs is
+  not covered.
+- **A Managed Process can be kept from the Client's key and program**
+  (ADR-0059): where the operator registers a process account, every program a
+  Supervisor starts — the Managed Process, its version probe, a package's
+  preflight — runs under it, started by a second service over a Unix socket or
+  named pipe that admits the Client's account alone. It reads its own `program/`
+  and `config/` and writes its data directories, and nothing else of the
+  Client's: not the private key, the certificates, `supervisor.toml`, the logs
+  or the environment, and no program it runs. On Windows it holds
+  `SeChangeNotifyPrivilege` alone, so no `SeImpersonatePrivilege`, and runs in a
+  job that ends with the Client's connection. An install that drops or changes
+  the account withdraws what the former one was granted. Residual: the
+  separation is opt-in, and a host without a process account runs every Managed
+  Process as the Client; all Managed Processes share the one account, so they
+  read one another's `config/`.
+- **A Managed Process cannot take the second service's place by its socket or
+  pipe, nor, on Linux, reach into it once it has marked itself** (ADR-0059
+  clause 4): before the Client writes anything on a new connection it reads the
+  process at the other end — `SO_PEERPIDFD` on Linux, `LOCAL_PEERPID` on macOS,
+  `GetNamedPipeServerProcessId` on Windows — and accepts it only where systemd,
+  launchd or the SCM runs that process as the second service. A Managed Process
+  that replaces the socket or creates an instance of the pipe hears nothing: the
+  Client closes the connection, logs an error naming the socket or pipe and the
+  process, and waits for the second service as for one that is away. On Linux
+  the second service's program marks itself not dumpable before it parses its
+  command line or sets up its log, so from then on no process of the process
+  account without `CAP_SYS_PTRACE` attaches to it, reads or writes its memory or
+  takes its descriptors, whatever `kernel.yama.ptrace_scope` says, and it does
+  not listen while it is traced. Residual: on Windows a Managed Process can open
+  the second service's process with the rights its account holds on it,
+  duplicate its pipe handle or run code in it; on Linux where Yama is absent or
+  `ptrace_scope` is 0, a Managed Process can kill the second service and attach
+  to the one its service manager starts again between its `execve` and the mark,
+  and as its tracer make it read a `TracerPid` of 0; on Linux before 6.5, on
+  macOS and on Windows a process that listened and ended can leave its id to the
+  second service, which the Client does not tell apart; a Managed Process can
+  remove or replace the socket, and the Client then finds the second service
+  away; where the service manager cannot be asked — no system bus, a
+  `launchctl print` that fails — no Managed Process starts until it answers
+  again.
+- **An install acts only on directories an administrator named or its roots
+  hold** (ADR-0053, ADR-0042 clause 2): `supervisor.toml` belongs to the
+  service's account, and `service install` and `service config` run as root or
+  an Administrator. The state directory comes from `--state-dir`, else from the
+  registration an earlier install wrote, and only then from the file, and from
+  that only beneath the data root or the layout root. Beneath a root it is
+  reached with no `..` and through no link or junction; anything else is refused
+  before anything is written. A Supervisors' root the file places outside them
+  is never created, restricted or handed over. The hand-over and the cut act on
+  a link or junction itself on every platform.
 - **A delivered Supervisor block reaches no further than the package signature**
   (ADR-0017): no environment or arguments beyond what the running block has or
   the operator allowed, and no file outside its own `config/` directory. Under
@@ -149,6 +201,17 @@ the project already has:
   the names and placeholders the clause lists, and further loader variables
   (`PATHEXT`, `COMSPEC`, `NODE_PATH`, `PYTHONHOME`, `PERLLIB`, `PERL5DB`,
   `RUBYLIB`) and new values that start with a path under the Supervisors' root.
+- **A privileged install follows no link the service's account placed**
+  (ADR-0054): `service install` and `service config` run as root or an
+  Administrator and write into the state directory and the layout root, which
+  belong to the account. Each file there is read without following a link and
+  written whole to a new name, then renamed over its own, so a link at the name
+  is replaced and never written through. A state directory, `versions/` or
+  version directory that is a link or junction is refused, and on Windows so is
+  a data or layout root that is a reparse point; the data root is held open from
+  the install's first write to its last. What `service config` re-owns is
+  re-owned as the entry itself, and a file with a second hard link is skipped
+  with a warning.
 - **No credential in `server.toml` authenticates on its own** (ADR-0021 clause
   26): an operator's Basic password is kept as an Argon2id hash of at least the
   OWASP minimum, and a value in clear is refused at startup without being
@@ -238,9 +301,21 @@ worth seeing at a glance. ✅ in force, ⚠️ partial, ❌ absent.
     is refused a WebSocket and anything but one enrolment request `403`, binds
     nothing, and its place upstream goes with its exchange (ADR-0039)
   - ✅ an Agent's place in the upstream pool is released when the socket that
-    carried it goes · ⚠️ a plain-HTTP Agent's place is released only when its
-    upstream connection drops, so a peer that polls under ever new
-    `instance_uid`s grows the pool's assignments until then
+    carried it goes · ✅ a plain-HTTP Agent's place goes when its binding makes
+    room for another, so a peer that polls under ever new `instance_uid`s holds
+    no more places than its host's `max_carried_agents` bindings (ADR-0039,
+    ADR-0058)
+  - ✅ an `instance_uid` stays bound to the host of its first report across the
+    Gateway's restarts, in `<state_dir>/gateway-packages/bindings`, written and
+    synced before a report that relies on it is forwarded · ✅ a binding gives
+    way only to another of its own host's, at the host's `max_carried_agents`
+    and at the Gateway's total alike · ✅ a host's bindings end when the latest
+    certificate it reported under has expired or is revoked, and a report under
+    an expired certificate binds nothing · ✅ while the store cannot be read — a
+    link, not `0600` or not the Client's on Unix, past 512 MiB, an unknown
+    version, a damaged line before the last — or cannot be rewritten at start,
+    every downstream Agent is refused `503` and the Gateway's own Supervisors go
+    on (ADR-0058)
 - **Supervisor Endpoint** — loopback, one Managed Process
   (`supervisor/endpoint.rs`).
   - ✅ headers ≤ 30 s (HTTP/1), from the same listener · ✅ connections served
@@ -289,9 +364,10 @@ only while every Supervisor whose configuration language can run commands as the
 Client's account — a Telegraf `inputs.exec`, an Icinga `CheckCommand`, the
 configuration a `command` kind's program reads — is in `remote_config_disabled`;
 otherwise the Server can configure such a Supervisor to rewrite
-`supervisor.toml`, and the keys change at the next start. A signed Client build
-can still replace the program that reads them where `[packages] self_update`
-consents (ADR-0018).
+`supervisor.toml`, and the keys change at the next start. Where a process
+account is registered (ADR-0059), such a command runs under it, and it cannot
+write `supervisor.toml`. A signed Client build can still replace the program
+that reads them where `[packages] self_update` consents (ADR-0018).
 
 It **cannot**: write outside a Supervisor's `config/` (entry names are
 sanitized), or store there an entry Windows cannot hold or two entries in one
@@ -305,16 +381,17 @@ own Server, or with an archive member that climbs out; serve a host from its
 download route an artifact that is not offered to an Agent the host speaks for,
 or serve a host behind a Gateway an artifact the Gateway did not relay to one of
 that host's Agents, or forward a report for an `instance_uid` bound to another
-host behind a Gateway — within the residual that the Gateway binds an
-`instance_uid` to the host of its first report since the Gateway started
-(ADR-0039); downgrade the Client or install a program that is not the Client as
-the Client; install a Supervisor package below the highest version this Client
-installed for its type, or under a version that is not SemVer — not by purging
-the Supervisor and adding it back under any name (ADR-0043); switch to
-plaintext, on the loopback neither, or keep a persisted move to plaintext that
-`supervisor.toml` does not name; weaken TLS verification, set a proxy or plant a
-header; hand the Client a private key. Each of these is enforced in the code,
-and most by a test.
+host behind a Gateway, before or after the Gateway restarts — within the
+residuals that the Gateway binds an `instance_uid` to the host of its first
+report there, and that a member reaching the Server directly may report one
+first, which the Gateway does not see (ADR-0058); downgrade the Client or
+install a program that is not the Client as the Client; install a Supervisor
+package below the highest version this Client installed for its type, or under a
+version that is not SemVer — not by purging the Supervisor and adding it back
+under any name (ADR-0043); switch to plaintext, on the loopback neither, or keep
+a persisted move to plaintext that `supervisor.toml` does not name; weaken TLS
+verification, set a proxy or plant a header; hand the Client a private key. Each
+of these is enforced in the code, and most by a test.
 
 ## Verifying a measure is in force
 

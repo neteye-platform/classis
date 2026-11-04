@@ -26,8 +26,12 @@ pub trait BlobStore: Send + Sync {
     /// Returns an error when no such blob is stored or it cannot be read.
     fn get(&self, sha256: &str) -> Result<Box<dyn Read + Send>, String>;
 
-    /// Whether a blob of that hash is stored.
-    fn exists(&self, sha256: &str) -> bool;
+    /// Whether a blob of that hash is stored. A name that is no hash names no blob.
+    ///
+    /// # Errors
+    /// Returns an error when the store cannot be asked: the caller must not take that for an
+    /// answer either way.
+    fn exists(&self, sha256: &str) -> Result<bool, String>;
 
     /// Deletes one blob; one that is not stored is not an error.
     ///

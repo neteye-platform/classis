@@ -338,6 +338,46 @@ fn stop_and_unregister_survive_the_crt() {
     ));
 }
 
+/// The condition each custom action is scheduled under, keyed by its `Action`, with the XML
+/// entities decoded.
+fn scheduled() -> BTreeMap<String, String> {
+    package_source()
+        .split("<Custom ")
+        .skip(1)
+        .filter_map(|block| {
+            let element = &block[..block.find("/>").expect("unterminated Custom element")];
+            Some((
+                attribute(element, "Action")?,
+                attribute(element, "Condition")?,
+            ))
+        })
+        .collect()
+}
+
+/// The stop and the deregistration run on a real removal alone: a major upgrade removes the old
+/// product with `REMOVE` set to `ALL` too, and sets `UPGRADINGPRODUCTCODE` while it does, so a
+/// condition on `REMOVE` alone would unregister both services in the middle of every upgrade.
+/// The registration runs on every install that removes nothing, an upgrade among them.
+/// Verifies: ADR-0019, ADR-0059
+#[test]
+fn the_msi_stops_and_unregisters_only_on_a_real_removal() {
+    let scheduled = scheduled();
+    for action in ["StopService", "UnregisterService"] {
+        assert_eq!(
+            scheduled.get(action).map(String::as_str),
+            Some(r#"REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE"#),
+            "{action}"
+        );
+    }
+    for action in ["RegisterServiceWithEndpoint", "RegisterService"] {
+        let condition = scheduled.get(action).expect(action);
+        assert!(
+            condition.starts_with("NOT REMOVE AND "),
+            "{action}: {condition}"
+        );
+    }
+}
+
 /// The endpoint dialog asks for no client identity and names where it goes instead: the client
 /// certificate and its key, as `cert_file` and `key_file`, in the configuration under
 /// `%ProgramData%` — not in the installation folder, which holds only the payload. It mentions no
