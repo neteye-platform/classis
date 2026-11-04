@@ -3,9 +3,9 @@
 //!
 //! The port is synchronous and `object_store` is not, so the adapter bridges inside itself
 //! (ADR-0049 clause 1) through a [`Bridge`]: a small Tokio runtime of its own, onto which every
-//! operation is spawned while the calling thread waits on a plain channel. The callers stay as they
-//! are — the upload and the download stream run on blocking threads, the rest on whatever thread
-//! calls.
+//! operation is spawned while the calling thread waits on a plain channel. The upload, and the
+//! download from its open to its last chunk, call it from blocking threads; the rest from whatever
+//! thread they run on.
 
 use std::collections::BTreeMap;
 use std::io::Read;

@@ -1833,10 +1833,23 @@ async fn download_package(
     // Streamed from the blob store, never buffered: a fleet updating at once means many concurrent
     // downloads of the same artifact, and each one holding a copy of a program in memory is how a
     // rollout takes the Server down with it.
-    let opened = state
-        .packages()
-        .map(|store| store.open_artifact(&sha256))
-        .unwrap_or_else(|| Err("package delivery is not configured".to_string()));
+    //
+    // Opened off the async workers, as the bytes are read: the blob port is synchronous
+    // (ADR-0049 clause 1), and on a bucket the open waits for the store's answer — up to the
+    // limits of `s3.rs`, minutes on a store that stalls. A rollout opens as many artifacts at once
+    // as there are hosts updating, and each open held on a worker is a worker no Agent or operator
+    // is answered on.
+    let opened = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            state
+                .packages()
+                .map(|store| store.open_artifact(&sha256))
+                .unwrap_or_else(|| Err("package delivery is not configured".to_string()))
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("the artifact could not be opened: {e}")));
     let bytes = match opened {
         Ok(bytes) => bytes,
         Err(e) => {

@@ -635,6 +635,111 @@ async fn a_version_waiting_for_its_rollout_cannot_be_fetched() {
     assert_eq!(pressed.bytes().await.expect("bytes").as_ref(), b"waiting");
 }
 
+/// A blob store over files whose first `get` holds until the test lets it go: a bucket slow to
+/// answer the open of an artifact. It holds ten seconds at most, so a Server that waits for it on
+/// a worker fails the test instead of hanging it.
+struct SlowToOpen {
+    inner: fleet_server::fs::FsBlobStore,
+    entered: Arc<tokio::sync::Notify>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    holding: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl fleet_server::blobs::BlobStore for SlowToOpen {
+    fn put(&self, bytes: &mut dyn std::io::Read) -> Result<(String, u64), String> {
+        self.inner.put(bytes)
+    }
+    fn get(&self, sha256: &str) -> Result<Box<dyn std::io::Read + Send>, String> {
+        let release = self.release.lock().expect("release").take();
+        if let Some(release) = release {
+            self.holding
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.entered.notify_one();
+            let _ = release.recv_timeout(std::time::Duration::from_secs(10));
+            self.holding
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.inner.get(sha256)
+    }
+    fn exists(&self, sha256: &str) -> Result<bool, String> {
+        self.inner.exists(sha256)
+    }
+    fn delete(&self, sha256: &str) -> Result<(), String> {
+        self.inner.delete(sha256)
+    }
+    fn list(&self) -> Result<Vec<(String, u64)>, String> {
+        self.inner.list()
+    }
+}
+
+/// A store slow to open an artifact holds no worker of the Server: while a download waits for the
+/// open, an Agent's report is still answered. The runtime has one worker, as a Server whose fleet
+/// updates at once has none to spare.
+#[tokio::test(flavor = "current_thread")]
+async fn a_download_waiting_for_its_store_holds_no_worker() {
+    opamp::tls::install_ring_provider();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let packages = dir.path().join("packages");
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let holding = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (release, released) = std::sync::mpsc::channel();
+    let blobs = SlowToOpen {
+        inner: fleet_server::fs::FsBlobStore::open(&packages).expect("blobs"),
+        entered: entered.clone(),
+        release: std::sync::Mutex::new(Some(released)),
+        holding: holding.clone(),
+    };
+    let store = PackageStore::with_backend(
+        Box::new(fleet_server::fs::FsPackageBackend::open(&packages).expect("records")),
+        Box::new(blobs),
+    )
+    .expect("store");
+    let state = Arc::new(
+        AppState::new(dir.path().join("fleet-configs"))
+            .expect("configs")
+            .with_packages(Some(
+                PackageOffering::new(&packages, store).expect("deployments"),
+            )),
+    );
+    let (addr, rest_addr) =
+        support::serve(state.clone(), fleet_server::transport::Admission::open()).await;
+    let server = TestServer {
+        addr,
+        rest_addr,
+        state,
+        _dir: dir,
+    };
+    upload(&server, support::AGENT_TYPE, "1.2.3", b"the-new-binary").await;
+
+    let url = format!(
+        "{}?os=linux&arch=amd64",
+        download_url(&server, support::AGENT_TYPE, "1.2.3")
+    );
+    let download =
+        tokio::spawn(async move { reqwest::Client::new().get(url).send().await.expect("get") });
+    tokio::time::timeout(std::time::Duration::from_secs(10), entered.notified())
+        .await
+        .expect("the download opens the artifact");
+
+    exchange(
+        &server,
+        &full_report(&InstanceUid::default(), "collector", 1),
+    )
+    .await;
+    assert!(
+        holding.load(std::sync::atomic::Ordering::SeqCst),
+        "the report must be answered while the store still holds the open, not after"
+    );
+
+    release.send(()).expect("release the open");
+    let served = download.await.expect("the download task");
+    assert_eq!(served.status(), 200);
+    assert_eq!(
+        served.bytes().await.expect("bytes").as_ref(),
+        b"the-new-binary"
+    );
+}
+
 /// The upload limit is a configured bound, not an accident of the framework: past it the API
 /// refuses rather than buffering whatever arrives.
 /// Verifies: ADR-0026
