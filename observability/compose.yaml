@@ -48,7 +48,7 @@ name: opamp-observability
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:26.8.22.13
+    image: clickhouse/clickhouse-server:26.8.22.13@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
     restart: unless-stopped
     environment:
       CLICKHOUSE_DB: otel
@@ -77,7 +77,7 @@ services:
   # starts at) and one BE (storage and execution). The FE redirects a stream load to the BE's
   # registered address, which is why the Collector shares this network with both.
   doris-fe:
-    image: apache/doris:fe-4.1.4
+    image: apache/doris:fe-4.1.4@sha256:3cbfc9b6293057a0b7f10c2e597f20f4a6bafed0729dfa9795db21eae2e136bb
     restart: unless-stopped
     environment:
       FE_SERVERS: "fe1:${DORIS_SUBNET_PREFIX:-10.250.0}.10:9010"
@@ -108,7 +108,7 @@ services:
       start_period: 30s
 
   doris-be:
-    image: apache/doris:be-4.1.4
+    image: apache/doris:be-4.1.4@sha256:08c139f3d0ec45090a5214fd76f19f84b871d05f1a2db83b5e35a85c193617b2
     restart: unless-stopped
     environment:
       # The image's entrypoint registers this BE with the FE (ALTER SYSTEM ADD BACKEND) on its first
@@ -145,7 +145,7 @@ services:
       start_period: 60s
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.162.0
+    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
@@ -170,7 +170,7 @@ services:
   # it. This one-shot container puts a pinned release, checked against its published SHA-256, into
   # the volume Grafana mounts as that plugin's directory. It does nothing once the version is there.
   grafana-doris-app:
-    image: alpine:3.24.2
+    image: alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
     restart: "no"
     environment:
       VERSION: "1.1.4"
@@ -188,7 +188,7 @@ services:
       - grafana-doris-app:/plugin
 
   grafana:
-    image: grafana/grafana:13.2.3
+    image: grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
     restart: unless-stopped
     environment:
       # Not Grafana's default 3000. Set on Grafana itself rather than only on the host side, so
