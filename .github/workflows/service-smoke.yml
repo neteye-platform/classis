@@ -1,0 +1,86 @@
+name: Service smoke
+
+# The one thing every other test stands in for: the machine's *real* service manager (ADR-0019,
+# ADR-0018). `crates/fleet-agent/tests/service_smoke.rs` installs the Client as a system service, starts
+# it, kills its process, and asserts the manager brings it back — the restart a self-update depends
+# on and that no in-process stand-in can prove.
+#
+# Deliberately not on `push` or `pull_request`. It registers a system service, needs elevation, and
+# waits on timers; a merge must not hang on it, and a flake must not read as a broken change.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Saturday, well outside working hours in CET.
+    - cron: "0 3 * * 6"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: service smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Generous: the test waits out the restart delay several times over, and a hang should fail as
+    # a timeout rather than burn a runner hour.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows: `service-manager`'s `sc.exe` backend discards the restart policy, so the Client
+        # registers the SCM's recovery actions itself and reports `ServiceSpecific(10)` on exit so
+        # a self-update's exit reads as a failure rather than a clean stop. None of that is
+        # asserted anywhere else. And the process account (ADR-0059): under the Client's and the
+        # second service's virtual accounts, a Managed Process runs through the second service's
+        # named pipe without SeImpersonatePrivilege, cannot read the Client's key or write its
+        # program, reads its config and writes its data, and runs again after the SCM restarts
+        # the second service.
+        # Linux: the unit the Client writes itself (ADR-0042) — a re-registration keeps its
+        # account, the service keeps the privileges `sudo` and setuid helpers need, and systemd
+        # accepts the unit. And the process account (ADR-0059): with two real accounts, a Managed
+        # Process runs under the process account through the second service, cannot read the
+        # Client's key or write its program, reads its config and writes its data, runs again after
+        # the second service restarts, keeps its data across a re-registration as a package upgrade
+        # makes one, and runs under the Client's account once the process account is dropped. The
+        # run step needs `sudo -E` there, which the Windows runner does not (its shell is already
+        # elevated).
+        # macOS: the same for launchd — both plists from `service-manager`, the second service's
+        # with the process account in `UserName`, and two role accounts made with `dseditgroup`
+        # and `sysadminctl -roleAccount` as the refusal of a missing process account says. The
+        # runner's `sudo` asks no password, as on Linux.
+        # Every platform: the install a script runs after the package (ADR-0029 clause 11) enrols
+        # with a `bootstrap.p12` and its password file from `--fleet-files`, against a Server in
+        # the test, and the service it registers reaches that Server on the issued certificate; a
+        # wrong password fails the install before anything is written.
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Built as its own step so a compile failure is not reported as a smoke-test failure.
+      - name: Build
+        run: cargo test -p fleet-agent --test service_smoke --locked --no-run
+      - name: Install, start, kill, restart, stop, uninstall
+        if: runner.os == 'Windows'
+        run: cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+      - name: Install, start, kill, restart, stop, uninstall; keep the account and the privileges; the process account
+        if: runner.os == 'Linux'
+        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+      - name: Install, start, kill, restart, stop, uninstall; the process account
+        if: runner.os == 'macOS'
+        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+      # Run as root, every link the test places is root's, and none beneath the Client's
+      # directories is followed all the same (ADR-0059 clause 6). The unprivileged run in CI covers
+      # the links of every other account.
+      - name: No link of root's beneath the Client's directories is followed
+        if: runner.os == 'Linux'
+        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --lib --locked -- --exact storage::tests::no_link_beneath_the_root_is_followed_whoever_owns_it
+      # Run as root, the test gives a link above the Supervisors' root to another account: the
+      # second service follows one of the Client's account and refuses one of a third (ADR-0059
+      # clause 5). The unprivileged run in CI covers a link of the service's own account.
+      - name: The second service follows the Client's links above the root, not its own
+        if: runner.os == 'Linux'
+        run: |
+          sudo -E env "PATH=$PATH" cargo test -p fleet-agent --lib --locked -- --exact \
+            supervisor::channel::tests::a_purge_follows_the_clients_links_above_the_root_and_not_the_services

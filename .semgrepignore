@@ -1,0 +1,5 @@
+:include .gitignore
+
+# The fuzz seeds are inputs the fuzzer starts from, not secrets: fuzz/seeds/pem/ec-key is a
+# throwaway key no deployment holds.
+fuzz/seeds/

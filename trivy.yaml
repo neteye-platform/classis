@@ -1,0 +1,5 @@
+# Read by Trivy from the working directory, so the shared fs scan picks it up as it is.
+scan:
+  skip-files:
+    # A fuzz seed, not a secret: a throwaway key no deployment holds (.semgrepignore says the same).
+    - fuzz/seeds/pem/ec-key

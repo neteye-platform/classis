@@ -1,0 +1,361 @@
+/* After GitKraken Dark, as GitKraken Desktop 12.6 ships it (`dark.jsonc-default`, with
+   `light.jsonc-default` for the light state): a charcoal app background with panels a step
+   lighter each, hairline borders of white at 8%, body text at 75% white so only what is
+   selected or headed is full white, and GitKraken's blue for what you press — outlined and
+   tinted rather than filled — and for the selected row. Its purple panel accent marks what is
+   selected within a section. Dark is the ground state, as GitKraken's is; light is the other,
+   below. Which one shows is the page's choice: the operator's, or the system's.
+
+   GitKraken's values are taken where they carry no text. Where one does — a state colour on its
+   own 20% tint, which GitKraken uses for borders rather than words — the badge takes the
+   brighter (dark) or deeper (light) step of the same hue from GitKraken's own palette, so it
+   reaches 4.5:1. The face is Open Sans where installed, as GitKraken's; the plane's policy loads
+   nothing from another origin, so the stack falls back to the platform's own. */
+:root {
+  color-scheme: dark;
+  --bg: #1c1e23;
+  --panel: #272a31;
+  --panel-2: #32363f;
+  --border: #383b41;
+  --border-strong: #4a4c52;
+  --input-bg: #1f2227;
+  /* 75% white, GitKraken's text-normal; full white is for what is headed or selected. */
+  --text: #c9cacc;
+  --text-strong: #ffffff;
+  --muted: #a9aaad;
+  --link: #40c5ec;
+  /* GitKraken's primary button: its blue as the border, a 20% tint of it as the fill. */
+  --primary: #4d88ff;
+  --primary-bg: #2f3d5a;
+  --primary-fg: #ffffff;
+  --primary-hover: #3e62ad;
+  --primary-hover-fg: #ffffff;
+  /* The second accent: what is picked, expanded, or being edited — GitKraken's panel accent. */
+  --accent: #bc7eff;
+  --accent-fg: #1c1e23;
+  --row-hover: #2b3346;
+  --row-selected: #2b303c;
+  --chip-bg: #32363f;
+  --chip-fg: #c9cacc;
+  /* Attribute namespaces: hues no state uses, tinted, their text at 7:1. */
+  --hue-blue-bg: #24456f;  --hue-blue-fg: #c3dcfb;
+  --hue-teal-bg: #1b4d47;  --hue-teal-fg: #a5ebe0;
+  --hue-pink-bg: #5c2443;  --hue-pink-fg: #f9c8e1;
+  --hue-slate-bg: #3b465b; --hue-slate-fg: #d3dbe9;
+  --ok-bg: #5cb85c;
+  --ok-fg: #1c1e23;
+  --soft-green-bg: #32463a;
+  --soft-green-fg: #6edfa6;
+  --soft-gray-bg: #3d424d;
+  --soft-gray-fg: #c9cacc;
+  --soft-amber-bg: #4c4135;
+  --soft-amber-fg: #f0c75e;
+  --soft-red-bg: #4b2f33;
+  --soft-red-fg: #f5939c;
+  --overlay: rgba(0, 0, 0, 0.5);
+  --sans: "Open Sans", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: Monaco, Menlo, "Ubuntu Mono", Consolas, ui-monospace, monospace;
+  /* An effective configuration's colours (ADR-0038), from this palette: keys in the link blue,
+     strings green, numbers and booleans amber, comments muted. */
+  --shiki-foreground: #c9cacc;
+  --shiki-background: #1f2227;
+  --shiki-token-keyword: #40c5ec;
+  --shiki-token-string: #6edfa6;
+  --shiki-token-string-expression: #6edfa6;
+  --shiki-token-constant: #f0c75e;
+  --shiki-token-comment: #a9aaad;
+  --shiki-token-parameter: #f9c8e1;
+  --shiki-token-function: #bc7eff;
+  --shiki-token-punctuation: #a9aaad;
+  --shiki-token-link: #40c5ec;
+}
+/* The only other state, GitKraken Light. Dark needs no rule of its own — :root above *is*
+   dark, so the page's `data-theme="dark"` matches nothing here. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fcfcfc;
+  --panel: #f3f3f3;
+  --panel-2: #fafafa;
+  --border: #c6c6c6;
+  --border-strong: #a8a8a8;
+  --input-bg: #ffffff;
+  --text: #3d3d3d;
+  --text-strong: #000000;
+  --muted: #616161;
+  --link: #005c95;
+  --primary: #4d88ff;
+  --primary-bg: #dae3f5;
+  --primary-fg: #3d3d3d;
+  --primary-hover: #6e9dfd;
+  --primary-hover-fg: #000000;
+  --accent: #7600f6;
+  --accent-fg: #ffffff;
+  --row-hover: #ecf1fa;
+  --row-selected: #eef1f8;
+  --chip-bg: #e8e8e8;
+  --chip-fg: #3d3d3d;
+  /* Attribute namespaces: hues no state uses, tinted, their text at 7:1. */
+  --hue-blue-bg: #c4d9f7;  --hue-blue-fg: #123a6e;
+  --hue-teal-bg: #b9e6de;  --hue-teal-fg: #0a4f46;
+  --hue-pink-bg: #f4c8de;  --hue-pink-fg: #7c1449;
+  --hue-slate-bg: #cdd5e2; --hue-slate-fg: #273449;
+  --ok-bg: #007a3f;
+  --ok-fg: #ffffff;
+  --soft-green-bg: #d6efe3;
+  --soft-green-fg: #007a3f;
+  --soft-gray-bg: #e8e8e8;
+  --soft-gray-fg: #3d3d3d;
+  --soft-amber-bg: #f8ede0;
+  --soft-amber-fg: #8a5a14;
+  --soft-red-bg: #eedada;
+  --soft-red-fg: #9f1a16;
+  --overlay: rgba(0, 0, 0, 0.35);
+  /* An effective configuration's colours (ADR-0038), the same roles in the light steps. */
+  --shiki-foreground: #3d3d3d;
+  --shiki-background: #ffffff;
+  --shiki-token-keyword: #005c95;
+  --shiki-token-string: #007a3f;
+  --shiki-token-string-expression: #007a3f;
+  --shiki-token-constant: #8a5a14;
+  --shiki-token-comment: #616161;
+  --shiki-token-parameter: #7c1449;
+  --shiki-token-function: #7600f6;
+  --shiki-token-punctuation: #616161;
+  --shiki-token-link: #005c95;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 14px/1.5 var(--sans);
+  background: var(--bg);
+  color: var(--text);
+}
+.wrap { max-width: 1320px; margin: 0 auto; padding: 28px 28px 48px; }
+
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.page-head h1 { margin: 0; font-size: 24px; font-weight: 600; color: var(--text-strong); }
+.page-head p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+.btn {
+  border: 1px solid transparent; border-radius: 3px; padding: 7px 16px;
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn-primary { background: var(--primary-bg); color: var(--primary-fg); border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); color: var(--primary-hover-fg); }
+/* GitKraken's default button: transparent, outlined in the body text, brightening on hover. */
+.btn-ghost { background: transparent; color: var(--text); border-color: var(--text); }
+.btn-ghost:hover { color: var(--text-strong); border-color: var(--text-strong); }
+/* The rollout act, wearing the Healthy badge's green and its shape: the same soft green the
+   table already uses for "this is well", pressable. Hover inverts it, as the ✕ disc does. */
+.btn-ok {
+  background: var(--soft-green-bg); color: var(--soft-green-fg);
+  border-radius: 999px; padding: 3px 10px; font-size: 12px;
+}
+.btn-ok:hover { background: var(--soft-green-fg); color: var(--soft-green-bg); }
+/* The theme's three buttons, joined into one outlined bar; the pressed one wears the primary
+   button's tint. */
+.theme-switch { display: inline-flex; }
+.theme-switch .btn { border-radius: 0; }
+.theme-switch .btn + .btn { margin-left: -1px; }
+.theme-switch .btn:first-child { border-radius: 3px 0 0 3px; }
+.theme-switch .btn:last-child { border-radius: 0 3px 3px 0; }
+.theme-switch .btn[aria-pressed="true"] {
+  position: relative; background: var(--primary-bg); color: var(--primary-fg); border-color: var(--primary);
+}
+/* A button sized to sit inside a form line rather than to head one. */
+.btn-sm { padding: 3px 12px; font-size: 12px; }
+/* A key fingerprint is compared character by character with the Client's log, so it is shown
+   whole, in the monospace face, and breaks anywhere rather than overflowing its cell. */
+.fingerprint { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+
+/* Tabs: the managements, one on screen at a time. The active tab's underline is the primary,
+   because the tab bar is where the next press lands; the purple accent stays reserved for what
+   is selected *within* a section. */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.tab {
+  border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600;
+  padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text-strong); border-bottom-color: var(--primary); }
+.tab .num { margin-left: 7px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Configurations and Packages editors — each fills its own tab */
+.config { padding: 16px; margin-bottom: 20px; }
+.config h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.config-fields { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.config-fields input {
+  flex: 1; min-width: 220px; padding: 8px 12px; border: 1px solid var(--border-strong);
+  border-radius: 3px; background: var(--input-bg); color: var(--text); font-size: 13px;
+  font-family: var(--mono);
+}
+.config-fields input:focus, textarea:focus, select:focus, .filters input:focus { outline: none; border-color: var(--primary); }
+.config-fields input::placeholder { color: var(--muted); }
+/* A field whose value is a short token, so four of them fit one row. */
+.config-fields input.narrow { flex: 0 1 190px; min-width: 150px; }
+/* A field the action refuses to run without. Marked only while it is empty — once it holds
+   a value there is nothing left to point at, and a border that kept shouting would be the
+   same noise as no marking at all. */
+.config-fields input.required:placeholder-shown { border-color: var(--soft-amber-fg); }
+/* A field that stands alone on its line and should not stretch across it — the package name,
+   which everything on the lines below is a statement about. */
+.config-fields input.quarter { flex: 0 1 25%; min-width: 180px; }
+/* Selected is the second accent, not the primary: the primary is what you press, this is
+   what you are looking at. */
+.chip.selected { background: var(--accent); color: var(--accent-fg); }
+.chip.clickable { cursor: pointer; }
+.pill.clickable { cursor: pointer; }
+textarea {
+  width: 100%; min-height: 120px; padding: 11px; border-radius: 3px;
+  border: 1px solid var(--border-strong); background: var(--input-bg); color: var(--text);
+  font-family: var(--mono); font-size: 13px; resize: vertical;
+}
+.config-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.hash { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* Filter bar */
+.filters { display: flex; align-items: stretch; gap: 0; padding: 10px; margin-bottom: 16px; }
+.filters .dropdown {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px;
+  border: 1px solid var(--border-strong); border-radius: 3px; color: var(--muted);
+  font-size: 13px; background: var(--panel-2); white-space: nowrap;
+}
+.filters input {
+  flex: 1; margin-left: 10px; padding: 8px 12px; border: 1px solid var(--border-strong);
+  border-radius: 3px; background: var(--input-bg); color: var(--text); font-size: 13px;
+  font-family: var(--mono);
+}
+.filters input::placeholder { color: var(--muted); font-family: var(--mono); }
+/* A choice from a fixed list looks like the text fields beside it. */
+select {
+  padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 3px;
+  background: var(--input-bg); color: var(--text); font-size: 13px; font-family: inherit;
+}
+
+.table-wrap { overflow-x: auto; }
+/* Fixed layout: the table is exactly as wide as its container and never wider — content
+   wraps or ellipsizes inside its column instead of growing a horizontal scrollbar. The
+   narrow columns are sized in px for the one kind of value they hold; Name gets a share of
+   the whole; what remains is split between the columns whose content is genuinely
+   elastic (Operating System is px too — its values repeat from a small set). The wrap's
+   overflow-x stays as the fallback for windows too narrow for any division. */
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; table-layout: fixed; }
+th[data-key="name"] { width: 16%; }
+th[data-key="version"] { width: 70px; }
+th[data-key="os"] { width: 130px; }
+th.col-network { width: 136px; }
+th[data-key="config"] { width: 110px; }
+th[data-key="seq"] { width: 50px; }
+th[data-key="seen"] { width: 88px; }
+thead th {
+  text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border);
+  color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; user-select: none;
+}
+thead th.sortable { cursor: pointer; }
+thead th.sortable:hover { color: var(--text-strong); }
+th .arrow { opacity: .55; font-size: 10px; }
+/* overflow hidden: under the fixed layout a value that fits no line of its column — one
+   overlong chip, an unbroken token — is clipped at the cell's edge rather than written
+   across the neighbour; the full value stays in the cell's own tooltip or details. */
+tbody td { padding: 13px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow: hidden; }
+tbody tr:last-child td { border-bottom: 0; }
+/* An agent is a row — and, when it is the current one, the rows under it that carry its
+   sets. The separator then belongs after the last of them, or the agent would read as
+   several; a row without detail rows keeps its own. */
+tbody tr.agent { cursor: pointer; }
+tbody tr.agent.current td, tbody tr.detail td { border-bottom: 0; }
+tbody tr.detail.last td { border-bottom: 1px solid var(--border); }
+/* The current Agent: the purple accent as a bar on the row's edge — what is being looked at,
+   not what is pressed — over a wash of GitKraken's blue barely off the panel, so no cell
+   content has to change color and the chips on it keep their own. */
+tbody tr.agent.current td { background: var(--row-selected); color: var(--text-strong); }
+tbody tr.agent.current td:first-child { box-shadow: inset 3px 0 var(--accent); }
+tbody tr.detail td { padding-top: 0; padding-bottom: 4px; }
+tbody tr.detail:hover { background: transparent; }
+tbody tr:hover { background: var(--row-hover); }
+td.chk, th.chk { width: 34px; }
+input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
+
+.name { color: var(--link); font-weight: 600; text-decoration: none; }
+.name:hover { text-decoration: underline; }
+.sub { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 2px; }
+/* The UID is long and rarely read, but must be selectable when it is: one line, its own text
+   selection, and a size that keeps it under the name rather than beside it. */
+.uid { font-size: 11px; opacity: 0.75; white-space: nowrap; user-select: all; overflow: hidden; text-overflow: ellipsis; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+/* The ✕ riding inside the Disconnected badge: a small solid disc in the badge's own colors
+   inverted, so it reads as a control rather than dissolving into the label beside it. */
+.pill .forget-btn {
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%; font-size: 11px; font-weight: 700;
+  background: var(--soft-red-fg); color: var(--soft-red-bg);
+}
+.pill .forget-btn:hover { filter: brightness(1.15); }
+/* Sized for its widest state — "Disconnected" with the ✕ — so the column does not breathe
+   when an Agent's connection flips; the Stale pill wraps below rather than widening it. */
+th.status, td.status { width: 180px; min-width: 180px; }
+.pill.solid-green { background: var(--ok-bg); color: var(--ok-fg); }
+/* The badge that heads a detail row. The accent, because these rows exist only under the
+   current Agent — the same purple that marks its row as the one being looked at. */
+.pill.violet { background: var(--accent); color: var(--accent-fg); }
+.pill.green { background: var(--soft-green-bg); color: var(--soft-green-fg); }
+.pill.gray { background: var(--soft-gray-bg); color: var(--soft-gray-fg); }
+.pill.amber { background: var(--soft-amber-bg); color: var(--soft-amber-fg); }
+.pill.red { background: var(--soft-red-bg); color: var(--soft-red-fg); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.cfg { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfg.cfg-open { cursor: pointer; }
+.cfg.cfg-open:hover { color: var(--text); }
+/* Text that is a document rather than a cell — an effective configuration, the reason a
+   Supervisor will not start — opens whole in this dialog, where it scrolls inside its own
+   box. A row stays one line high whatever the text is: a column that grows to fit the
+   longest error pushes every other row off the screen, and the error is read once. */
+.text-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border-strong); border-radius: 4px; padding: 16px 18px; width: min(760px, 92vw); }
+.text-dialog::backdrop { background: var(--overlay); }
+.text-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.text-full { margin: 0; padding: 8px 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 65vh; overflow: auto; border: 1px solid var(--border); border-radius: 3px; background: var(--input-bg); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+/* A Package's entries: one chip per row, its columns aligned across the rows. */
+.entry-list { flex-direction: column; align-items: flex-start; }
+.entry-list .chip { display: flex; gap: 14px; align-items: baseline; font-family: var(--mono); white-space: normal; max-width: 100%; }
+.entry-list .platform { min-width: 110px; }
+.entry-list .size { min-width: 64px; text-align: right; }
+.entry-list .sha { user-select: all; word-break: break-all; }
+.entry-list .sig { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.entry-list .sig input { width: 22ch; font-family: var(--mono); font-size: 12px; }
+.dep-pkg-head { display: flex; gap: 10px; align-items: center; margin: 8px 0 4px; }
+.chip { background: var(--chip-bg); color: var(--chip-fg); border-radius: 3px; padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+.chip.hue-blue { background: var(--hue-blue-bg); color: var(--hue-blue-fg); }
+.chip.hue-teal { background: var(--hue-teal-bg); color: var(--hue-teal-fg); }
+.chip.hue-pink { background: var(--hue-pink-bg); color: var(--hue-pink-fg); }
+.chip.hue-slate { background: var(--hue-slate-bg); color: var(--hue-slate-fg); }
+/* Outlined in their own ink, since the detail row they sit on is itself tinted. */
+.chip[class*="hue-"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 40%, transparent); }
+/* The count of a list value's further entries: a disc in the chip's own ink. */
+.chip-count {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: color-mix(in srgb, currentColor 18%, transparent); font-weight: 600;
+}
+.num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.empty { padding: 40px 0; text-align: center; color: var(--muted); }
+.err { color: var(--soft-red-fg); font-size: 12px; margin-top: 3px; }
+
+/* A form field with its caption: what the field is, and whether the action needs it. The words
+   "required" and "optional" say it, so the marking does not rest on colour alone; the required
+   one takes the warning's hue. The field's width class sits on the label, which is the flex
+   item; the control inside fills it. */
+.config-fields .field, .config-actions .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px; }
+.config-fields .field.quarter { flex: 0 1 25%; min-width: 180px; }
+.config-fields .field.narrow { flex: 0 1 190px; min-width: 150px; }
+.config-fields .field > input, .config-fields .field > select, .config-actions .field > input { flex: none; width: 100%; min-width: 0; box-sizing: border-box; }
+.field-cap { display: block; font-size: 11px; color: var(--muted); }
+label.field-cap { margin-bottom: 4px; }
+.need { margin-left: 4px; font-weight: 400; }
+.need.req { font-weight: 600; color: var(--soft-amber-fg); }

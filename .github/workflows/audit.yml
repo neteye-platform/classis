@@ -1,0 +1,47 @@
+name: Security audit
+
+# Runs `cargo deny check` (README → "Build, Test & Run") against the locked dependency graph — the
+# supply-chain gate of specification Q-3. It fails on a known advisory, a licence outside the list,
+# a source outside crates.io, or a banned crate; reviewed advisories are recorded in `deny.toml`.
+#
+# Two kinds of trigger, because two kinds of thing change: the dependency graph (a Cargo.toml/lock
+# edit) and the advisory database itself. The schedule is what catches a newly disclosed advisory in
+# a dependency nobody has touched — the whole reason an audit is worth running on a clock.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/audit.yml"
+  schedule:
+    - cron: "17 6 * * 6" # Weekly, Saturday 06:17 UTC; pushes touching the lockfile run it in between.
+
+# A failing scheduled run is reported the way GitHub reports any failed workflow: a red run, and a
+# notification to whoever last edited the schedule. The project keeps no issue tracker for it.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny
+      - name: cargo deny
+        run: cargo deny check
+      # The fuzz targets have a lockfile of their own (fuzz/Cargo.lock); the same gate holds.
+      - name: cargo deny (fuzz targets)
+        run: cargo deny --manifest-path fuzz/Cargo.toml check

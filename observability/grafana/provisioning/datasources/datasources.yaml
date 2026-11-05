@@ -1,0 +1,63 @@
+apiVersion: 1
+
+# One datasource for all three signals. Where the three-store stack needed Prometheus, Loki and
+# Tempo cross-linked to each other, a log record and the span it belongs to are now rows in two
+# tables of one database — so the link is a join, not an integration.
+datasources:
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    isDefault: true
+    jsonData:
+      host: clickhouse
+      port: 9000
+      protocol: native
+      secure: false
+      username: otel
+      defaultDatabase: otel
+
+      # `otelEnabled` points the built-in Logs and Traces query builders at the OTel column names,
+      # which is what makes Explore's log and trace views work without writing SQL. The dashboards
+      # do write SQL — this is for looking around beyond them.
+      logs:
+        defaultDatabase: otel
+        defaultTable: otel_logs
+        otelEnabled: true
+        otelVersion: latest
+        selectContextColumns: true
+        contextColumns:
+          - ServiceName
+          - ScopeName
+
+      traces:
+        defaultDatabase: otel
+        defaultTable: otel_traces
+        otelEnabled: true
+        otelVersion: latest
+        # The exporter stores span duration in nanoseconds; saying so is what makes Grafana's
+        # trace view show milliseconds instead of a number 1,000,000x too large.
+        durationUnit: nanoseconds
+    secureJsonData:
+      password: otel
+
+  # The same data in Apache Doris, for the "(Doris)" twins of the dashboards. Doris speaks the
+  # MySQL protocol on the FE's port 9030, so Grafana's built-in MySQL datasource is the driver: no
+  # plugin needed to query it, and the dashboards' macros are MySQL's ($__timeFilter, $__timeGroup).
+  - name: Doris
+    uid: doris
+    type: mysql
+    access: proxy
+    url: doris-fe:9030
+    user: root
+    jsonData:
+      database: otel
+      # The Collector writes Doris timestamps as UTC without an offset (otel-collector.yaml,
+      # `timezone: UTC`); the session must read them in the same zone, or $__timeFilter's
+      # FROM_UNIXTIME and the returned times are shifted by the FE's own zone.
+      timezone: "+00:00"
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ""

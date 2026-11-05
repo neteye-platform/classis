@@ -1,0 +1,5 @@
+# What the fuzzer generates; only the curated seeds under seeds/ are tracked.
+target/
+corpus/
+artifacts/
+coverage/

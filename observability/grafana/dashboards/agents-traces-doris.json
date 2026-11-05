@@ -1,0 +1,446 @@
+{
+  "uid": "opamp-agents-traces-doris",
+  "title": "Fleet Agents — Traces (Doris)",
+  "description": "Control-loop operations, their phases, and which phase fails.",
+  "tags": [
+    "clickhouse",
+    "doris",
+    "opamp"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "operation",
+        "label": "Operation",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "doris"
+        },
+        "description": "The control-loop operation, i.e. the root span's name.",
+        "query": "SELECT DISTINCT span_name FROM otel.otel_traces WHERE parent_span_id = '' ORDER BY 1",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "definition": "SELECT DISTINCT span_name FROM otel.otel_traces WHERE parent_span_id = '' ORDER BY 1"
+      },
+      {
+        "name": "trace",
+        "label": "Trace",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "description": "A trace id, for the detail panel. Filled by clicking one in the table."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "About this dashboard",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Every trace here is one fleet operation.** A Client opens a span for installing a package, applying a configuration — a Managed Process's, and its own Supervisor set — applying offered connection settings, and updating itself (ADR-0016). Its phases are the child spans, and the outcome it reported to the Server is the span status, so *which phase failed* is a question these panels answer.\n\nMessage handling is deliberately not traced, so the rate below is operations and not traffic. A self-update spans a restart and still arrives as one trace."
+      },
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "Spans per second, by service",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       service_name AS service,\n       COUNT(*) / ($__interval_ms / 1000) AS spans_per_second\nFROM otel.otel_traces\nWHERE $__timeFilter(timestamp)\nGROUP BY `time`, service\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "Errored spans per second",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       service_name AS service,\n       SUM(CASE WHEN status_code = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) / ($__interval_ms / 1000) AS errored_per_second\nFROM otel.otel_traces\nWHERE $__timeFilter(timestamp)\nGROUP BY `time`, service\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "Operation duration p50 / p95 / p99",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       PERCENTILE_APPROX(duration, 0.50) / 1000 AS p50_ms,\n       PERCENTILE_APPROX(duration, 0.95) / 1000 AS p95_ms,\n       PERCENTILE_APPROX(duration, 0.99) / 1000 AS p99_ms\nFROM otel.otel_traces\nWHERE parent_span_id = '' AND $__timeFilter(timestamp)\nGROUP BY `time`\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "type": "table",
+      "title": "Phases, by how often they fail",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95 ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Failed %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT span_name AS `Phase`,\n       COUNT(*) AS `Runs`,\n       SUM(CASE WHEN status_code = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) AS `Failed`,\n       ROUND(100 * SUM(CASE WHEN status_code = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) / COUNT(*), 1) AS `Failed %`,\n       PERCENTILE_APPROX(duration, 0.95) / 1000 AS `p95 ms`\nFROM otel.otel_traces\nWHERE parent_span_id != '' AND $__timeFilter(timestamp)\nGROUP BY span_name\nORDER BY `Failed` DESC, `Runs` DESC",
+          "format": "table"
+        }
+      ],
+      "description": "Child spans grouped by name. Where Tempo's service map showed which service talks to which, an Agent's spans are phases of one operation — so what is worth seeing is which phase fails.",
+      "id": 5
+    },
+    {
+      "type": "table",
+      "title": "Operations",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this trace",
+                    "url": "/d/opamp-agents-traces-doris/fleet-agents-traces?var-trace=${__value.raw}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration (ms)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT trace_id AS `Trace`,\n       span_name AS `Operation`,\n       timestamp AS `Started`,\n       duration / 1000 AS `Duration (ms)`,\n       CASE status_code WHEN 'STATUS_CODE_ERROR' THEN 'Error' WHEN 'STATUS_CODE_OK' THEN 'Ok' ELSE 'Unset' END AS `Outcome`,\n       status_message AS `Message`\nFROM otel.otel_traces\nWHERE parent_span_id = '' AND $__timeFilter(timestamp)\n      AND span_name REGEXP '${operation:regex}'\nORDER BY timestamp DESC\nLIMIT 200",
+          "format": "table"
+        }
+      ],
+      "description": "Root spans. Click a trace id to open it below.",
+      "id": 6
+    },
+    {
+      "type": "traces",
+      "title": "Trace detail",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT trace_id AS traceID,\n       span_id AS spanID,\n       parent_span_id AS parentSpanID,\n       service_name AS serviceName,\n       span_name AS operationName,\n       CAST(UNIX_TIMESTAMP(timestamp) * 1000 AS DOUBLE) AS startTime,\n       CAST(duration AS DOUBLE) / 1000 AS duration,\n       CAST(span_attributes AS STRING) AS tags,\n       CAST(resource_attributes AS STRING) AS serviceTags,\n       CASE WHEN status_code = 'STATUS_CODE_ERROR' THEN 2 ELSE 0 END AS statusCode\nFROM otel.otel_traces\nWHERE trace_id = '${trace}'\nORDER BY startTime ASC, duration DESC",
+          "format": "table"
+        }
+      ],
+      "description": "Set by clicking a trace id above, or paste one into the Trace variable.",
+      "id": 7
+    }
+  ]
+}

@@ -1,0 +1,1047 @@
+{
+  "uid": "opamp-agents-overview",
+  "title": "Fleet Agents \u2014 Overview",
+  "description": "All three signals from one ClickHouse table set.",
+  "tags": [
+    "opamp",
+    "clickhouse"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "client",
+        "label": "Client type",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "description": "The Clients' service.name \u2014 one value per kind of Client, not per host.",
+        "query": {
+          "refId": "tempvar",
+          "editorType": "sql",
+          "format": 1,
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT DISTINCT ResourceAttributes['service.name'] FROM otel.otel_metrics_gauge ORDER BY 1"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "instance",
+        "label": "Agent",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "description": "The Agent each sample is about, which is what separates a Managed Process from the Client that sampled it.",
+        "query": {
+          "refId": "tempvar",
+          "editorType": "sql",
+          "format": 1,
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT DISTINCT Attributes['service.instance.id'] FROM otel.otel_metrics_gauge ORDER BY 1"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "platform",
+        "label": "Platform",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "description": "The host an Agent runs on, as os.type/host.arch \u2014 the two halves ADR-0026 selects a package variant by.",
+        "query": {
+          "refId": "tempvar",
+          "editorType": "sql",
+          "format": 1,
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT DISTINCT concat(ResourceAttributes['os.type'], '/', ResourceAttributes['host.arch']) FROM otel.otel_metrics_gauge ORDER BY 1"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Agents reporting",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT uniqExact(Attributes['service.instance.id'])\nFROM otel.otel_metrics_gauge\nWHERE MetricName = 'process.uptime' AND $__timeFilter(TimeUnix)"
+        }
+      ],
+      "description": "Distinct Agents that reported a sample in the window \u2014 the Client's own Agent and every Managed Process it supervises.",
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Clients reporting",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT uniqExact(ResourceAttributes['service.instance.id'])\nFROM otel.otel_metrics_gauge\nWHERE $__timeFilter(TimeUnix)"
+        }
+      ],
+      "description": "Distinct Clients, counted by the Resource's service.instance.id. Counting by service.name instead would read 1 for any fleet size.",
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Memory, all agents",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT sum(latest)\nFROM (SELECT argMax(Value, TimeUnix) AS latest\n      FROM otel.otel_metrics_gauge\n      WHERE MetricName = 'process.memory.usage' AND $__timeFilter(TimeUnix)\n      GROUP BY Attributes['service.instance.id'])"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Busiest agent, CPU",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT max(latest)\nFROM (SELECT argMax(Value, TimeUnix) AS latest\n      FROM otel.otel_metrics_gauge\n      WHERE MetricName = 'process.cpu.utilization' AND $__timeFilter(TimeUnix)\n      GROUP BY Attributes['service.instance.id'])"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Log lines / min",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT count() / greatest(1, dateDiff('minute', $__fromTime, $__toTime))\nFROM otel.otel_logs\nWHERE $__timeFilter(Timestamp)"
+        }
+      ],
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Traces / min",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT count() / greatest(1, dateDiff('minute', $__fromTime, $__toTime))\nFROM otel.otel_traces\nWHERE ParentSpanId = '' AND $__timeFilter(Timestamp)"
+        }
+      ],
+      "id": 6
+    },
+    {
+      "type": "row",
+      "title": "Metrics \u2014 what each agent's process is doing",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Process memory",
+      "interval": "30s",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "displayName": "${__field.labels.label}",
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(TimeUnix) AS time,\n       Attributes['service.instance.id'] AS agent,\n       arrayStringConcat(arrayFilter(x -> x != '', [\n           Attributes['service.instance.name'],\n           Attributes['service.name'],\n           ResourceAttributes['os.type']]), ' \u00b7 ') AS label,\n       avg(Value) AS memory\nFROM otel.otel_metrics_gauge\nWHERE MetricName = 'process.memory.usage' AND $__timeFilter(TimeUnix)\n  AND match(ResourceAttributes['service.name'], '${client:regex}')\n  AND match(Attributes['service.instance.id'], '${instance:regex}')\n  AND match(concat(ResourceAttributes['os.type'], '/', ResourceAttributes['host.arch']), '${platform:regex}')\nGROUP BY time, agent, label\nORDER BY time"
+        }
+      ],
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Process CPU",
+      "interval": "30s",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "displayName": "${__field.labels.label}",
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(TimeUnix) AS time,\n       Attributes['service.instance.id'] AS agent,\n       arrayStringConcat(arrayFilter(x -> x != '', [\n           Attributes['service.instance.name'],\n           Attributes['service.name'],\n           ResourceAttributes['os.type']]), ' \u00b7 ') AS label,\n       avg(Value) AS cpu\nFROM otel.otel_metrics_gauge\nWHERE MetricName = 'process.cpu.utilization' AND $__timeFilter(TimeUnix)\n  AND match(ResourceAttributes['service.name'], '${client:regex}')\n  AND match(Attributes['service.instance.id'], '${instance:regex}')\n  AND match(concat(ResourceAttributes['os.type'], '/', ResourceAttributes['host.arch']), '${platform:regex}')\nGROUP BY time, agent, label\nORDER BY time"
+        }
+      ],
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Process uptime",
+      "interval": "30s",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "displayName": "${__field.labels.label}",
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(TimeUnix) AS time,\n       Attributes['service.instance.id'] AS agent,\n       arrayStringConcat(arrayFilter(x -> x != '', [\n           Attributes['service.instance.name'],\n           Attributes['service.name'],\n           ResourceAttributes['os.type']]), ' \u00b7 ') AS label,\n       avg(Value) AS uptime\nFROM otel.otel_metrics_gauge\nWHERE MetricName = 'process.uptime' AND $__timeFilter(TimeUnix)\n  AND match(ResourceAttributes['service.name'], '${client:regex}')\n  AND match(Attributes['service.instance.id'], '${instance:regex}')\n  AND match(concat(ResourceAttributes['os.type'], '/', ResourceAttributes['host.arch']), '${platform:regex}')\nGROUP BY time, agent, label\nORDER BY time"
+        }
+      ],
+      "description": "A step back to zero is a restart. A gap is a process that was not running when the sample was taken \u2014 not an error.",
+      "id": 10
+    },
+    {
+      "type": "table",
+      "title": "Agents",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Memory"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uptime"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT Attributes['service.instance.id'] AS \"Agent\",\n       any(Attributes['service.instance.name']) AS \"Name\",\n       any(Attributes['service.name']) AS \"Type\",\n       any(ResourceAttributes['service.instance.name']) AS \"Client\",\n       any(ResourceAttributes['service.version']) AS \"Client version\",\n       any(ResourceAttributes['os.type']) AS \"OS\",\n       any(ResourceAttributes['host.arch']) AS \"Arch\",\n       argMaxIf(Value, TimeUnix, MetricName = 'process.memory.usage') AS \"Memory\",\n       argMaxIf(Value, TimeUnix, MetricName = 'process.cpu.utilization') AS \"CPU\",\n       argMaxIf(Value, TimeUnix, MetricName = 'process.uptime') AS \"Uptime\",\n       max(TimeUnix) AS \"Last sample\"\nFROM otel.otel_metrics_gauge\nWHERE $__timeFilter(TimeUnix)\n  AND match(ResourceAttributes['service.name'], '${client:regex}')\n  AND match(Attributes['service.instance.id'], '${instance:regex}')\n  AND match(concat(ResourceAttributes['os.type'], '/', ResourceAttributes['host.arch']), '${platform:regex}')\nGROUP BY \"Agent\"\nORDER BY \"Agent\""
+        }
+      ],
+      "description": "All three metrics per Agent in one row, from the newest sample of each. Name and Type are the Agent's own; Client, Client version, OS and Arch describe the Client that sampled it and the host both run on.",
+      "id": 11
+    },
+    {
+      "type": "row",
+      "title": "Logs \u2014 what the agents are saying",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by level",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time, SeverityText AS level, count() AS lines\nFROM otel.otel_logs\nWHERE $__timeFilter(Timestamp)\nGROUP BY time, level\nORDER BY time"
+        }
+      ],
+      "id": 13
+    },
+    {
+      "type": "logs",
+      "title": "Live log",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 21,
+        "w": 16,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "queryType": "logs",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT Timestamp AS timestamp,\n       Body AS body,\n       SeverityText AS level,\n       ServiceName AS service,\n       TraceId AS trace_id,\n       LogAttributes['code.namespace'] AS target\nFROM otel.otel_logs\nWHERE $__timeFilter(Timestamp)\nORDER BY Timestamp DESC\nLIMIT 500"
+        }
+      ],
+      "id": 14
+    },
+    {
+      "type": "row",
+      "title": "Traces \u2014 operations with a lifecycle",
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Spans by service",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time, ServiceName AS service, count() AS spans\nFROM otel.otel_traces\nWHERE $__timeFilter(Timestamp)\nGROUP BY time, service\nORDER BY time"
+        }
+      ],
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Operation duration, p95",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 30,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT $__timeInterval(Timestamp) AS time,\n       ServiceName AS service,\n       quantile(0.95)(Duration) / 1000000 AS p95_ms\nFROM otel.otel_traces\nWHERE ParentSpanId = '' AND $__timeFilter(Timestamp)\nGROUP BY time, service\nORDER BY time"
+        }
+      ],
+      "id": 17
+    },
+    {
+      "type": "table",
+      "title": "Recent operations",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 30,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this trace",
+                    "url": "/d/opamp-agents-traces/fleet-agents-traces?var-trace=${__value.raw}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration (ms)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.20.0",
+          "rawSql": "SELECT TraceId AS \"Trace\",\n       SpanName AS \"Operation\",\n       Timestamp AS \"Started\",\n       Duration / 1000000 AS \"Duration (ms)\",\n       StatusCode AS \"Outcome\",\n       SpanAttributes['service.instance.id'] AS \"Agent\"\nFROM otel.otel_traces\nWHERE ParentSpanId = '' AND $__timeFilter(Timestamp)\nORDER BY Timestamp DESC\nLIMIT 50"
+        }
+      ],
+      "id": 18
+    }
+  ]
+}

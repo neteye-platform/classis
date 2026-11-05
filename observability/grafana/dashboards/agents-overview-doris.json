@@ -1,0 +1,1018 @@
+{
+  "uid": "opamp-agents-overview-doris",
+  "title": "Fleet Agents — Overview (Doris)",
+  "description": "All three signals from one ClickHouse table set.",
+  "tags": [
+    "clickhouse",
+    "doris",
+    "opamp"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "client",
+        "label": "Client type",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "doris"
+        },
+        "description": "The Clients' service.name — one value per kind of Client, not per host.",
+        "query": "SELECT DISTINCT service_name FROM otel.otel_metrics_gauge ORDER BY 1",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "definition": "SELECT DISTINCT service_name FROM otel.otel_metrics_gauge ORDER BY 1"
+      },
+      {
+        "name": "instance",
+        "label": "Agent",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "doris"
+        },
+        "description": "The Agent each sample is about, which is what separates a Managed Process from the Client that sampled it.",
+        "query": "SELECT DISTINCT CAST(attributes['service.instance.id'] AS STRING) FROM otel.otel_metrics_gauge ORDER BY 1",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "definition": "SELECT DISTINCT CAST(attributes['service.instance.id'] AS STRING) FROM otel.otel_metrics_gauge ORDER BY 1"
+      },
+      {
+        "name": "platform",
+        "label": "Platform",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "doris"
+        },
+        "description": "The host an Agent runs on, as os.type/host.arch — the two halves ADR-0026 selects a package variant by.",
+        "query": "SELECT DISTINCT CONCAT(CAST(resource_attributes['os.type'] AS STRING), '/', CAST(resource_attributes['host.arch'] AS STRING)) FROM otel.otel_metrics_gauge ORDER BY 1",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "definition": "SELECT DISTINCT CONCAT(CAST(resource_attributes['os.type'] AS STRING), '/', CAST(resource_attributes['host.arch'] AS STRING)) FROM otel.otel_metrics_gauge ORDER BY 1"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Agents reporting",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT CAST(attributes['service.instance.id'] AS STRING))\nFROM otel.otel_metrics_gauge\nWHERE metric_name = 'process.uptime' AND $__timeFilter(timestamp)",
+          "format": "table"
+        }
+      ],
+      "description": "Distinct Agents that reported a sample in the window — the Client's own Agent and every Managed Process it supervises.",
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Clients reporting",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT service_instance_id)\nFROM otel.otel_metrics_gauge\nWHERE $__timeFilter(timestamp)",
+          "format": "table"
+        }
+      ],
+      "description": "Distinct Clients, counted by the Resource's service.instance.id. Counting by service.name instead would read 1 for any fleet size.",
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Memory, all agents",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT SUM(latest)\nFROM (SELECT MAX_BY(value, timestamp) AS latest\n      FROM otel.otel_metrics_gauge\n      WHERE metric_name = 'process.memory.usage' AND $__timeFilter(timestamp)\n      GROUP BY CAST(attributes['service.instance.id'] AS STRING)) AS per_agent",
+          "format": "table"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Busiest agent, CPU",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT MAX(latest)\nFROM (SELECT MAX_BY(value, timestamp) AS latest\n      FROM otel.otel_metrics_gauge\n      WHERE metric_name = 'process.cpu.utilization' AND $__timeFilter(timestamp)\n      GROUP BY CAST(attributes['service.instance.id'] AS STRING)) AS per_agent",
+          "format": "table"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Log lines / min",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) / GREATEST(1, MINUTES_DIFF($__timeTo(), $__timeFrom()))\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)",
+          "format": "table"
+        }
+      ],
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Traces / min",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [],
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) / GREATEST(1, MINUTES_DIFF($__timeTo(), $__timeFrom()))\nFROM otel.otel_traces\nWHERE parent_span_id = '' AND $__timeFilter(timestamp)",
+          "format": "table"
+        }
+      ],
+      "id": 6
+    },
+    {
+      "type": "row",
+      "title": "Metrics — what each agent's process is doing",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Process memory",
+      "interval": "30s",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "displayName": "${__field.labels.label}",
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       CAST(attributes['service.instance.id'] AS STRING) AS agent,\n       CONCAT_WS(' · ', NULLIF(CAST(attributes['service.instance.name'] AS STRING), ''), NULLIF(CAST(attributes['service.name'] AS STRING), ''), NULLIF(CAST(resource_attributes['os.type'] AS STRING), '')) AS label,\n       AVG(value) AS memory\nFROM otel.otel_metrics_gauge\nWHERE metric_name = 'process.memory.usage' AND $__timeFilter(timestamp)\n  AND service_name REGEXP '${client:regex}'\n  AND CAST(attributes['service.instance.id'] AS STRING) REGEXP '${instance:regex}'\n  AND CONCAT(CAST(resource_attributes['os.type'] AS STRING), '/', CAST(resource_attributes['host.arch'] AS STRING)) REGEXP '${platform:regex}'\nGROUP BY `time`, agent, label\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Process CPU",
+      "interval": "30s",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "displayName": "${__field.labels.label}",
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       CAST(attributes['service.instance.id'] AS STRING) AS agent,\n       CONCAT_WS(' · ', NULLIF(CAST(attributes['service.instance.name'] AS STRING), ''), NULLIF(CAST(attributes['service.name'] AS STRING), ''), NULLIF(CAST(resource_attributes['os.type'] AS STRING), '')) AS label,\n       AVG(value) AS cpu\nFROM otel.otel_metrics_gauge\nWHERE metric_name = 'process.cpu.utilization' AND $__timeFilter(timestamp)\n  AND service_name REGEXP '${client:regex}'\n  AND CAST(attributes['service.instance.id'] AS STRING) REGEXP '${instance:regex}'\n  AND CONCAT(CAST(resource_attributes['os.type'] AS STRING), '/', CAST(resource_attributes['host.arch'] AS STRING)) REGEXP '${platform:regex}'\nGROUP BY `time`, agent, label\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Process uptime",
+      "interval": "30s",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "displayName": "${__field.labels.label}",
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       CAST(attributes['service.instance.id'] AS STRING) AS agent,\n       CONCAT_WS(' · ', NULLIF(CAST(attributes['service.instance.name'] AS STRING), ''), NULLIF(CAST(attributes['service.name'] AS STRING), ''), NULLIF(CAST(resource_attributes['os.type'] AS STRING), '')) AS label,\n       AVG(value) AS uptime\nFROM otel.otel_metrics_gauge\nWHERE metric_name = 'process.uptime' AND $__timeFilter(timestamp)\n  AND service_name REGEXP '${client:regex}'\n  AND CAST(attributes['service.instance.id'] AS STRING) REGEXP '${instance:regex}'\n  AND CONCAT(CAST(resource_attributes['os.type'] AS STRING), '/', CAST(resource_attributes['host.arch'] AS STRING)) REGEXP '${platform:regex}'\nGROUP BY `time`, agent, label\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "description": "A step back to zero is a restart. A gap is a process that was not running when the sample was taken — not an error.",
+      "id": 10
+    },
+    {
+      "type": "table",
+      "title": "Agents",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Memory"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uptime"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT agent AS `Agent`,\n       ANY_VALUE(name) AS `Name`,\n       ANY_VALUE(type) AS `Type`,\n       ANY_VALUE(client) AS `Client`,\n       ANY_VALUE(client_version) AS `Client version`,\n       ANY_VALUE(os) AS `OS`,\n       ANY_VALUE(arch) AS `Arch`,\n       MAX(CASE WHEN metric_name = 'process.memory.usage' THEN latest END) AS `Memory`,\n       MAX(CASE WHEN metric_name = 'process.cpu.utilization' THEN latest END) AS `CPU`,\n       MAX(CASE WHEN metric_name = 'process.uptime' THEN latest END) AS `Uptime`,\n       MAX(last_sample) AS `Last sample`\nFROM (SELECT CAST(attributes['service.instance.id'] AS STRING) AS agent,\n             metric_name,\n             MAX_BY(value, timestamp) AS latest,\n             MAX(timestamp) AS last_sample,\n             ANY_VALUE(CAST(attributes['service.instance.name'] AS STRING)) AS name,\n             ANY_VALUE(CAST(attributes['service.name'] AS STRING)) AS type,\n             ANY_VALUE(CAST(resource_attributes['service.instance.name'] AS STRING)) AS client,\n             ANY_VALUE(CAST(resource_attributes['service.version'] AS STRING)) AS client_version,\n             ANY_VALUE(CAST(resource_attributes['os.type'] AS STRING)) AS os,\n             ANY_VALUE(CAST(resource_attributes['host.arch'] AS STRING)) AS arch\n      FROM otel.otel_metrics_gauge\n      WHERE $__timeFilter(timestamp)\n        AND service_name REGEXP '${client:regex}'\n        AND CAST(attributes['service.instance.id'] AS STRING) REGEXP '${instance:regex}'\n        AND CONCAT(CAST(resource_attributes['os.type'] AS STRING), '/', CAST(resource_attributes['host.arch'] AS STRING)) REGEXP '${platform:regex}'\n      GROUP BY agent, metric_name) AS per_metric\nGROUP BY agent\nORDER BY agent",
+          "format": "table"
+        }
+      ],
+      "description": "All three metrics per Agent in one row, from the newest sample of each. Name and Type are the Agent's own; Client, Client version, OS and Arch describe the Client that sampled it and the host both run on.",
+      "id": 11
+    },
+    {
+      "type": "row",
+      "title": "Logs — what the agents are saying",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by level",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`, severity_text AS level, COUNT(*) AS lines\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\nGROUP BY `time`, level\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 13
+    },
+    {
+      "type": "logs",
+      "title": "Live log",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 21,
+        "w": 16,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp,\n       body,\n       severity_text AS level,\n       service_name AS service,\n       trace_id,\n       CAST(log_attributes['code.namespace'] AS STRING) AS target\nFROM otel.otel_logs\nWHERE $__timeFilter(timestamp)\nORDER BY timestamp DESC\nLIMIT 500",
+          "format": "table"
+        }
+      ],
+      "id": 14
+    },
+    {
+      "type": "row",
+      "title": "Traces — operations with a lifecycle",
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Spans by service",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`, service_name AS service, COUNT(*) AS spans\nFROM otel.otel_traces\nWHERE $__timeFilter(timestamp)\nGROUP BY `time`, service\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Operation duration, p95",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 30,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": 60000
+          },
+          "mappings": [],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(timestamp, $__interval) AS `time`,\n       service_name AS service,\n       PERCENTILE_APPROX(duration, 0.95) / 1000 AS p95_ms\nFROM otel.otel_traces\nWHERE parent_span_id = '' AND $__timeFilter(timestamp)\nGROUP BY `time`, service\nORDER BY `time`",
+          "format": "time_series"
+        }
+      ],
+      "id": 17
+    },
+    {
+      "type": "table",
+      "title": "Recent operations",
+      "datasource": {
+        "type": "mysql",
+        "uid": "doris"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 30,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this trace",
+                    "url": "/d/opamp-agents-traces-doris/fleet-agents-traces?var-trace=${__value.raw}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration (ms)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "doris"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT trace_id AS `Trace`,\n       span_name AS `Operation`,\n       timestamp AS `Started`,\n       duration / 1000 AS `Duration (ms)`,\n       CASE status_code WHEN 'STATUS_CODE_ERROR' THEN 'Error' WHEN 'STATUS_CODE_OK' THEN 'Ok' ELSE 'Unset' END AS `Outcome`,\n       CAST(span_attributes['service.instance.id'] AS STRING) AS `Agent`\nFROM otel.otel_traces\nWHERE parent_span_id = '' AND $__timeFilter(timestamp)\nORDER BY timestamp DESC\nLIMIT 50",
+          "format": "table"
+        }
+      ],
+      "id": 18
+    }
+  ]
+}

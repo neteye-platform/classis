@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Enables the Grafana Doris app (compose.yaml installs it) on the Doris datasource and the tables
+# the Collector's Doris exporter writes. These are the app's defaults, spelled out so a renamed
+# datasource or table shows up here rather than as an empty Discover page.
+apps:
+  - type: velodb-doris-app
+    org_id: 1
+    disabled: false
+    jsonData:
+      logsConfig:
+        datasource: doris
+        database: otel
+        logsTable: otel_logs
+        targetTraceTable: otel_traces
+        applicationAttributeKey: app

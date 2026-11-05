@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# Git pre-commit hook: no commit on main.
+#
+# An agent commits on a branch, never on main, and changes reach main through a pull request
+# (AGENTS.md, section 6). A permission prompt cannot decide this — it asks a human about a command,
+# not about the branch it lands on — so the repository's own hook does, for every agent and every
+# human alike. Enabled through 'git config core.hooksPath .githooks', which the Dev Container sets
+# on creation (.devcontainer/devcontainer.json); outside it, run that command once per clone.
+#
+# Bypassable with 'git commit --no-verify', which is what a maintainer does on purpose and what an
+# agent has no instruction for. scripts/test-git-hooks.sh exercises this hook.
+
+set -uo pipefail
+
+branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || true)"
+
+if [[ "$branch" == "main" ]]; then
+  echo "pre-commit: refused — the checkout is on 'main', and commits land on a branch that reaches main through a pull request (AGENTS.md, section 6). Create a branch first: git switch -c <name>" >&2
+  exit 1
+fi
+
+exit 0

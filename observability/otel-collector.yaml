@@ -1,0 +1,127 @@
+# One receiver, two exporters — the Collector is the only thing an Agent needs to know about, and
+# the only thing that knows where the data lands: ClickHouse and Apache Doris, each signal to both.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Guards the Collector against an Agent that floods it; checked before the batcher on purpose.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    username: otel
+    password: otel
+    database: otel
+    # The exporter owns the schema. It runs CREATE TABLE IF NOT EXISTS on start, which is why
+    # nothing here ships a .sql file to keep in step with the exporter's own column list — a
+    # hand-maintained copy would drift on the next Collector upgrade and fail at insert time.
+    create_schema: true
+    # Retention, as a TTL on the tables it creates. This is the whole retention story now: one
+    # setting instead of Prometheus' `--storage.tsdb.retention`, Loki's `retention_period`, and
+    # Tempo's `block_retention` — which is one of the reasons for a single store.
+    ttl: 24h
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    # Named explicitly, though these are the defaults: the dashboards query
+    # `otel_metrics_gauge` by name, so the coupling should be visible in both places.
+    metrics_tables:
+      gauge:
+        name: otel_metrics_gauge
+      sum:
+        name: otel_metrics_sum
+      summary:
+        name: otel_metrics_summary
+      histogram:
+        name: otel_metrics_histogram
+      exponential_histogram:
+        name: otel_metrics_exponential_histogram
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+  # The same data into Apache Doris, so the two stores can be compared side by side. The exporter
+  # owns this schema too, but it is not ClickHouse's: snake_case columns, attributes as VARIANT,
+  # span durations in MICROSECONDS and status codes spelled `STATUS_CODE_ERROR` — which is why the
+  # Doris dashboards are queries of their own rather than copies.
+  doris:
+    # Stream load starts at the FE, which redirects it to the BE by the address the BE registered
+    # with (compose.yaml) — reachable here because the Collector shares that network.
+    endpoint: http://doris-fe:8030
+    mysql_endpoint: doris-fe:9030   # for CREATE DATABASE/TABLE; host:port, no scheme
+    username: root
+    password: ""
+    database: otel
+    table:
+      logs: otel_logs
+      traces: otel_traces
+      metrics: otel_metrics          # a prefix: the tables are otel_metrics_gauge, _sum, …
+    create_schema: true
+    replication_num: 1               # one BE; more replicas than BEs fails every CREATE TABLE
+    # Timestamps go in as DATETIME without an offset, in this zone. UTC, because Grafana's session
+    # (provisioning/datasources) reads them as UTC; the default, the Collector's local zone, would
+    # shift every point by the host's offset.
+    timezone: UTC
+    # The same retention as ClickHouse's TTL above: one day of daily partitions.
+    history_days: 1
+    timeout: 10s
+    # Each exporter queues on its own, so a Doris that is down or slow fills its own queue and
+    # drops from it — and ClickHouse, in the same pipelines, never waits for it.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+  # Uncomment `debug` in a pipeline below to see what actually arrives.
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse, doris]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse, doris]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse, doris]

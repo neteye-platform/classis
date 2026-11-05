@@ -1,0 +1,2601 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpAMP Fleet</title>
+    <link id="ui-style" rel="stylesheet" href="/ui.css" />
+    <!-- Colours an Agent's effective configuration (ADR-0038); deferred, so the page never waits
+         for it, and without it every configuration stays plain text. -->
+    <script id="shiki" src="/shiki.js" defer></script>
+    <script>
+      // The looks the UI can wear: each a stylesheet from this origin.
+      const UI_STYLES = {
+        default: { label: "GitKraken", href: "/ui.css" },
+        carbon: { label: "Carbon", href: "/ui-carbon.css" },
+        quiet: { label: "Quiet", href: "/ui-quiet.css" },
+      };
+      const UI_STYLE_KEY = "opamp-fleet-style";
+      // Light, dark, or whichever the operating system prefers: one choice, whatever the look. Its
+      // key is the one the UI has always used, so a browser's earlier light or dark still holds.
+      const UI_THEMES = ["system", "light", "dark"];
+      const UI_THEME_KEY = "opamp-fleet-theme";
+      const SYSTEM_DARK = window.matchMedia("(prefers-color-scheme: dark)");
+      // Storage can be denied outright (private mode, a locked-down profile). The default style,
+      // following the system, is then the answer every time.
+      function storedStyle() {
+        try {
+          const style = localStorage.getItem(UI_STYLE_KEY);
+          return Object.hasOwn(UI_STYLES, style) ? style : "default";
+        } catch (e) {
+          return "default";
+        }
+      }
+      function storedTheme() {
+        try {
+          const theme = localStorage.getItem(UI_THEME_KEY);
+          return UI_THEMES.includes(theme) ? theme : "system";
+        } catch (e) {
+          return "system";
+        }
+      }
+      // The theme the page shows: the choice itself, or for "system" the one the system prefers.
+      function shownTheme(theme) {
+        return theme === "system" ? (SYSTEM_DARK.matches ? "dark" : "light") : theme;
+      }
+      function applyStylesheet(style, theme) {
+        const link = document.getElementById("ui-style");
+        if (link.getAttribute("href") !== UI_STYLES[style].href) link.href = UI_STYLES[style].href;
+        document.documentElement.dataset.theme = shownTheme(theme);
+      }
+      // Before the first paint, or a stored choice would show the default look for a frame and then
+      // swap. The theme is always set outright, because the stylesheets open in different ones.
+      // The controls below re-apply the same values once the page is up.
+      applyStylesheet(storedStyle(), storedTheme());
+    </script>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="page-head">
+        <div>
+          <h1>OpAMP Fleet</h1>
+          <p>Monitor, configure, and manage your OpAMP fleet · <a class="name" href="/api/v1/docs" target="_blank" rel="noopener">API docs</a></p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <select id="style-select" title="Style" aria-label="Style"></select>
+          <div id="theme-switch" class="theme-switch" role="group" aria-label="Theme"></div>
+        </div>
+      </div>
+
+      <!-- Each management is a tab, and the counts sit on the tabs themselves — so the numbers an
+           operator scans for ("how many agents, how many packages") are visible from every tab,
+           not only from the one that holds the list. -->
+      <nav class="tabs">
+        <button class="tab" data-tab="agents">Agents<span class="num" id="count">0</span></button>
+        <button class="tab" data-tab="hosts">Hosts<span class="num" id="host-count">0</span></button>
+        <button class="tab" data-tab="deployments">Deployments<span class="num" id="deployment-count">0</span></button>
+        <button class="tab" data-tab="packages">Packages<span class="num" id="package-count">0</span></button>
+        <button class="tab" data-tab="configurations">Configurations<span class="num" id="config-count">0</span></button>
+        <button class="tab" data-tab="enrolments">Enrolments<span class="num" id="enrolment-count">0</span></button>
+      </nav>
+
+      <!-- Configurations (ADR-0034): content only — a body for an agent type, and a role. One table
+           of Configurations and a detail form for the current one; no Selector and no rollout
+           press here, because a Configuration aims at nobody: a Deployment holds it, and the
+           rollout press is that Deployment's. -->
+      <div id="panel-configurations" class="tab-panel">
+      <div class="card filters" style="align-items: center; gap: 12px;">
+        <button id="config-create" class="btn btn-primary"
+                title="Write a new configuration: a name, the agent type it is for, a role and a body. Saved only — a deployment holding it releases it.">＋ Create</button>
+        <span class="sub">A <b>configuration</b> is content: a body in the agent's own format, the agent type it is for, and a role. It aims at nobody by itself and is never rolled out; a <b>deployment</b> holds it — one configuration may sit in several — and reaches the agents of its channel whose type it fits. Select a row to edit it.</span>
+        <span id="configs-error" class="err"></span>
+      </div>
+
+      <div class="card table-wrap" style="margin-bottom: 20px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">Name</th>
+              <th style="width: 20%">Agent type</th>
+              <th style="width: 14%">Role</th>
+              <th>In deployments</th>
+            </tr>
+          </thead>
+          <tbody id="configs"></tbody>
+        </table>
+        <div id="configs-empty" class="empty">No configurations yet. Create one.</div>
+      </div>
+
+      <section id="config-detail" class="card config" style="display: none">
+        <h2 id="config-detail-title">Configuration</h2>
+        <div class="config-fields">
+          <label class="field quarter"><span class="field-cap">Name <b class="need req">required</b></span>
+            <input required aria-required="true" id="config-name" placeholder="name (lowercase letters, digits, '-')" autocomplete="off"
+                   title="The configuration's name — the file name its entry gets on the agent. Frozen once created." />
+          </label>
+          <label class="field"><span class="field-cap">Agent type <b class="need req">required</b></span>
+            <input required aria-required="true" id="config-type" list="config-type-options" placeholder="agent type: the service.name it is for" autocomplete="off"
+                   title="Compared raw for equality against the service.name the agents report (ADR-0034): of the agents a deployment holding it claims, only those of this type receive it. Content for several types is one configuration per type." />
+          </label>
+          <datalist id="config-type-options"></datalist>
+          <label class="field"><span class="field-cap">Role <b class="need opt">optional</b></span>
+            <input id="config-role" placeholder="role (empty = configuration; 'supplementary' = a file the agent reads by path)" autocomplete="off" title="The Baseline's AgentConfigFile.role, sent to the agent verbatim. Empty means top-level configuration. 'supplementary' means the content is written next to the configuration but never passed as configuration — a fragment, a certificate, a rule file." />
+          </label>
+        </div>
+        <label class="field-cap" for="config">Body <b class="need req">required</b></label>
+        <textarea id="config" required aria-required="true" placeholder="The configuration body — saved only; released by the rollout press of a deployment that holds it…"></textarea>
+        <div class="config-actions">
+          <button id="config-delete" class="btn btn-ghost"
+                  title="Delete this configuration — refused while an agent's assignment pins it. It leaves every deployment that holds it.">Delete</button>
+          <span id="config-state" class="sub"></span>
+          <span id="config-error" class="err" style="flex: 1"></span>
+          <button id="config-cancel" class="btn btn-ghost" style="margin-left: auto">Cancel</button>
+          <button id="config-ok" class="btn btn-primary"
+                  title="Save the form as this configuration. Nothing is distributed by this press (ADR-0025); every agent keeps the revision its assignment pins, and the Agents tab shows the save waiting.">OK</button>
+        </div>
+      </section>
+      </div>
+
+      <!-- Packages as Sets (ADR-0026): one table of Sets, and a detail form for the *current* one.
+           A Set is identified by name, agent type, and version — stated at creation, never edited;
+           it holds one entry per platform. Saving never distributes (ADR-0025): a Set reaches an
+           agent only through a rollout act. The table is the master, the form the detail; while
+           nothing is current the form is not on screen. -->
+      <div id="panel-packages" class="tab-panel">
+      <div class="card filters" style="align-items: center; gap: 12px;">
+        <button id="set-create" class="btn btn-primary"
+                title="Define a new Set: name, agent type, and version — its identity — plus a Selector. Saved only: nothing reaches any agent until a rollout act names the Set.">＋ Create</button>
+        <span class="sub">A <b>package</b> is what an agent type runs at a version — its identity, and one entry per platform: an uploaded artifact with its SHA-256 and its signature. An entry without a signature is offered to nobody. A package aims at nobody by itself and is never rolled out; a <b>deployment</b> holds it and reaches the channel it names. Select a row to inspect, sign or edit it.</span>
+        <span id="sets-result" class="sub"></span>
+        <span id="sets-error" class="err"></span>
+      </div>
+
+      <div class="card table-wrap" style="margin-bottom: 20px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%">Agent type</th>
+              <th style="width: 18%">Package</th>
+              <th style="width: 110px">Version</th>
+              <th>Platforms</th>
+              <th style="width: 150px">Signatures</th>
+              <th>In deployments</th>
+            </tr>
+          </thead>
+          <tbody id="sets"></tbody>
+        </table>
+        <div id="sets-empty" class="empty">No package sets yet. Create one.</div>
+      </div>
+
+      <!-- The detail form: exactly as capable as the API, one rule (the Server's), rendered. The
+           identity fields are writable only while creating; on an existing Set they are the frozen
+           identity. Entries are editable while the package is assigned to nobody. OK and Cancel persist or discard the form; the rollout act stays its own button
+           (ADR-0025: the press that changes the fleet is never the press that carries the bytes). -->
+      <section id="set-detail" class="card config" style="display: none">
+        <h2 id="set-detail-title">Package set</h2>
+        <div class="config-fields">
+          <label class="field"><span class="field-cap">Agent type <b class="need req">required</b></span>
+            <input required aria-required="true" id="set-type" class="required" placeholder="agent type: the service.name its agents report (e.g. otelcol-contrib)" autocomplete="off"
+                   title="Matched for equality against the service.name an agent reports (ADR-0026), and half this package's identity together with the version (ADR-0026) — frozen once created. It is also the name the package carries on the wire, which is why it never holds the version. While it is empty, choosing an artifact file fills it from the file's name." />
+          </label>
+          <label class="field narrow"><span class="field-cap">Version <b class="need req">required</b></span>
+            <input required aria-required="true" id="set-version" placeholder="version (e.g. 1.2.3)" autocomplete="off"
+                   title="The version every entry of this Set shares. Part of the Set's identity — a new version is a new Set." />
+          </label>
+        </div>
+        <div class="config-fields">
+        </div>
+        <div class="config-actions" style="margin: 0 0 10px">
+          <span id="set-state" class="sub"></span>
+        </div>
+        <h2>Entries — one per platform, no duplicates, each an uploaded file with its signature. Editable until the package is assigned to an agent; frozen from then on, signatures included. New bytes take the entry's signature away.</h2>
+        <div id="set-entries" class="chips entry-list" style="margin-bottom: 10px"></div>
+        <div id="entry-editor">
+        <div class="config-fields">
+          <label class="field narrow"><span class="field-cap">OS <b class="need req">required</b></span>
+            <input required aria-required="true" id="entry-os" placeholder="os: linux, darwin, windows" autocomplete="off"
+                   title="The operating system this entry is built for, as the agent reports os.type. Other spellings (macos) are accepted and stored canonically." />
+          </label>
+          <label class="field narrow"><span class="field-cap">Arch <b class="need req">required</b></span>
+            <input required aria-required="true" id="entry-arch" placeholder="arch: amd64, arm64" autocomplete="off"
+                   title="The architecture, as the agent reports host.arch. Other spellings (x86_64, aarch64) are accepted and stored canonically." />
+          </label>
+        </div>
+        <div class="config-actions" style="margin: 0 0 10px">
+          <label class="field"><span class="field-cap">Artifact file <b class="need req">required</b></span>
+            <input required aria-required="true" id="entry-file" type="file" style="color: var(--muted); font-size: 13px;" />
+          </label>
+          <button id="entry-add" class="btn btn-ghost btn-sm"
+                  title="Store the chosen file as this set's entry for the platform named above, now. Replaces the entry already held for that platform, and its signature with it. While a new set is being created, OK is what saves the set and this entry together.">＋ Add entry</button>
+          <span class="sub">a file named <code>&lt;name&gt;_&lt;version&gt;_&lt;os&gt;_&lt;arch&gt;.7z</code> fills the platform — and, while creating, whatever of the name, agent type, and version is still empty (<code>-</code> or <code>_</code>)</span>
+        </div>
+        </div>
+        <!-- Delete stands alone on the left — the one press that destroys, kept away from the
+             two that finish an edit. OK and Cancel sit on the right, where a form is concluded.
+             The rollout act is not here at all: it lives on the Set's table row (ADR-0025's
+             seam — the press that changes the fleet is never the press that carries the bytes). -->
+        <div class="config-actions">
+          <button id="set-delete" class="btn btn-ghost"
+                  title="Delete this Set — entries, artifacts and metadata — refused while an agent's assignment pins it. It leaves every deployment that holds it. Nothing is uninstalled: an agent keeps running what it took.">Delete</button>
+          <button id="set-signing" class="btn btn-ghost"
+                  title="Download what a signature covers, as JSON: the Agent type, the version, and each entry's platform and SHA-256. The platform is not signed; it says which entry the signature goes to. Sign it with opamp-fleetctl package sign --signing-info and import it here.">Signing info</button>
+          <label class="field"><span class="field-cap">Signing file to import <b class="need opt">optional</b></span>
+            <input id="set-sig-file" type="file" accept=".json,application/json" style="color: var(--muted); font-size: 13px;" />
+          </label>
+          <button id="set-sig-import" class="btn btn-ghost"
+                  title="Put the signatures of a signed signing file onto the package it names, one request per entry. Each goes to the entry with its platform and SHA-256; one for other bytes is not taken. The Server's answer is reported per entry, its signature check included.">Import signing file</button>
+          <span id="set-error" class="err" style="flex: 1"></span>
+          <button id="set-cancel" class="btn btn-ghost" style="margin-left: auto"
+                  title="Discard the form's changes: back to the stored state, or close the form when it was creating a new Set.">Cancel</button>
+          <button id="set-ok" class="btn btn-primary"
+                  title="Save the form: creates the Set — and, when a file is chosen above, stores that entry too. Nothing is distributed by this press (ADR-0025).">OK</button>
+        </div>
+        <div id="set-sig-result" class="sub" style="margin: 10px 0 0; white-space: pre-line"></div>
+      </section>
+      </div>
+
+
+      <!-- Deployments (ADR-0026): what reaches a channel of hosts, and the only thing rolled out. The
+           table is the master, the form the detail; while nothing is current the form is not on
+           screen. The rollout press sits on the row, never in the form — ADR-0025's seam: the
+           press that changes the fleet is never the press that saves. -->
+      <div id="panel-deployments" class="tab-panel">
+      <div class="card filters" style="align-items: center; gap: 12px;">
+        <button id="dep-create" class="btn btn-primary"
+                title="Define a new deployment: a name, the channel it aims at, its packages and its configurations. Saved only — nothing reaches any agent until the row's rollout press.">＋ Create</button>
+        <span class="sub">A <b>deployment</b> is a name, the channel it aims at, one package per agent type, and any number of configurations — the one thing rolled out. An agent belongs to <b>at most one</b>: two matching the same agent is a conflict, and that agent is offered nothing new until a selector is narrowed. There is no fleet-wide default — a selector is equality and cannot say "not", so channels are a partition over an attribute every agent carries (<code>channel = stable</code>), set at provisioning or as a label on the Agents tab.</span>
+        <span id="dep-result" class="sub"></span>
+        <span id="deps-error" class="err"></span>
+      </div>
+
+      <div class="card table-wrap" style="margin-bottom: 20px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%">Name</th>
+              <th>Selector</th>
+              <th>Packages</th>
+              <th>Configurations</th>
+              <th style="width: 170px">Reach</th>
+            </tr>
+          </thead>
+          <tbody id="deps"></tbody>
+        </table>
+        <div id="deps-empty" class="empty">No deployments yet. Create one — a package or a configuration reaches nobody without a channel to hold it.</div>
+      </div>
+
+      <section id="dep-detail" class="card config" style="display: none">
+        <h2 id="dep-detail-title">Deployment</h2>
+        <div class="config-fields">
+          <label class="field quarter"><span class="field-cap">Name <b class="need req">required</b></span>
+            <input required aria-required="true" id="dep-name" placeholder="name (lowercase letters, digits, '-')" autocomplete="off"
+                   title="The operator's name for this channel, and the path segment that addresses it. Frozen once created." />
+          </label>
+          <label class="field"><span class="field-cap">Selector <b class="need req">required</b></span>
+            <input required aria-required="true" id="dep-selector" placeholder="selector: channel=stable — required, and never empty" autocomplete="off"
+                   title="Equality pairs that must all match an attribute the agent reported, labels included. It may not be empty: an empty selector matches every agent, so it would collide with every other channel. Always editable — re-aiming distributes nothing by itself." />
+          </label>
+        </div>
+        <div id="selector-options" class="chips" style="margin-bottom: 10px" title="Attributes the fleet currently reports — click one to add it to the selector"></div>
+        <div class="config-actions" style="margin: 0 0 10px">
+          <span id="dep-state" class="sub"></span>
+        </div>
+        <h2>Packages — at most one per agent type. Every entry of each must be signed, on the Packages tab, before the channel is rolled out.</h2>
+        <div class="config-fields">
+          <label class="field"><span class="field-cap">Package to add <b class="need opt">optional</b></span>
+            <select id="dep-package-pick"></select>
+          </label>
+        </div>
+        <div class="config-actions" style="margin: 0 0 10px">
+          <button id="dep-package-add" class="btn btn-ghost btn-sm"
+                  title="Put this package into the channel; on a new deployment it goes in with OK. A package already here for that agent type is replaced, which is how the version a channel runs is changed.">＋ Add package</button>
+        </div>
+        <div id="dep-packages" style="margin-bottom: 10px"></div>
+        <h2>Configurations — any number. Each reaches the agents of this channel whose type it fits.</h2>
+        <div class="config-fields">
+          <label class="field"><span class="field-cap">Configuration to add <b class="need opt">optional</b></span>
+            <select id="dep-config-pick"></select>
+          </label>
+        </div>
+        <div class="config-actions" style="margin: 0 0 10px">
+          <button id="dep-config-add" class="btn btn-ghost btn-sm"
+                  title="Put this configuration into the channel; on a new deployment it goes in with OK. Nothing is distributed: the agents of the channel show it waiting until the rollout press.">＋ Add configuration</button>
+        </div>
+        <div id="dep-configs" class="chips" style="margin-bottom: 10px"></div>
+        <div class="config-actions">
+          <button id="dep-delete" class="btn btn-ghost"
+                  title="Delete this deployment — refused while an agent's assignment names it. Nothing is uninstalled — an agent keeps running what it took.">Delete</button>
+          <span id="dep-error" class="err" style="flex: 1"></span>
+          <button id="dep-cancel" class="btn btn-ghost" style="margin-left: auto">Cancel</button>
+          <button id="dep-ok" class="btn btn-primary"
+                  title="Save the form: creates the deployment or re-aims it. Nothing is distributed by this press — the rollout is the row's button.">OK</button>
+        </div>
+      </section>
+      </div>
+
+      <!-- Enrolments (ADR-0021 clause 22): the hosts that asked for a certificate with the fleet's
+           bootstrap certificate, waiting for an operator. The key fingerprint is shown whole so it
+           can be matched against the `key_fingerprint` the Client logs on the host it came from;
+           approving and rejecting are per-row presses, never part of a form. -->
+      <div id="panel-enrolments" class="tab-panel">
+      <div class="card filters" style="align-items: center; gap: 12px;">
+        <span id="enrolment-window" class="pill gray">window closed</span>
+        <span id="enrolment-window-controls" style="display: none; gap: 8px; align-items: center; white-space: nowrap;">
+          <select id="enrolment-window-secs" title="How long the window stays open from now">
+            <option value="900">15 minutes</option>
+            <option value="3600">1 hour</option>
+            <option value="14400">4 hours</option>
+          </select>
+          <button id="enrolment-window-open" class="btn btn-primary"
+                  title="Open the enrolment window for the chosen time; an open window ends then instead">Open window</button>
+          <button id="enrolment-window-close" class="btn btn-ghost" style="display: none"
+                  title="Close the window now: every enrolling connection ends and every waiting request expires">Close window</button>
+        </span>
+        <span class="sub">A host enrols with a bootstrap certificate while the enrolment window is open, and waits here until an operator approves it. The <b>bootstrap certificate</b> column shows the subject values it was issued with — what the host certificate carries once approved; the request's own subject is not shown, since the host chose it. Before approving, compare the <b>key fingerprint</b> with the <code>key_fingerprint</code> the Client logged on that host: only a match is the host you mean.</span>
+        <span id="enrolment-result" class="sub"></span>
+        <span id="enrolments-error" class="err"></span>
+      </div>
+
+      <div class="card table-wrap" style="margin-bottom: 20px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 110px">Arrived</th>
+              <th style="width: 120px">From</th>
+              <th>Key fingerprint (SHA-256)</th>
+              <th style="width: 36%">Bootstrap certificate</th>
+              <th style="width: 190px"></th>
+            </tr>
+          </thead>
+          <tbody id="enrolments"></tbody>
+        </table>
+        <div id="enrolments-empty" class="empty">No host is waiting.</div>
+      </div>
+
+      <!-- Bootstrap certificates (ADR-0028, ADR-0036): issued by this Server with the subject values
+           an operator names, which every host certificate issued from one carries. The Server keeps
+           a PKCS#12 file of the pair under the password the operator types, which any page offers
+           for download; the page never holds a private key, and the typed password is sent once
+           and kept nowhere (ADR-0029, ADR-0036 clause 6). -->
+      <section id="boot-section" class="card config" style="display: none">
+        <h2>Bootstrap certificates — one per customer, site or batch; each opens nothing without an open window and an approval</h2>
+        <div class="config-fields">
+          <label class="field quarter"><span class="field-cap">Country (C) <b class="need opt">optional</b></span>
+            <select id="boot-country"
+                    title="The country (C), an ISO 3166-1 alpha-2 code. Optional. Every host certificate issued from this one carries it as fleet.host.country.">
+              <option value="">country (C)</option>
+            </select>
+          </label>
+          <label class="field quarter"><span class="field-cap">State (ST) <b class="need opt">optional</b></span>
+            <input id="boot-state" placeholder="state (ST)" maxlength="64" autocomplete="off"
+                   title="The state or province. Optional; 1 to 64 characters. Host certificates carry it as fleet.host.state." />
+          </label>
+          <label class="field quarter"><span class="field-cap">Locality (L) <b class="need opt">optional</b></span>
+            <input id="boot-locality" placeholder="locality (L)" maxlength="64" autocomplete="off"
+                   title="The locality, a town for instance. Optional; 1 to 64 characters. Host certificates carry it as fleet.host.locality." />
+          </label>
+          <label class="field quarter"><span class="field-cap">Customer (O) <b class="need req">required</b></span>
+            <input required aria-required="true" id="boot-org" placeholder="customer (O)" maxlength="64" autocomplete="off"
+                   title="The organization the certificate is issued to, typically the customer. 1 to 64 characters. Host certificates carry it as fleet.host.organization; it describes and selects, and authorizes nothing." />
+          </label>
+          <label class="field quarter"><span class="field-cap">Site (OU) <b class="need req">required</b></span>
+            <input required aria-required="true" id="boot-unit" placeholder="site (OU)" maxlength="64" autocomplete="off"
+                   title="The organizational unit, typically the site. 1 to 64 characters. Host certificates carry it as fleet.host.site." />
+          </label>
+          <label class="field quarter"><span class="field-cap">Customer number (organizationIdentifier) <b class="need opt">optional</b></span>
+            <input id="boot-org-id" placeholder="customer number (organizationIdentifier)" maxlength="64" autocomplete="off"
+                   title="A customer or contract number, a UUID for instance, in any format. Optional; 1 to 64 characters. Host certificates carry it as fleet.host.organization_id." />
+          </label>
+          <label class="field narrow"><span class="field-cap">Valid for days <b class="need opt">optional</b></span>
+            <input id="boot-days" type="number" min="1" max="90" value="10"
+                   title="How many days the certificate is valid: 1 to 90, cut to the bootstrap CA's end." />
+          </label>
+          <label class="field quarter"><span class="field-cap">Password <b class="need req">required</b></span>
+            <input required aria-required="true" id="boot-pass" type="password" placeholder="password" autocomplete="new-password" minlength="8" maxlength="128"
+                   title="The Server keeps the certificate and its key as bootstrap.p12, encrypted under this password, for download until the certificate ends or is revoked. 8 to 128 characters; a short one is quicker to break if the file leaks. The Server keeps the password nowhere: give it to the host by another way than the file. A host that needs the pair as PEM takes it out with opamp-fleetctl pki p12-extract." />
+          </label>
+          <label class="field quarter"><span class="field-cap">Password again <b class="need req">required</b></span>
+            <input required aria-required="true" id="boot-pass2" type="password" placeholder="password again" autocomplete="new-password"
+                   title="The same password once more." />
+          </label>
+          <button id="boot-issue" class="btn btn-primary"
+                  title="Issue a bootstrap certificate with a fresh key. Its row offers bootstrap.p12 in any page until it ends or is revoked.">Issue</button>
+        </div>
+        <span id="boot-result" class="sub"></span>
+        <span id="boot-error" class="err"></span>
+        <div class="table-wrap" style="margin-top: 10px">
+          <table>
+            <thead>
+              <tr>
+                <th>Subject</th>
+                <th style="width: 22%">Serial</th>
+                <th style="width: 150px">Issued</th>
+                <th style="width: 150px">Valid until</th>
+                <th style="width: 110px">State</th>
+                <th style="width: 190px"></th>
+              </tr>
+            </thead>
+            <tbody id="boots"></tbody>
+          </table>
+          <div id="boots-empty" class="empty">This Server has issued no bootstrap certificate that is still on record.</div>
+          <span id="boots-error" class="err"></span>
+        </div>
+      </section>
+      </div>
+
+      <!-- Hosts (ADR-0035): what a client certificate names — one Client installation connecting
+           directly, a Gateway included. One table of Hosts; the current one shows its Agents
+           beneath it, grouped by their Client Agent. Nothing on a Host is edited: the Gateway mark
+           and the revocation of its certificates are per-row presses, and labels stay on the
+           Agents tab. -->
+      <div id="panel-hosts" class="tab-panel">
+      <div class="card filters" style="align-items: center; gap: 12px;">
+        <span class="sub">A <b>host</b> is what a client certificate of this Server names: one Client installation that connects directly, a gateway included. The agents arriving over it directly carry its certificate's subject values as <code>fleet.host.*</code>, which a selector can match and no agent can claim. A <b>gateway</b> carries the agents behind it, which carry no <code>fleet.host.*</code>. The labels of a Client's own agent hold for the Client's other agents — label it once on the Agents tab. Select a row to see its agents.</span>
+        <span id="hosts-result" class="sub"></span>
+        <span id="hosts-error" class="err"></span>
+      </div>
+
+      <div class="card table-wrap" style="margin-bottom: 20px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 20%">Host</th>
+              <th>Subject</th>
+              <th style="width: 100px">Gateway</th>
+              <th style="width: 22%">Valid certificates</th>
+              <th style="width: 80px">Agents</th>
+              <th style="width: 260px"></th>
+            </tr>
+          </thead>
+          <tbody id="hosts"></tbody>
+        </table>
+        <div id="hosts-empty" class="empty">No host yet. A host appears when its enrolment is approved, or at the first report of a certificate that names one.</div>
+      </div>
+
+      <section id="host-detail" class="card config" style="display: none">
+        <h2 id="host-detail-title">Agents</h2>
+        <div id="host-agents"></div>
+      </section>
+      </div>
+
+      <div id="panel-agents" class="tab-panel">
+      <div class="card filters">
+        <span class="dropdown">Filters ▾</span>
+        <input id="filter" type="text" placeholder="Filter by name, status, OS or label" autocomplete="off" />
+        <span id="fleet-error" class="err"></span>
+      </div>
+
+      <div id="selection-bar" class="card filters" style="display: none; align-items: center; gap: 12px">
+        <span id="selection-count" class="sub"></span>
+        <button id="restart-selected" class="btn btn-ghost">⟳ Restart selected</button>
+        <span id="selection-result" class="sub"></span>
+      </div>
+
+      <div class="card table-wrap">
+        <table>
+          <thead>
+            <tr id="head-row">
+              <th class="chk"><input type="checkbox" id="select-all" /></th>
+              <th class="sortable" data-key="name">Name <span class="arrow"></span></th>
+              <th class="sortable" data-key="version">Version <span class="arrow"></span></th>
+              <th class="sortable" data-key="os">Operating System <span class="arrow"></span></th>
+              <th class="col-network">Network</th>
+              <th class="sortable" data-key="config">Configuration <span class="arrow"></span></th>
+              <th>Rollout</th>
+              <th>Effective config</th>
+              <th class="sortable" data-key="seq">Seq <span class="arrow"></span></th>
+              <th class="sortable" data-key="seen">Last seen <span class="arrow"></span></th>
+              <th class="sortable" data-key="health">Health <span class="arrow"></span></th>
+              <th class="sortable status" data-key="connected">Status <span class="arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="agents"></tbody>
+        </table>
+        <div id="empty" class="empty">No agents connected yet. Start a Client.</div>
+      </div>
+      </div>
+    </div>
+
+    <!-- Text too long for a cell, opened from the cell that summarises it: an effective
+         configuration from its truncated column, an error from the red badge that reports it. A
+         native <dialog>:
+         the browser supplies the backdrop and the Esc-to-close, nothing here reinvents them. -->
+    <dialog id="text-dialog" class="text-dialog">
+      <div class="text-dialog-head">
+        <strong id="text-dialog-title"></strong>
+        <button id="text-dialog-close" class="btn btn-ghost">Close</button>
+      </div>
+      <pre id="text-dialog-body" class="text-full"></pre>
+    </dialog>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      // Style and theme: which look, and light, dark or the system's within it. The two are
+      // independent — a look shows in whichever theme is chosen — and both are remembered per
+      // browser, since there is nothing per-operator on the server to keep them in.
+      // The buttons show only their sign; the name is the screen reader's and the tooltip's.
+      const THEME_ICON = { system: "◐", light: "☀", dark: "☾" };
+      // Held here as well as stored, so the controls still switch where storage is denied.
+      let currentStyle = storedStyle();
+      let currentTheme = storedTheme();
+      // The combo's options and the theme's buttons are UI_STYLES and UI_THEMES, in their order
+      // (in the head). The pressed button is the theme chosen.
+      for (const [style, { label }] of Object.entries(UI_STYLES)) {
+        $("style-select").add(new Option(label, style));
+      }
+      for (const theme of UI_THEMES) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn btn-ghost";
+        button.dataset.themeChoice = theme;
+        button.textContent = THEME_ICON[theme];
+        button.setAttribute("aria-label", theme[0].toUpperCase() + theme.slice(1));
+        button.addEventListener("click", () => {
+          currentTheme = theme;
+          applyLook();
+        });
+        $("theme-switch").append(button);
+      }
+      function applyLook() {
+        try {
+          localStorage.setItem(UI_STYLE_KEY, currentStyle);
+          localStorage.setItem(UI_THEME_KEY, currentTheme);
+        } catch (e) { /* not remembered, still applied */ }
+        applyStylesheet(currentStyle, currentTheme);
+        $("style-select").value = currentStyle;
+        for (const button of $("theme-switch").children) {
+          const theme = button.dataset.themeChoice;
+          button.setAttribute("aria-pressed", String(theme === currentTheme));
+          button.title = theme === "system"
+            ? `Follow the system, now ${shownTheme("system")}`
+            : `Always ${theme}`;
+        }
+      }
+      $("style-select").addEventListener("change", (event) => {
+        currentStyle = event.target.value;
+        applyLook();
+      });
+      // A system that switches between light and dark, on a schedule or by hand, is followed live.
+      SYSTEM_DARK.addEventListener("change", () => {
+        if (currentTheme === "system") applyLook();
+      });
+      applyLook();
+
+      // Tabs: which management is on screen. The choice lives in the URL's hash
+      // rather than in storage — unlike the theme it is a place, not a preference, so a reload
+      // comes back to the same tab and a link can point a colleague straight at #packages. An
+      // unknown hash falls back to Agents, the tab the fleet is watched from.
+      const TABS = ["agents", "hosts", "deployments", "packages", "configurations", "enrolments"];
+      function showTab(name) {
+        if (!TABS.includes(name)) name = "agents";
+        document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+        for (const t of TABS) $(`panel-${t}`).classList.toggle("active", t === name);
+        document.title = `${name[0].toUpperCase()}${name.slice(1)} · OpAMP Fleet`;
+        // replaceState, not assignment: stepping through tabs is browsing one page, and Back
+        // should leave it, not replay every tab visited on the way.
+        if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+      }
+      document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
+      window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+      showTab(location.hash.slice(1));
+
+      let agents = [];
+      let filterText = "";
+      let sortKey = "name";
+      let sortDir = 1;
+      let configDirty = false;
+      // Agents whose declared-capabilities / available-components detail rows are open, keyed by
+      // instance_uid so the state survives the periodic re-render.
+      const expandedCaps = new Set();
+      const expandedComponents = new Set();
+      // The current Agent — the one whose detail rows are on screen. One at a time, toggled by
+      // pressing its row: the table stays one line per Agent until an operator asks about one,
+      // which is what keeps a fleet of fifty scannable. Distinct from the checkboxes, which
+      // collect Agents for a bulk action and must not fold rows open along the way.
+      let currentAgent = null;
+      // Which Agents the operator has ticked. Kept by instance_uid rather than by row, so a
+      // selection survives the two-second refresh instead of being wiped mid-decision.
+      const selectedAgents = new Set();
+
+      // Escapes every character that can break out of HTML text or an attribute value — including
+      // ' and ` so the safety does not depend on every attribute staying double-quoted. Agent-
+      // reported strings (names, attributes, health text) flow through here before reaching the DOM.
+      const esc = (s) => (s ?? "").toString().replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
+      // The grammar an Agent's effective configuration is coloured with, chosen by the type the
+      // Agent reports (ADR-0038 clause 3); any other type is shown plain.
+      const CONFIG_GRAMMARS = new Map([["supervisor", "toml"], ["telegraf", "toml"], ["fluent-bit", "ini"]]);
+      const configGrammar = (type) => ((type || "").startsWith("otelcol") ? "yaml" : CONFIG_GRAMMARS.get(type) || null);
+      // Coloured configurations by grammar and text: the refresh every two seconds draws an
+      // unchanged one from here instead of colouring it again. A text whose colouring failed is
+      // kept as null and stays plain. Shiki escapes the text it builds its HTML from.
+      const highlighted = new Map();
+      const highlighting = new Map();
+      const highlightKey = (text, lang) => `${lang}\n${text}`;
+      function highlight(text, lang) {
+        const key = highlightKey(text, lang);
+        if (highlighted.has(key)) return Promise.resolve(highlighted.get(key));
+        // The script is deferred: until it has run, nothing is coloured and nothing is kept.
+        if (typeof window.fleetHighlight !== "function") return Promise.resolve(null);
+        if (!highlighting.has(key)) {
+          highlighting.set(key, Promise.resolve()
+            .then(() => window.fleetHighlight(text, lang))
+            .catch(() => null)
+            .then((html) => {
+              highlighting.delete(key);
+              if (highlighted.size >= 200) highlighted.clear();
+              highlighted.set(key, typeof html === "string" ? html : null);
+              return highlighted.get(key);
+            }));
+        }
+        return highlighting.get(key);
+      }
+      function ago(ms) {
+        const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+        if (s < 60) return s + "s ago";
+        if (s < 3600) return Math.round(s / 60) + "m ago";
+        return Math.round(s / 3600) + "h ago";
+      }
+
+      // What to call an Agent (ADR-0016): the operator's name for it, falling back to its type and
+      // then to the UID. A foreign OpAMP client reports no instance name, and every Collector of
+      // one distribution reports the same type — so both steps are needed for a row to stay
+      // distinguishable from its neighbours.
+      const displayName = (a) => a.service_instance_name || a.service_name || a.instance_uid;
+
+      // The UID under the name, spelled out rather than left to a tooltip: it is the identity every
+      // REST call and every log line names an Agent by, so an operator reading a row has to be able
+      // to copy it. Suppressed when it is already the row's title — that is displayName's last
+      // fallback, and one line saying it twice reads as two Agents.
+      const uidLine = (a) =>
+        displayName(a) === a.instance_uid
+          ? ""
+          : `<div class="sub uid" title="the instance UID this Agent reports — what the Server keys it by">${esc(a.instance_uid)}</div>`;
+
+      const sortVal = {
+        name: displayName,
+        connected: (a) => (a.connected ? 1 : 0),
+        // Unhealthy first, then never-reported, then healthy: the sort exists to bring trouble
+        // to the top, and an Agent that reports nothing sits between finding and all-clear.
+        health: (a) => (a.healthy ? 2 : a.health_status || a.health_error ? 0 : 1),
+        config: (a) => a.remote_config_status,
+        version: (a) => a.service_version,
+        os: (a) => a.os,
+        seq: (a) => a.sequence_num,
+        seen: (a) => a.last_seen_ms,
+      };
+
+      function statusPill(a) {
+        // Two facts, not one (ADR-0024): the pill says whether a connection is open — behind a
+        // Gateway, the Gateway's — and "Stale" beside it says the Agent itself stopped talking.
+        // Disconnected is soft red, not gray: a link that is down is a finding, not an absence —
+        // but soft, because behind a Gateway it can be routine (ADR-0024); FAILED keeps the
+        // stronger reading as the one hard error in the row.
+        //
+        // The badge carries a ✕: a disconnected row is where forgetting is usually decided, so
+        // the remedy rides on the diagnosis. A shortcut, not the rule — the details keep the
+        // forget chip for *every* Agent, because whether one may be forgotten is a question about
+        // silence and not about this flag (ADR-0024): an Agent behind a Gateway reads Connected
+        // however dead its host is, and must stay forgettable.
+        const base = a.connected
+          ? `<span class="pill solid-green"><span class="dot"></span>Connected</span>`
+          : `<span class="pill red"><span class="dot"></span>Disconnected<span class="forget-btn" data-uid="${esc(a.instance_uid)}" title="Forget this Agent: the Server drops what it knows and the row goes away. Nothing happens on the host — a Client that is still running comes back.">✕</span></span>`;
+        return a.stale
+          ? `${base}<span class="pill amber" title="nothing heard for longer than this Agent's heartbeat budget">Stale</span>`
+          : base;
+      }
+      // The third fact beside the two the Status pill carries (ADR-0024): Connected says a
+      // connection is open, Stale says the Agent stopped talking — and this pill says whether
+      // what the connection carries is actually running. A Supervisor whose Managed Process
+      // will not start is exactly the case that needs the split: its row reads Connected,
+      // truthfully — the Supervisor lives — and only the health says the process does not.
+      // The red pill wears the Agent's own status string ("no process installed", …): the
+      // Baseline defines no status values, so the Agent's words are the most an operator can
+      // be told. Gray when no health was ever reported — absence of a report is not a finding,
+      // and a Foreign Agent that never promised ReportsHealth must not read as broken.
+      // A red badge and nothing else. The reason a process will not start is a paragraph — a
+      // linker error, a validation run's whole command line — and printed into the cell it makes
+      // that row twenty lines tall, which pushes every other Agent off the screen for a text that
+      // is read once and then acted on. So the row keeps the finding and the click carries the
+      // reason, the way the effective configuration column already works. Without an error there
+      // is nothing to open, and the badge stays a plain one rather than lying about being
+      // clickable.
+      function errorPill(a, kind, label, error) {
+        if (!error) return `<span class="pill red">${label}</span>`;
+        return `<span class="pill red clickable err-open" data-uid="${esc(a.instance_uid)}" data-kind="${kind}" title="Click to see the error">${label}</span>`;
+      }
+      function healthPill(a) {
+        if (a.healthy) return `<span class="pill green">Healthy</span>`;
+        if (a.health_status || a.health_error)
+          return errorPill(a, "health", esc(a.health_status) || "Unhealthy", a.health_error);
+        return `<span class="pill gray">—</span>`;
+      }
+      function configPill(a) {
+        if (a.remote_config_status === "FAILED")
+          return errorPill(a, "config", "Failed", a.remote_config_error);
+        if (!a.in_sync) return `<span class="pill amber">Syncing…</span>`;
+        if (a.remote_config_status === "APPLIED") return `<span class="pill green">Applied</span>`;
+        return `<span class="pill gray">Unset</span>`;
+      }
+      // The platform this agent reports, `os.type`-`host.arch` — the exact pair a package artifact
+      // is stored under, so it can be read off a row and typed into the packages form. Empty when
+      // the agent reports neither, which is also why it would be offered no package at all.
+      function platformOf(a) {
+        const n = a.non_identifying_attributes || {};
+        return n["os.type"] && n["host.arch"] ? `${n["os.type"]}-${n["host.arch"]}` : "";
+      }
+      // The host's addresses (ADR-0016), first of each on the row: the row answers "which host is
+      // this" at a glance, while the full lists stay in the details chips below and in the
+      // tooltip — a host can hold many addresses, and a column is as wide as its widest cell.
+      function networkOf(a) {
+        const n = a.non_identifying_attributes || {};
+        const ips = (n["host.ip"] || "").split(", ").filter(Boolean);
+        const macs = (n["host.mac"] || "").split(", ").filter(Boolean);
+        if (!ips.length && !macs.length) return "—";
+        const more = (list) => (list.length > 1 ? ` +${list.length - 1}` : "");
+        const title = [ips.length ? `IP: ${ips.join(", ")}` : "", macs.length ? `MAC: ${macs.join(", ")}` : ""].filter(Boolean).join("\n");
+        return `<span title="${esc(title)}">${esc(ips[0]) || "—"}${more(ips)}</span><div class="sub" title="${esc(title)}">${esc(macs[0]) || ""}${more(macs)}</div>`;
+      }
+      // A reported attribute's chip takes the hue of the namespace its key starts with, so a row's
+      // host, OS and service facts read as groups; a namespace not named here keeps the neutral
+      // chip. The stylesheets know the hues, this list what they mean. A list value — the Server
+      // joins an array with ", " — shows its first entry and a count of the rest, and the whole
+      // list on hover, so a host with many addresses keeps its chip one line high.
+      const ATTR_HUE = { host: "blue", os: "teal", service: "pink", supervisor: "slate" };
+      function attrChipClass(key) {
+        const hue = ATTR_HUE[key.split(".")[0]];
+        return hue ? `chip hue-${hue}` : "chip";
+      }
+      function attrChip(key, value) {
+        const cls = attrChipClass(key);
+        const entries = String(value).split(", ");
+        if (entries.length < 2) return `<span class="${cls}">${esc(key)}: ${esc(value)}</span>`;
+        return `<span class="${cls}" title="${esc(entries.join("\n"))}">${esc(key)}: ${esc(entries[0])}<span class="chip-count">+${entries.length - 1}</span></span>`;
+      }
+      // Everything about an agent that is a set rather than a value: reported attributes, the
+      // operator's labels (ADR-0024), the per-row actions, and its package pills. Not named
+      // `labels` — that word means the 🏷 chips alone (ADR-0024), and a row headed with it
+      // reads as if a package status were one.
+      function details(a) {
+        const chips = [];
+        if (a.transport) chips.push(`<span class="chip">transport: ${esc(a.transport)}</span>`);
+        if (a.health_status) chips.push(`<span class="chip">status: ${esc(a.health_status)}</span>`);
+        // Every reported attribute, with nothing held back: this list is what a selector is
+        // written from, so leaving a key out of it hides a key you can target. os.type and
+        // host.arch appear in the OS column too, and that is not a duplicate — there they are the
+        // artifact's platform (`linux-amd64`, what an upload is keyed by), here they are attribute
+        // pairs (`os.type: linux`, what a selector matches). Two questions, two spellings.
+        // By key, so the same attribute sits in the same place on every row and the eye can go
+        // straight to it. Sorted here rather than trusted from the server, which orders them by a
+        // map it is free to change.
+        for (const [k, v] of Object.entries(a.non_identifying_attributes || {}).sort(([x], [y]) => x.localeCompare(y))) {
+          chips.push(attrChip(k, v));
+        }
+        const caps = a.capabilities || [];
+        if (caps.length) {
+          const open = expandedCaps.has(a.instance_uid);
+          chips.push(`<span class="chip clickable cap-toggle${open ? " selected" : ""}" data-uid="${esc(a.instance_uid)}" title="Click to ${open ? "hide" : "show"} the declared capabilities">capabilities: ${caps.length} ${open ? "▴" : "▾"}</span>`);
+        }
+        const components = a.available_components || [];
+        if (components.length) {
+          const open = expandedComponents.has(a.instance_uid);
+          chips.push(`<span class="chip clickable comp-toggle${open ? " selected" : ""}" data-uid="${esc(a.instance_uid)}" title="Click to ${open ? "hide" : "show"} the available components">components: ${components.length} ${open ? "▴" : "▾"}</span>`);
+        }
+        if (caps.includes("AcceptsRestartCommand")) {
+          chips.push(`<span class="chip clickable restart-btn" data-uid="${esc(a.instance_uid)}" title="Restart the managed process">⟳ restart</span>`);
+        }
+        // Offered on every row rather than pre-filtered (ADR-0024): whether an Agent may be
+        // forgotten is a question about silence, which this view does not carry. The Server holds
+        // the rule and says no with a reason — one place to be right instead of two to drift.
+        chips.push(`<span class="chip clickable forget-btn" data-uid="${esc(a.instance_uid)}" title="Forget this Agent: the Server drops what it knows and the row goes away. Nothing happens on the host — a Client that is still running comes back.">✕ forget</span>`);
+        // The operator's labels (ADR-0024): matched by Selectors exactly like a reported attribute,
+        // which is what makes a rollout channel a Server-side decision instead of an edit on the host.
+        for (const [key, value] of Object.entries(a.labels || {})) {
+          const dead = (a.shadowed_labels || []).includes(key);
+          chips.push(`<span class="chip${dead ? " " : " selected"}" title="${dead ? "the Agent reports this attribute itself, so the label matches nothing" : "a label: Selectors match it like a reported attribute"}">${dead ? "⚠ " : "🏷 "}${esc(key)}=${esc(value)}</span>`);
+        }
+        // Its Client Agent's labels hold for it below its own (ADR-0035 clause 4): set on the Client
+        // Agent's row, marked here as inherited, and dimmed where its own label or a report wins.
+        const own = a.labels || {};
+        const reported = { ...(a.identifying_attributes || {}), ...(a.non_identifying_attributes || {}) };
+        for (const [key, value] of Object.entries(a.inherited_labels || {})) {
+          const over = key in own || key in reported;
+          chips.push(`<span class="chip" title="${over ? "inherited from this agent's client agent, but its own label or report of this key wins" : "inherited from this agent's client agent — change it on that agent's row"}">${over ? "⚠ " : "⤵ "}${esc(key)}=${esc(value)}</span>`);
+        }
+        if (a.ambiguous) {
+          chips.push(`<span class="pill amber" title="more than one client agent arrives over this host for this machine, so no agent of it inherits labels">client: ambiguous</span>`);
+        }
+        // The values of the host's certificate (ADR-0035 clause 3): matched by selectors, and no
+        // agent can report them.
+        for (const [key, value] of Object.entries(a.host_attributes || {})) {
+          chips.push(`<span class="chip" title="from the certificate of host ${esc(a.host)} — selectors match it, and no agent can claim it">🔒 ${esc(key)}=${esc(value)}</span>`);
+        }
+        for (const key of a.ignored_attributes || []) {
+          chips.push(`<span class="pill amber" title="the agent reports this, but fleet.* is the Server's own, so it is left out of what selectors match">⚠ ignored ${esc(key)}</span>`);
+        }
+        chips.push(`<span class="chip clickable label-btn" data-uid="${esc(a.instance_uid)}" title="Set this Agent's labels — the whole set, as key=value pairs separated by commas. Empty clears them. A key the Agent reports itself is refused, and so is a key starting fleet. — the Server's own. A client agent's labels hold for its client's other agents.">🏷 labels…</span>`);
+        if (a.package_conflict) {
+          chips.push(`<span class="pill red" title="${esc(a.package_conflict)}">deployment: ambiguous target</span>`);
+        }
+        for (const p of a.packages || []) {
+          const cls = p.status === "Installed" ? "green"
+            : p.status === "InstallFailed" ? "red"
+            : "amber"; // Downloading / Installing / InstallPending
+          let label = `pkg: ${esc(p.name)}${p.version ? " " + esc(p.version) : ""}`;
+          let title = p.status === "InstallFailed" && p.error ? esc(p.error) : esc(p.status);
+          // A download of a few hundred megabytes takes minutes: show it moving rather than
+          // leaving the operator to guess whether it is progressing or wedged.
+          if (p.status === "Downloading") {
+            label += p.download_percent != null ? ` ↓ ${p.download_percent.toFixed(0)}%` : " ↓";
+            const rate = p.download_bytes_per_second;
+            title = rate ? `Downloading — ${(rate / 1048576).toFixed(1)} MiB/s` : "Downloading";
+          }
+          chips.push(`<span class="pill ${cls}" title="${title}">${label}</span>`);
+        }
+        // The chips only — the row below the agent supplies the `.chips` box they lay out in, and
+        // a second one nested inside it would wrap them as a single item rather than individually.
+        return chips.join("");
+      }
+      // The rollout column (ADR-0025, ADR-0034): what is rolled out to this Agent (its assignment —
+      // the Deployment it went through, its Configurations and its Package), what waits for the
+      // operator's press, per Configuration and for the Package, and the press itself. The Server
+      // never rolls out on its own — a save, a Deployment edit, a label move, or this Agent
+      // enrolling only ever adds to the waiting list here.
+      function rolloutCell(a) {
+        const chips = [];
+        if (a.assigned_deployment) {
+          chips.push(`<span class="chip" title="the deployment this agent's release went through — pinned as of that act, so re-aiming or editing the deployment changes nothing here">⤷ ${esc(a.assigned_deployment)}</span>`);
+        }
+        for (const n of a.assigned_configurations || []) {
+          chips.push(`<span class="chip" title="rolled out to this agent — the pinned revision it is offered">${esc(n)}</span>`);
+        }
+        if (a.assigned_package) {
+          chips.push(`<span class="chip" title="rolled out to this agent — pinned as of that act, so putting a newer package in the channel changes nothing here">pkg ${esc(a.assigned_package)}</span>`);
+        }
+        // Three states that would otherwise be the same empty cell, and the operator's next move
+        // differs in each (ADR-0026 point 25). Calm, not alarming: a freshly enrolled host is in no
+        // channel yet, which is the ordinary state and not a fault.
+        const pending = (a.pending_configurations || []).length + (a.pending_packages || []).length + (a.pending_deployment ? 1 : 0);
+        if (!a.package_conflict) {
+          if (!a.deployment) {
+            chips.push(`<span class="pill gray" title="no deployment's selector matches this agent, so nothing aims at it — give it a channel: a label here, or a channel attribute at provisioning. This is the ordinary state right after an enrolment.">in no deployment</span>`);
+          } else if (!a.assigned_deployment && !pending) {
+            chips.push(`<span class="pill gray" title="deployment ${esc(a.deployment)} claims this agent but holds nothing it can take — no configuration for its type, and no package for its type or its platform">${esc(a.deployment)}: nothing for this agent</span>`);
+          }
+        }
+        const why = {
+          new: "waits for its first rollout act",
+          update: "a newer save or version waits for a rollout act",
+          remove: "the deployment no longer releases it to this agent — the next rollout act drops it, and the smaller set is applied",
+          kept: "the deployment releases nothing to this agent any more — the next rollout act leaves it with no assignment, and it keeps running what it runs",
+        };
+        const mark = { new: "", update: " ✎", remove: " ✕", kept: " ⏸" };
+        if (a.pending_deployment) {
+          chips.push(`<span class="pill amber" title="deployment ${esc(a.pending_deployment)} claims this agent — the next rollout act releases through it rather than through the deployment named in this agent's assignment, even where the content stays the same">⏳ ⤷ ${esc(a.pending_deployment)}</span>`);
+        }
+        for (const p of a.pending_configurations || []) {
+          chips.push(`<span class="pill amber" title="configuration ${esc(p.name)}: ${why[p.change] || esc(p.change)}">⏳ ${esc(p.name)}${mark[p.change] || ""}</span>`);
+        }
+        for (const p of a.pending_packages || []) {
+          chips.push(`<span class="pill amber" title="package ${esc(p.display_name)} through ${esc(p.deployment)}: ${why[p.change] || esc(p.change)}">⏳ pkg ${esc(p.display_name)} · ${esc(p.deployment)}${mark[p.change] || ""}</span>`);
+        }
+        if (pending) {
+          chips.push(`<span class="chip clickable agent-rollout-btn" data-uid="${esc(a.instance_uid)}" title="Roll out the deployment that claims this agent to it — the one press that distributes (ADR-0034)">⤴ roll out</span>`);
+        }
+        if (!chips.length) return `<span class="pill gray">none</span>`;
+        return `<div class="chips">${chips.join("")}</div>`;
+      }
+
+      function matches(a) {
+        if (!filterText) return true;
+        // Labels are searched beside the reported attributes, in the same `key=value` spelling:
+        // the filter promises "or label", and a rollout channel is exactly what an operator narrows
+        // the fleet by (ADR-0024).
+        const attrs = Object.entries(a.non_identifying_attributes || {}).concat(Object.entries(a.identifying_attributes || {}))
+          .concat(Object.entries(a.labels || {}))
+          .concat(Object.entries(a.inherited_labels || {}))
+          .concat(Object.entries(a.host_attributes || {}))
+          .map(([k, v]) => `${k}=${v}`);
+        const pkgs = (a.packages || []).flatMap((p) => [p.name, p.version, p.status]);
+        const hay = [a.service_name, a.service_instance_name, a.instance_uid, a.os, platformOf(a), a.service_version, a.service_build, a.remote_config_status, a.connected ? "connected" : "disconnected", a.stale ? "stale" : "", a.health_status, a.health_error, a.healthy ? "healthy" : "", a.transport]
+          .concat(a.matched_configurations || []).concat(attrs).concat(a.capabilities || []).concat(pkgs)
+          .join(" ").toLowerCase();
+        return hay.includes(filterText);
+      }
+
+      function render() {
+        const rows = agents.filter(matches).sort((x, y) => {
+          const f = sortVal[sortKey] || sortVal.name;
+          const a = f(x), b = f(y);
+          return (a < b ? -1 : a > b ? 1 : 0) * sortDir;
+        });
+        $("count").textContent = agents.length;
+        $("empty").style.display = rows.length ? "none" : "block";
+        $("agents").innerHTML = rows.map((a) => {
+          const current = a.instance_uid === currentAgent;
+          const grammar = a.effective_config ? configGrammar(a.service_name) : null;
+          const coloured = grammar ? highlighted.get(highlightKey(a.effective_config, grammar)) : null;
+          const row = `
+          <tr class="agent${current ? " current" : ""}" data-uid="${esc(a.instance_uid)}">
+            <td class="chk"><input type="checkbox" class="row-select" data-uid="${esc(a.instance_uid)}"${selectedAgents.has(a.instance_uid) ? " checked" : ""} /></td>
+            <td><a class="name" href="#">${esc(displayName(a)) || "agent"}</a><div class="sub">${esc(a.service_name) || "no type reported"}</div>${uidLine(a)}</td>
+            <td class="num" title="${esc(a.service_build) || ""}">${esc(a.service_version) || "—"}</td>
+            <td>${esc(a.os) || "—"}<div class="sub">${esc(platformOf(a)) || "no platform reported"}</div></td>
+            <td>${networkOf(a)}</td>
+            <td>${configPill(a)}</td>
+            <td>${rolloutCell(a)}</td>
+            <td><pre class="cfg${a.effective_config ? " cfg-open" : ""}" data-uid="${esc(a.instance_uid)}" title="${a.effective_config ? "Click to see the whole configuration" : ""}">${coloured || esc(a.effective_config) || "—"}</pre></td>
+            <td class="num">${a.sequence_num}</td>
+            <td class="num">${ago(a.last_seen_ms)}</td>
+            <td>${healthPill(a)}</td>
+            <td class="status">${statusPill(a)}</td>
+          </tr>`;
+          // Everything about an agent that is a *set* rather than a value goes under its row
+          // rather than into a column of its own: a column has to be as wide as its widest cell,
+          // and one agent with a dozen attributes then pushed every other column off the screen.
+          const detailRow = ([label, chips], i, all) => `
+          <tr class="detail${i === all.length - 1 ? " last" : ""}">
+            <td class="chk"></td>
+            <td colspan="11"><div class="chips" style="padding: 2px 0 6px">
+              <span class="pill violet">${label}</span>
+              ${chips || `<span class="chip">none</span>`}
+            </div></td>
+          </tr>`;
+          // Only the current Agent carries its sets on screen — every other one is its row alone,
+          // and the per-Agent actions (restart, forget, labels) travel with the details, so making
+          // an Agent current is also what puts its controls in reach.
+          if (!current) return row;
+          const below = [["details", details(a)]];
+          if (expandedCaps.has(a.instance_uid)) {
+            // A copy, sorted: the list arrives in the order of the protocol's capability bitmask,
+            // which is an implementation detail of the wire and not a reading order. `caps` in
+            // `details` is searched by name, so the original must not be reordered under it.
+            below.push(["declared capabilities", [...(a.capabilities || [])].sort().map((c) => `<span class="chip">${esc(c)}</span>`).join("")]);
+          }
+          if (expandedComponents.has(a.instance_uid)) {
+            below.push(["available components", [...(a.available_components || [])].sort().map((c) => `<span class="chip">${esc(c)}</span>`).join("")]);
+          }
+          return row + below.map(detailRow).join("");
+        }).join("");
+        document.querySelectorAll("th.sortable").forEach((th) => {
+          const arrow = th.querySelector(".arrow");
+          arrow.textContent = th.dataset.key === sortKey ? (sortDir === 1 ? "▲" : "▼") : "";
+        });
+        colourConfigs(rows);
+      }
+
+      // Colours each drawn configuration not yet coloured, after the table is on screen; a cell
+      // whose Agent has since reported another text, or another type, is left as it is.
+      function colourConfigs(rows) {
+        for (const a of rows) {
+          const text = a.effective_config;
+          const grammar = text ? configGrammar(a.service_name) : null;
+          if (!grammar || highlighted.has(highlightKey(text, grammar))) continue;
+          highlight(text, grammar).then((html) => {
+            const now = agents.find((x) => x.instance_uid === a.instance_uid);
+            if (!html || !now || now.effective_config !== text || configGrammar(now.service_name) !== grammar) return;
+            const cell = [...$("agents").querySelectorAll("pre.cfg-open")].find((pre) => pre.dataset.uid === a.instance_uid);
+            if (cell) cell.innerHTML = html;
+          });
+        }
+      }
+      // The deferred script runs after this one: the table drawn before it is coloured once it has.
+      $("shiki").addEventListener("load", () => render());
+
+      document.querySelectorAll("th.sortable").forEach((th) => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.key;
+          if (sortKey === key) sortDir *= -1;
+          else { sortKey = key; sortDir = 1; }
+          render();
+        });
+      });
+      $("filter").addEventListener("input", (e) => { filterText = e.target.value.trim().toLowerCase(); render(); });
+      $("agents").addEventListener("click", (e) => {
+        const rolloutBtn = e.target.closest(".agent-rollout-btn");
+        if (rolloutBtn) {
+          // The empty body releases the deployment that claims this agent (ADR-0034).
+          fetch(`/api/v1/agents/${encodeURIComponent(rolloutBtn.dataset.uid)}/rollout`, { method: "POST" })
+            .then(async (res) => {
+              $("fleet-error").textContent = res.ok
+                ? ""
+                : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+              refreshAgents();
+            });
+          return;
+        }
+        const restart = e.target.closest(".restart-btn");
+        if (restart) {
+          fetch(`/api/v1/agents/${encodeURIComponent(restart.dataset.uid)}/restart`, { method: "POST" })
+            .then(() => refreshAgents());
+          return;
+        }
+        const label = e.target.closest(".label-btn");
+        if (label) {
+          const uid = label.dataset.uid;
+          const current = (agents.find((a) => a.instance_uid === uid) || {}).labels || {};
+          const asText = Object.entries(current).map(([k, v]) => `${k}=${v}`).join(", ");
+          const answer = prompt("Labels for this Agent — key=value, comma separated. Empty clears them.", asText);
+          if (answer === null) return;
+          const labels = {};
+          for (const pair of answer.split(",").map((p) => p.trim()).filter(Boolean)) {
+            const at = pair.indexOf("=");
+            if (at < 1) { $("fleet-error").textContent = `not a key=value pair: ${pair}`; return; }
+            labels[pair.slice(0, at).trim()] = pair.slice(at + 1).trim();
+          }
+          fetch(`/api/v1/agents/${encodeURIComponent(uid)}/labels`, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ labels }),
+          }).then(async (res) => {
+            // A refusal is a normal answer — a key the Agent reports itself — so it is shown.
+            $("fleet-error").textContent = res.ok
+              ? ""
+              : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+            refreshAgents();
+          });
+          return;
+        }
+        const forget = e.target.closest(".forget-btn");
+        if (forget) {
+          fetch(`/api/v1/agents/${encodeURIComponent(forget.dataset.uid)}`, { method: "DELETE" })
+            .then(async (res) => {
+              // A refusal is a normal answer here — the Agent is still reporting — so it is shown
+              // rather than swallowed.
+              $("fleet-error").textContent = res.ok
+                ? ""
+                : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+              refreshAgents();
+            });
+          return;
+        }
+        const comp = e.target.closest(".comp-toggle");
+        if (comp) {
+          const uid = comp.dataset.uid;
+          if (expandedComponents.has(uid)) expandedComponents.delete(uid); else expandedComponents.add(uid);
+          render();
+          return;
+        }
+        const cfg = e.target.closest(".cfg-open");
+        if (cfg) {
+          const agent = agents.find((x) => x.instance_uid === cfg.dataset.uid);
+          if (agent && agent.effective_config) {
+            openTextDialog(`${displayName(agent) || "agent"} — effective configuration`, agent.effective_config, configGrammar(agent.service_name));
+          }
+          return;
+        }
+        const errPill = e.target.closest(".err-open");
+        if (errPill) {
+          const agent = agents.find((x) => x.instance_uid === errPill.dataset.uid);
+          if (agent) {
+            const health = errPill.dataset.kind === "health";
+            openTextDialog(
+              `${displayName(agent) || "agent"} — ${health ? "health error" : "configuration error"}`,
+              health ? agent.health_error : agent.remote_config_error,
+            );
+          }
+          return;
+        }
+        const toggle = e.target.closest(".cap-toggle");
+        if (toggle) {
+          const uid = toggle.dataset.uid;
+          if (expandedCaps.has(uid)) expandedCaps.delete(uid); else expandedCaps.add(uid);
+          render();
+          return;
+        }
+        // Anywhere else on an Agent's row makes it the current one — or lets it go when it
+        // already is, folding its details away. Not the checkbox, which collects for a bulk
+        // action; not the UID, whose click is a copy and must stay one.
+        const tr = e.target.closest("tr.agent");
+        if (!tr || e.target.closest("input, .uid")) return;
+        // The name is an anchor with a dead href, kept for its link styling — following it
+        // would rewrite the tab hash.
+        e.preventDefault();
+        currentAgent = currentAgent === tr.dataset.uid ? null : tr.dataset.uid;
+        render();
+      });
+      // The one way this view shows a text that does not fit its cell.
+      // A `grammar` colours the text once the dialog shows it, unless another text has replaced it.
+      function openTextDialog(title, body, grammar) {
+        $("text-dialog-title").textContent = title;
+        $("text-dialog-body").textContent = body;
+        $("text-dialog").showModal();
+        if (!grammar) return;
+        highlight(body, grammar).then((html) => {
+          if (html && $("text-dialog").open && $("text-dialog-body").textContent === body) {
+            $("text-dialog-body").innerHTML = html;
+          }
+        });
+      }
+      $("text-dialog-close").addEventListener("click", () => $("text-dialog").close());
+      // A click on the backdrop closes too: the dialog's own box catches clicks inside it, so a
+      // click that reaches the <dialog> element itself can only have hit the backdrop.
+      $("text-dialog").addEventListener("click", (e) => {
+        if (e.target === $("text-dialog")) $("text-dialog").close();
+      });
+      // Reflects the current selection in the bar above the table.
+      function renderSelection() {
+        $("selection-bar").style.display = selectedAgents.size ? "flex" : "none";
+        $("selection-count").textContent = `${selectedAgents.size} agent(s) selected`;
+      }
+
+      document.addEventListener("change", (e) => {
+        const box = e.target.closest(".row-select");
+        if (!box) return;
+        if (box.checked) selectedAgents.add(box.dataset.uid); else selectedAgents.delete(box.dataset.uid);
+        $("selection-result").textContent = "";
+        renderSelection();
+      });
+
+      // A restart per selected Agent — the same route the per-row button uses, since the UI is a
+      // client of the API and nothing more. Refusals are counted and named rather than swallowed:
+      // an Agent that does not declare AcceptsRestartCommand is answered 409 by the Server.
+      $("restart-selected").addEventListener("click", async () => {
+        const uids = [...selectedAgents];
+        if (!uids.length) return;
+        $("selection-result").textContent = "restarting…";
+        let accepted = 0;
+        const refused = [];
+        for (const uid of uids) {
+          try {
+            const res = await fetch(`/api/v1/agents/${encodeURIComponent(uid)}/restart`, { method: "POST" });
+            if (res.ok) { accepted += 1; continue; }
+            const reason = (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+            refused.push(`${uid.slice(0, 8)}…: ${reason}`);
+          } catch (e) {
+            refused.push(`${uid.slice(0, 8)}…: ${e.message}`);
+          }
+        }
+        $("selection-result").textContent = refused.length
+          ? `${accepted} restarted · ${refused.length} refused — ${refused.join("; ")}`
+          : `${accepted} restarted`;
+        refreshAgents();
+      });
+
+      // Select-all applies to what is on screen — which, with a filter active, is the point.
+      $("select-all").addEventListener("change", (e) => {
+        document.querySelectorAll("#agents .row-select").forEach((box) => {
+          box.checked = e.target.checked;
+          if (box.checked) selectedAgents.add(box.dataset.uid); else selectedAgents.delete(box.dataset.uid);
+        });
+        $("selection-result").textContent = "";
+        renderSelection();
+      });
+
+      // Configurations (ADR-0034): a master table of content, and a detail form for the *current*
+      // one — name, agent type, role, body. A PUT only saves (ADR-0025); a Configuration reaches an
+      // agent only through a Deployment that holds it, whose row carries the rollout press.
+      let configurations = [];
+      let currentConfig = null;    // the name of the current row, or null — no current, no form
+      let creatingConfig = false;  // the form is writing a new one: the name is writable
+
+      const selectorText = (sel) => Object.entries(sel || {}).map(([k, v]) => `${k}=${v}`).join(", ");
+      function parseSelector(text) {
+        const selector = {};
+        for (const pair of text.split(",").map((p) => p.trim()).filter(Boolean)) {
+          const eq = pair.indexOf("=");
+          if (eq < 1) throw new Error(`selector entry "${pair}" is not key=value`);
+          selector[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+        }
+        return selector;
+      }
+      const currentConfigView = () => configurations.find((c) => c.name === currentConfig) || null;
+      const configPath = (name) => `/api/v1/configurations/${encodeURIComponent(name)}`;
+
+      function renderConfigs() {
+        $("config-count").textContent = configurations.length;
+        $("configs-empty").style.display = configurations.length ? "none" : "block";
+        $("configs").innerHTML = configurations.map((c) => {
+          const held = (c.deployments || []).map((d) => `<span class="chip">${esc(d)}</span>`).join("")
+            || `<span class="chip" title="no deployment holds it, so no rollout press can release it">in no deployment</span>`;
+          return `
+          <tr class="agent${c.name === currentConfig ? " current" : ""}" data-name="${esc(c.name)}">
+            <td><a class="name" href="#">${esc(c.name)}</a></td>
+            <td>${esc(c.service_name)}</td>
+            <td>${c.role ? esc(c.role) : `<span class="sub">configuration</span>`}</td>
+            <td><div class="chips">${held}</div></td>
+          </tr>`;
+        }).join("");
+      }
+
+      function showConfigDetail() {
+        const c = currentConfigView();
+        if (!c && !creatingConfig) { $("config-detail").style.display = "none"; return; }
+        $("config-detail").style.display = "block";
+        $("config-detail-title").textContent = creatingConfig
+          ? "New configuration — content only; a deployment holding it releases it"
+          : `Configuration ${c.name}`;
+        $("config-name").value = c ? c.name : "";
+        $("config-name").disabled = !creatingConfig;
+        $("config-type").value = c ? c.service_name || "" : "";
+        $("config-role").value = c ? c.role || "" : "";
+        $("config").value = c ? c.body : "";
+        const held = c ? c.deployments || [] : [];
+        $("config-state").textContent = !c
+          ? "put it into a deployment on the Deployments tab to release it"
+          : held.length
+            ? `held by ${held.join(", ")} — a save waits for their rollout press`
+            : "held by no deployment — it reaches nobody";
+        $("config-delete").disabled = creatingConfig;
+      }
+
+      $("configs").addEventListener("click", (e) => {
+        const tr = e.target.closest("tr.agent");
+        if (!tr) return;
+        e.preventDefault();
+        creatingConfig = false;
+        configDirty = false;
+        currentConfig = currentConfig === tr.dataset.name ? null : tr.dataset.name;
+        $("config-error").textContent = "";
+        renderConfigs();
+        showConfigDetail();
+      });
+
+      $("config-create").addEventListener("click", () => {
+        creatingConfig = true;
+        currentConfig = null;
+        configDirty = true;
+        $("config-error").textContent = "";
+        renderConfigs();
+        showConfigDetail();
+      });
+
+      for (const id of ["config-name", "config-type", "config-role", "config"]) {
+        $(id).addEventListener("input", () => { configDirty = true; });
+      }
+
+      // OK saves and closes the form; a refused save keeps it open beside its message.
+      $("config-ok").addEventListener("click", async () => {
+        $("config-error").textContent = "";
+        const name = $("config-name").value.trim();
+        if (!name) { $("config-error").textContent = "a configuration needs a name"; return; }
+        const type = $("config-type").value.trim();
+        if (!type) { $("config-error").textContent = "a configuration needs the agent type it is for"; return; }
+        const role = $("config-role").value.trim();
+        const res = await fetch(configPath(name), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          // An empty role is left out entirely rather than sent as "": absent is what the
+          // resource means by top-level configuration.
+          body: JSON.stringify({ body: $("config").value, service_name: type, ...(role ? { role } : {}) }),
+        });
+        if (!res.ok) {
+          $("config-error").textContent = (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+          return;
+        }
+        creatingConfig = false;
+        currentConfig = null;
+        configDirty = false;
+        await refreshConfigs();
+        refreshAgents();
+      });
+
+      $("config-cancel").addEventListener("click", () => {
+        creatingConfig = false;
+        currentConfig = null;
+        configDirty = false;
+        $("config-error").textContent = "";
+        renderConfigs();
+        showConfigDetail();
+      });
+
+      // Refused while an agent's assignment pins it (ADR-0034): the Server says how many, and the
+      // way out is a rollout of a deployment without it.
+      $("config-delete").addEventListener("click", async () => {
+        const c = currentConfigView();
+        if (!c) return;
+        const res = await fetch(configPath(c.name), { method: "DELETE" });
+        if (!res.ok && res.status !== 404) {
+          $("config-error").textContent = (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+          return;
+        }
+        currentConfig = null;
+        configDirty = false;
+        $("config-error").textContent = "";
+        await refreshConfigs();
+        refreshDeployments();
+      });
+
+      // Every attribute the fleet currently reports, as clickable key=value suggestions for a
+      // deployment's selector — what a Selector can actually match on, in the hue of its
+      // namespace as on the Agents tab. A list value is left out: a Selector matches string values
+      // only, and its ", " would split the pair in the selector's text.
+      function renderSelectorOptions() {
+        const pairs = new Map();
+        for (const a of agents) {
+          for (const list of [a.identifying_attributes, a.non_identifying_attributes]) {
+            for (const [k, v] of Object.entries(list || {})) {
+              if (!String(v).includes(", ")) pairs.set(`${k}=${v}`, k);
+            }
+          }
+        }
+        $("selector-options").innerHTML = [...pairs].sort(([x], [y]) => x.localeCompare(y)).map(([p, k]) =>
+          `<span class="${attrChipClass(k)} clickable" data-pair="${esc(p)}">${esc(p)}</span>`
+        ).join("") || `<span class="chip">no agents reporting yet</span>`;
+        // The types the fleet currently reports, as suggestions for a configuration's type
+        // (ADR-0034) — so stating the type is a pick, not a remembered spelling.
+        const types = [...new Set(agents.map((a) => a.service_name).filter(Boolean))].sort();
+        $("config-type-options").innerHTML = types.map((t) => `<option value="${esc(t)}"></option>`).join("");
+        document.querySelectorAll("#selector-options .clickable").forEach((chip) => {
+          chip.addEventListener("click", () => {
+            const input = $("dep-selector");
+            const current = input.value.trim();
+            if (current.split(",").map((p) => p.trim()).includes(chip.dataset.pair)) return;
+            input.value = current ? `${current}, ${chip.dataset.pair}` : chip.dataset.pair;
+            depFormDirty = true;
+          });
+        });
+      }
+
+      // Packages as Sets (ADR-0026): a master table of every Set, and a detail form for the
+      // *current* one. The form enforces no rule of its own — what it greys out is what the
+      // Server answers 409 to — and the identity (name, agent type, version) is writable only
+      // while a new Set is being created, because a new version is a new Set, never an edit.
+      let packages = [];
+      let currentSet = null;    // the identity string of the current row, or null — no current, no form
+      let creatingSet = false;  // the form is defining a new Set: identity fields writable
+      let setFormDirty = false; // an edit in flight — the periodic refresh must not overwrite it
+
+      const setKey = (p) => `${p.agent_type}@${p.version}`;
+      const setPath = (type, version) =>
+        `/api/v1/packages/${encodeURIComponent(type)}/${encodeURIComponent(version)}`;
+      const currentSetView = () => packages.find((p) => setKey(p) === currentSet) || null;
+      const fmtBytes = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KiB` : `${n} B`;
+
+      // How many Agents a rollout act would reach, as the Server resolves it. Zero is the case
+      // worth seeing — a mistyped agent type, a platform the fleet does not run, or a Selector
+      // matching nobody — none of which is a rejected upload, so nothing else would say it.
+      // Checking the aim before the act is what the count exists for (ADR-0025) — so the count
+      // rides on the act it aims, and is a button only where it is a count the act can reach.
+      // Zero has two meanings (ADR-0025), and only one of them is a mistake: a set that aims
+      // at nobody is the amber warning, a set everyone already runs is a plain statement.
+      // A package aims at nobody by itself (ADR-0026): what answers "whom would this reach" is
+      // the channels that hold it, and an empty list means stored, and unreachable.
+      function ringsCell(p) {
+        const channels = p.deployments || [];
+        if (!channels.length) {
+          return `<span class="pill amber" title="no deployment holds this package, so it reaches nobody — put it in one on the Deployments tab (ADR-0026)">in no deployment</span>`;
+        }
+        return channels.map((r) => `<span class="pill">${esc(r)}</span>`).join(" ");
+      }
+
+      // An entry's signature as the Server found it (ADR-0033): checked against the Server's
+      // verification key when it holds one. An invalid one is a warning, never a refusal — the
+      // Client's own check decides.
+      const SIG_STATES = {
+        missing: ["amber", "unsigned", "no signature — offered to nobody until it is signed"],
+        valid: ["green", "🔏 valid", "the signature verifies against the Server's [packages] verification_key"],
+        invalid: ["amber", "⚠ invalid", "the signature does not verify against the Server's [packages] verification_key — it is kept and offered, and every Client with the right key refuses it"],
+        unchecked: ["gray", "🔏 signed", "signed; the Server holds no verification_key to check it with, so only the Clients do"],
+      };
+      function sigPill(e) {
+        const [tone, label, why] = SIG_STATES[e.signature_state] || SIG_STATES.missing;
+        return `<span class="pill ${tone}" title="${esc(why)}">${label}</span>`;
+      }
+
+      // Whether every entry carries a valid signature (ADR-0033 clause 8), in one pill per row.
+      function signaturesCell(p) {
+        const entries = p.entries || [];
+        if (!entries.length) return "";
+        const count = (state) => entries.filter((e) => e.signature_state === state).length;
+        if (count("invalid")) return `<span class="pill amber" title="${esc(SIG_STATES.invalid[2])}">⚠ ${count("invalid")} invalid</span>`;
+        if (count("missing")) return `<span class="pill amber" title="${esc(SIG_STATES.missing[2])}">${count("missing")} of ${entries.length} unsigned</span>`;
+        if (count("unchecked")) return `<span class="pill gray" title="${esc(SIG_STATES.unchecked[2])}">🔏 signed</span>`;
+        return `<span class="pill green" title="${esc(SIG_STATES.valid[2])}">🔏 all valid</span>`;
+      }
+
+      const entrySigPath = (type, version, os, arch) =>
+        `${setPath(type, version)}/entries/${encodeURIComponent(os)}/${encodeURIComponent(arch)}/signature`;
+
+      function renderSets() {
+        $("package-count").textContent = packages.length;
+        $("sets-empty").style.display = packages.length ? "none" : "block";
+        $("sets").innerHTML = packages.map((p) => {
+          const key = setKey(p);
+          const entries = (p.entries || []).map((e) =>
+            `<span class="chip" title="${fmtBytes(e.size)}">${esc(e.os)}-${esc(e.arch)}</span>`
+          ).join("");
+          return `
+          <tr class="agent${key === currentSet ? " current" : ""}" data-key="${esc(key)}">
+            <td><a class="name" href="#">${esc(p.agent_type)}</a></td>
+            <td><span class="sub" style="font-size: 13px">${esc(p.display_name)}</span></td>
+            <td class="num">${esc(p.version)}</td>
+            <td><div class="chips">${entries || `<span class="chip">no entries yet</span>`}</div></td>
+            <td>${signaturesCell(p)}</td>
+            <td>${ringsCell(p)}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      // The entries of the current Set, one row each: platform, size, the full SHA-256 —
+      // selectable on its own, since it is what an operator compares against the file they sign —
+      // and the signature (ADR-0033): its state, with a ✕ to take it away, or a field to give it.
+      // Each entry carries a ✕ that deletes it; on a Set that is assigned to an agent the entries
+      // are frozen and the Server answers 409 with the reason — one rule, held where the
+      // assignments are known (ADR-0025). What is typed survives a re-render.
+      function renderSetEntries(p) {
+        const entries = p ? p.entries || [] : [];
+        const typed = {};
+        for (const f of document.querySelectorAll("#set-entries .entry-sig-hex")) {
+          if (f.value.trim()) typed[`${f.dataset.os}/${f.dataset.arch}`] = f.value.trim();
+        }
+        $("set-entries").innerHTML = entries.map((e) => {
+          const at = `data-os="${esc(e.os)}" data-arch="${esc(e.arch)}"`;
+          const sig = e.signature_state && e.signature_state !== "missing"
+            ? `${sigPill(e)}<span class="entry-sig-del" ${at} style="cursor: pointer; font-weight: 700;" title="Take this signature away. The entry is offered to nobody without one. Refused while the set is assigned to an agent.">✕</span>`
+            : `${sigPill(e)}<input class="entry-sig-hex" ${at} placeholder="hex Ed25519 signature" autocomplete="off" value="${esc(typed[`${e.os}/${e.arch}`] || "")}" title="What opamp-fleetctl package sign --agent-type … --version … prints for this artifact." /><button class="btn btn-ghost btn-sm entry-sig-put" ${at}>Sign</button>`;
+          return `<span class="chip"><span class="platform">${esc(e.os)}-${esc(e.arch)}</span><span class="size">${fmtBytes(e.size)}</span><span class="sha" title="The SHA-256 each Agent verifies its download against, and the signature covers. Compare it with opamp-fleetctl package sha256 on the file you sign.">${esc(e.content_hash)}</span><span class="sig">${sig}</span><span class="entry-del" ${at} style="cursor: pointer; font-weight: 700;" title="Delete this entry (its artifact and signature go with it). Refused while the set is assigned to an agent.">✕</span></span>`;
+        }).join("") || `<span class="chip">no entries yet — a package needs one for a host to take it</span>`;
+      }
+
+      // Fills (or hides) the detail form from the current Set. With no current Set and nothing
+      // being created, the form is not on screen — the master–detail rule of ADR-0026.
+      function showSetDetail() {
+        const p = creatingSet ? null : currentSetView();
+        if (!creatingSet && !p) {
+          currentSet = null;
+          $("set-detail").style.display = "none";
+          return;
+        }
+        $("set-detail").style.display = "block";
+        $("set-detail-title").textContent = creatingSet
+          ? "New package set — saved, distributed by a rollout act"
+          : `Package ${p.display_name}`;
+        // The identity: writable only while creating. Afterwards it *is* the Set (ADR-0026),
+        // and another version is another Create.
+        for (const [id, value] of [["set-type", p ? p.agent_type : ""], ["set-version", p ? p.version : ""]]) {
+          $(id).value = value;
+          $(id).disabled = !creatingSet;
+        }
+        $("set-state").textContent = !p
+          ? "will be saved — nothing reaches an agent until a rollout act names it"
+          : "saved — distributed only by a rollout act; entries freeze while the set is assigned to an agent";
+        $("set-delete").disabled = creatingSet;
+        $("set-signing").disabled = creatingSet || !(p.entries || []).length;
+        $("set-sig-import").disabled = creatingSet || !(p.entries || []).length;
+        renderSetEntries(p);
+        for (const id of ["entry-os", "entry-arch", "entry-file"]) {
+          $(id).disabled = false;
+        }
+        $("entry-add").disabled = creatingSet;
+        setFormDirty = false;
+      }
+
+      function clearEntryEditor() {
+        for (const id of ["entry-os", "entry-arch"]) $(id).value = "";
+        $("entry-file").value = "";
+      }
+
+      // One PUT, answered with the message to show or "" when it went through.
+      async function put(path, init) {
+        let res;
+        try { res = await fetch(path, { method: "PUT", ...init }); }
+        catch (e) { return e.message; }
+        if (!res.ok) return (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+        return "";
+      }
+      const putJson = (path, body) =>
+        put(path, { headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+      // The file the editor holds, sent to a Set that now exists as the entry for the platform
+      // named (ADR-0033: every artifact is uploaded). No file is nothing to send. Returns the
+      // message to show, "" when it went through or was empty.
+      async function sendPendingEntry(type, version) {
+        const file = $("entry-file").files[0];
+        if (!file) return "";
+        const os = $("entry-os").value.trim();
+        const arch = $("entry-arch").value.trim();
+        if (!os || !arch) return "an entry needs an os and an arch — it is only ever offered to machines that match";
+        const base = `${setPath(type, version)}/entries/${encodeURIComponent(os)}/${encodeURIComponent(arch)}`;
+        // No signature here: it has its own route, and the Server refuses one on this route by
+        // name rather than dropping it.
+        const failed = await put(base, {
+          headers: { "content-type": "application/octet-stream" },
+          body: await file.arrayBuffer(),
+        });
+        if (!failed) clearEntryEditor();
+        return failed;
+      }
+
+      // Create: the form opens empty, identity writable, nothing current in the table.
+      $("set-create").addEventListener("click", () => {
+        creatingSet = true;
+        currentSet = null;
+        renderSets();
+        $("set-detail").style.display = "block";
+        for (const id of ["set-type", "set-version"]) { $(id).value = ""; $(id).disabled = false; }
+        clearEntryEditor();
+        for (const id of ["entry-os", "entry-arch", "entry-file"]) $(id).disabled = false;
+        $("entry-add").disabled = true; // the set does not exist yet — OK creates it, entry and all
+        $("set-detail-title").textContent = "New package set — saved, distributed by a rollout act";
+        $("set-state").textContent = "will be saved — nothing reaches an agent until a rollout act names it";
+        $("set-delete").disabled = true;
+        $("set-signing").disabled = true;
+        $("set-sig-import").disabled = true;
+        $("set-sig-result").textContent = "";
+        renderSetEntries(null);
+        $("set-error").textContent = "";
+        setFormDirty = false;
+      });
+
+      // Selecting a row makes its Package current and shows it in the form; selecting it again
+      // lets it go, and the form leaves the screen with it. There is no rollout button here any
+      // more: a Package is not rolled out (ADR-0026), its Deployment is.
+      $("sets").addEventListener("click", async (e) => {
+        const tr = e.target.closest("tr.agent");
+        if (!tr) return;
+        e.preventDefault();
+        creatingSet = false;
+        currentSet = currentSet === tr.dataset.key ? null : tr.dataset.key;
+        $("set-error").textContent = "";
+        $("set-sig-result").textContent = "";
+        clearEntryEditor();
+        renderSets();
+        showSetDetail();
+      });
+
+      // OK: create the Package if it is new, then store the entry the editor holds, if any. The
+      // identity is all a Package has, so there is nothing else to persist — and never a release:
+      // the rollout act belongs to a Deployment (ADR-0026).
+      $("set-ok").addEventListener("click", async () => {
+        $("set-error").textContent = "";
+        const type = $("set-type").value.trim();
+        const version = $("set-version").value.trim();
+        if (!type || !version) {
+          $("set-error").textContent = "a package is identified by its agent type and its version — both are required";
+          return;
+        }
+        const failed = await putJson(setPath(type, version), {});
+        if (failed) { $("set-error").textContent = failed; return; }
+        const entryError = await sendPendingEntry(type, version);
+        creatingSet = false;
+        // OK concludes the form: the current row is let go and the form leaves the screen. Only
+        // a failed entry keeps the Set current, so the message is read next to the fields it is
+        // about.
+        currentSet = entryError ? `${type}@${version}` : null;
+        await refreshPackages();
+        refreshAgents();
+        renderSets();
+        showSetDetail();
+        $("set-error").textContent = entryError;
+      });
+
+      // Cancel concludes the form exactly as OK does, minus the writes: the changes are
+      // discarded, the current row is let go, and the form leaves the screen.
+      $("set-cancel").addEventListener("click", () => {
+        $("set-error").textContent = "";
+        clearEntryEditor();
+        creatingSet = false;
+        currentSet = null;
+        renderSets();
+        $("set-detail").style.display = "none";
+      });
+
+      // The signing file's one format (ADR-0027): written by the download, required by the import.
+      const SIGNING_FORMAT = "opamp-fleet-signing-v1";
+
+      // What a signature covers (ADR-0026 clause 54), as a file to take to where the key is: the
+      // Agent type, the version and each entry's SHA-256. Built from what the page already read —
+      // the Server is not asked again, so the file is exactly what the operator saw.
+      $("set-signing").addEventListener("click", () => {
+        const p = currentSetView();
+        if (!p) return;
+        const info = {
+          format: SIGNING_FORMAT,
+          agent_type: p.agent_type,
+          version: p.version,
+          entries: (p.entries || []).map((e) => ({ os: e.os, arch: e.arch, sha256: e.content_hash })),
+        };
+        const blob = new Blob([JSON.stringify(info, null, 2) + "\n"], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `${p.agent_type}_${p.version}_signing.json`;
+        link.click();
+        // Released once the click has handed the URL to the download, not before it.
+        setTimeout(() => URL.revokeObjectURL(link.href), 0);
+      });
+
+      // Delete: the Set goes — entries, artifacts, metadata — and with it the current record, so
+      // the form leaves the screen. Nothing is uninstalled on any host (ADR-0026).
+      $("set-delete").addEventListener("click", async () => {
+        const p = currentSetView();
+        if (!p) return;
+        const res = await fetch(setPath(p.agent_type, p.version), { method: "DELETE" });
+        if (!res.ok && res.status !== 404) {
+          $("set-error").textContent = (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+          return;
+        }
+        currentSet = null;
+        creatingSet = false;
+        $("set-detail").style.display = "none";
+        await refreshPackages();
+        refreshAgents();
+      });
+
+      // An entry's ✕, its Sign, and the ✕ of its signature, each one request against the current
+      // Set; the Server refuses each while the Set is assigned (ADR-0025, ADR-0033).
+      $("set-entries").addEventListener("click", async (e) => {
+        const p = currentSetView();
+        if (!p) return;
+        const del = e.target.closest(".entry-del");
+        const unsign = e.target.closest(".entry-sig-del");
+        const sign = e.target.closest(".entry-sig-put");
+        if (del) {
+          const res = await fetch(
+            `${setPath(p.agent_type, p.version)}/entries/${encodeURIComponent(del.dataset.os)}/${encodeURIComponent(del.dataset.arch)}`,
+            { method: "DELETE" }
+          );
+          $("set-error").textContent = res.ok || res.status === 404
+            ? ""
+            : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+        } else if (unsign) {
+          const res = await fetch(entrySigPath(p.agent_type, p.version, unsign.dataset.os, unsign.dataset.arch), { method: "DELETE" });
+          $("set-error").textContent = res.ok ? "" : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+        } else if (sign) {
+          const field = [...document.querySelectorAll("#set-entries .entry-sig-hex")]
+            .find((f) => f.dataset.os === sign.dataset.os && f.dataset.arch === sign.dataset.arch);
+          const signature = field ? field.value.trim() : "";
+          if (!signature) { $("set-error").textContent = "type the hex signature first"; return; }
+          const failed = await putJson(entrySigPath(p.agent_type, p.version, sign.dataset.os, sign.dataset.arch), { signature });
+          $("set-error").textContent = failed;
+          if (!failed) field.value = "";
+        } else {
+          return;
+        }
+        setFormDirty = false;
+        await refreshPackages();
+        refreshAgents();
+      });
+
+      $("set-entries").addEventListener("input", () => { setFormDirty = true; });
+
+      // A signed signing file (ADR-0027) matched to the package it names and to each entry by its
+      // platform and SHA-256: a signature for other bytes than the entry's is not taken. Each goes
+      // through the entry's signature route, one request each, and the Server's answer is reported
+      // per entry with what its check found (ADR-0033 clause 12). Nothing is checked against a key
+      // here — the Server does when it holds one, and every Client does before it opens the
+      // artifact (ADR-0026 clause 54).
+      $("set-sig-import").addEventListener("click", async () => {
+        const file = $("set-sig-file").files[0];
+        if (!file) {
+          $("set-sig-result").textContent = "choose a signed signing file first";
+          return;
+        }
+        if (file.size > 1024 * 1024) {
+          $("set-sig-result").textContent = `${file.name} is far larger than a signing file`;
+          return;
+        }
+        let info;
+        try { info = JSON.parse(await file.text()); }
+        catch (e) { $("set-sig-result").textContent = `${file.name} is not JSON: ${e.message}`; return; }
+        if (!info || info.format !== SIGNING_FORMAT || !info.agent_type || !info.version || !Array.isArray(info.entries)) {
+          $("set-sig-result").textContent = `${file.name} is not an ${SIGNING_FORMAT} file`;
+          return;
+        }
+        const key = `${info.agent_type}@${info.version}`;
+        const p = packages.find((x) => setKey(x) === key);
+        if (!p) {
+          $("set-sig-result").textContent = `${key} is not in the package store — upload it first`;
+          return;
+        }
+        const lines = [];
+        for (const e of info.entries) {
+          if (!e || !e.os || !e.arch) {
+            lines.push("an entry names no platform — skipped");
+            continue;
+          }
+          const platform = `${e.os}/${e.arch}`;
+          const entry = (p.entries || []).find((x) => x.os === e.os && x.arch === e.arch);
+          if (!entry) { lines.push(`${platform}: the package has no such entry — skipped`); continue; }
+          if (e.sha256 !== entry.content_hash) { lines.push(`${platform}: the SHA-256 is not this entry's — skipped`); continue; }
+          if (!e.signature) { lines.push(`${platform}: not signed — skipped`); continue; }
+          let res;
+          try {
+            res = await fetch(entrySigPath(info.agent_type, info.version, e.os, e.arch), {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ signature: e.signature }),
+            });
+          } catch (err) { lines.push(`${platform}: ${err.message}`); continue; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { lines.push(`${platform}: ${body.error || `HTTP ${res.status}`}`); continue; }
+          const stored = (body.entries || []).find((x) => x.os === e.os && x.arch === e.arch);
+          lines.push(`${platform}: recorded — ${stored ? stored.signature_state : "stored"}`);
+        }
+        $("set-sig-result").textContent = `${key}\n${lines.join("\n")}`;
+        $("set-sig-file").value = "";
+        await refreshPackages();
+      });
+
+      // Add entry: stores what the editor holds into the current set, now — one request per
+      // entry, so a five-platform release is five adds on one set rather than five saves. The
+      // removal beside each entry chip is the same shape in reverse.
+      $("entry-add").addEventListener("click", async () => {
+        const p = currentSetView();
+        if (!p) return;
+        if (!$("entry-file").files[0]) {
+          $("set-error").textContent = "nothing to add — choose a file";
+          return;
+        }
+        const failed = await sendPendingEntry(p.agent_type, p.version);
+        $("set-error").textContent = failed;
+        if (!failed) setFormDirty = false;
+        await refreshPackages();
+        refreshAgents();
+      });
+
+      // Edits in flight: the periodic refresh must not overwrite a form being typed in.
+      for (const id of ["entry-os", "entry-arch", "entry-file"]) {
+        $(id).addEventListener("input", () => { setFormDirty = true; });
+      }
+
+      // Older and foreign spellings, mirroring the server's table. The server canonicalises
+      // whatever it is sent anyway, so a drift here costs a prefilled field and never correctness.
+      const OS_ALIASES = { macos: "darwin", osx: "darwin", win: "windows", win32: "windows", win64: "windows" };
+      const ARCH_ALIASES = { x86_64: "amd64", x64: "amd64", aarch64: "arm64" };
+      const KNOWN_OS = new Set(["linux", "darwin", "windows", ...Object.keys(OS_ALIASES)]);
+      const KNOWN_ARCH = new Set(["amd64", "arm64", ...Object.keys(ARCH_ALIASES)]);
+
+      // What an artifact's file name already says. A release is `<name><sep><version><sep><os>`
+      // `<sep><arch>.7z` (ADR-0019), and the last two fields are exactly the platform
+      // pair an entry is keyed by (ADR-0026) — so naming the file answers the fields. The platform
+      // is found by matching the known tokens at the end, not by splitting: `linux-x86_64` must
+      // not come apart at its own underscore. A tail the vocabulary does not know returns null
+      // rather than a guess, because a wrong platform is an entry no agent is ever offered.
+      const PLATFORM_TAIL = new RegExp(
+        "[-_](" + [...KNOWN_OS].sort((a, b) => b.length - a.length).join("|") + ")" +
+        "[-_](" + [...KNOWN_ARCH].sort((a, b) => b.length - a.length).join("|") + ")$", "i");
+
+      function fromArtifactName(fileName) {
+        const stem = fileName.replace(/\.(7z|tgz|tar\.gz)$/i, "");
+        const tail = PLATFORM_TAIL.exec(stem);
+        if (!tail) return null;
+        const head = stem.slice(0, tail.index);
+        const os = tail[1].toLowerCase();
+        const arch = tail[2].toLowerCase();
+        const at = head.search(/[-_]\d/);
+        return {
+          name: at === -1 ? head : head.slice(0, at),
+          version: at === -1 ? "" : head.slice(at + 1),
+          os: OS_ALIASES[os] || os,
+          arch: ARCH_ALIASES[arch] || arch,
+        };
+      }
+
+      // Naming an artifact is a statement about what is being uploaded, so it fills what it can
+      // answer: the entry's platform always, and — while a new Set is being created — whatever of
+      // the name, the agent type, and the version is still empty. The type is not picked from a
+      // list; it is read out of the file's name, which for a release artifact is the type its
+      // agents report (`otelcol-contrib_…`, `opamp-fleet-client_…`). A suggestion in a visible,
+      // editable identity field that OK confirms — not the silent server-side default ADR-0026
+      // rejected — so a package named for the rollout rather than the type (a canary) is one
+      // correction in the field before OK. It never rewrites a value already given, never an
+      // identity already frozen, and clears nothing it cannot answer.
+      function fillFromArtifact(parsed) {
+        if (!parsed) return;
+        $("entry-os").value = parsed.os;
+        $("entry-arch").value = parsed.arch;
+        if (creatingSet && parsed.name) {
+          if (!$("set-type").value.trim()) $("set-type").value = parsed.name;
+          if (!$("set-version").value.trim() && parsed.version) $("set-version").value = parsed.version;
+        }
+        setFormDirty = true;
+      }
+      $("entry-file").addEventListener("change", () => {
+        const file = $("entry-file").files[0];
+        fillFromArtifact(file ? fromArtifactName(file.name) : null);
+      });
+
+
+      // ── Deployments (ADR-0026, ADR-0034) ───────────────────────────────────
+      let deployments = [];
+      let currentDep = null;      // the channel whose detail form is on screen
+      let creatingDep = false;    // the form is defining a new one: the name is writable
+      let depFormDirty = false;   // an edit in flight — the periodic refresh must not overwrite it
+
+      const depPath = (name) => `/api/v1/deployments/${encodeURIComponent(name)}`;
+      const currentDepView = () => deployments.find((d) => d.name === currentDep) || null;
+
+      // Three counts, because zero has three meanings and only the first is a mistake to hunt:
+      // the channel aims at nobody, everyone in it is up to date, or everyone it aims at is claimed
+      // by a second channel as well.
+      function depReachCell(d) {
+        const bits = [];
+        if (d.conflicting_agents) {
+          bits.push(`<span class="pill amber" title="another deployment matches ${d.conflicting_agents} of the agents this one does — an agent belongs to at most one, so they are offered nothing new until a selector is narrowed">⚠ ${d.conflicting_agents} in conflict</span>`);
+        }
+        if (d.targeted_agents) {
+          bits.push(`<button class="btn btn-ok rollout-dep-btn" data-name="${esc(d.name)}" title="Roll this deployment out to the ${d.targeted_agents} agent(s) it would move (ADR-0034) — its packages and configurations in one release, the press that changes the fleet. Agents that join the channel later wait for their own act on the Agents tab.">Roll out (${d.targeted_agents})</button>`);
+        } else if (d.claiming_agents) {
+          bits.push(`<span class="pill gray" title="the ${d.claiming_agents} agent(s) this channel claims already hold what it releases, so a rollout act would change nothing (ADR-0025)">${d.claiming_agents} up to date</span>`);
+        } else if (!d.conflicting_agents) {
+          bits.push(`<span class="pill amber" title="this channel claims no agent at all — its selector names an attribute nobody reports, or a value nobody carries. Not a rejected write, so nothing else would say so.">aims at nobody</span>`);
+        }
+        return bits.join(" ");
+      }
+
+      function renderDeployments() {
+        $("deployment-count").textContent = deployments.length;
+        $("deps-empty").style.display = deployments.length ? "none" : "block";
+        $("deps").innerHTML = deployments.map((d) => {
+          // A package's signatures are its entries' own (ADR-0033); the chip warns while one is
+          // missing, because the channel is not rolled out until every entry is signed.
+          const pkgs = (d.packages || []).map((h) => {
+            const p = packages.find((x) => x.agent_type === h.agent_type && x.version === h.version);
+            const unsigned = !p || (p.entries || []).some((e) => e.signature_state === "missing");
+            return `<span class="chip" title="${unsigned ? "an entry of this package is unsigned — sign it on the Packages tab before rolling the channel out" : "every entry of this package is signed"}">${esc(h.display_name)}${unsigned ? " ⚠" : " 🔏"}</span>`;
+          }).join("");
+          return `
+          <tr class="agent${d.name === currentDep ? " current" : ""}" data-name="${esc(d.name)}">
+            <td><a class="name" href="#">${esc(d.name)}</a></td>
+            <td>${esc(selectorText(d.selector))}</td>
+            <td><div class="chips">${pkgs || `<span class="chip">no packages</span>`}</div></td>
+            <td><div class="chips">${(d.configurations || []).map((c) => `<span class="chip">${esc(c)}</span>`).join("") || `<span class="chip">no configurations</span>`}</div></td>
+            <td>${depReachCell(d)}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      // The packages a new deployment takes with OK, as agent_type@version, and its configurations
+      // by name: it does not exist yet, so nothing can be put into it before then.
+      let depPending = [];
+      let depConfigPending = [];
+
+      // What the form lists: the packages the saved deployment holds, or those a new one will take.
+      function depHeld(d) {
+        if (d) {
+          return (d.packages || []).map((p) => ({
+            type: p.agent_type, version: p.version, display_name: p.display_name,
+          }));
+        }
+        return depPending.map((key) => {
+          const [type, version] = key.split("@");
+          const p = packages.find((x) => setKey(x) === key);
+          return { type, version, display_name: p ? p.display_name : key };
+        });
+      }
+
+      // Every package with all its entries, one row each: platform, size, the full SHA-256 and the
+      // entry's signature state — read here, written on the Packages tab (ADR-0033).
+      function renderDepPackages(d) {
+        $("dep-packages").innerHTML = depHeld(d).map((h) => {
+          const p = packages.find((x) => x.agent_type === h.type && x.version === h.version);
+          const entries = p ? p.entries || [] : [];
+          const signedCount = entries.filter((e) => e.signature_state && e.signature_state !== "missing").length;
+          const rows = entries.map((e) =>
+            `<span class="chip"><span class="platform">${esc(e.os)}-${esc(e.arch)}</span><span class="size">${fmtBytes(e.size)}</span><span class="sha" title="The SHA-256 the entry's signature covers.">${esc(e.content_hash)}</span><span class="sig">${sigPill(e)}</span></span>`
+          ).join("") || `<span class="chip">${p ? "no entries — nothing a host could take" : "not in the package store"}</span>`;
+          const complete = entries.length && signedCount === entries.length;
+          return `<div class="dep-pkg-head"><b>${esc(h.display_name)}</b>`
+            + `<span class="pill ${complete ? "green" : "amber"}" title="${complete ? "every entry is signed" : "an unsigned entry is offered to nobody, and the channel is not rolled out while one is left — sign it on the Packages tab"}">${signedCount} of ${entries.length} signed</span>`
+            + `<span class="dep-pkg-del" data-type="${esc(h.type)}" data-version="${esc(h.version)}" style="cursor: pointer; font-weight: 700;" title="Take this package out of the channel. Nothing is uninstalled.">✕</span></div>`
+            + `<div class="chips entry-list">${rows}</div>`;
+        }).join("") || `<span class="chip">no packages</span>`;
+      }
+
+      // The configurations the saved deployment holds, or those a new one will take with OK — each
+      // with its ✕ — and the picker offering every configuration the store holds besides.
+      function renderDepConfigs(d) {
+        const held = d ? d.configurations || [] : depConfigPending;
+        $("dep-configs").innerHTML = held.map((name) => {
+          const c = configurations.find((x) => x.name === name);
+          const type = c ? ` · ${esc(c.service_name)}` : "";
+          return `<span class="chip" title="${c ? `reaches the agents of this channel that report ${esc(c.service_name)}` : ""}">${esc(name)}${type} <span class="dep-config-del" data-name="${esc(name)}" style="cursor: pointer; font-weight: 700;" title="Take this configuration out of the channel. Agents keep the revision they were given until the next press, which drops it from their map.">✕</span></span>`;
+        }).join("") || `<span class="chip">no configurations</span>`;
+        $("dep-config-pick").innerHTML = configurations
+          .filter((c) => !held.includes(c.name))
+          .map((c) => `<option value="${esc(c.name)}">${esc(c.name)} · ${esc(c.service_name)}</option>`)
+          .join("") || `<option value="">no other configuration saved</option>`;
+      }
+
+      function showDepDetail() {
+        const d = currentDepView();
+        if (!d && !creatingDep) { $("dep-detail").style.display = "none"; return; }
+        $("dep-detail").style.display = "block";
+        $("dep-detail-title").textContent = creatingDep ? "New deployment — saved, distributed by the row's rollout press" : `Deployment ${d.name}`;
+        $("dep-name").value = d ? d.name : "";
+        $("dep-name").disabled = !creatingDep;
+        $("dep-selector").value = d ? selectorText(d.selector) : "";
+        $("dep-state").textContent = !d
+          ? "will be saved with its packages and configurations — nothing reaches an agent until the rollout press"
+          : "saved — the rollout press on its row is what distributes; editing it changes only what is proposed";
+        $("dep-delete").disabled = creatingDep;
+        renderDepPackages(d);
+        renderDepConfigs(d);
+        // The picker offers what the store holds; the Server refuses a package nobody uploaded.
+        $("dep-package-pick").innerHTML = packages.map((p) =>
+          `<option value="${esc(p.agent_type)}@${esc(p.version)}">${esc(p.display_name)}</option>`
+        ).join("") || `<option value="">no packages uploaded yet</option>`;
+      }
+
+      $("deps").addEventListener("click", async (e) => {
+        const act = e.target.closest(".rollout-dep-btn");
+        if (act) {
+          e.preventDefault();
+          $("deps-error").textContent = "";
+          const res = await fetch(`${depPath(act.dataset.name)}/rollout`, { method: "POST" });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) $("deps-error").textContent = body.error || `HTTP ${res.status}`;
+          else $("dep-result").textContent = `${act.dataset.name}: rolled out to ${body.assigned_agents} agent(s)`;
+          await refreshDeployments();
+          refreshAgents();
+          return;
+        }
+        const tr = e.target.closest("tr.agent");
+        if (!tr) return;
+        e.preventDefault();
+        creatingDep = false;
+        depPending = [];
+        depConfigPending = [];
+        depFormDirty = false;
+        currentDep = currentDep === tr.dataset.name ? null : tr.dataset.name;
+        $("dep-error").textContent = "";
+        $("dep-packages").innerHTML = "";
+        renderDeployments();
+        showDepDetail();
+      });
+
+      $("dep-create").addEventListener("click", () => {
+        creatingDep = true;
+        currentDep = null;
+        depPending = [];
+        depConfigPending = [];
+        $("dep-packages").innerHTML = "";
+        renderDeployments();
+        showDepDetail();
+        $("dep-name").value = "";
+        $("dep-name").disabled = false;
+        $("dep-selector").value = "";
+        depFormDirty = true;
+      });
+
+      // OK saves the name and the selector, and carries along what the form holds besides: on a new
+      // deployment its packages and configurations. A failed request keeps the form open on the
+      // saved deployment, beside its message.
+      $("dep-ok").addEventListener("click", async () => {
+        $("dep-error").textContent = "";
+        const name = $("dep-name").value.trim();
+        if (!name) { $("dep-error").textContent = "a deployment needs a name"; return; }
+        let selector;
+        try { selector = parseSelector($("dep-selector").value); }
+        catch (e) { $("dep-error").textContent = e.message; return; }
+        const failed = await putJson(depPath(name), { selector });
+        if (failed) { $("dep-error").textContent = failed; return; }
+        const problems = [];
+        if (creatingDep) {
+          for (const key of depPending) {
+            const [type, version] = key.split("@");
+            const res = await fetch(`${depPath(name)}/packages/${encodeURIComponent(type)}/${encodeURIComponent(version)}?replace=true`, { method: "PUT" });
+            if (!res.ok) problems.push(`${key}: ${(await res.json().catch(() => ({}))).error || `HTTP ${res.status}`}`);
+          }
+          for (const configuration of depConfigPending) {
+            const res = await fetch(`${depPath(name)}/configurations/${encodeURIComponent(configuration)}`, { method: "PUT" });
+            if (!res.ok) problems.push(`${configuration}: ${(await res.json().catch(() => ({}))).error || `HTTP ${res.status}`}`);
+          }
+        }
+        creatingDep = false;
+        depPending = [];
+        depConfigPending = [];
+        depFormDirty = false;
+        currentDep = problems.length ? name : null;
+        await refreshDeployments();
+        refreshConfigs();
+        refreshAgents();
+        if (problems.length) {
+          showDepDetail();
+          $("dep-error").textContent = problems.join("; ");
+        }
+      });
+
+      $("dep-cancel").addEventListener("click", () => {
+        creatingDep = false;
+        currentDep = null;
+        depPending = [];
+        depConfigPending = [];
+        depFormDirty = false;
+        $("dep-error").textContent = "";
+        $("dep-packages").innerHTML = "";
+        renderDeployments();
+        showDepDetail();
+      });
+
+      $("dep-delete").addEventListener("click", async () => {
+        const d = currentDepView();
+        if (!d) return;
+        const res = await fetch(depPath(d.name), { method: "DELETE" });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          $("dep-error").textContent = body.error || `HTTP ${res.status}`;
+          return;
+        }
+        currentDep = null;
+        depFormDirty = false;
+        await refreshDeployments();
+        refreshConfigs();
+        refreshAgents();
+      });
+
+      $("dep-package-add").addEventListener("click", async () => {
+        const pick = $("dep-package-pick").value;
+        if (!pick) { $("dep-error").textContent = "no package to add"; return; }
+        const [type, version] = pick.split("@");
+        $("dep-error").textContent = "";
+        if (creatingDep) {
+          // One package per agent type: the one picked takes the place of another version.
+          depPending = depPending.filter((key) => key.split("@")[0] !== type).concat(pick);
+          renderDepPackages(null);
+          return;
+        }
+        const d = currentDepView();
+        if (!d) return;
+        // `replace`: pointing a channel at another version of a type it already holds is the ordinary
+        // act, and it is what an operator means by pressing Add on a package they chose.
+        const res = await fetch(`${depPath(d.name)}/packages/${encodeURIComponent(type)}/${encodeURIComponent(version)}?replace=true`, { method: "PUT" });
+        const body = await res.json().catch(() => ({}));
+        $("dep-error").textContent = res.ok ? "" : (body.error || `HTTP ${res.status}`);
+        await refreshDeployments();
+        showDepDetail();
+      });
+
+      // The package list: its ✕, one request.
+      $("dep-packages").addEventListener("click", async (e) => {
+        const del = e.target.closest(".dep-pkg-del");
+        if (!del) return;
+        if (creatingDep) {
+          depPending = depPending.filter((key) => key !== `${del.dataset.type}@${del.dataset.version}`);
+          renderDepPackages(null);
+          return;
+        }
+        const d = currentDepView();
+        if (!d) return;
+        const res = await fetch(`${depPath(d.name)}/packages/${encodeURIComponent(del.dataset.type)}/${encodeURIComponent(del.dataset.version)}`, { method: "DELETE" });
+        $("dep-error").textContent = res.ok ? "" : ((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        await refreshDeployments();
+        showDepDetail();
+      });
+
+      // Add configuration: one request, now — or, on a new deployment, carried along with OK.
+      $("dep-config-add").addEventListener("click", async () => {
+        const pick = $("dep-config-pick").value;
+        if (!pick) { $("dep-error").textContent = "no configuration to add"; return; }
+        $("dep-error").textContent = "";
+        if (creatingDep) {
+          if (!depConfigPending.includes(pick)) depConfigPending.push(pick);
+          renderDepConfigs(null);
+          return;
+        }
+        const d = currentDepView();
+        if (!d) return;
+        const res = await fetch(`${depPath(d.name)}/configurations/${encodeURIComponent(pick)}`, { method: "PUT" });
+        $("dep-error").textContent = res.ok ? "" : ((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        await refreshDeployments();
+        showDepDetail();
+        refreshConfigs();
+        refreshAgents();
+      });
+
+      // The configuration list: its ✕, one request.
+      $("dep-configs").addEventListener("click", async (e) => {
+        const del = e.target.closest(".dep-config-del");
+        if (!del) return;
+        if (creatingDep) {
+          depConfigPending = depConfigPending.filter((name) => name !== del.dataset.name);
+          renderDepConfigs(null);
+          return;
+        }
+        const d = currentDepView();
+        if (!d) return;
+        const res = await fetch(`${depPath(d.name)}/configurations/${encodeURIComponent(del.dataset.name)}`, { method: "DELETE" });
+        $("dep-error").textContent = res.ok ? "" : ((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        await refreshDeployments();
+        showDepDetail();
+        refreshConfigs();
+        refreshAgents();
+      });
+
+      for (const id of ["dep-name", "dep-selector"]) {
+        $(id).addEventListener("input", () => { depFormDirty = true; });
+      }
+
+      async function refreshDeployments() {
+        try {
+          const res = await fetch("/api/v1/deployments");
+          deployments = res.ok ? await res.json() : [];
+        } catch { return; }
+        renderDeployments();
+        if (!depFormDirty && (currentDep || !creatingDep)) {
+          if (currentDep) showDepDetail();
+          else if (!creatingDep) $("dep-detail").style.display = "none";
+        }
+      }
+
+      async function refreshPackages() {
+        try {
+          const res = await fetch("/api/v1/packages");
+          packages = res.ok ? await res.json() : [];
+        } catch { return; }
+        renderSets();
+        // The Deployments table reads each package's signature states from here.
+        renderDeployments();
+        // The form follows the store unless an edit is in flight — a refresh must never type
+        // over the operator.
+        if (!setFormDirty && (currentSet || !creatingSet)) {
+          if (currentSet) showSetDetail();
+          else if (!creatingSet) $("set-detail").style.display = "none";
+        }
+      }
+
+      async function refreshAgents() {
+        try { agents = await (await fetch("/api/v1/agents")).json(); } catch { return; }
+        render();
+        renderSelectorOptions();
+      }
+      async function refreshConfigs() {
+        try { configurations = await (await fetch("/api/v1/configurations")).json(); } catch { return; }
+        renderConfigs();
+        // The form follows the store unless an edit is in flight — a refresh must never type
+        // over the operator.
+        if (!configDirty && (currentConfig || !creatingConfig)) {
+          if (currentConfig) showConfigDetail();
+          else if (!creatingConfig) $("config-detail").style.display = "none";
+        }
+        // The Deployments form picks configurations from this list.
+        if (currentDep || creatingDep) renderDepConfigs(currentDepView());
+      }
+
+      // Enrolments (ADR-0021 clause 22; the UI as a client of the API, ADR-0023). A Server without
+      // [enrolment] answers 404 on both routes, and the tab says so instead of showing an empty
+      // queue that could never fill.
+      let enrolments = [];
+      let enrolmentsShown = null;
+      // The bootstrap certificates on record (ADR-0028 clause 24). A request names the one it carries
+      // by serial, since the record keeps the key's fingerprint and the request the certificate's.
+      let boots = [];
+      let bootsShown = null;
+      const when = (ms) => new Date(ms).toLocaleString();
+      // What an operator issued a bootstrap certificate *for* — its customer and site — without the
+      // common name the Server sets on every one of them. The subject is kept whole as text, not
+      // split into its attributes: a customer's name may hold a comma, and a split that guessed
+      // wrong would put a wrong name in front of an approval. The full subject is in the tooltip.
+      function bootstrapName(subject) {
+        const m = /^(.*?)(?:, )?CN=[^=]*Bootstrap Certificate$/.exec(subject);
+        const named = m ? m[1] : subject;
+        return named || "no customer or site named";
+      }
+      function bootstrapCell(e) {
+        const b = boots.find((b) => b.serial === e.bootstrap_serial);
+        const tip = (lines) => esc(lines.join("\n"));
+        // The values the approval carries into the host certificate, or why it will be refused
+        // (ADR-0036 clause 5) — shown before the operator presses Approve.
+        const values = e.subject_refusal
+          ? `<span class="pill red" title="Approving this request is refused, and nothing is signed: ${esc(e.subject_refusal)}. Reject it, and give the host a bootstrap certificate whose subject follows the rules.">subject cannot be carried: ${esc(e.subject_refusal)}</span>`
+          : SUBJECT_FIELDS.filter(([field]) => e.bootstrap_subject && e.bootstrap_subject[field])
+            .map(([field, short, key]) => `<span class="chip" title="${short} — the host certificate carries it, and its agents as ${key}">${short}=${esc(e.bootstrap_subject[field])}</span>`)
+            .join("") || `<span class="sub">no subject values</span>`;
+        if (!b) {
+          const title = tip([`serial ${e.bootstrap_serial}`, `fingerprint ${e.bootstrap_fingerprint}`,
+            "Not on this Server's record: made elsewhere, under a bootstrap CA since replaced, or deleted from the record after its revocation."]);
+          return `<div title="${title}">${values}
+            <div class="sub"><span class="pill amber">not issued here</span> serial ${esc(e.bootstrap_serial)}</div></div>`;
+        }
+        const title = tip([b.subject, `serial ${b.serial}`, `issued ${when(b.issued_ms)}`, `valid until ${when(b.not_after_ms)}`,
+          `fingerprint ${e.bootstrap_fingerprint}`]);
+        const state = b.revoked ? `<span class="pill red">revoked</span> ` : "";
+        return `<div title="${title}">${values}
+          <div class="sub">${state}serial ${esc(b.serial)} · valid until ${esc(when(b.not_after_ms))}</div></div>`;
+      }
+      function renderEnrolments(win, failed) {
+        $("enrolment-count").textContent = enrolments.length;
+        const badge = $("enrolment-window");
+        if (failed) {
+          badge.className = "pill amber";
+          badge.textContent = "enrolment state unknown";
+          badge.title = failed;
+        } else if (win === null) {
+          badge.className = "pill gray";
+          badge.textContent = "enrolment not configured";
+          badge.title = "set [enrolment] bootstrap_ca_file in server.toml to let hosts enrol";
+        } else if (win.open) {
+          badge.className = "pill amber";
+          badge.textContent = `window open until ${when(win.until_ms)}`;
+          badge.title = "hosts holding the bootstrap certificate may ask for a certificate until then";
+        } else {
+          badge.className = "pill gray";
+          badge.textContent = "window closed";
+          badge.title = "no host can ask for a certificate until an operator opens the window";
+        }
+        // The window can be opened only on a Server that knows its state and has enrolment.
+        $("enrolment-window-controls").style.display = failed || win === null ? "none" : "inline-flex";
+        $("enrolment-window-open").textContent = win && win.open ? "Set end" : "Open window";
+        $("enrolment-window-close").style.display = win && win.open ? "" : "none";
+        $("enrolments-error").textContent = failed || "";
+        $("enrolments-empty").style.display = enrolments.length || failed ? "none" : "block";
+        // Rebuilt only when the queue changed: an operator selecting a fingerprint to compare it
+        // with the Client's log must not lose the selection to a refresh.
+        const shown = JSON.stringify([enrolments, boots]);
+        if (shown === enrolmentsShown) return;
+        enrolmentsShown = shown;
+        $("enrolments").innerHTML = enrolments.map((e) => `
+          <tr>
+            <td>${esc(when(e.arrived_ms))}</td>
+            <td>${e.gateway ? `via Gateway ${esc(e.gateway)}` : esc(e.peer || "—")}</td>
+            <td><span class="fingerprint">${esc(e.key_fingerprint)}</span></td>
+            <td>${bootstrapCell(e)}</td>
+            <td>
+              <button class="btn btn-ok btn-sm enrolment-act" data-act="approve" data-id="${esc(e.id)}" title="Sign this host's certificate — after comparing the key fingerprint with the Client's log">Approve</button>
+              <button class="btn btn-ghost btn-sm enrolment-act" data-act="reject" data-id="${esc(e.id)}" title="Refuse this request; the host's connection is closed">Reject</button>
+            </td>
+          </tr>`).join("");
+      }
+
+      function renderBoots(failed) {
+        $("boots-error").textContent = failed || "";
+        $("boots-empty").style.display = boots.length || failed ? "none" : "block";
+        // How many requests in the queue carry each certificate, so the two tables point at each other.
+        const waiting = new Map();
+        for (const e of enrolments) waiting.set(e.bootstrap_serial, (waiting.get(e.bootstrap_serial) || 0) + 1);
+        const shown = JSON.stringify([boots, [...waiting]]);
+        if (shown === bootsShown) return;
+        bootsShown = shown;
+        const p12 = (b) => b.p12 && !b.revoked ? `
+              <button class="btn btn-ghost btn-sm boot-p12" data-serial="${esc(b.serial)}" title="Save the certificate and its key as bootstrap.p12, encrypted under the password it was issued with. Offered until the certificate ends or is revoked.">Save bootstrap.p12</button>` : "";
+        $("boots").innerHTML = boots.map((b) => `
+          <tr>
+            <td title="${esc(b.subject)}"><strong>${esc(bootstrapName(b.subject))}</strong></td>
+            <td><span class="fingerprint">${esc(b.serial)}</span></td>
+            <td>${esc(when(b.issued_ms))}</td>
+            <td>${esc(when(b.not_after_ms))}</td>
+            <td>${b.revoked ? `<span class="pill red">revoked</span>` : `<span class="pill green">valid</span>`}${waiting.get(b.serial) ? `
+              <div style="margin-top: 4px"><span class="pill amber" title="requests in the queue above that enrol with this certificate">${waiting.get(b.serial)} waiting</span></div>` : ""}</td>
+            <td><div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px">${p12(b)}${b.revoked ? `
+              <button class="btn btn-ghost btn-sm boot-delete" data-serial="${esc(b.serial)}" title="Delete this revoked certificate from the list. Its revocation stays: no host can enrol with it.">Delete</button>` : `
+              <button class="btn btn-ghost btn-sm boot-revoke" data-serial="${esc(b.serial)}" title="Revoke this certificate: no host can enrol with it any more">Revoke</button>`}</div></td>
+          </tr>`).join("");
+      }
+
+      async function refreshEnrolments() {
+        let win;
+        try {
+          const res = await fetch("/api/v1/enrolment/window");
+          if (res.status === 404) {
+            enrolments = [];
+            boots = [];
+            $("boot-section").style.display = "none";
+            renderEnrolments(null);
+            return;
+          }
+          if (!res.ok) { renderEnrolments(undefined, `the enrolment window could not be read: HTTP ${res.status}`); return; }
+          win = await res.json();
+          $("boot-section").style.display = "";
+          const certs = await fetch("/api/v1/bootstrap-certificates");
+          if (certs.ok) boots = await certs.json();
+          // Drawn after the queue is read, since each row counts the requests waiting with it.
+          const bootsFailed = certs.ok ? undefined : `the bootstrap certificates could not be read: HTTP ${certs.status}`;
+          const list = await fetch("/api/v1/enrolments");
+          if (!list.ok) {
+            renderBoots(bootsFailed);
+            renderEnrolments(win, `the pending requests could not be read: HTTP ${list.status}`);
+            return;
+          }
+          enrolments = await list.json();
+          renderBoots(bootsFailed);
+        } catch { return; }
+        renderEnrolments(win);
+      }
+
+      $("enrolment-window-open").addEventListener("click", async () => {
+        $("enrolments-error").textContent = "";
+        $("enrolment-result").textContent = "";
+        const res = await fetch("/api/v1/enrolment/window", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ open_for_secs: Number($("enrolment-window-secs").value) }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) $("enrolments-error").textContent = body.error || `HTTP ${res.status}`;
+        await refreshEnrolments();
+      });
+
+      $("enrolment-window-close").addEventListener("click", async () => {
+        if (!confirm("Close the enrolment window now? Every waiting request expires.")) return;
+        $("enrolments-error").textContent = "";
+        $("enrolment-result").textContent = "";
+        const res = await fetch("/api/v1/enrolment/window", { method: "DELETE" });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          $("enrolments-error").textContent = body.error || `HTTP ${res.status}`;
+        }
+        await refreshEnrolments();
+      });
+
+      $("enrolments").addEventListener("click", async (e) => {
+        const btn = e.target.closest(".enrolment-act");
+        if (!btn) return;
+        e.preventDefault();
+        // The id is the requested key's fingerprint (ADR-0021 clause 22).
+        const fingerprint = btn.dataset.id;
+        const approve = btn.dataset.act === "approve";
+        const question = approve
+          ? `Approve the host whose key fingerprint is\n\n${fingerprint}\n\nOnly if it matches the key_fingerprint the Client logged on that host.`
+          : `Reject the request whose key fingerprint is\n\n${fingerprint}?`;
+        if (!confirm(question)) return;
+        $("enrolments-error").textContent = "";
+        $("enrolment-result").textContent = "";
+        const res = await fetch(`/api/v1/enrolments/${encodeURIComponent(fingerprint)}/${btn.dataset.act}`, { method: "POST" });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) $("enrolments-error").textContent = body.error || `HTTP ${res.status}`;
+        else $("enrolment-result").textContent = `${fingerprint.slice(0, 16)}…: ${approve ? "approved" : "rejected"}`;
+        await refreshEnrolments();
+      });
+
+      // The ISO 3166-1 alpha-2 codes a bootstrap certificate's country is chosen from (ADR-0036
+      // clause 6), each named in the browser's language where it knows the name.
+      const COUNTRIES = ("AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS "
+        + "BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET "
+        + "FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO "
+        + "IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH "
+        + "MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM "
+        + "PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG "
+        + "TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW").split(" ");
+      {
+        let names = null;
+        try { names = new Intl.DisplayNames(undefined, { type: "region" }); } catch (_) { /* codes alone */ }
+        $("boot-country").insertAdjacentHTML("beforeend", COUNTRIES.map((code) => {
+          let name = "";
+          try { name = names ? names.of(code) : ""; } catch (_) { name = ""; }
+          return `<option value="${code}">${code}${name && name !== code ? ` — ${esc(name)}` : ""}</option>`;
+        }).join(""));
+      }
+
+      $("boot-issue").addEventListener("click", async () => {
+        $("boot-error").textContent = "";
+        $("boot-result").textContent = "";
+        const subject = {};
+        for (const [field, id] of [["country", "boot-country"], ["state", "boot-state"], ["locality", "boot-locality"],
+          ["organization", "boot-org"], ["organizational_unit", "boot-unit"], ["organization_identifier", "boot-org-id"]]) {
+          const value = $(id).value.trim();
+          if (value) subject[field] = value;
+        }
+        if (!subject.organization) { $("boot-error").textContent = "a bootstrap certificate needs a customer (O)"; return; }
+        if (!subject.organizational_unit) { $("boot-error").textContent = "a bootstrap certificate needs a site (OU)"; return; }
+        const password = $("boot-pass").value;
+        if (!password) { $("boot-error").textContent = "a bootstrap certificate needs a password"; return; }
+        if (password !== $("boot-pass2").value) {
+          $("boot-error").textContent = "the two passwords differ";
+          return;
+        }
+        const request = { subject, validity_days: Number($("boot-days").value), password };
+        // Disabled while the request runs, so a double click issues one certificate.
+        $("boot-issue").disabled = true;
+        const res = await fetch("/api/v1/bootstrap-certificates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        }).catch(() => null);
+        const body = res ? await res.json().catch(() => ({})) : {};
+        $("boot-issue").disabled = false;
+        if (!res || !res.ok) {
+          $("boot-error").textContent = body.error || (res ? `HTTP ${res.status}` : "the Server could not be reached");
+          return;
+        }
+        // The page keeps no password once it is sent (ADR-0029 clause 5).
+        $("boot-pass").value = "";
+        $("boot-pass2").value = "";
+        $("boot-result").textContent = `Issued ${body.subject}, serial ${body.serial}: save bootstrap.p12 from its row, now or later.`;
+        await refreshEnrolments();
+      });
+
+
+      $("boots").addEventListener("click", async (e) => {
+        const p12 = e.target.closest(".boot-p12");
+        if (p12) {
+          $("boot-error").textContent = "";
+          const res = await fetch(`/api/v1/bootstrap-certificates/${encodeURIComponent(p12.dataset.serial)}/p12`).catch(() => null);
+          if (!res || !res.ok) {
+            const body = res ? await res.json().catch(() => ({})) : {};
+            $("boot-error").textContent = body.error || (res ? `HTTP ${res.status}` : "the Server could not be reached");
+            await refreshEnrolments();
+            return;
+          }
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(await res.blob());
+          link.download = "bootstrap.p12";
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(link.href), 0);
+          return;
+        }
+        const del = e.target.closest(".boot-delete");
+        if (del) {
+          e.preventDefault();
+          const serial = del.dataset.serial;
+          if (!confirm(`Delete the revoked bootstrap certificate with serial\n\n${serial}\n\nfrom the list? Its revocation stays.`)) return;
+          $("boot-error").textContent = "";
+          $("boot-result").textContent = "";
+          const res = await fetch(`/api/v1/bootstrap-certificates/${encodeURIComponent(serial)}`, { method: "DELETE" }).catch(() => null);
+          if (!res || !res.ok) {
+            const body = res ? await res.json().catch(() => ({})) : {};
+            $("boot-error").textContent = body.error || (res ? `HTTP ${res.status}` : "the Server could not be reached");
+          } else {
+            $("boot-result").textContent = `${serial.slice(0, 16)}…: deleted`;
+          }
+          await refreshEnrolments();
+          return;
+        }
+        const btn = e.target.closest(".boot-revoke");
+        if (!btn) return;
+        e.preventDefault();
+        const serial = btn.dataset.serial;
+        if (!confirm(`Revoke the bootstrap certificate with serial\n\n${serial}?\n\nNo host can enrol with it any more.`)) return;
+        $("boot-error").textContent = "";
+        $("boot-result").textContent = "";
+        const res = await fetch("/api/v1/revocations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ certificate: { authority: "bootstrap", serial } }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) $("boot-error").textContent = body.error || `HTTP ${res.status}`;
+        else $("boot-result").textContent = `${serial.slice(0, 16)}…: revoked`;
+        await refreshEnrolments();
+      });
+
+      // Hosts (ADR-0035): the table and, for the current Host, its Agents grouped by their Client
+      // Agent. The certificates and the revocation list come from their own routes, so a row shows
+      // which of a Host's certificates are still valid, and when each ends.
+      let hosts = [];
+      let hostCertificates = [];
+      let revokedClient = new Set();
+      let currentHost = null;    // the host id of the current row, or null — no current, no detail
+      const SUBJECT_FIELDS = [
+        ["country", "C", "fleet.host.country"],
+        ["state", "ST", "fleet.host.state"],
+        ["locality", "L", "fleet.host.locality"],
+        ["organization", "O", "fleet.host.organization"],
+        ["organizational_unit", "OU", "fleet.host.site"],
+        ["organization_identifier", "organizationIdentifier", "fleet.host.organization_id"],
+      ];
+      function validCertificates(h) {
+        const now = Date.now();
+        return hostCertificates.filter((c) => c.host === h.host && c.not_after_ms > now && !revokedClient.has(c.serial));
+      }
+      function renderHosts() {
+        $("host-count").textContent = hosts.length;
+        $("hosts-empty").style.display = hosts.length ? "none" : "block";
+        $("hosts").innerHTML = hosts.map((h) => {
+          const subject = SUBJECT_FIELDS.filter(([field]) => h.subject && h.subject[field])
+            .map(([field, short, key]) => `<span class="chip" title="${short} — the agents arriving over it directly carry it as ${key}">${short}=${esc(h.subject[field])}</span>`)
+            .join("");
+          const certs = validCertificates(h)
+            .map((c) => `<div class="sub" title="serial ${esc(c.serial)}">${esc(c.serial.slice(0, 12))}… · until ${esc(when(c.not_after_ms))}</div>`)
+            .join("");
+          return `
+          <tr class="agent${h.host === currentHost ? " current" : ""}" data-host="${esc(h.host)}">
+            <td><a class="name" href="#">${esc(h.name)}</a>${h.name !== h.host ? `<div class="sub">${esc(h.host)}</div>` : ""}</td>
+            <td><div class="chips">${subject || `<span class="chip">none</span>`}</div></td>
+            <td>${h.gateway ? `<span class="pill violet">gateway</span>` : `<span class="pill gray">direct</span>`}</td>
+            <td>${certs || `<span class="pill gray">none in the register</span>`}</td>
+            <td class="num">${(h.agents || []).length}</td>
+            <td>
+              <button class="btn btn-ghost host-gateway" data-host="${esc(h.host)}" data-gateway="${h.gateway ? "false" : "true"}"
+                      title="${h.gateway ? "Take the gateway mark away: its certificate then speaks only for the agents bound to it" : "Mark as a gateway: its certificate then speaks for any agent, and the agents behind it are grouped by the machine they report"}">${h.gateway ? "Unmark gateway" : "Mark gateway"}</button>
+              <button class="btn btn-ghost host-revoke" data-host="${esc(h.host)}"${validCertificates(h).length ? "" : " disabled"}
+                      title="Revoke every valid certificate of this host: its connections end, and it cannot renew">Revoke</button>
+            </td>
+          </tr>`;
+        }).join("");
+        renderHostDetail();
+      }
+      const hostAgentName = (a) => a.service_instance_name || a.service_name || `${a.instance_uid.slice(0, 8)}…`;
+      function hostAgentLine(a) {
+        const status = a.connected ? `<span class="pill green">connected</span>` : `<span class="pill gray">disconnected</span>`;
+        const client = a.client ? ` <span class="pill violet">client</span>` : "";
+        return `<strong>${esc(hostAgentName(a))}</strong>${client} <span class="sub">${esc(a.service_name)} · ${esc(a.instance_uid)}</span> ${status}`;
+      }
+      // Grouped as the Server places the agents (ADR-0035 clause 4): under their client agent, the
+      // ones whose client cannot be told apart under the machine they report. Presentation only.
+      function renderHostDetail() {
+        const h = hosts.find((x) => x.host === currentHost);
+        if (!h) { $("host-detail").style.display = "none"; return; }
+        $("host-detail").style.display = "";
+        $("host-detail-title").textContent = h.gateway
+          ? `${h.name} — the agents behind this gateway, by the client they report`
+          : `${h.name} — its agents, by client`;
+        const groups = new Map();
+        for (const a of h.agents || []) {
+          const key = a.ambiguous ? `ambiguous ${a.machine}` : a.client_agent || `none ${a.machine}`;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(a);
+        }
+        const blocks = [...groups.values()].map((members) => {
+          const first = members[0];
+          const client = first.ambiguous ? null : members.find((a) => a.instance_uid === a.client_agent);
+          const machine = first.machine ? ` <span class="sub">${esc(first.machine)}</span>` : "";
+          let head;
+          if (client) head = `${hostAgentLine(client)}${machine}`;
+          else if (first.ambiguous) head = `<span class="pill amber" title="more than one client agent reports this machine, so no agent of it inherits labels">ambiguous client</span>${machine}`;
+          else head = `<span class="pill gray" title="no agent of this group reports supervisor.kind.*, so nothing is inherited">no client agent</span>${machine}`;
+          const beneath = members.filter((a) => a !== client).map((a) => `<li>${hostAgentLine(a)}</li>`).join("");
+          return `<div style="margin-bottom: 10px">${head}${beneath ? `<ul style="margin: 4px 0 0 18px">${beneath}</ul>` : ""}</div>`;
+        });
+        $("host-agents").innerHTML = blocks.join("") || `<div class="empty">No agent has arrived over this host yet.</div>`;
+      }
+      async function refreshHosts() {
+        try {
+          const res = await fetch("/api/v1/hosts");
+          if (!res.ok) {
+            hosts = [];
+            $("hosts-error").textContent = res.status === 404 ? "This Server keeps no host register." : `HTTP ${res.status}`;
+            renderHosts();
+            return;
+          }
+          hosts = await res.json();
+          const certs = await fetch("/api/v1/certificates");
+          hostCertificates = certs.ok ? await certs.json() : [];
+          const list = await fetch("/api/v1/revocations");
+          revokedClient = new Set(list.ok
+            ? (await list.json()).filter((r) => r.certificate.authority === "client").map((r) => r.certificate.serial)
+            : []);
+        } catch { return; }
+        renderHosts();
+      }
+      $("hosts").addEventListener("click", async (e) => {
+        const mark = e.target.closest(".host-gateway");
+        if (mark) {
+          const gateway = mark.dataset.gateway === "true";
+          if (!confirm(gateway
+            ? `Mark host ${mark.dataset.host} as a gateway? Its certificate then speaks for any agent.`
+            : `Take the gateway mark from host ${mark.dataset.host}?`)) return;
+          $("hosts-error").textContent = "";
+          const res = await fetch(`/api/v1/hosts/${encodeURIComponent(mark.dataset.host)}/gateway`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ gateway }),
+          });
+          if (!res.ok) $("hosts-error").textContent = (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`;
+          await refreshHosts();
+          return;
+        }
+        const revoke = e.target.closest(".host-revoke");
+        if (revoke) {
+          const h = hosts.find((x) => x.host === revoke.dataset.host);
+          const serials = h ? validCertificates(h).map((c) => c.serial) : [];
+          if (!serials.length) return;
+          if (!confirm(`Revoke the ${serials.length} valid certificate(s) of host ${revoke.dataset.host}?\n\nIts connections end, and it cannot renew.`)) return;
+          $("hosts-error").textContent = "";
+          $("hosts-result").textContent = "";
+          const refused = [];
+          for (const serial of serials) {
+            const res = await fetch("/api/v1/revocations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ certificate: { authority: "client", serial } }),
+            });
+            if (!res.ok) refused.push(`${serial.slice(0, 12)}…: ${(await res.json().catch(() => ({}))).error || `HTTP ${res.status}`}`);
+          }
+          if (refused.length) $("hosts-error").textContent = refused.join("; ");
+          else $("hosts-result").textContent = `${revoke.dataset.host}: ${serials.length} certificate(s) revoked`;
+          await refreshHosts();
+          return;
+        }
+        const tr = e.target.closest("tr.agent");
+        if (!tr) return;
+        e.preventDefault();
+        currentHost = currentHost === tr.dataset.host ? null : tr.dataset.host;
+        renderHosts();
+      });
+
+      refreshConfigs();
+      refreshPackages();
+      refreshDeployments();
+      refreshEnrolments();
+      refreshAgents();
+      setInterval(refreshAgents, 2000);
+      setInterval(refreshConfigs, 5000);
+      setInterval(refreshPackages, 5000);
+      setInterval(refreshDeployments, 5000);
+      setInterval(refreshEnrolments, 3000);
+      refreshHosts();
+      setInterval(refreshHosts, 5000);
+    </script>
+  </body>
+</html>
