@@ -332,12 +332,10 @@ client_ca_file = "client-ca.pem"
 # Pick ONE of the three shapes below. They are alternatives, not a sequence — switching on two of
 # them leaves the file with a duplicated table header, which is an error rather than a merge.
 #
-# (1) Development — the stack in observability/ runs on the host and publishes the Collector's
-#     OTLP/HTTP port there; inside the Dev Container, .devcontainer/forward-otlp.sh puts that port
-#     on the container's loopback, so the same URL reaches the same Collector in both places.
-#     Cleartext is accepted here because the address is a loopback literal, the one place
-#     plaintext is allowed — 127.0.0.1, not the name localhost. While the stack is
-#     down, the exports fail and the Agents keep running; the next export after it is up arrives.
+# (1) Development — a Collector receiving OTLP/HTTP on this machine's loopback. Cleartext is
+#     accepted here because the address is a loopback literal, the one place plaintext is
+#     allowed — 127.0.0.1, not the name localhost. While the Collector is down, the exports fail
+#     and the Agents keep running; the next export after it is up arrives.
 # [telemetry_offer]
 # metrics_endpoint = "http://127.0.0.1:4318/v1/metrics"
 # traces_endpoint = "http://127.0.0.1:4318/v1/traces"

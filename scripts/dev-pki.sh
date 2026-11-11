@@ -18,7 +18,7 @@
 #                  a Server and a Client configuration that use the set, every other key at its
 #                  default but one: server.toml serves the Agent plane on every interface, so
 #                  Clients on other machines reach it; it carries the offer of the fleet's own
-#                  telemetry to the observability stack in observability/ commented out
+#                  telemetry to a Collector on the loopback commented out
 #
 # The development Client enrols like any other host, with a bootstrap certificate the Server issues
 # (ADR-0028): start the Server, run `scripts/seed_test_configs.sh --enrol`, which issues it,
@@ -53,7 +53,7 @@ OUT="$(cd "$OUT" && pwd)"  # the configurations name the set by absolute path
   echo
   cat "$OUT/server/server.toml.fragment"
   echo
-  echo '# The fleet'"'"'s own telemetry, to the stack in observability/ (see config/server.toml).'
+  echo '# The fleet'"'"'s own telemetry, to a Collector on the loopback (see config/server.toml).'
   echo '# [telemetry_offer]'
   echo '# metrics_endpoint = "http://127.0.0.1:4318/v1/metrics"'
   echo '# traces_endpoint = "http://127.0.0.1:4318/v1/traces"'
