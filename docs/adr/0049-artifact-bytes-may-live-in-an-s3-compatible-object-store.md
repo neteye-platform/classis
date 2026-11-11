@@ -9,7 +9,7 @@
   `[blobs]` section of `server.toml` and its parsing in
   `crates/fleet-server/src/config.rs`, `config/server.toml`, the `object_store`
   dependency in `Cargo.toml` and `deny.toml`, the S3 adapter's tests and the CI
-  job that runs them, the rustfs service in `observability/compose.yaml` and its
+  job that runs them, the rustfs service in `dev/compose.yaml` and its
   forward into the Dev Container, `docs/ARCHITECTURE.md`, and every document
   that names where the Server keeps artifacts
 - **Supersedes:**
@@ -170,12 +170,12 @@ through the Server in both directions.
    with no object store and creates nothing in one but the objects of clause 4.
    In production the bucket, its credentials, its policies, its retention and
    its backups are the operator's.
-   - For development, rustfs runs as a service of `observability/compose.yaml`,
-     the Compose project on the host beside the Dev Container
-     ([ADR-0002](0002-dev-container-runtime.md)). The Dev Container forwards its
-     port onto its own loopback, as it forwards the Collector's, so a
-     development Server reaches it at an `http://127.0.0.1` endpoint that clause
-     5 allows, through `[blobs.s3]` like any other store.
+   - For development, rustfs runs as a service of `dev/compose.yaml`, the
+     Compose project of the development stores on the host beside the Dev
+     Container ([ADR-0002](0002-dev-container-runtime.md)). The Dev Container
+     forwards its port onto its own loopback, so a development Server reaches it
+     at an `http://127.0.0.1` endpoint that clause 5 allows, through
+     `[blobs.s3]` like any other store.
    - The S3 adapter's tests run against the store that `FLEET_TEST_S3_ENDPOINT`,
      `FLEET_TEST_S3_BUCKET` and the credentials of clause 6 name. CI runs them
      in a job with a rustfs service, its image pinned. Where no store is named,
@@ -226,9 +226,9 @@ a production store.
   in the development stack. A defect in the S3 adapter would then be found only
   by whoever runs the tests against a store, not by every pull request.
   Rejected.
-- **A Compose project of its own for the stores.** It would keep the
-  observability stack to its one purpose, but a developer would start and
-  forward two stacks on the host instead of one. Rejected.
+- **The stores inside the development observability stack.** One stack to
+  start and forward on the host, but it tied the stores to a stack the project
+  no longer carries. Rejected.
 - **MinIO as the reference store.** The working note named it. MinIO no longer
   maintains its open source distribution; rustfs is S3-compatible, Apache-2.0,
   and reached 1.0 in 2026. Rejected in favour of rustfs.

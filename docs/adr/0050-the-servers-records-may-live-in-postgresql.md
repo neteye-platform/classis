@@ -12,7 +12,7 @@
   `config/server.toml`, the `server migrate-to-postgres` command, the
   `tokio-postgres`, `deadpool-postgres` and `tokio-postgres-rustls` dependencies
   in `Cargo.toml` and `deny.toml`, the PostgreSQL adapter's tests and the CI job
-  that runs them, the postgres service in `observability/compose.yaml` and its
+  that runs them, the postgres service in `dev/compose.yaml` and its
   forward into the Dev Container, `docs/ARCHITECTURE.md`, and every document
   that names where the Server keeps its records
 - **Supersedes:**
@@ -344,9 +344,9 @@ per database schema.
 
 16. **The database is external; the adapter only connects to it.** In production
     the database, its role, its replication and its backups are the operator's.
-    - For development, PostgreSQL runs as a service of
-      `observability/compose.yaml`, the Compose project on the host beside the
-      Dev Container ([ADR-0002](0002-dev-container-runtime.md)). The Dev
+    - For development, PostgreSQL runs as a service of `dev/compose.yaml`, the
+      Compose project of the development stores on the host beside the Dev
+      Container ([ADR-0002](0002-dev-container-runtime.md)). The Dev
       Container forwards its port onto its own loopback, so a development Server
       reaches it at `127.0.0.1:5432`, with `tls = false` as clause 7 allows on
       the loopback.

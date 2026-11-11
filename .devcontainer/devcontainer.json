@@ -51,7 +51,7 @@
   // Both are *developer tooling* — nothing shipped depends on them, which is why they
   // need no ADR (AGENTS.md §3.6) — and each earns its place:
   //
-  //   socat     forwards the host's OpenTelemetry Collector onto this container's loopback, see
+  //   socat     forwards the host's development stores onto this container's loopback, see
   //             `postStartCommand` below.
   //   llvm      `llvm-lib`, without which `cargo xwin` cannot typecheck the Client for Windows.
   //             That check is not optional in practice: `#[cfg(unix)]` code is invisible to an
@@ -59,13 +59,11 @@
   //             author. See README → "Build, Test & Run".
   "postCreateCommand": "git config core.hooksPath .githooks && sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends socat llvm",
 
-  // Runs inside the container on every start. The development observability stack runs on the host,
-  // apart from this container (observability/compose.yaml); this puts its Collector on the
-  // container's loopback, 127.0.0.1:4317 and :4318, because the Client sends own telemetry in
-  // plaintext to a loopback IP literal alone (ADR-0016), the stack's rustfs on :9100, the S3
-  // store a development Server may use (ADR-0049), and its PostgreSQL on :5432, the database it may
-  // keep its records in (ADR-0050). See observability/README.md.
-  "postStartCommand": ".devcontainer/forward-otlp.sh",
+  // Runs inside the container on every start. The development stores run on the host, apart from
+  // this container (dev/compose.yaml); this puts their rustfs on the container's loopback at :9100,
+  // the S3 store a development Server may use (ADR-0049), and their PostgreSQL at :5432, the
+  // database it may keep its records in (ADR-0050). See dev/README.md.
+  "postStartCommand": ".devcontainer/forward-dev-stores.sh",
 
   "customizations": {
     // VS Code extensions installed inside the container
@@ -98,11 +96,9 @@
   "portsAttributes": {
     "4320": { "label": "OpAMP Fleet Server (Agent plane: OpAMP + downloads)" },
     "4321": { "label": "OpAMP Fleet Server (Operator plane: REST + UI)" },
-    // The forwarder of `postStartCommand` listens here and leads to the host's Collector. VS Code
-    // would offer to forward these ports back to the host, onto the ports the Collector already
-    // holds there; labelled for the Ports view, ignored by the auto-forwarder.
-    "4317": { "label": "OTLP/gRPC → host Collector", "onAutoForward": "ignore" },
-    "4318": { "label": "OTLP/HTTP → host Collector", "onAutoForward": "ignore" },
+    // The forwarder of `postStartCommand` listens here and leads to the host's stores. VS Code
+    // would offer to forward these ports back to the host, onto the ports the stores already
+    // hold there; labelled for the Ports view, ignored by the auto-forwarder.
     "9100": { "label": "S3 API → host rustfs", "onAutoForward": "ignore" },
     "5432": { "label": "PostgreSQL → host postgres", "onAutoForward": "ignore" }
   },
