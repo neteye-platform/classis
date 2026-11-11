@@ -468,7 +468,7 @@ config/               # annotated example configuration files (server.toml, supe
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
 interop/              # the Go side of the interop check against opamp-go (ADR-0011)
-observability/        # the development observability stack — Collector, ClickHouse, Grafana — run on the host
+dev/                  # the development stores — rustfs (S3) and PostgreSQL — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
 .githooks/            # git hooks: refuse a commit on main and a push while the checks are red
 .github/              # CI workflows, issue & pull request templates
@@ -494,24 +494,20 @@ committed `devcontainer-lock.json`. Extensions are listed by identifier only,
 because a published extension version cannot be repointed and a version suffix
 is VS Code-specific.
 
-### The observability stack runs beside it
+### The development stores run beside it
 
-The development observability stack — Collector, ClickHouse and Grafana — is a
-Compose project of its own in [`observability/`](observability/README.md). It
-runs on the **host**, apart from the container, and is started when you want it:
+The development stores — rustfs, an S3-compatible store, and PostgreSQL — are a
+Compose project of their own in [`dev/`](dev/README.md). They run on the
+**host**, apart from the container, and are started when you want them:
 
 ```sh
-docker compose -f observability/compose.yaml up -d     # on the host, from the repository root
+docker compose -f dev/compose.yaml up -d     # on the host, from the repository root
 ```
 
-The container reaches the Collector through the host. Since the Client sends own
-telemetry in plaintext to a loopback IP literal alone
-([ADR-0016](docs/adr/0016-what-an-agent-reports-about-itself.md)),
-[`.devcontainer/forward-otlp.sh`](.devcontainer/forward-otlp.sh) puts the host's
-Collector on the container's loopback on every start: `http://127.0.0.1:4318`
-inside the container is the Collector on the host, so a `server.toml` naming
-`http://127.0.0.1:4318/v1/logs` means the same thing in both places. Grafana is
-on <http://localhost:3001> in the host's browser.
+The container reaches them through the host:
+[`.devcontainer/forward-dev-stores.sh`](.devcontainer/forward-dev-stores.sh)
+puts them on the container's loopback on every start, so `127.0.0.1:9100` and
+`127.0.0.1:5432` inside the container are the stores on the host.
 
 ### Host container management
 

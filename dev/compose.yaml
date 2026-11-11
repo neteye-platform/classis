@@ -1,0 +1,44 @@
+# The development stores: the S3-compatible store a development Server keeps its artifacts in
+# (ADR-0049) and the PostgreSQL database it keeps its records in (ADR-0050). Run on the host, apart
+# from the Dev Container, which reaches both through .devcontainer/forward-dev-stores.sh.
+# See dev/README.md.
+name: opamp-dev-stores
+
+services:
+  # The development S3 store. The key pair is a development one, valid for this container alone.
+  rustfs:
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: fleet-dev
+      RUSTFS_SECRET_KEY: fleet-dev-secret
+    volumes:
+      - rustfs-data:/data
+    ports:
+      - "${STORES_BIND:-127.0.0.1}:9100:9000"   # S3 API
+
+  # The development database (ADR-0050 clause 16). The Server creates no database and no role; the
+  # image makes both, `fleet`, on its first start. The password is a development one. Plaintext:
+  # the Server reaches it on the loopback with `tls = false`.
+  postgres:
+    image: postgres:18.6@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD: fleet
+      POSTGRES_DB: fleet
+    volumes:
+      # From PostgreSQL 18 on the image keeps its data in a versioned directory below this one.
+      - postgres-data:/var/lib/postgresql
+    ports:
+      - "${STORES_BIND:-127.0.0.1}:5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username", "fleet", "--dbname", "fleet"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+volumes:
+  rustfs-data:
+  postgres-data:
