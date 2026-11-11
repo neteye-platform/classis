@@ -7,6 +7,9 @@
 /build/
 /target/
 /target*/
+# What a manual `go build` in interop/ writes; the interop test builds its own copy under
+# CARGO_TARGET_TMPDIR, so nothing reads this one.
+/interop/interop
 
 # Local runtime state (default paths of server.toml / supervisor.toml).
 #
