@@ -1219,11 +1219,12 @@ written back without it.
 /api/v1/revocations/<id>` lifts one; the next connection is admitted again. A
 lifted bootstrap certificate gets no PKCS#12 file back: one its revocation could
 not remove is removed first, and while that fails the lift is answered `500` and
-the revocation stays. The list holds at most 100 000 entries; an entry for a
-certificate the register held is dropped once neither that certificate nor any
-renewal of it is valid. The register holds at most 100 000 certificates and at
-most 10 000 in one renewal chain, and keeps the last 1 000 places for
-enrolments.
+the revocation stays. A Server without `[enrolment]` cannot remove it, so it
+answers `500` to the lift of any bootstrap certificate's revocation and keeps
+it. The list holds at most 100 000 entries; an entry for a certificate the
+register held is dropped once neither that certificate nor any renewal of it is
+valid. The register holds at most 100 000 certificates and at most 10 000 in one
+renewal chain, and keeps the last 1 000 places for enrolments.
 
 Every WebSocket session also ends when the certificate that admitted it expires,
 with `1008` and the reason `certificate expired`. A Client renews at two thirds
@@ -1273,13 +1274,15 @@ likes stays out of the default `info`:
   download over a host's rate (`agent_rate.throttled`); a download a host may
   not fetch; a member refused the Gateways' revocation list; an enrolment
   request refused, directly or through a Gateway, or asked again while it waits;
-  and each admitted plain-HTTP poll and download. Set
+  and each admitted request (`admission.admitted`): a plain-HTTP poll, a
+  download, or a WebSocket upgrade before its session starts. Set
   `RUST_LOG=info,fleet_server=debug` while you investigate.
-- **`info`** — every decision taken: a WebSocket session admitted or ended, a
-  new enrolment request, a request refused for its bootstrap certificate's share
-  of the queue (once per certificate and window), an approval or rejection, the
-  window, every issuance, revocation and bootstrap-certificate event, an
-  operator act, a package outcome.
+- **`info`** — every decision taken: a WebSocket session started or ended
+  (`session.started`, `session.ended`), a new enrolment request, a request
+  refused for its bootstrap certificate's share of the queue (once per
+  certificate and window), an approval or rejection, the window, every issuance,
+  revocation and bootstrap-certificate event, an operator act, a package
+  outcome.
 - **`warn`** — what an admitted host should never ask for: a certificate
   request refused, a report that claims an `instance_uid` bound to another host;
   and a certificate the Server depends on that is ending (`pki.expiring`).

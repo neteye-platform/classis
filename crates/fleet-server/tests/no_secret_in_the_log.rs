@@ -73,11 +73,12 @@ fn client(ca_pem: &str, identity: Option<&(String, String)>) -> reqwest::Client 
     builder.build().expect("client")
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .expect("a free port")
-        .port()
+/// Two free ports, distinct: both listeners are held until both ports are read.
+fn free_ports() -> (u16, u16) {
+    let bind = || std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let (first, second) = (bind(), bind());
+    let port = |listener: &std::net::TcpListener| listener.local_addr().expect("addr").port();
+    (port(&first), port(&second))
 }
 
 fn path(dir: &Path, name: &str, contents: &str) -> String {
@@ -99,7 +100,7 @@ async fn no_secret_reaches_the_log() {
     let fleet_ca = ca("opamp-fleet test CA");
     let bootstrap_ca = ca("opamp-fleet test bootstrap CA");
     let server = issue(&fleet_ca, &["localhost"]);
-    let (agent_port, operator_port) = (free_port(), free_port());
+    let (agent_port, operator_port) = free_ports();
     let config = dir.path().join("server.toml");
     std::fs::write(
         &config,

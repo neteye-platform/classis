@@ -95,9 +95,9 @@ chain, no verification and no `[audit]` section.
      host's rate; a download a host may not fetch; a member refused the
      Gateways' revocation list; an enrolment request refused, directly or
      through a Gateway, or asked again while it waits; and the admission of a
-     plain-HTTP poll and of a download, which a fleet repeats every few
-     seconds.
-   - `info`: every decision taken. These are a WebSocket session admitted or
+     request, a plain-HTTP poll, a download or a WebSocket upgrade not yet
+     taken, which a peer can repeat every few seconds.
+   - `info`: every decision taken. These are a WebSocket session started or
      ended, a new enrolment request, a request refused once per bootstrap
      certificate and window for its share of the queue (ADR-0046), an approval
      or rejection, the window, every issuance, revocation and bootstrap event,

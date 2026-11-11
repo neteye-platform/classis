@@ -406,7 +406,8 @@ impl Enrolment {
             return answered(entry);
         }
         // Only the requests that wait for an operator hold a place and a share: a decided one
-        // stays until its host collects it or the window closes, and holds neither (ADR-0046).
+        // stays in the queue until the window closes or runs out — collecting its certificate
+        // does not remove it — and holds neither (ADR-0046).
         let waiting = || {
             state
                 .entries

@@ -29,8 +29,8 @@ section carries a date once its tag exists.
 
 - **Lifting the revocation of a bootstrap certificate never hands out its
   PKCS#12 file again.** When its revocation could not remove the file, the lift
-  removes it first; while that fails, the lift is answered `500` and the
-  revocation stays.
+  removes it first; while that fails, and on a Server without `[enrolment]`,
+  the lift is answered `500` and the revocation stays.
 - **`500` on approving an enrolment request** now means approved and not
   persisted: the certificate is signed and recorded, and its host collects it.
   A restart may list the request again; do not approve it twice.

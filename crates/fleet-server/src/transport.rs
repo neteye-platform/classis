@@ -583,29 +583,18 @@ async fn admit(
     let authority = presented
         .as_ref()
         .and_then(|facts| admission.issuers_role(&facts.id.issuer));
-    // A WebSocket session at `info`, once per session; a plain-HTTP poll, every few seconds,
-    // at `debug`.
-    if websocket {
-        info!(
-            event = "admission.admitted",
-            peer = peer.map(tracing::field::display),
-            transport = "websocket",
-            admitted_as,
-            authority,
-            serial,
-            "admitted a session"
-        );
-    } else {
-        debug!(
-            event = "admission.admitted",
-            peer = peer.map(tracing::field::display),
-            transport = "http",
-            admitted_as,
-            authority,
-            serial,
-            "admitted a request"
-        );
-    }
+    // At `debug`: a plain-HTTP poll comes every few seconds, and a request that asks for an upgrade
+    // is not yet a session — the endpoint may refuse it. A session is logged once it is accepted
+    // (`session.started`).
+    debug!(
+        event = "admission.admitted",
+        peer = peer.map(tracing::field::display),
+        transport = if websocket { "websocket" } else { "http" },
+        admitted_as,
+        authority,
+        serial,
+        "admitted a request"
+    );
     request.extensions_mut().insert(classified);
     request.extensions_mut().insert(Proofs {
         der: certificate.map(|cert| Arc::from(cert.as_ref())),
@@ -812,6 +801,21 @@ impl Handler for Fleet {
         };
         let websocket = request.transport == opamp::server::Transport::WebSocket;
         let peer = request.peer.map(|peer| peer.ip());
+        if websocket {
+            // The endpoint has checked the upgrade and is about to accept it: a session, at
+            // `info` (ADR-0022 clause 3).
+            info!(
+                event = "session.started",
+                peer = peer.map(tracing::field::display),
+                admitted_as = match request.extensions.get::<Peer>() {
+                    Some(Peer::Enrolling { .. }) => "enrolling",
+                    _ => "member",
+                },
+                authority = proofs.authority(self.0.revocations()),
+                serial = proofs.serial(),
+                "a WebSocket session starts"
+            );
+        }
         if let (
             Some(Peer::Enrolling {
                 subject,

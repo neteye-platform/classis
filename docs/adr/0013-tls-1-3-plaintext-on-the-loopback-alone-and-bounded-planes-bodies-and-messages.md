@@ -168,9 +168,11 @@ Forces that shape the rate limit:
     to reconnect"_.
   - _"The minimum recommended retry interval is 30 seconds."_
   - This Server answers `Unavailable` with `retry_info` of 30 s (`RETRY_AFTER`
-    in [`fleet.rs`](../../crates/fleet-server/src/fleet.rs)) in three places
+    in [`fleet.rs`](../../crates/fleet-server/src/fleet.rs)) in four places
     besides the rate limit: at the Agent-record ceiling, when the enrolment
-    queue is full, and when no enrolment window is open (ADR-0021 clause 21).
+    queue is full, when no enrolment window is open (ADR-0021 clause 21), and
+    when a CSR's certificate cannot be written to the register (ADR-0021 clause
+    33).
 - **The Client honours `Unavailable` on both transports.**
   [`opamp::client::protocol`](../../crates/opamp/src/client/protocol.rs) turns
   it into a wait, `retry_info` or 30 s without one.

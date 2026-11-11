@@ -197,6 +197,8 @@ struct Setup<'a> {
     revocations: bool,
     /// A register that cannot write a certificate it is handed (ADR-0021 clause 33).
     failing_register: bool,
+    /// The revocation list a Server before this one left, `revocations.json` as it is written.
+    revocations_file: Option<serde_json::Value>,
     /// `[agent_rate_limit]` (ADR-0013).
     agent_rate: Option<fleet_server::agent_rate::Limits>,
     /// `max_agents`.
@@ -263,6 +265,11 @@ async fn serve(pki: &Pki, setup: Setup<'_>) -> Served {
         )
     });
     let revocations = setup.revocations.then(|| {
+        if let Some(list) = &setup.revocations_file {
+            let configs = dir.path().join("fleet-configs");
+            std::fs::create_dir_all(&configs).expect("mkdir");
+            std::fs::write(configs.join("revocations.json"), list.to_string()).expect("list");
+        }
         let ledger = fleet_server::fs::FsLedgerStore::open(&dir.path().join("fleet-configs"))
             .expect("ledger");
         let ledger: Box<dyn fleet_server::revocation::LedgerStore> = if setup.failing_register {
@@ -547,6 +554,95 @@ async fn a_client_certificate_is_required_in_the_handshake_on_the_agent_plane() 
     let agents = format!("https://localhost:{}/api/v1/agents", served.operator_port);
     let response = without.get(&agents).send().await.expect("send");
     assert!(response.status().is_success(), "{:?}", response.status());
+}
+
+/// A writer the log goes to, for a test to read back.
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log lock").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    /// What was logged so far at `INFO` that names `event`.
+    fn info(&self, event: &str) -> Vec<String> {
+        String::from_utf8(self.0.lock().expect("log lock").clone())
+            .expect("utf-8")
+            .lines()
+            .filter(|line| line.contains(" INFO ") && line.contains(event))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// A WebSocket session is logged at `info` once the upgrade is accepted, and only then: a request
+/// that merely carries `Upgrade: websocket`, which an admitted peer can send at will, is refused
+/// by the endpoint and leaves no `info` line (ADR-0022 clause 3). The test's runtime runs on one
+/// thread, the Server's tasks included, so the subscriber set for it sees their events.
+/// Verifies: ADR-0022
+#[tokio::test]
+async fn only_a_websocket_session_is_logged_at_info() {
+    let log = Captured::default();
+    let _logging = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish(),
+    );
+    let pki = Pki::new();
+    let served = serve(&pki, revocations_setup(&pki)).await;
+    let (cert, key) = pki.issue("edge-01");
+
+    opamp::tls::install_ring_provider();
+    let mut identity = key.as_bytes().to_vec();
+    identity.extend_from_slice(cert.as_bytes());
+    let http1 = reqwest::Client::builder()
+        .use_rustls_tls()
+        .http1_only()
+        .tls_certs_only([reqwest::Certificate::from_pem(served.ca_pem.as_bytes()).expect("ca")])
+        .resolve(
+            "localhost",
+            "127.0.0.1:0".parse::<std::net::SocketAddr>().expect("addr"),
+        )
+        .identity(reqwest::Identity::from_pem(&identity).expect("identity"))
+        .build()
+        .expect("client");
+    for _ in 0..3 {
+        let refused = http1
+            .get(&served.endpoint)
+            .header(reqwest::header::UPGRADE, "websocket")
+            .send()
+            .await
+            .expect("send");
+        assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+    assert!(
+        log.info("admission.admitted").is_empty() && log.info("session.started").is_empty(),
+        "a refused upgrade was logged at info: {:?}",
+        log.info("")
+    );
+
+    let mut socket = websocket(&served, &cert, &key, None)
+        .await
+        .expect("admitted");
+    exchange(&mut socket, &InstanceUid::default()).await;
+    let started = log.info("session.started");
+    assert_eq!(started.len(), 1, "{started:?}");
+    assert!(
+        started[0].contains(&cert_id(&cert).serial),
+        "it names the certificate: {started:?}"
+    );
 }
 
 /// The certificate is the whole of admission: a member presenting one is admitted on both
@@ -3616,6 +3712,46 @@ async fn lifting_a_revocation_never_hands_out_a_pkcs12_file_again() {
     std::fs::remove_dir(&in_the_way).expect("clear the way");
     assert_eq!(lift().await, 204);
     assert_eq!(download().await, 404, "lifting brought the file back");
+}
+
+/// A bootstrap certificate's revocation is not lifted by a Server without `[enrolment]`: it holds
+/// no record of the bootstrap certificates, so it cannot forget a PKCS#12 file the revocation
+/// left, which a Server with `[enrolment]` again would then hand out (ADR-0029 clause 4).
+/// Verifies: ADR-0029
+#[tokio::test]
+async fn a_bootstrap_revocation_is_not_lifted_without_enrolment() {
+    let pki = Pki::new();
+    let served = serve(
+        &pki,
+        Setup {
+            revocations_file: Some(serde_json::json!([{
+                "id": "r1",
+                "revoked": {"certificate":
+                    {"authority": "bootstrap", "issuers": ["ab"], "serial": "0b"}},
+                "revoked_ms": 1
+            }])),
+            ..revocations_setup(&pki)
+        },
+    )
+    .await;
+    let operator_client = client(&served.ca_pem, None);
+    let lifted = operator_client
+        .delete(operator(&served, "/api/v1/revocations/r1"))
+        .send()
+        .await
+        .expect("lift");
+    assert_eq!(lifted.status(), 500);
+    let body = lifted.text().await.expect("body");
+    assert!(body.contains("[enrolment]"), "{body}");
+    let listed: serde_json::Value = operator_client
+        .get(operator(&served, "/api/v1/revocations"))
+        .send()
+        .await
+        .expect("list")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(listed[0]["id"], "r1", "the revocation stays: {listed}");
 }
 
 /// A revoked bootstrap certificate's entry can be deleted, with its PKCS#12 file; its revocation

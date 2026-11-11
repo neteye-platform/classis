@@ -3417,7 +3417,7 @@ async fn revoke(
         (status = 204, description = "Lifted"),
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
         (status = 404, description = "No such revocation, or revocation is not configured", body = ErrorBody),
-        (status = 500, description = "Not lifted: the list could not be written, or the revoked bootstrap certificate's PKCS#12 file could not be removed", body = ErrorBody)
+        (status = 500, description = "Not lifted: the list could not be written, or the revoked bootstrap certificate's PKCS#12 file could not be removed — on a Server without [enrolment] it cannot be", body = ErrorBody)
     )
 )]
 async fn lift_revocation(
@@ -3440,7 +3440,19 @@ async fn lift_revocation(
                 authority, serial, ..
             } => (authority == "bootstrap").then_some(serial),
         });
-    if let (Some(serial), Some(bootstrap)) = (bootstrap_serial, state.bootstrap()) {
+    if let Some(serial) = bootstrap_serial {
+        // Without `[enrolment]` there is no record to forget the file in, and a Server with it
+        // again would hand the file out once the revocation is gone.
+        let Some(bootstrap) = state.bootstrap() else {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "not lifted: {id:?} revokes the bootstrap certificate {serial}, and without \
+                     [enrolment] this Server cannot remove its PKCS#12 file — lift it on a Server \
+                     with [enrolment]"
+                ),
+            );
+        };
         if let Err(e) = bootstrap.forget_p12(&serial) {
             warn!(revocation = %id, serial = %serial, "cannot remove the revoked PKCS#12 file: {e}");
             return error(
