@@ -4,10 +4,10 @@
 //! The database is checked first: it must hold none of the Server's tables, and nothing is created
 //! before it has been found so. Every record of the old `data_dir` is then read through the
 //! filesystem adapters — from a copy, since they repair what they open — so a record that would
-//! fail a Server's startup fails here before anything is written. The audit record and, with the
-//! filesystem blob store, the blobs are copied byte for byte into the new `data_dir`; then the
-//! schema and every record are written in one transaction, so a copy that fails leaves the
-//! database without the Server's tables, and the new `data_dir` as empty as it was. The old
+//! fail a Server's startup fails here before anything is written. With the filesystem blob store,
+//! the blobs are copied byte for byte into the new `data_dir`; then the schema and every record
+//! are written in one transaction, so a copy that fails leaves the database without the Server's
+//! tables, and the new `data_dir` as empty as it was. The old
 //! `data_dir` is only read — no directory created, no mode changed, no file removed: it stays as
 //! the backup. Moving records back from PostgreSQL to files is not provided.
 
@@ -236,20 +236,6 @@ fn copy(
     let records = records?;
 
     let mut report = Report::default();
-    let audit = from.join(fs::AUDIT);
-    let audit_files = if audit.is_dir() {
-        fs::audit_files(&audit)?
-    } else {
-        Vec::new()
-    };
-    fs::create_private_dir(&to.join(fs::AUDIT))?;
-    for file in &audit_files {
-        let name = file.file_name().expect("a file in the audit directory");
-        copy_file(file, &to.join(fs::AUDIT).join(name))?;
-    }
-    report
-        .lines
-        .push(format!("{} audit files, unchanged", audit_files.len()));
     if filesystem_blobs {
         let blobs = from.join(fs::BLOBS);
         let target = to.join(fs::BLOBS);
@@ -296,15 +282,15 @@ fn copy(
 /// Where inside the new `data_dir` the records of the old one are copied to be read.
 const STAGING: &str = ".records-being-copied";
 
-/// Copies every entry of the data directory `from` into `to`, but for the files of `audit/` and
-/// `blobs/`, which are copied on their own: the layout as it stands, read and nothing else.
+/// Copies every entry of the data directory `from` into `to`, but for the files of `blobs/`, which
+/// are copied on their own: the layout as it stands, read and nothing else.
 fn copy_records(from: &Path, to: &Path) -> Result<(), String> {
     fs::create_private_dir(to)?;
     for (name, path) in read_dir(from)? {
         let target = to.join(&name);
         if path.is_dir() {
             fs::create_private_dir(&target)?;
-            if name != fs::AUDIT && name != fs::BLOBS {
+            if name != fs::BLOBS {
                 copy_tree(&path, &target)?;
             }
         } else {
@@ -362,10 +348,8 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     use super::*;
-    use crate::audit::{Audit as _, Entry};
     use crate::postgres::testing::TestDatabase;
     use crate::revocation::{CertId, Facts, Host, Issued, Revocation, Revoked, SubjectValues};
 
@@ -431,7 +415,7 @@ mod tests {
     }
 
     /// A `data_dir` holding at least one record of every kind, written through the filesystem
-    /// adapters as a Server writes it, with an audit record of three entries.
+    /// adapters as a Server writes it.
     fn fixture(root: &Path) {
         fs::open_data_dir(root, true).expect("open");
         let pinned = crate::configs::Revision {
@@ -545,41 +529,11 @@ mod tests {
                     .expect("window"),
             )
             .expect("enrolment");
-        let audit = crate::audit_log::AuditLog::start(
-            Box::new(fs::FsAuditStore::open(root).expect("open")),
-            crate::audit_log::Limits::default(),
-            Arc::new(crate::clock::SystemClock),
-        )
-        .expect("audit");
-        for n in 0..3 {
-            audit
-                .record(Entry::new("test.event", "ok").with("n", n.to_string()))
-                .expect("record");
-        }
-        assert!(audit.drain(std::time::Duration::from_secs(5)));
     }
 
-    /// How many entries the chain in `dir` holds, verified.
-    fn verified(dir: &Path) -> Result<u64, String> {
-        let mut texts = Vec::new();
-        for file in fs::audit_files(dir)? {
-            texts.push((
-                file.display().to_string(),
-                std::fs::read_to_string(&file).expect("read"),
-            ));
-        }
-        crate::audit_log::verify(texts.iter().flat_map(|(name, text)| {
-            text.lines()
-                .filter(|line| !line.trim().is_empty())
-                .enumerate()
-                .map(move |(index, line)| (format!("{name}:{index}"), line))
-        }))
-    }
-
-    /// The copy over a fixture `data_dir` carries every record into the database and the audit
-    /// record and the blobs into the new `data_dir`, keeps the chain verifiable, leaves the old
-    /// `data_dir` unchanged, and refuses a database that holds the Server's tables and a
-    /// `--data-dir` that is not empty (ADR-0050 clause 15).
+    /// The copy over a fixture `data_dir` carries every record into the database and the blobs
+    /// into the new `data_dir`, leaves the old `data_dir` unchanged, and refuses a database that
+    /// holds the Server's tables and a `--data-dir` that is not empty (ADR-0050 clause 15).
     /// Verifies: ADR-0050
     #[test]
     fn migrate_to_postgres_carries_every_record_and_leaves_the_old_data_dir() {
@@ -608,11 +562,6 @@ mod tests {
             report.lines.iter().any(|line| line == "1 agents"),
             "{report:?}"
         );
-        assert!(report
-            .lines
-            .iter()
-            .any(|line| line == "3 audit files, unchanged"
-                || line.ends_with("audit files, unchanged")));
         assert_eq!(snapshot(&old), before, "the old data_dir is unchanged");
 
         let database = test.open();
@@ -679,18 +628,6 @@ mod tests {
         .expect("every entry finds its blob in the new data_dir");
         assert!(!state_packages.is_empty());
 
-        assert_eq!(
-            verified(&new.join(fs::AUDIT)),
-            verified(&old.join(fs::AUDIT))
-        );
-        assert!(verified(&new.join(fs::AUDIT)).expect("the chain holds") >= 3);
-        for file in fs::audit_files(&old.join(fs::AUDIT)).expect("files") {
-            let copied = new.join(fs::AUDIT).join(file.file_name().expect("name"));
-            assert_eq!(
-                std::fs::read(&copied).expect("read"),
-                std::fs::read(&file).expect("read")
-            );
-        }
         drop((records, state_packages, bootstrap));
 
         // The lock goes with its session, which the server notices once the connection closes.

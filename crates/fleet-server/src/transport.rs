@@ -6,10 +6,8 @@
 //! Endpoint (ADR-0010); what is the Server's is the [`Fleet`] handler, which hands every decoded
 //! report to the same [`AppState::process`], so transport is carriage, never semantics.
 
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{header, StatusCode};
@@ -25,10 +23,9 @@ use opamp::uid::InstanceUid;
 use tokio::sync::watch;
 use tracing::{debug, info};
 
-use crate::agent_rate::{AgentRate, Bucket, Subject};
-use crate::audit::{Audit, Entry};
+use crate::agent_rate::{AgentRate, Subject};
 use crate::enrolment::{Enrolment, Requester, Submitted};
-use crate::fleet::{bad_request, unavailable, AppState, ConnId, Transport};
+use crate::fleet::{bad_request, bounded, unavailable, AppState, ConnId, Transport};
 use crate::revocation::{CertId, Presented, Revocations};
 use crate::throttle::Throttle;
 use crate::tls::{Issuers, Peer};
@@ -52,17 +49,7 @@ pub struct Admission {
     enrolment: Option<Arc<Enrolment>>,
     throttle: Option<Arc<Throttle>>,
     revocations: Option<Arc<Revocations>>,
-    audit: Option<Arc<dyn Audit>>,
-    /// When a plain-HTTP peer presenting a certificate was last recorded as admitted.
-    admitted: Mutex<HashMap<(IpAddr, Option<String>), Instant>>,
 }
-
-/// How often a plain-HTTP peer's admission is recorded: once per address and certificate per
-/// hour, so a poll every few seconds does not crowd the record (ADR-0022 clause 1).
-const ADMITTED_EVERY: Duration = Duration::from_secs(3600);
-
-/// The plain-HTTP peers remembered as recorded at most.
-const ADMITTED_MAX: usize = 100_000;
 
 /// What admitted a connection (ADR-0021 clause 40): the certificate, with when it expires. A
 /// WebSocket session ends when it is revoked, or when it expires.
@@ -96,29 +83,25 @@ impl Proofs {
         }
     }
 
-    /// The refusal of a message or a download past the limit (ADR-0013 clause 27): the host, or the
-    /// certificate's serial and the role of the CA that issued it.
-    fn throttled_entry(
-        &self,
-        peer: Option<IpAddr>,
-        revocations: Option<&Arc<Revocations>>,
-        bucket: Bucket,
-    ) -> Entry {
-        let entry = Entry::new("agent_rate.throttled", "throttled")
-            .peer(peer)
-            .with("plane", "agent")
-            .with("bucket", bucket.as_str());
-        match (&self.host, &self.certificate) {
-            (Some(host), _) => entry.with("host", host.clone()),
-            (None, Some((id, _))) => entry.with("serial", id.serial.clone()).with(
-                "authority",
-                revocations
-                    .and_then(|revocations| revocations.authority_of(&id.issuer))
-                    .map(|authority| authority.role.clone()),
-            ),
-            (None, None) => entry,
-        }
+    /// The serial of the certificate that admitted the connection, if one did.
+    pub(crate) fn serial(&self) -> Option<&str> {
+        self.certificate.as_ref().map(|(id, _)| id.serial.as_str())
     }
+
+    /// The role of the CA that issued that certificate — `client` or `bootstrap` — when it is one
+    /// of this Server's.
+    pub(crate) fn authority(&self, revocations: Option<&Arc<Revocations>>) -> Option<String> {
+        let (id, _) = self.certificate.as_ref()?;
+        revocations?
+            .authority_of(&id.issuer)
+            .map(|authority| authority.role.clone())
+    }
+}
+
+/// An `instance_uid` as hex for a log line, or `None` when it is not one: what a peer sent in its
+/// place is not written out.
+fn logged_uid(uid: &[u8]) -> Option<String> {
+    InstanceUid::from_wire(uid).map(|_| hex::encode(uid))
 }
 
 /// Whether `subject` is a host marked as a Gateway, read at each message (ADR-0013 clause 22).
@@ -162,53 +145,12 @@ impl Admission {
         self
     }
 
-    /// Records every decision in `audit` (ADR-0022).
-    #[must_use]
-    pub fn with_audit(mut self, audit: Option<Arc<dyn Audit>>) -> Self {
-        self.audit = audit;
-        self
-    }
-
     /// `client` or `bootstrap` for a certificate one of this Server's CAs issued.
     fn issuers_role(&self, issuer: &str) -> Option<String> {
         self.revocations
             .as_ref()
             .and_then(|revocations| revocations.authority_of(issuer))
             .map(|authority| authority.role.clone())
-    }
-
-    /// Whether this admission is recorded: every WebSocket session, and a plain-HTTP peer once per
-    /// address — an IPv6 one by its /64 — and certificate per [`ADMITTED_EVERY`].
-    fn worth_recording(&self, websocket: bool, peer: Option<IpAddr>, serial: Option<&str>) -> bool {
-        let (false, Some(peer)) = (websocket, peer) else {
-            return true;
-        };
-        let key = (crate::throttle::peer_key(peer), serial.map(str::to_string));
-        self.admitted
-            .lock()
-            .expect("admitted lock")
-            .get(&key)
-            .is_none_or(|at| at.elapsed() >= ADMITTED_EVERY)
-    }
-
-    /// Notes that a plain-HTTP peer's admission was recorded — only once it was, so a peer
-    /// refused for want of a record is recorded when it is admitted.
-    fn recorded(&self, peer: Option<IpAddr>, serial: Option<&str>) {
-        let Some(peer) = peer else {
-            return;
-        };
-        let mut admitted = self.admitted.lock().expect("admitted lock");
-        if admitted.len() >= ADMITTED_MAX {
-            admitted.retain(|_, at| at.elapsed() < ADMITTED_EVERY);
-            if admitted.len() >= ADMITTED_MAX {
-                // Forgetting only means recording again; it never means admitting unrecorded.
-                admitted.clear();
-            }
-        }
-        admitted.insert(
-            (crate::throttle::peer_key(peer), serial.map(str::to_string)),
-            Instant::now(),
-        );
     }
 
     /// Refuses a revoked certificate (ADR-0021 clause 39).
@@ -250,7 +192,6 @@ pub struct DownloadGuard {
     issuers: Issuers,
     throttle: Option<Arc<Throttle>>,
     revocations: Option<Arc<Revocations>>,
-    audit: Option<Arc<dyn Audit>>,
     agent_rate: Option<Arc<AgentRate>>,
 }
 
@@ -263,7 +204,6 @@ impl Admission {
             issuers: self.issuers.clone(),
             throttle: self.throttle.clone(),
             revocations: self.revocations.clone(),
-            audit: self.audit.clone(),
             agent_rate: None,
         }
     }
@@ -295,20 +235,17 @@ async fn admit_download(
     next: Next,
 ) -> Response {
     let peer = peer_ip(&request);
+    // Logged at `debug`: a peer that was not admitted repeats a refusal at will.
     let path = request.uri().path().to_string();
-    let record = |event: &str, outcome: &str| {
-        guard.audit.as_ref().map(|audit| {
-            audit.record(
-                Entry::new(event, outcome)
-                    .peer(peer)
-                    .with("plane", "agent")
-                    .with("path", path.clone()),
-            )
-        })
-    };
-    if let (Some(throttle), Some(peer)) = (&guard.throttle, peer) {
-        if let Some(wait) = throttle.retry_after(peer) {
-            let _ = record("download.throttled", "throttled");
+    let path = bounded(&path);
+    if let (Some(throttle), Some(ip)) = (&guard.throttle, peer) {
+        if let Some(wait) = throttle.retry_after(ip) {
+            debug!(
+                event = "download.throttled",
+                peer = peer.map(tracing::field::display),
+                path,
+                "refused a download: the address is in back-off"
+            );
             return throttled(wait);
         }
     }
@@ -335,7 +272,12 @@ async fn admit_download(
         if let (Some(throttle), Some(peer)) = (&guard.throttle, peer) {
             throttle.failed(peer);
         }
-        let _ = record("download.refused", "refused");
+        debug!(
+            event = "download.refused",
+            peer = peer.map(tracing::field::display),
+            path,
+            "refused a download: no certificate of the fleet"
+        );
         return unauthorized("the package download requires a certificate of the fleet");
     }
     // What the certificate proves, read once: counted here, and handed to the route, which serves
@@ -356,19 +298,25 @@ async fn admit_download(
         // A download names no Agent, so through a Gateway it counts in the aggregate alone. Over
         // the limit is no failure: the throttle of ADR-0021 clause 24 is not fed.
         if let Err(bucket) = agent_rate.admit(&subject, gateway, None) {
-            if let Some(audit) = &guard.audit {
-                audit.refusal(
-                    proofs
-                        .throttled_entry(peer, guard.revocations.as_ref(), bucket)
-                        .with("route", "download"),
-                );
-            }
+            debug!(
+                event = "agent_rate.throttled",
+                route = "download",
+                peer = peer.map(tracing::field::display),
+                bucket = bucket.as_str(),
+                host = proofs.host.as_deref(),
+                serial = proofs.serial(),
+                authority = proofs.authority(guard.revocations.as_ref()),
+                "a download past the rate limit"
+            );
             return over_rate();
         }
     }
-    if record("download.admitted", "admitted") == Some(Err(crate::audit::Unavailable)) {
-        return busy();
-    }
+    debug!(
+        event = "download.admitted",
+        peer = peer.map(tracing::field::display),
+        path,
+        "admitted a download"
+    );
     if let Some(proofs) = proofs {
         request.extensions_mut().insert(proofs);
     }
@@ -427,14 +375,12 @@ async fn gateway_revocations(State(state): State<Arc<AppState>>, request: Reques
                 .as_ref()
                 .is_some_and(|host| revocations.is_gateway(host))
             {
-                // A member asking for what only a Gateway is handed is a refusal like any other
-                // (ADR-0022 clause 1).
-                state.audit_refusal(
-                    Entry::new("gateway_list.refused", "refused")
-                        .peer(peer_ip(&request))
-                        .with("plane", "agent")
-                        .with("host", host)
-                        .with("check", "not a gateway"),
+                // A member asking for what only a Gateway is handed is a refusal like any other.
+                debug!(
+                    event = "gateway_list.refused",
+                    peer = peer_ip(&request).map(tracing::field::display),
+                    host = host.as_deref(),
+                    "refused the revocation list: not a Gateway"
                 );
                 return forbidden();
             }
@@ -473,7 +419,7 @@ pub fn peer_ip(request: &Request) -> Option<std::net::IpAddr> {
 }
 
 /// The answer while the Server cannot take a decision now — too many password hashes under way on
-/// the Operator plane, or the audit record unavailable: `503`, try again in a second.
+/// the Operator plane: `503`, try again in a second.
 pub fn busy() -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -516,19 +462,14 @@ async fn admit(
     // is the trust boundary; the host is the only bound between admitted Agents. An
     // `Authorization` header is not read here or anywhere behind it (ADR-0021 clause 1).
     let peer = peer_ip(&request);
-    let record_refusal = |event: &str, outcome: &str, check: &str| {
-        if let Some(audit) = &admission.audit {
-            audit.refusal(
-                Entry::new(event, outcome)
-                    .peer(peer)
-                    .with("plane", "agent")
-                    .with("check", check),
+    // Every refusal is logged at `debug`: a peer that was not admitted repeats it at will.
+    if let (Some(throttle), Some(ip)) = (&admission.throttle, peer) {
+        if let Some(wait) = throttle.retry_after(ip) {
+            debug!(
+                event = "admission.throttled",
+                peer = peer.map(tracing::field::display),
+                "refused: the address is in back-off"
             );
-        }
-    };
-    if let (Some(throttle), Some(peer)) = (&admission.throttle, peer) {
-        if let Some(wait) = throttle.retry_after(peer) {
-            record_refusal("admission.throttled", "throttled", "throttle");
             return throttled(wait);
         }
     }
@@ -536,7 +477,12 @@ async fn admit(
         if let (Some(throttle), Some(peer)) = (&admission.throttle, peer) {
             throttle.failed(peer);
         }
-        record_refusal("admission.refused", "refused", check);
+        debug!(
+            event = "admission.refused",
+            peer = peer.map(tracing::field::display),
+            check,
+            "refused admission"
+        );
         response
     };
     let websocket = request
@@ -549,7 +495,6 @@ async fn admit(
         .get::<PeerCertificate>()
         .and_then(|peer| peer.0.clone());
     if admission.require_client_certificate && certificate.is_none() {
-        debug!("refused: the OpAMP endpoint requires a client certificate");
         return refuse(
             "certificate",
             (
@@ -579,7 +524,6 @@ async fn admit(
         .as_ref()
         .is_some_and(|facts| expired(facts.not_after_ms))
     {
-        debug!("refused: an expired certificate");
         return refuse(
             "expired",
             unauthorized("the OpAMP endpoint requires a certificate of the fleet"),
@@ -596,17 +540,13 @@ async fn admit(
         };
         // That the certificate was revoked is not said (ADR-0021 clause 39).
         if proofs.revoked(revocations) {
-            debug!("refused: a revoked certificate");
-            if let Some(audit) = &admission.audit {
-                audit.refusal(
-                    Entry::new("admission.revoked_proof", "refused")
-                        .peer(peer)
-                        .with(
-                            "serial",
-                            presented.as_ref().map(|facts| facts.id.serial.clone()),
-                        ),
-                );
-            }
+            debug!(
+                event = "admission.revoked_proof",
+                peer = peer.map(tracing::field::display),
+                serial = proofs.serial(),
+                authority = proofs.authority(Some(revocations)),
+                "refused: a revoked certificate"
+            );
             return refuse(
                 "revoked",
                 unauthorized("the OpAMP endpoint requires a certificate of the fleet"),
@@ -622,8 +562,12 @@ async fn admit(
         // The handshake proved the certificate, so this is no guess and counts as no failure:
         // hosts that wait for an operator must not throttle the members behind the same address.
         if !admission.enrolment.as_ref().is_some_and(|e| e.is_open()) {
-            debug!("refused: a bootstrap certificate outside an enrolment window");
-            record_refusal("admission.refused", "refused", "enrolment_window");
+            debug!(
+                event = "admission.refused",
+                peer = peer.map(tracing::field::display),
+                check = "enrolment_window",
+                "refused: a bootstrap certificate outside an enrolment window"
+            );
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "no enrolment window is open",
@@ -631,35 +575,36 @@ async fn admit(
                 .into_response();
         }
     }
-    if let Some(audit) = &admission.audit {
-        let serial = presented.as_ref().map(|facts| facts.id.serial.as_str());
-        if admission.worth_recording(websocket, peer, serial) {
-            let entry = Entry::new("admission.admitted", "admitted")
-                .peer(peer)
-                .with("plane", "agent")
-                .with("transport", if websocket { "websocket" } else { "http" })
-                .with(
-                    "as",
-                    match &classified {
-                        Peer::Member => "member",
-                        Peer::Enrolling { .. } => "enrolling",
-                    },
-                )
-                .with(
-                    "authority",
-                    presented
-                        .as_ref()
-                        .and_then(|facts| admission.issuers_role(&facts.id.issuer)),
-                )
-                .with("serial", serial.map(str::to_string));
-            // Not admitted without its record (ADR-0022 clause 6).
-            if audit.record(entry).is_err() {
-                return busy();
-            }
-            if !websocket {
-                admission.recorded(peer, serial);
-            }
-        }
+    let serial = presented.as_ref().map(|facts| facts.id.serial.as_str());
+    let admitted_as = match &classified {
+        Peer::Member => "member",
+        Peer::Enrolling { .. } => "enrolling",
+    };
+    let authority = presented
+        .as_ref()
+        .and_then(|facts| admission.issuers_role(&facts.id.issuer));
+    // A WebSocket session at `info`, once per session; a plain-HTTP poll, every few seconds,
+    // at `debug`.
+    if websocket {
+        info!(
+            event = "admission.admitted",
+            peer = peer.map(tracing::field::display),
+            transport = "websocket",
+            admitted_as,
+            authority,
+            serial,
+            "admitted a session"
+        );
+    } else {
+        debug!(
+            event = "admission.admitted",
+            peer = peer.map(tracing::field::display),
+            transport = "http",
+            admitted_as,
+            authority,
+            serial,
+            "admitted a request"
+        );
     }
     request.extensions_mut().insert(classified);
     request.extensions_mut().insert(Proofs {
@@ -730,7 +675,6 @@ struct Session {
 
 struct Guard {
     revocations: Arc<Revocations>,
-    audit: Option<Arc<dyn Audit>>,
     changes: watch::Receiver<u64>,
     proofs: Proofs,
     expires: Option<tokio::time::Instant>,
@@ -740,7 +684,6 @@ struct Guard {
 impl Guard {
     fn new(
         revocations: Arc<Revocations>,
-        audit: Option<Arc<dyn Audit>>,
         proofs: Proofs,
         ended: Arc<Mutex<Option<&'static str>>>,
     ) -> Self {
@@ -754,7 +697,6 @@ impl Guard {
         Guard {
             changes,
             revocations,
-            audit,
             proofs,
             expires,
             ended,
@@ -804,23 +746,12 @@ impl Outbound for Session {
             return pushes.next().await;
         };
         let ended = guard.ended.clone();
-        let audit = guard.audit.clone();
-        let serial = guard
-            .proofs
-            .certificate
-            .as_ref()
-            .map(|(id, _)| id.serial.clone());
+        let serial = guard.proofs.serial().map(str::to_string);
+        let authority = guard.proofs.authority(Some(&guard.revocations));
         tokio::select! {
             item = pushes.next() => item,
             reason = guard.tripped() => {
-                info!(reason, "ending a session");
-                if let Some(audit) = audit {
-                    audit.refusal(
-                        Entry::new("session.ended", "ended")
-                            .with("reason", reason)
-                            .with("serial", serial),
-                    );
-                }
+                info!(event = "session.ended", reason, serial, authority, "ending a session");
                 *ended.lock().expect("ended lock") = Some(reason);
                 None
             }
@@ -874,14 +805,10 @@ impl Handler for Fleet {
         let ended = Arc::new(Mutex::new(None));
         let session = |pushes: Pushes| Session {
             pushes,
-            guard: self.0.revocations().map(|revocations| {
-                Guard::new(
-                    revocations.clone(),
-                    self.0.audit().cloned(),
-                    proofs.clone(),
-                    ended.clone(),
-                )
-            }),
+            guard: self
+                .0
+                .revocations()
+                .map(|revocations| Guard::new(revocations.clone(), proofs.clone(), ended.clone())),
         };
         let websocket = request.transport == opamp::server::Transport::WebSocket;
         let peer = request.peer.map(|peer| peer.ip());
@@ -1083,7 +1010,7 @@ enum Relayed {
 impl Fleet {
     /// Takes the message's token (ADR-0013) — for an enrolment request through a Gateway, from the
     /// Gateway's enrolment aggregate and the bucket of the bootstrap certificate it names, once
-    /// checked (ADR-0039 clause 13) — and records a message past the limit.
+    /// checked (ADR-0039 clause 13) — and logs a message past the limit.
     fn over_rate(
         &self,
         carrier: &Carrier,
@@ -1109,17 +1036,20 @@ impl Fleet {
         let Err(bucket) = taken else {
             return false;
         };
-        debug!(bucket = bucket.as_str(), "a message past the rate limit");
         let uid = instance_uid
             .filter(|uid| InstanceUid::from_wire(uid).is_some())
             .map(hex::encode);
-        self.0.audit_refusal(
-            carrier
-                .proofs
-                .throttled_entry(carrier.peer, revocations, bucket)
-                .with("instance_uid", uid)
-                .with("route", "opamp")
-                .with("transport", carrier.transport.as_str()),
+        debug!(
+            event = "agent_rate.throttled",
+            route = "opamp",
+            peer = carrier.peer.map(tracing::field::display),
+            bucket = bucket.as_str(),
+            host = carrier.proofs.host.as_deref(),
+            serial = carrier.proofs.serial(),
+            authority = carrier.proofs.authority(revocations),
+            instance_uid = uid,
+            transport = carrier.transport.as_str(),
+            "a message past the rate limit"
         );
         true
     }
@@ -1128,15 +1058,27 @@ impl Fleet {
     /// certificate signing request: no Agent record is created and nothing is offered but the
     /// issued certificate.
     fn enrol(&self, enrolling: &Enrolling, report: &AgentToServer) -> ServerToAgent {
+        // At `debug`: the enrolling host repeats a refused request at will.
+        let refuse = |e: &str| {
+            debug!(
+                event = "enrolment.refused",
+                peer = enrolling.requester.peer.map(tracing::field::display),
+                bootstrap_serial = %enrolling.requester.bootstrap.serial,
+                instance_uid = logged_uid(&report.instance_uid),
+                error = %e,
+                "refused an enrolment request"
+            );
+            bad_request(e)
+        };
         let Some(enrolment) = self.0.enrolment() else {
-            return bad_request("this Server does not enrol");
+            return refuse("this Server does not enrol");
         };
         // A session whose bootstrap certificate was revoked a moment ago neither queues a request
         // nor collects a certificate before its guard closes it (ADR-0021 clause 35).
         if self.0.revocations().is_some_and(|revocations| {
             revocations.is_certificate_revoked(&enrolling.requester.bootstrap)
         }) {
-            return bad_request("this connection is no longer admitted");
+            return refuse("this connection is no longer admitted");
         }
         *enrolling.instance_uid.lock().expect("uid lock") = report.instance_uid.clone();
         let Some(csr) = report
@@ -1158,7 +1100,7 @@ impl Fleet {
                 crate::ca::enrolment_request(&pem, &report.instance_uid)
             }) {
             Ok(request) => request,
-            Err(e) => return bad_request(&e),
+            Err(e) => return refuse(&e),
         };
         *enrolling.request.lock().expect("request lock") = Some(request.clone());
         self.file(
@@ -1225,12 +1167,13 @@ impl Fleet {
         let uid = &report.instance_uid;
         let gateway = carrier.proofs.host.clone();
         let refuse = |e: &str| {
-            info!(gateway = gateway.as_deref().unwrap_or(""), error = %e, "refused an enrolment request through a Gateway");
-            self.0.audit_refusal(
-                Entry::new("enrolment.refused", "refused")
-                    .with("gateway", gateway.clone())
-                    .with("reason", e.to_string())
-                    .with("instance_uid", hex::encode(uid)),
+            // At `debug`: a Gateway relays a refused request as often as its hosts send it.
+            debug!(
+                event = "enrolment.refused",
+                gateway = gateway.as_deref(),
+                instance_uid = logged_uid(uid),
+                error = %e,
+                "refused an enrolment request through a Gateway"
             );
             let mut reply = bad_request(e);
             reply.instance_uid.clone_from(uid);
@@ -1311,17 +1254,21 @@ impl Fleet {
         let subject = request.subject.clone();
         let answer = match enrolment.submit(request, requester.clone()) {
             Submitted::Waiting => {
-                info!(key = %key, "an enrolment request waits for an operator");
-                if let (true, Some(audit)) = (new, self.0.audit()) {
-                    audit.refusal(
-                        Entry::new("enrolment.queued", "queued")
-                            .peer(requester.peer)
-                            .with("gateway", requester.gateway.clone())
-                            .with("id", key.clone())
-                            .with("subject", subject)
-                            .with("bootstrap_subject", requester.bootstrap_subject.clone())
-                            .with("instance_uid", hex::encode(instance_uid)),
+                // A new request at `info`; the same one asked again — every few seconds while it
+                // waits — at `debug`.
+                if new {
+                    info!(
+                        event = "enrolment.queued",
+                        key = %key,
+                        peer = requester.peer.map(tracing::field::display),
+                        gateway = requester.gateway.as_deref(),
+                        subject = bounded(&subject),
+                        bootstrap_subject = %requester.bootstrap_subject,
+                        instance_uid = logged_uid(instance_uid),
+                        "an enrolment request waits for an operator"
                     );
+                } else {
+                    debug!(event = "enrolment.queued", key = %key, "an enrolment request still waits for an operator");
                 }
                 self.0.enrolment_answer(instance_uid, None)
             }
@@ -1334,16 +1281,18 @@ impl Fleet {
                 unavailable(instance_uid, "the enrolment queue is full — retry later")
             }
             Submitted::OverShare { first } => {
-                // Audited once per certificate and window (ADR-0046): a host re-sending its
-                // refused request does not flood the record.
-                if let (true, Some(audit)) = (first, self.0.audit()) {
-                    audit.refusal(
-                        Entry::new("enrolment.refused", "refused")
-                            .peer(requester.peer)
-                            .with("gateway", requester.gateway.clone())
-                            .with("reason", "bootstrap_share")
-                            .with("bootstrap_serial", requester.bootstrap.serial.clone())
-                            .with("bootstrap_subject", requester.bootstrap_subject.clone()),
+                // Logged once per certificate and window (ADR-0046): a host re-sending its
+                // refused request does not flood the log.
+                if first {
+                    info!(
+                        event = "enrolment.refused",
+                        reason = "bootstrap_share",
+                        peer = requester.peer.map(tracing::field::display),
+                        gateway = requester.gateway.as_deref(),
+                        bootstrap_serial = %requester.bootstrap.serial,
+                        bootstrap_subject = %requester.bootstrap_subject,
+                        "refused an enrolment request: its bootstrap certificate holds its share \
+                         of the queue"
                     );
                 }
                 unavailable(

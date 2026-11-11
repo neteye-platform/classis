@@ -3,7 +3,7 @@
 - **Status:** ⚪ superseded by
   [ADR-0048](0048-a-bootstrap-pkcs12-password-of-8-to-128-characters.md)
 - **Date:** 2026-10-15
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the password rule of `crates/fleet-core/src/pkcs12.rs` and its
   callers, the password field of the Enrolments tab of the bundled UI in
   `crates/fleet-server/static/index.html`, the `400` text of
@@ -44,9 +44,9 @@ control characters in place of ADR-0029 clause 2's 12 to 128.
 
 1. **Restates ADR-0029 clause 2. A password is 4 to 128 characters of UTF-8
    without control characters.** Anything else is answered `400`. The password
-   is not stored, logged or audited anywhere, on the Server or on the host. It
-   reaches the Server on the Operator plane, which beyond the loopback serves
-   TLS only (ADR-0021 clause 17).
+   is not stored or logged anywhere, on the Server or on the host. It reaches
+   the Server on the Operator plane, which beyond the loopback serves TLS only
+   (ADR-0021 clause 17).
 
 **Out of scope:** a strength rule beyond the length, a warning for short
 passwords, and a password the Server generates. Each can be added later without
@@ -89,7 +89,7 @@ contradicting this clause.
   too. This trade-off is accepted. The documents that tell an operator how to
   issue a bootstrap certificate say so.
 - Follow-ups: whether a short password should be marked when the certificate is
-  issued (for example in the audit entry, without the password); and whether the
+  issued (for example in its log event, without the password); and whether the
   Server should offer a generated password.
 
 ## Enforcement

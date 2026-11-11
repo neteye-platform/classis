@@ -5,7 +5,7 @@
   superseded by
   [ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the CSR handling on a member connection in
   `crates/fleet-server/src/fleet.rs` (the host and predecessor a CSR is issued
   to), the certificate register in `crates/fleet-server/src/revocation.rs`, the
@@ -103,8 +103,8 @@ the Server decides as any enrolment.
    bootstrap proof is an enrolment through the Gateway (clause 12), and any
    other is answered `BadRequest` with a message saying that a certificate
    requested through a Gateway needs a renewal or a bootstrap proof. Nothing is
-   signed, and the refusal is recorded as every refused CSR is
-   ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)). This holds
+   signed, and the refusal is logged as every refused CSR is
+   ([ADR-0022](0022-security-decisions-are-structured-log-events.md)). This holds
    whatever `instance_uid` the message names, and for the Gateway's own Agent
    too.
 
@@ -351,7 +351,7 @@ the Server decides as any enrolment.
     mints a host of its own, never the Gateway's. Without an open window it is
     answered `Unavailable`, as on an enrolment connection. The pending request
     names the Gateway's host instead of a peer address, in the queue and in
-    every audit entry of it. Through a Gateway the proof carries no chain, so
+    every log event of it. Through a Gateway the proof carries no chain, so
     its certificate must be issued directly by the bootstrap CA. A CSR with a
     bootstrap proof over a certificate whose host is not marked as a Gateway is
     answered `BadRequest`: a member does not enrol. A proof that names the

@@ -191,7 +191,11 @@ fn the_server_warns_at_startup_about_a_ca_that_is_ending_and_serves_on() {
     let mut warned = false;
     loop {
         match logged.recv_timeout(Duration::from_secs(30)) {
-            Ok(line) if line.contains("ends soon") && line.contains("client-ca.pem") => {
+            Ok(line)
+                if line.contains("ends soon")
+                    && line.contains("client-ca.pem")
+                    && line.contains("pki.expiring") =>
+            {
                 warned = true;
             }
             Ok(line) if line.contains("serving the REST API") => break,
@@ -203,27 +207,6 @@ fn the_server_warns_at_startup_about_a_ca_that_is_ending_and_serves_on() {
         warned,
         "the ending client CA was not warned about before serving"
     );
-
-    // The audit writer runs on its own; give it a moment to reach the file.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let audit = std::fs::read_dir(dir.path().join("data/audit"))
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
-                    .collect::<String>()
-            })
-            .unwrap_or_default();
-        if audit.contains("\"pki.expiring\"") {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no pki.expiring entry in the audit: {audit}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// `server pki status` reads the configuration every command reads (ADR-0051 clause 2): without

@@ -444,8 +444,8 @@ with it, and the Server logs an error naming the database and refuses every
 write from then on, so it never writes beside a second Server. Restart it once
 the database answers.
 
-With `"postgres"`, `data_dir` holds the audit record (`audit/`) and, with the
-filesystem blob store, the artifacts (`blobs/`), and nothing else. A record of
+With `"postgres"`, `data_dir` holds the artifacts (`blobs/`) with the filesystem
+blob store, and nothing else. A record of
 the filesystem store found there — `agents/`, `configurations/`,
 `revocations.json` and the rest — stops the start, naming it and
 `server migrate-to-postgres`. A backup takes the database and `data_dir`
@@ -573,8 +573,8 @@ endpoint = "wss://fleet.example:4320/v1/opamp"
 
 Everything the Server knows survives a restart under one directory, `data_dir`,
 in a fixed layout — or, with [`[database]`](#database) `store = "postgres"`, in
-the database, with only `audit/` and `blobs/` left under `data_dir`. With the
-filesystem store the layout is:
+the database, with at most `blobs/` left under `data_dir`. With the filesystem
+store the layout is:
 
 | Path                                       | One file per          | Holds                                                                                                                        |
 | ------------------------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -588,7 +588,6 @@ filesystem store the layout is:
 | `revocations.json`                         | —                     | The revocation list                                                                                                          |
 | `bootstrap/<issuer>-<serial>.json`, `.p12` | bootstrap certificate | Its record, and its PKCS#12 file when one was made                                                                           |
 | `enrolment.json`                           | —                     | The enrolment window and its pending requests                                                                                |
-| `audit/audit-<first seq>.jsonl`            | audit file            | The audit record                                                                                                             |
 
 `<issuer>` is the first 16 hex characters of the SHA-256 of the issuer's
 DER-encoded name, and `<serial>` the certificate's serial in lowercase hex. A
@@ -602,8 +601,8 @@ it written as `%XX` in its file name.
   admits only the Server's account and the administrators.
 - **One step per write.** Every record is written to a temporary file beside it
   and renamed into place, so a crash leaves the old document or the new one. The
-  register, the revocation list, the Hosts, the bootstrap records, the enrolment
-  window and the audit reach the disk before the decision they answer is. A
+  register, the revocation list, the Hosts, the bootstrap records and the
+  enrolment window reach the disk before the decision they answer is. A
   temporary file a crash left behind is removed at the next start.
 - **Nothing else is read.** A file or directory the layout does not name, a file
   that does not parse, or one whose name disagrees with what it holds stops the
@@ -612,7 +611,7 @@ it written as `%XX` in its file name.
   artifact no Package entry names is deleted then.
 - **Backup** is a copy of `data_dir` taken while the Server is stopped;
   restoring it is putting the copy back. A copy taken while it runs may hold an
-  Agent record or an audit line mid-write.
+  Agent record mid-write.
 
 ## Moving the records into PostgreSQL
 
@@ -633,9 +632,9 @@ server migrate-to-postgres --from /var/lib/opamp-fleet/fleet-data \
   written into the database. It only reads the old `data_dir`: what a start
   would repair there — a missing directory, a leftover temporary file, a mode —
   it leaves as it is.
-- It copies `audit/` and, with the filesystem blob store, `blobs/` into the new
-  `data_dir` byte for byte, so the audit chain still verifies; then it applies
-  the schema and writes every record in one transaction.
+- With the filesystem blob store it copies `blobs/` into the new `data_dir` byte
+  for byte; then it applies the schema and writes every record in one
+  transaction.
 - It copies rather than moves: the old `data_dir` stays as the backup. It prints
   what it copied, and exits non-zero when it could not copy all of it, leaving
   the database without the Server's tables and the new `data_dir` empty.
@@ -667,9 +666,12 @@ reads neither: a `server.toml` naming either key stops it at startup.
    It copies and never moves: the old directories stay as they were, as your
    backup. It prints one line per thing it carried, dropped or listed:
    - **Trust data** — the certificate register, the revocation list, the Hosts,
-     the bootstrap certificates with their PKCS#12 files, and the audit files —
-     is carried whole. The audit lines are copied, not rewritten, and the
-     migration checks that the chain holds.
+     and the bootstrap certificates with their PKCS#12 files — is carried
+     whole.
+   - **Audit files** are not carried: this Server keeps no audit record
+     ([Security decisions in the log](#security-decisions-in-the-log)). The
+     migration names them and leaves them in the old directory; keep them there
+     if you need the old record.
    - **Packages**: each artifact becomes a blob. Each entry takes the signature
      the Deployments held for it; where two Deployments held different
      signatures for one entry it is carried **unsigned** and named — sign it
@@ -957,13 +959,12 @@ and carries an HMAC-SHA-256 MAC, so OpenSSL 3 opens it with its defaults
 (`openssl pkcs12 -in bootstrap.p12 -info`). The Server keeps it beside the
 certificate's record under `data_dir/bootstrap/`, as `<issuer>-<serial>.p12`,
 readable by its own account only. **The password is kept nowhere** — not in the
-file's directory, not in a log, not in the audit — so give it to the host by
-another way than the file. Every download is recorded in the audit as
-`enrolment.bootstrap_p12_downloaded` with the serial; a download is answered
-`503` while the audit record cannot be written, and `404` for a certificate with
-no file, a revoked one, an ended one, an unknown serial, or a certificate an
-older Server issued without a file. A revocation removes the file before it is
-answered; lifting the revocation does not bring it back.
+file's directory, not in a log — so give it to the host by another way than the
+file. Every download is logged as `enrolment.bootstrap_p12_downloaded` with the
+serial. A download is answered `404` for a certificate with no file, a revoked
+one, an ended one, an unknown serial, or a certificate an older Server issued
+without a file. A revocation removes the file before it is answered; lifting the
+revocation does not bring it back.
 
 **Every host certificate issued from it carries its subject values.** Approving
 an enrolment copies the six values from the bootstrap certificate the host
@@ -981,8 +982,8 @@ type or length, no organization or no organizational unit — lists no
 `bootstrap_subject` but a `subject_refusal` naming the attribute: approving it
 is refused `409`, so reject it and give the host a certificate that follows
 them. A renewal carries the values of the certificate it renews as they are,
-without checking them again. Every issuance is recorded in the audit as
-`enrolment.bootstrap_issued`, with `p12` saying a file was made.
+without checking them again. Every issuance is logged as
+`enrolment.bootstrap_issued`, with its serial, subject and `not_after_ms`.
 
 The UI's **Enrolments** tab does the same: it issues a certificate with the
 values you type, the customer, the site and the password required and the
@@ -1011,20 +1012,18 @@ curl --cacert ca.pem -X DELETE https://127.0.0.1:4321/api/v1/bootstrap-certifica
 ```
 
 Deleting removes the entry and any `bootstrap.p12` of it, answered `204`, and is
-recorded in the audit as `enrolment.bootstrap_deleted`. **The revocation
-stays**: the certificate is still refused for as long as it would be valid, and
-`GET /api/v1/revocations` still lists it. A request that carries it shows _not
-issued here_. Only a revoked certificate is deleted; a valid one is answered
-`409` — revoke it first — and an unknown serial `404`; while the audit record
-cannot be written, nothing is deleted and the answer is `503`.
+logged as `enrolment.bootstrap_deleted`. **The revocation stays**: the
+certificate is still refused for as long as it would be valid, and `GET
+/api/v1/revocations` still lists it. A request that carries it shows _not issued
+here_. Only a revoked certificate is deleted; a valid one is answered `409` —
+revoke it first — and an unknown serial `404`.
 
 When issuing, the Server holds at most 10 000 valid ones, revoked ones included
 until they end or are deleted, and answers a request beyond that `409`. It
 answers `409` too while it holds no `bootstrap_ca_key_file` or once the
-bootstrap CA has ended, `503` while the audit record cannot be written, since no
-key is handed out unrecorded, and `400` for a subject attribute it does not
-know, a value out of bounds, `validity_days` outside 1 to 90, or a password
-outside 8 to 128 characters.
+bootstrap CA has ended, and `400` for a subject attribute it does not know, a
+value out of bounds, `validity_days` outside 1 to 90, or a password outside 8 to
+128 characters.
 
 **The window is closed by default.** Open it for as long as you are enrolling
 hosts, from 1 to 86400 seconds:
@@ -1053,8 +1052,8 @@ else.** The Server creates no Agent record for it and offers it nothing but the
 issued certificate. The request waits in a queue of at most 1024, of which the
 requests of one bootstrap certificate hold at most `max_pending_per_bootstrap`,
 256 by default. A request beyond either bound is answered `Unavailable` and the
-host retries later; one beyond its bootstrap certificate's share is recorded in
-the audit as `enrolment.refused` with `reason` `bootstrap_share` and the
+host retries later; one beyond its bootstrap certificate's share is logged as
+`enrolment.refused` with `reason` `bootstrap_share` and the
 certificate's serial, once per certificate and window. A re-sent request that
 already waits is never refused. The Client keeps its pending key and re-sends
 the same request until it is answered.
@@ -1151,7 +1150,7 @@ never queued.
 
 The pending request names the Gateway's host in place of a peer address —
 `"gateway":"0192…"` in `GET /api/v1/enrolments`, _via Gateway_ in the
-**Enrolments** tab, and `gateway` in every audit entry of it:
+**Enrolments** tab, and `gateway` in every log event of it:
 `enrolment.queued`, `enrolment.refused`, `enrolment.approved` and
 `enrolment.rejected`. The host collects its certificate in its next request
 after the approval, and then reports through the Gateway as a member. The Server
@@ -1234,40 +1233,60 @@ Server unreachable, or its host not marked — answers every downstream peer `50
 and closes their sessions with the reason `revocation list stale`. Revoking the
 Gateway's own certificate ends every Agent it carries.
 
-## The audit record
+## Security decisions in the log
 
-Every security decision leaves one line in `data_dir/audit/`: each admission and
-refusal on the Agent plane, each refused operator sign-in, each enrolment
-request, approval and rejection, each certificate issued, each revocation and
-the session it ended, each request for the Gateways' revocation list from a host
-not marked as a Gateway, each download a host may not fetch, each operator act
-with the operator's name, and each package an Agent reports installed or failed.
-A plain-HTTP Agent's admission is recorded once an hour per address and
-certificate, a WebSocket session every time. No line holds a secret in any form
-— an `Authorization` value is never written, not even as a hash, whether an
-operator presented it or an Agent sent it unasked — nor a key or a CSR body.
+The Server keeps no audit record and writes nothing for one. Every security
+decision it takes is one structured event on its log, which goes to standard
+error with everything else it logs ([Running it](#running-it)): each admission
+and refusal on the Agent plane, each refused or throttled operator sign-in, each
+enrolment request, approval and rejection, each certificate issued, each
+revocation and the session it ended, each request for the Gateways' revocation
+list from a host not marked as a Gateway, each download a host may not fetch,
+each operator act — every `POST`, `PUT`, `PATCH` and `DELETE` on the REST API,
+once it has run, with its method, path and status but not the operator's name —
+each package an Agent reports installed or failed, and each of the Server's own
+certificates that is ending or has ended.
 
-```console
-$ tail -n1 /var/lib/opamp-fleet-server/audit/audit-1.jsonl
-{"event":"revocation.revoked","id":"9d2e…","kind":"certificate","authority":"client",
- "serial":"5c0f…","outcome":"revoked","prev":"41b7…","seq":5113,"time":"2026-10-04T09:12:44Z"}
-$ server audit-verify /var/lib/opamp-fleet-server/audit
-5113 entries in 1 files, the chain holds
+Each event names itself in its `event` field — `admission.refused`,
+`enrolment.approved`, `revocation.revoked` and so on — and carries, where they
+apply, the peer address, the Agent's `instance_uid`, and the certificate's CA
+role (`authority`) and serial. No event holds a secret in any form — an
+`Authorization` value is never logged, not even as a hash, whether an operator
+presented it or an Agent sent it unasked — nor a key or a CSR body. A text a peer
+chose, such as a user name, a path, a request's subject or the error an Agent
+reports, is cut at 256 bytes.
+
+The level says whether a peer can repeat it at will. Nothing aggregates the
+events and the log has no rate limit, so what a peer can cause as often as it
+likes stays out of the default `info`:
+
+- **`debug`** — a refusal or a throttle of a peer that was not admitted, on the
+  Agent plane, on the download route and at an operator sign-in; a message or a
+  download over a host's rate (`agent_rate.throttled`); a download a host may
+  not fetch; a member refused the Gateways' revocation list; an enrolment
+  request refused, directly or through a Gateway, or asked again while it waits;
+  and each admitted plain-HTTP poll and download. Set
+  `RUST_LOG=info,fleet_server=debug` while you investigate.
+- **`info`** — every decision taken: a WebSocket session admitted or ended, a
+  new enrolment request, a request refused for its bootstrap certificate's share
+  of the queue (once per certificate and window), an approval or rejection, the
+  window, every issuance, revocation and bootstrap-certificate event, an
+  operator act, a package outcome.
+- **`warn`** — what an admitted host should never ask for: a certificate
+  request refused, a report that claims an `instance_uid` bound to another host;
+  and a certificate the Server depends on that is ending (`pki.expiring`).
+- **`error`** — such a certificate that has ended (`pki.expired`).
+
+```sh
+docker logs opamp-fleet-server 2>&1 | grep 'revocation.revoked'
 ```
 
-Each line carries the SHA-256 of the line before it, so a line edited or removed
-afterwards breaks the chain where it happened; `audit-verify` names the first
-entry that does not follow. Against an intruder on the Server host that only
-helps with a copy taken before, so ship the directory off the host. The record
-also goes to the Server's log under the target `audit`.
-
-The Server never takes a decision it cannot record: when the record cannot be
-written — a full disk, a failed device — it admits no Agent and runs no operator
-act, answering `503`, until it can. A certificate request in that time is
-answered `Unavailable` with a time to retry, and the Agent asks again. Refusals
-past ten a second from one address are counted into one line, not dropped.
-`[audit] max_file_bytes` (64 MiB) and `keep_files` (16) bound the space it
-takes.
+What keeps these lines, for how long, and who may change them is whatever
+collects the Server's output — journald, the container runtime, a log shipper.
+Nothing makes a line edited or removed afterwards visible; if you need that,
+ship the log off the host to a store the Server's host cannot rewrite. A
+decision never waits for its line: no request is answered `503`, and no
+certificate request `Unavailable`, for want of one.
 
 ## Configurations: what the fleet runs
 
@@ -1719,14 +1738,15 @@ released to another host's Agents, one released to nobody yet, an entry that
 carries no signature, and any request over a certificate that names no host. A
 malformed type, version or Platform is still answered `400`, and a certificate
 that is not a member's still `401`. Each refused fetch leaves a
-`download.refused` entry in [the audit record](#the-audit-record) with `check`
-`not offered`, the host, the certificate's serial and the type, version and
-Platform asked for. The certificate is admitted before the route decides what it
-may fetch, so a refused fetch leaves both a `download.admitted` and a
-`download.refused` entry: a `download.admitted` says the certificate was let in,
-not that an artifact was served. Such a refusal is no failed admission, so it
-does not count toward [the throttle](#repeated-failures-are-throttled). Each
-download, served or refused, takes a token from the host's bucket
+`download.refused` event at `debug` in [the log](#security-decisions-in-the-log)
+with `check` `not offered`, the host, the certificate's serial and CA role, and
+the type, version and Platform asked for. The certificate is admitted before the
+route decides what it may fetch, so a refused fetch leaves both a
+`download.admitted` and a `download.refused` event: a `download.admitted` says
+the certificate was let in, not that an artifact was served. Such a refusal is
+no failed admission, so it does not count toward
+[the throttle](#repeated-failures-are-throttled). Each download, served or
+refused, takes a token from the host's bucket
 ([How often a member may be heard](#how-often-a-member-may-be-heard)); for a
 Gateway, from its aggregate bucket.
 
@@ -1988,7 +2008,7 @@ successful admission clears nothing — behind a shared address a member's succe
 would wipe a guesser's count — so failures only age out of the window. On the
 Agent plane a `401` follows a handshake that succeeded, so the throttle bounds
 what a refused host that keeps retrying costs in handshakes, revocation lookups
-and audit entries. The Operator plane counts its own `401`s the same way, in a
+and log lines. The Operator plane counts its own `401`s the same way, in a
 table of its own. `0` for any of the three keys is refused at startup.
 
 ### How often a member may be heard
@@ -2040,14 +2060,14 @@ Client waits it out before it asks again, for up to 30 minutes per download.
 Beyond this limit the Server honours the protocol's error and retry semantics as
 well, and answers malformed input with `BAD_REQUEST`.
 
-Every refusal is recorded as `agent_rate.throttled`, naming the host (or the
-serial and the CA's role), the `instance_uid`, the `bucket` that was empty
-(`agent`, `host` or `gateway`; for an enrolment request through a Gateway
-`bootstrap` for its certificate's bucket, `enrolment` for the Gateway's
+Every refusal is logged as `agent_rate.throttled`, naming the host, the
+certificate's serial and CA role (`authority`), the `instance_uid`, the `bucket`
+that was empty (`agent`, `host` or `gateway`; for an enrolment request through a
+Gateway `bootstrap` for its certificate's bucket, `enrolment` for the Gateway's
 enrolment aggregate, `unchecked_enrolment` for its bucket for unchecked
-enrolments) and the `route` (`opamp` with its `transport`, or `download`). Past
-ten a second from one address they are counted in
-`agent_rate.throttled.aggregated`.
+enrolments) and the `route` (`opamp` with its `transport`, or `download`), at
+`debug`. Nothing aggregates them: a host that floods writes one line per
+refusal.
 
 The default `burst` lets one full report from each of the 256 Agents a host may
 speak for through after a reconnect. `messages_per_sec` times the offered
@@ -2261,3 +2281,6 @@ Agent's signing request.
   services on the host — the Client is the end that ships its own service
   integration.
 - **It has no user model and no multi-tenancy.** One Server manages one fleet.
+- **It keeps no audit record.** Its security decisions are
+  [events on its log](#security-decisions-in-the-log); nothing makes a line
+  edited or removed afterwards visible.

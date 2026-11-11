@@ -7,7 +7,7 @@
   · clause 22 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
 - **Date:** 2026-10-04
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the OpAMP endpoint and both transports in
   `crates/fleet-server/src/transport.rs` and
   `crates/fleet-agent/src/transport/`, TLS in `crates/opamp/src/tls.rs`,
@@ -25,7 +25,7 @@
   every `Unavailable` reply in `crates/fleet-server/src/fleet.rs`, the
   `[agent_rate_limit]` section of `server.toml` and its parsing and startup
   warning in `crates/fleet-server/src/config.rs`, and the `agent_rate.throttled`
-  audit event
+  log event
 
 ## Context
 
@@ -168,11 +168,9 @@ Forces that shape the rate limit:
     to reconnect"_.
   - _"The minimum recommended retry interval is 30 seconds."_
   - This Server answers `Unavailable` with `retry_info` of 30 s (`RETRY_AFTER`
-    in [`fleet.rs`](../../crates/fleet-server/src/fleet.rs)) in four places
+    in [`fleet.rs`](../../crates/fleet-server/src/fleet.rs)) in three places
     besides the rate limit: at the Agent-record ceiling, when the enrolment
-    queue is full, when no enrolment window is open (ADR-0021 clause 21), and
-    when the audit record holds back a CSR
-    ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md) clause 6).
+    queue is full, and when no enrolment window is open (ADR-0021 clause 21).
 - **The Client honours `Unavailable` on both transports.**
   [`opamp::client::protocol`](../../crates/opamp/src/client/protocol.rs) turns
   it into a wait, `retry_info` or 30 s without one.
@@ -196,10 +194,9 @@ Forces that shape the rate limit:
 - **A host speaks for at most 256 Agents** (ADR-0021 clause 7), and after a
   reconnect the Client sends one full report for each of them. At the Baseline's
   30 s heartbeat or poll, 256 Agents send about 8.5 messages a second.
-- **Refusals already have a bounded record.** ADR-0022 clause 5 writes at most
-  ten refusals of one event per peer address and second, and counts the rest.
-  ADR-0022 clause 6 counts every decision whose entry could not be queued in the
-  next entry's `unrecorded_before`.
+- **A refusal is a log event.** The Server keeps no record of its own
+  ([ADR-0022](0022-security-decisions-are-structured-log-events.md)), and
+  nothing aggregates the lines a flood of refusals writes.
 
 ## Decision
 
@@ -487,7 +484,7 @@ for a host marked as a Gateway.
     | Who gets it             | A peer address in back-off for failed admissions | A member over its rate                                     |
     | `Retry-After`           | The seconds of back-off left                     | 30                                                         |
     | Feeds the failure count | —                                                | No, it is no failure                                       |
-    | Recorded as             | `download.throttled`                             | `agent_rate.throttled` with `route` `download` (clause 27) |
+    | Logged as               | `download.throttled`                             | `agent_rate.throttled` with `route` `download` (clause 27) |
 
     The Client's downloader treats either one as a failed download.
 
@@ -495,10 +492,8 @@ for a host marked as a Gateway.
     answers.** The Client and a Gateway route replies by that field alone and
     drop a reply without it. The throttled reply of clause 23 therefore names
     the Agent that sent the message, and only that Agent. The other
-    `Unavailable` replies carry it too, within ADR-0021 and ADR-0022. Those
-    replies are:
+    `Unavailable` replies carry it too, within ADR-0021. Those replies are:
     - the Agent-record ceiling in `fleet.rs`;
-    - a CSR held back for its audit record;
     - the full enrolment queue and the closed enrolment window in
       `Fleet::enrol`.
 
@@ -520,21 +515,22 @@ for a host marked as a Gateway.
     early, and filling a table to that end takes as many keys in use as the
     table holds.
 
-27. **The audit records every throttled message and download as a refusal.**
-    Each one is passed to the audit record (ADR-0022) as event
-    `agent_rate.throttled` with outcome `throttled`. The entry carries:
+27. **Every throttled message and download is logged as a refusal.** Each one
+    is the log event `agent_rate.throttled`
+    ([ADR-0022](0022-security-decisions-are-structured-log-events.md)). The
+    event carries:
     - the peer address;
-    - `host`, or `serial` and the CA role where the certificate names no host;
+    - `host` where the certificate names one, its `serial`, and its CA role as
+      `authority`;
     - `instance_uid`, hex, where the message carries a valid one;
     - `bucket`: `agent`, `host` or `gateway`, naming the bucket that was empty;
     - `route`: `opamp` with the `transport`, or `download`.
 
-    The entries are aggregated under ADR-0022 clause 5, by event and peer
-    address. A host that floods costs at most ten entries and one
-    `agent_rate.throttled.aggregated` count per address and second. The refusal
-    never waits for its entry. A refusal that finds the audit channel full is
-    counted in the next entry's `unrecorded_before` (ADR-0022 clause 6). A
-    message or download the limit lets through is recorded by nothing new.
+    The event is logged at `debug`, as everything a peer can repeat at will is
+    (ADR-0022 clause 3), and nothing aggregates it: a host that floods writes
+    one line per refused message or download. The refusal never waits for its
+    event. A message or download the limit lets through is logged by nothing
+    new.
 
 **Out of scope:** authentication on either plane and what a client certificate
 must prove, including whether the Agent plane's handshake requires it
@@ -666,7 +662,7 @@ honours `Retry-After`.
   `retry_info`, only a reconnect at its backoff.
 - **`retry_info` as the time until the next token.** That is at most 100 ms at
   the defaults, and a WebSocket Client reconnects at that pace. Every reconnect
-  costs a TLS handshake and an admission entry, and it brings a full report from
+  costs a TLS handshake and an admission event, and it brings a full report from
   every Agent at once, which can run into the limit again. 30 s is the
   Baseline's recommended minimum and what every other `Unavailable` of this
   Server says.
@@ -773,8 +769,6 @@ honours `Retry-After`.
     throttle and its bounded table;
   - [`fleet.rs`](../../crates/fleet-server/src/fleet.rs): `unavailable`,
     `RETRY_AFTER` and the `sequence_num` gap;
-  - [`audit_log.rs`](../../crates/fleet-server/src/audit_log.rs): the
-    `unrecorded_before` count;
   - [`server.rs`](../../crates/opamp/src/server.rs): the `Handler` dispatch;
   - the Client's handling of `Unavailable` in
     [`protocol.rs`](../../crates/opamp/src/client/protocol.rs),
@@ -871,9 +865,10 @@ honours `Retry-After`.
   Server, and here it answers one host or Gateway over its rate while the Server
   has time to spare. The Agent sees no difference, and the protocol has no other
   retryable answer.
-- Negative / trade-offs: an aggregate audit entry names the peer address, not
-  the host, because ADR-0022 aggregates by address. Behind a NAT or a Gateway
-  only the first ten entries of each second name the host or the Agent.
+- Negative / trade-offs: a host that floods writes one `agent_rate.throttled`
+  line per refused message, each naming the host or the Agent; nothing
+  aggregates them
+  ([ADR-0022](0022-security-decisions-are-structured-log-events.md)).
 - Follow-ups: per-listener TLS material if a deployment needs a public
   certificate for operators and a private one for Agents; a connection cap on
   the Client's Gateway endpoint; measuring the HTTP/2 bounds against a real
@@ -1000,19 +995,12 @@ Tests of the rate limit, each marked `Verifies: ADR-0013`:
   - `two_certificates_of_one_host_share_a_bucket_and_two_hosts_do_not` and
     `a_bootstrap_certificate_shared_by_two_addresses_is_two_buckets` (clause
     22);
-  - `a_throttled_message_leaves_an_aggregated_refusal_naming_the_host`: beyond
-    ten a second, the entries are counted in `agent_rate.throttled.aggregated`
-    (clause 27);
   - `every_unavailable_reply_names_the_agent_it_answers`: each of these carries
     the message's `instance_uid` (clause 25):
     - the throttled reply;
     - the Agent-record ceiling;
-    - a CSR held back for its audit record;
     - the full enrolment queue;
     - the closed enrolment window.
-- `crates/fleet-server/src/audit_log.rs`:
-  `a_throttle_refusal_that_finds_the_channel_full_is_counted_unrecorded` (clause
-  27).
 - `crates/fleet-agent/tests/gateway_revocation_e2e.rs`:
   `a_throttled_agent_behind_a_gateway_hears_unavailable_and_its_neighbour_does_not`.
   Two Agents ride one folded connection to a marked Gateway, and one floods. It
@@ -1025,4 +1013,5 @@ no test waits them out; review keeps both planes on `listen::plane` and the
 shared `Handle`. Clause 17 — the HTTP/2 stream cap and keep-alive bounds are
 named constants set in `opamp::server::listen`, and the workspace has no HTTP/2
 client to drive a peer past them; review checks that every listener goes through
-`Listener::serve`.
+`Listener::serve`. Clause 27 — no test reads the Server's log, so that each
+throttled message and download is logged with its fields is review.

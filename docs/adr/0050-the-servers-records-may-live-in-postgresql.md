@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** every storage port in `crates/fleet-server/src/`
   (`agent_store.rs`, `configs.rs`, `deployments.rs`, `packages.rs`,
   `bootstrap.rs`, `enrolment.rs`, `revocation.rs`) and every PostgreSQL adapter
@@ -70,8 +70,8 @@ per database schema.
    - `[database] store` is `"fs"`, the default, or `"postgres"`. Any other value
      fails startup naming the key. Both are supported in production.
    - `server.toml` names `data_dir` (default `fleet-data`) with either store.
-     With `"fs"` it holds every record; with `"postgres"` it holds the audit
-     record and, with the filesystem blob store, the blobs (clause 2).
+     With `"fs"` it holds every record; with `"postgres"` it holds the blobs of
+     the filesystem blob store, and nothing else (clause 2).
    - `config_dir` and `packages_dir` no longer exist. A `server.toml` that names
      either fails startup, naming the key and `server migrate`.
    - The Server creates every directory under `data_dir` owner-only (`0700`) and
@@ -80,8 +80,8 @@ per database schema.
      its parent directory hands down. Restricting it to the Server's account is
      then the operator's, as no installer exists for the Server there.
    - Every file is written through a temporary file and a rename. Where a record
-     answers a security decision (the register, the revocation list, the audit),
-     the rename is synced to disk before the decision is answered.
+     answers a security decision (the register, the revocation list), the
+     rename is synced to disk before the decision is answered.
 
 2. **Restates ADR-0037 clause 2. The layout of `data_dir` is fixed, and no other
    is read.** With `store = "fs"`, under `data_dir`:
@@ -98,11 +98,10 @@ per database schema.
    | `revocations.json`                         | the revocation list                        | Revocations                                                                                              |
    | `bootstrap/<issuer>-<serial>.json`, `.p12` | bootstrap certificate the Server issued    | Bootstrap                                                                                                |
    | `enrolment.json`                           | the window and its pending requests        | Enrolment (clause 9)                                                                                     |
-   | `audit/audit-<first seq>.jsonl`            | audit file                                 | Audit                                                                                                    |
 
-   With `store = "postgres"`, `data_dir` holds `audit/` and, with the filesystem
-   blob store, `blobs/`, and nothing else. Beside a bucket, a `blobs/` an
-   earlier filesystem blob store left is accepted too, as the place
+   With `store = "postgres"`, `data_dir` holds `blobs/` with the filesystem blob
+   store, and nothing else. Beside a bucket, a `blobs/` an earlier filesystem
+   blob store left is accepted too, as the place
    [ADR-0049](0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md)
    clause 7 copies from; the Server does not create it there.
 
@@ -117,12 +116,12 @@ per database schema.
    since the record beside it is the one before the write.
 
 3. **One PostgreSQL adapter per port, one transaction per call.**
-   - Every port of ADR-0037 clause 3 but the blob port and the audit port gets
-     an adapter that keeps its records in tables of the Server's schema:
-     Configurations with their revisions, Deployments, Package records, Agents
-     with their labels and assignments, Hosts, the certificate register, the
-     revocation list, bootstrap entries with their PKCS#12 files, and the
-     enrolment window with its queue.
+   - Every port of ADR-0037 clause 3 but the blob port gets an adapter that
+     keeps its records in tables of the Server's schema: Configurations with
+     their revisions, Deployments, Package records, Agents with their labels and
+     assignments, Hosts, the certificate register, the revocation list,
+     bootstrap entries with their PKCS#12 files, and the enrolment window with
+     its queue.
    - What one port call writes is one transaction. A rollout's revisions and
      assignments commit together or not at all, and a bootstrap entry commits
      with its PKCS#12 file.
@@ -136,10 +135,9 @@ per database schema.
      a rollout. The same bytes round-trip as with the filesystem store.
    - A call that answers a security decision returns only after its transaction
      has committed.
-   - The audit record stays in `data_dir/audit/` with either store
-     ([ADR-0037](0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)
-     clause 12). Moving it into the database is a later decision on audit chains
-     per instance.
+   - Neither store keeps an audit record
+     ([ADR-0022](0022-security-decisions-are-structured-log-events.md)). One in
+     the database would be a decision of its own.
 
 4. **The in-memory state stays what the Server answers from.** With either
    store, the Server loads every record through its port at startup, answers
@@ -301,13 +299,11 @@ per database schema.
       answered `409`.
     - A bootstrap certificate is revoked as ADR-0021 clause 34 states, with the
       authority `bootstrap`.
-    - The audit records each issuance as `enrolment.bootstrap_issued`, with
-      serial, subject, `not_after` and `p12`. It records each download of a
-      PKCS#12 file as `enrolment.bootstrap_p12_downloaded` with the serial. It
-      records each deletion as `enrolment.bootstrap_deleted` with the serial and
-      subject ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)).
-    - When the audit cannot be written, nothing is handed out or deleted, and
-      the request is answered `503`.
+    - Each issuance is logged as `enrolment.bootstrap_issued`, with serial,
+      subject and `not_after_ms`. Each download of a PKCS#12 file is logged
+      as `enrolment.bootstrap_p12_downloaded` with the serial. Each deletion is
+      logged as `enrolment.bootstrap_deleted` with the serial and subject
+      ([ADR-0022](0022-security-decisions-are-structured-log-events.md)).
 
 13. **Restates ADR-0037 clause 6, which restates ADR-0026 clause 19. The store's
     layout is fixed, and no other is read.** With the filesystem store a Package
@@ -334,9 +330,8 @@ per database schema.
     - It refuses a database that holds any of the Server's tables, and a
       `--data-dir` that is not empty.
     - It applies the schema, copies every record of the old `data_dir` into the
-      database in one transaction, and copies `audit/` and, with the filesystem
-      blob store, `blobs/` into the new `data_dir`, the audit lines unchanged so
-      the chain holds.
+      database in one transaction, and, with the filesystem blob store, copies
+      `blobs/` into the new `data_dir`.
     - It copies rather than moves: the old `data_dir` stays as the backup. It
       prints what it copied and exits non-zero when it could not copy all of it,
       leaving the database without the Server's tables.
@@ -361,7 +356,7 @@ per database schema.
       works in a schema of its own and drops it afterwards.
 
 **Out of scope:** several Server instances against one database, presence,
-leases and notifying other instances; the audit record in the database; paging
+leases and notifying other instances; an audit record in the database; paging
 and filtering in the database; moving records from PostgreSQL back to files;
 anything that runs, provisions, replicates or monitors a production database.
 
@@ -441,13 +436,13 @@ anything that runs, provisions, replicates or monitors a production database.
 - Negative / trade-offs: two stores per port to test and document. The
   PostgreSQL tests need a database, so they run in a CI job of their own and
   against the development stack, and are skipped in a plain `cargo test`.
-- Negative / trade-offs: with PostgreSQL the Server's state is in two places,
-  the database and `data_dir` (the audit record, and blobs with the filesystem
-  blob store). A backup takes both.
+- Negative / trade-offs: with PostgreSQL and the filesystem blob store the
+  Server's state is in two places, the database and `data_dir` (the blobs). A
+  backup takes both.
 - Negative / trade-offs: the whole fleet is still loaded at startup and held in
   memory, so a start against a large database takes as long as reading it.
 - Follow-ups: several Server instances against one database, with presence,
-  leases and notifications; the audit record in the database, one chain per
+  leases and notifications; an audit record in the database, one chain per
   instance; paging and filtering the REST API in the database; how a backup
   takes the database and `data_dir` together.
 
@@ -472,8 +467,8 @@ Tests that will carry `Verifies: ADR-0050`:
 - A `data_dir` holding `agents/` used with `store = "postgres"` fails startup
   naming `server migrate-to-postgres`.
 - `server migrate-to-postgres` over a fixture `data_dir` carries every record,
-  keeps the audit chain verifiable, refuses a database holding the Server's
-  tables, and leaves the old `data_dir` unchanged.
+  refuses a database holding the Server's tables, and leaves the old `data_dir`
+  unchanged.
 - Setting `PGHOST` or `PGSSLMODE` in the environment does not change the
   database or allow plaintext.
 - A database that never answers fails startup within the bound of a call, and

@@ -11,7 +11,7 @@
   · clause 21 superseded by
   [ADR-0046](0046-one-bootstrap-certificate-holds-at-most-a-quarter-of-the-enrolment-queue.md)
 - **Date:** 2026-10-06
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** Admission on `/v1/opamp` in
   `crates/fleet-server/src/transport.rs`, `tls.rs` and `ca.rs`, the Operator
   plane's credential in `crates/fleet-server/src/credentials.rs`, enrolment in
@@ -472,8 +472,8 @@ loopback, `localhost` included.
     `401` follows a handshake that succeeded — a revoked certificate, or a
     bootstrap certificate on the download route — so the throttle no longer
     stops guessing; it bounds what a refused host that keeps retrying costs in
-    handshakes, revocation lookups and audit entries
-    ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)).
+    handshakes, revocation lookups and log lines
+    ([ADR-0022](0022-security-decisions-are-structured-log-events.md)).
 
 25. **Enrolment happens directly against the Server.** A Gateway's downstream
     handshake trusts the fleet's client CA and never the bootstrap CA
@@ -888,8 +888,8 @@ revocations.
   `[auth]`, no `hash-credential --bearer`, no credential in connection-settings
   offers
   ([ADR-0014](0014-connection-settings-offered-without-a-credential-and-server-capabilities.md)),
-  no revocation by hash (clause 36), no audit events for one
-  ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)), and no
+  no revocation by hash (clause 36), no log events for one
+  ([ADR-0022](0022-security-decisions-are-structured-log-events.md)), and no
   Gateway pool partitioned by credential
   ([ADR-0015](0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
 - Positive: a compromised host reports only for its own Agents and holds at most

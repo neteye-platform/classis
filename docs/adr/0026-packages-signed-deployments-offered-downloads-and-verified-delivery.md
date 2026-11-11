@@ -18,7 +18,7 @@
   superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** `crates/fleet-server/src/packages.rs`,
   `crates/fleet-server/src/deployments.rs`, the package, deployment and download
   routes of `crates/fleet-server/src/api.rs` with the download handler
@@ -27,7 +27,7 @@
   `crates/fleet-server/src/fleet.rs` and
   `crates/fleet-server/src/agent_store.rs`, what a host speaks for in
   `crates/fleet-server/src/revocation.rs` and
-  `crates/fleet-server/src/fleet.rs`, the `download.refused` audit entry, the
+  `crates/fleet-server/src/fleet.rs`, the `download.refused` log event, the
   startup notice of `crates/fleet-server/src/main.rs` when `[client_ca]` is
   absent, the platform table in `crates/opamp/src/attributes.rs`, the
   `host.arch` the Client reports, the Packages and Deployments tabs of the
@@ -797,12 +797,12 @@ was taken is why this object is called a Deployment.
     records under the fleet lock. Only after that does it look for the file.
     `admit_download` keeps only admission
     ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
-    clause 23) and records `download.admitted` as now. A request that fails the
-    offered test is also recorded as `download.refused`, outcome `refused`, with
-    check `not offered`, the host, the certificate's serial and the requested
-    type, version and Platform. That entry goes through the refusal aggregation
-    of [ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md) clause 5.
-    It does not count toward the admission throttle
+    clause 23) and logs `download.admitted` as now. A request that fails the
+    offered test is also logged as `download.refused`, with check `not offered`,
+    the host, the certificate's serial and CA role (`authority`) and the
+    requested type, version and Platform, at `debug`: a member can repeat it at
+    will ([ADR-0022](0022-security-decisions-are-structured-log-events.md)
+    clause 3). It does not count toward the admission throttle
     ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
     clause 24): the handshake succeeded, so the refusal is not a guess at a
     credential, and counting it would throttle every member behind the same
@@ -929,9 +929,9 @@ was taken is why this object is called a Deployment.
     [ADR-0015](0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)
     clause 11 allows a Gateway.
 
-46. **The Gateway logs what it refuses; it keeps no audit record.** The audit
-    record is the Server's
-    ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)). A
+46. **The Gateway logs what it refuses.** It keeps no record of its own, as the
+    Server keeps none
+    ([ADR-0022](0022-security-decisions-are-structured-log-events.md)). A
     downstream request answered `404` because no offer of that artifact was
     recorded for the requesting host is logged at `info` with the host (or that
     the certificate names none), the certificate's serial and the requested path
@@ -939,8 +939,8 @@ was taken is why this object is called a Deployment.
     to another host is logged at `warn` with both hosts. Both kinds of line are
     aggregated per host: the first five in a minute are logged one by one, and
     the rest of that minute are counted into one line when the next minute's
-    first line for that host arrives. The Server records the Gateway's own
-    fetches as it records every download (clause 39).
+    first line for that host arrives. The Server logs the Gateway's own fetches
+    as it logs every download (clause 39).
 
 47. **The cache is bounded, and an artifact that does not fit is refused.**
     `[gateway] package_cache_bytes` bounds the bytes the cache holds, stages and
@@ -1422,7 +1422,7 @@ for `opamp-fleetctl package pack`.
   disagree on which artifact is meant.
 - **Count `not offered` refusals toward the admission throttle.** That throttle
   counts a peer address, so one misbehaving host would throttle every member
-  behind a shared address. The record already holds the refusals, aggregated.
+  behind a shared address. Each refusal is already a log event.
 - **Relay the download route through the Gateway, request by request.** The
   Gateway would fetch with its own certificate for every downstream request, so
   the bytes would cross the Gateway's link once per Agent, and every request
@@ -1758,9 +1758,9 @@ for `opamp-fleetctl package pack`.
   cases are affected: a fleet whose Server signs no CSRs (no `[client_ca]`) and
   whose operator provisions certificates without the host SAN URI, and a
   third-party Agent with such a certificate. Each gets `404` instead of bytes.
-  The startup notice (clause 37) and the audit entry say why. The manual
-  (`docs/manual/server.md`, `[client_ca]` and the download route) states that
-  without `[client_ca]` a hand-provisioned certificate must carry
+  The startup notice (clause 37) and the `download.refused` event say why. The
+  manual (`docs/manual/server.md`, `[client_ca]` and the download route) states
+  that without `[client_ca]` a hand-provisioned certificate must carry
   `urn:opamp-fleet:host:<id>` to receive uploaded artifacts.
 - Negative / trade-offs: a partition is only as strong as the hosts it
   partitions (Context). A compromised host can report another partition's
@@ -1997,8 +1997,7 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
     compares status, body and headers byte for byte (clause 38).
   - `a_marked_gateway_fetches_what_is_offered_to_any_agent` (clause 37).
   - `a_certificate_naming_no_host_fetches_nothing` (clause 37).
-  - `a_refused_fetch_leaves_one_download_refused_entry_naming_its_check`, which
-    also checks that the throttle did not count it (clause 39).
+  - `a_refused_fetch_is_no_failure_the_throttle_counts` (clause 39).
   - `a_malformed_token_is_answered_400_before_the_offer_is_tested` (clause 39).
   - `a_download_costs_a_token_of_the_hosts_bucket` (clause 40).
 - `crates/fleet-server/src/main.rs`:

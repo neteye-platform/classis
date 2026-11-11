@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the pending queue in `crates/fleet-server/src/enrolment.rs`
   and its answer on an enrolment connection in
   `crates/fleet-server/src/transport.rs`, the `[enrolment]` section of
@@ -59,7 +59,7 @@ configurable share of the enrolment queue, a quarter of it by default.
    runs from 1 to 1024, and anything else fails startup naming the key. A CSR
    beyond either bound is answered `ServerErrorResponse` `Unavailable` with
    `retry_info`, and one beyond the share of its bootstrap certificate is
-   audited once per certificate and window as `enrolment.refused` with the
+   logged once per certificate and window as `enrolment.refused` with the
    reason. A re-sent CSR that already has its entry is never refused by either
    bound. On approval the Server signs it (ADR-0021 clause 9) and offers the
    certificate on that connection the way it offers any certificate; the Agent
@@ -110,7 +110,7 @@ enrolment through a Gateway.
 Tests that will carry `Verifies: ADR-0046`:
 
 - With `max_pending_per_bootstrap = 2`, a third request of one bootstrap
-  certificate is answered `Unavailable` and audited, a request of another
+  certificate is answered `Unavailable` and logged, a request of another
   bootstrap certificate is still queued, and a re-sent request of the first
   certificate still joins its entry.
 - `max_pending_per_bootstrap = 0` and `= 1025` fail startup naming the key.

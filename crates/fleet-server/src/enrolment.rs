@@ -36,8 +36,8 @@ pub const DEFAULT_MAX_PENDING_PER_BOOTSTRAP: usize = MAX_PENDING / 4;
 pub struct Request {
     /// The PEM the Agent sent, signed as it is on approval.
     pub csr_pem: String,
-    /// The CSR's subject, for the audit record only: the host chose it, so it is neither listed
-    /// nor carried (ADR-0036 clause 5).
+    /// The CSR's subject, for the log only: the host chose it, so it is neither listed nor carried
+    /// (ADR-0036 clause 5).
     pub subject: String,
     /// The SHA-256 fingerprint of the requested public key, hex — the key of the queue, and what the
     /// Client logs so an operator can match a request to a host.
@@ -52,7 +52,7 @@ pub struct Request {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Requester {
-    /// The bootstrap certificate's subject as text, for the audit record.
+    /// The bootstrap certificate's subject as text, for the log.
     pub bootstrap_subject: String,
     /// The values an approval carries into the host certificate, or why the subject breaks the
     /// rules of ADR-0036 clause 1 — read from the certificate verified in the handshake. The queue
@@ -94,7 +94,7 @@ pub enum Submitted {
     Full,
     /// Its bootstrap certificate holds its share of the queue already (ADR-0046); the Client is
     /// told to come back later. `first` is set for the first such refusal of that certificate in
-    /// the window, the one that is audited.
+    /// the window, the one that is logged.
     OverShare { first: bool },
     /// No window is open.
     Closed,
@@ -190,8 +190,8 @@ struct State {
     window_until_ms: Option<u64>,
     /// Keyed by the id, which is the key fingerprint.
     entries: BTreeMap<String, Entry>,
-    /// The bootstrap certificates refused for their share in this window, each audited once
-    /// (ADR-0046). Not persisted: a restart may audit a certificate once more.
+    /// The bootstrap certificates refused for their share in this window, each logged once
+    /// (ADR-0046). Not persisted: a restart may log a certificate once more.
     over_share: std::collections::BTreeSet<CertId>,
 }
 
@@ -252,8 +252,6 @@ pub struct Enrolment {
     /// Where the window and its queue persist; `None` keeps them in memory, as a test does.
     store: Option<Box<dyn EnrolmentStore>>,
     changes: watch::Sender<u64>,
-    /// Where a window that runs out records the requests that expired with it (ADR-0022).
-    audit: std::sync::OnceLock<Arc<dyn crate::audit::Audit>>,
 }
 
 impl Enrolment {
@@ -266,7 +264,6 @@ impl Enrolment {
             max_per_bootstrap: DEFAULT_MAX_PENDING_PER_BOOTSTRAP,
             store: None,
             changes: watch::channel(0).0,
-            audit: std::sync::OnceLock::new(),
         }
     }
 
@@ -295,7 +292,6 @@ impl Enrolment {
             max_per_bootstrap: DEFAULT_MAX_PENDING_PER_BOOTSTRAP,
             store: Some(store),
             changes: watch::channel(0).0,
-            audit: std::sync::OnceLock::new(),
         })
     }
 
@@ -320,11 +316,6 @@ impl Enrolment {
         if let Err(e) = self.save(state) {
             tracing::warn!(error = %e, "cannot persist the enrolment window and its requests");
         }
-    }
-
-    /// Records a window that runs out in `audit`; set once, at startup.
-    pub fn set_audit(&self, audit: Arc<dyn crate::audit::Audit>) {
-        let _ = self.audit.set(audit);
     }
 
     /// Opens the window, or moves its end, to `secs` from now, persisted before it answers when
@@ -588,13 +579,13 @@ impl Enrolment {
             .count();
         state.entries.clear();
         self.save_logged(state);
-        if let Some(audit) = self.audit.get() {
-            audit.refusal(
-                crate::audit::Entry::new("enrolment.window", "expired")
-                    .with("until_ms", until)
-                    .with("expired_requests", expired),
-            );
-        }
+        tracing::info!(
+            event = "enrolment.window",
+            outcome = "expired",
+            until_ms = until,
+            expired_requests = expired,
+            "the enrolment window ran out"
+        );
         self.changes.send_modify(|rev| *rev += 1);
         None
     }
@@ -918,7 +909,7 @@ pub(crate) mod tests {
 
     /// The requests of one bootstrap certificate hold at most their share of the queue; a re-sent
     /// one joins its entry all the same, another certificate's is still queued, and the first
-    /// refusal of a certificate in a window is the one marked for the audit.
+    /// refusal of a certificate in a window is the one marked for the log.
     /// Verifies: ADR-0046
     #[test]
     fn one_bootstrap_certificate_holds_at_most_its_share() {
@@ -940,7 +931,7 @@ pub(crate) mod tests {
         assert_eq!(
             enrolment.submit(request("d"), requester()),
             Submitted::OverShare { first: false },
-            "audited once per certificate and window"
+            "logged once per certificate and window"
         );
         assert_eq!(
             enrolment.submit(request("a"), requester()),
@@ -961,7 +952,7 @@ pub(crate) mod tests {
         assert_eq!(
             enrolment.submit(request("c"), requester()),
             Submitted::OverShare { first: true },
-            "a new window audits again"
+            "a new window logs again"
         );
     }
 

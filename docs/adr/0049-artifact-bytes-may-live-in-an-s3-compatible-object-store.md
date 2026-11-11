@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the blob port in `crates/fleet-server/src/blobs.rs`, its
   filesystem adapter in `crates/fleet-server/src/fs/blobs.rs` and every S3
   adapter beside it, the wiring in `crates/fleet-server/src/main.rs`, the
@@ -32,8 +32,8 @@ S3 adapter to a decision of its own because it adds a dependency.
 
 The artifacts are the largest part of the Server's state: one Package of 1 GiB
 is allowed per entry (`max_package_size_bytes`), and the fleet's software
-multiplies that. On the Server's host they share a disk with the audit record
-and the register, are backed up with them, and bind the Server to one machine.
+multiplies that. On the Server's host they share a disk with the register, are
+backed up with it, and bind the Server to one machine.
 The target architecture recorded outside the ADRs, the working note "server
 split", puts artifacts in S3-compatible storage, content-addressed and
 immutable, streamed through the Server in both directions, with the S3 client's
@@ -217,7 +217,7 @@ a production store.
 - **Presigned URLs for downloads or uploads.** They move the traffic off the
   Server, but the fleet would then reach the store directly, outside the
   admission by client certificate, and an upload would bypass the Server's own
-  hash and the audit record. Rejected, as the working note decided.
+  hash and its log. Rejected, as the working note decided.
 - **Take the store's configuration from the `AWS_*` environment, as the S3
   client does by default.** `AWS_ALLOW_HTTP` or `AWS_ENDPOINT` set in a
   service's environment would then move the Server to plaintext or to another
