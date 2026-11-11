@@ -2702,7 +2702,7 @@ async fn every_unavailable_reply_names_the_agent_it_answers() {
         };
         assert_eq!(
             enrolment.submit(request, requester),
-            fleet_server::enrolment::Submitted::Waiting
+            fleet_server::enrolment::Submitted::Waiting { new: true }
         );
     }
     let (bootstrap_cert, bootstrap_key) = bootstrap.issue_bootstrap("bootstrap");
@@ -2712,7 +2712,7 @@ async fn every_unavailable_reply_names_the_agent_it_answers() {
     let reply = decode(post(&enrolling, &served.endpoint, with_csr(&uid, csr)).await).await;
     names_its_agent(&reply, &uid, "the full enrolment queue");
 
-    enrolment.close().expect("close");
+    enrolment.close().saved.expect("close");
     enrolment.open(60).expect("open the window");
     let mut socket = websocket(&served, &bootstrap_cert, &bootstrap_key, None)
         .await
@@ -3521,6 +3521,101 @@ async fn a_bootstrap_certificate_issued_with_a_password_is_a_pkcs12_file_until_r
         .await
         .expect("download");
     assert_eq!(unknown.status(), 404);
+}
+
+/// A revocation whose PKCS#12 file could not be forgotten does not bring the file back when it is
+/// lifted: the lift forgets the file first, and is refused while it cannot (ADR-0029 clause 4).
+/// The failure is a directory standing where the entry's next write goes.
+/// Verifies: ADR-0029
+#[tokio::test]
+async fn lifting_a_revocation_never_hands_out_a_pkcs12_file_again() {
+    let pki = Pki::new();
+    let bootstrap = Pki::named("acme bootstrap CA");
+    let served = serve(
+        &pki,
+        Setup {
+            client_ca: Some(client_ca_of(&pki)),
+            bootstrap: Some(&bootstrap),
+            issue_bootstrap: true,
+            revocations: true,
+            ..Setup::default()
+        },
+    )
+    .await;
+    let operator_client = client(&served.ca_pem, None);
+    let issued: serde_json::Value = operator_client
+        .post(operator(&served, "/api/v1/bootstrap-certificates"))
+        .json(&serde_json::json!({
+            "subject": customer_and_site(),
+            "password": BOOTSTRAP_PASSWORD
+        }))
+        .send()
+        .await
+        .expect("issue")
+        .json()
+        .await
+        .expect("json");
+    let serial = issued["serial"].as_str().expect("serial").to_string();
+    let download = || {
+        let client = operator_client.clone();
+        let url = operator(
+            &served,
+            &format!("/api/v1/bootstrap-certificates/{serial}/p12"),
+        );
+        async move { client.get(url).send().await.expect("download").status() }
+    };
+    assert_eq!(download().await, 200);
+
+    let entry = bootstrap_files(&served, &serial)
+        .into_iter()
+        .find(|name| name.ends_with(".json"))
+        .expect("the entry");
+    let in_the_way = served
+        .config_dir
+        .join("fleet-configs/bootstrap")
+        .join(format!("{entry}.tmp"));
+    std::fs::create_dir(&in_the_way).expect("stand in the way of the entry's write");
+    let revoked = operator_client
+        .post(operator(&served, "/api/v1/revocations"))
+        .json(&serde_json::json!({
+            "certificate": { "authority": "bootstrap", "serial": serial }
+        }))
+        .send()
+        .await
+        .expect("revoke");
+    assert_eq!(
+        revoked.status(),
+        500,
+        "revoked, but the file is not forgotten"
+    );
+    let revocations: serde_json::Value = operator_client
+        .get(operator(&served, "/api/v1/revocations"))
+        .send()
+        .await
+        .expect("revocations")
+        .json()
+        .await
+        .expect("json");
+    let id = revocations[0]["id"]
+        .as_str()
+        .expect("the revocation stands");
+    let lift = || {
+        let client = operator_client.clone();
+        let url = operator(&served, &format!("/api/v1/revocations/{id}"));
+        async move { client.delete(url).send().await.expect("lift").status() }
+    };
+    assert_eq!(download().await, 404, "refused while revoked");
+
+    assert_eq!(
+        lift().await,
+        500,
+        "no lift while the file cannot be forgotten"
+    );
+    assert_eq!(download().await, 404, "the revocation stands");
+
+    std::fs::remove_dir(&in_the_way).expect("clear the way");
+    assert_eq!(lift().await, 204);
+    assert_eq!(download().await, 404, "lifting brought the file back");
 }
 
 /// A revoked bootstrap certificate's entry can be deleted, with its PKCS#12 file; its revocation
@@ -4682,7 +4777,7 @@ async fn an_enrolment_through_a_gateway_is_refused_as_any_enrolment() {
     }
     assert!(enrolment.pending().is_empty());
 
-    enrolment.close().expect("close");
+    enrolment.close().saved.expect("close");
     let (cert, key) = bootstrap.issue_bootstrap("bootstrap-a");
     let reply = decode(
         post(

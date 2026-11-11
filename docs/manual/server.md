@@ -1046,14 +1046,19 @@ certificate after the restart. A window whose end passed while the Server was
 down is closed when it starts. When it closes, every enrolling connection is
 closed and every pending request expires, an approved one whose certificate its
 host has not collected included; that host enrols again in the next window.
+Closing a window that is not open is answered `204` as well. An approval that
+cannot be written is answered `500`, and it stands all the same: its certificate
+is signed and recorded, and its host collects it. A restart before the next
+write may list the request again; do not approve it twice.
 
 **While it is open, an enrolling host may send a certificate request and nothing
 else.** The Server creates no Agent record for it and offers it nothing but the
-issued certificate. The request waits in a queue of at most 1024, of which the
-requests of one bootstrap certificate hold at most `max_pending_per_bootstrap`,
-256 by default. A request beyond either bound is answered `Unavailable` and the
-host retries later; one beyond its bootstrap certificate's share is logged as
-`enrolment.refused` with `reason` `bootstrap_share` and the
+issued certificate. The request waits in a queue of at most 1024 requests
+waiting for an operator, of which the requests of one bootstrap certificate hold
+at most `max_pending_per_bootstrap`, 256 by default; a request an operator
+approved or rejected holds no place. A request beyond either bound is answered
+`Unavailable` and the host retries later; one beyond its bootstrap certificate's
+share is logged as `enrolment.refused` with `reason` `bootstrap_share` and the
 certificate's serial, once per certificate and window. A re-sent request that
 already waits is never refused. The Client keeps its pending key and re-sends
 the same request until it is answered.
@@ -1210,12 +1215,15 @@ certificate alone. A credential entry `revocations.json` holds is dropped when
 the list is loaded, with one log line giving the number dropped, and the list is
 written back without it.
 
-`GET /api/v1/revocations` lists every entry, and
-`DELETE /api/v1/revocations/<id>` lifts one; the next connection is admitted
-again. The list holds at most 100 000 entries; an entry for a certificate the
-register held is dropped once neither that certificate nor any renewal of it is
-valid. The register holds at most 100 000 certificates and at most 10 000 in one
-renewal chain, and keeps the last 1 000 places for enrolments.
+`GET /api/v1/revocations` lists every entry, and `DELETE
+/api/v1/revocations/<id>` lifts one; the next connection is admitted again. A
+lifted bootstrap certificate gets no PKCS#12 file back: one its revocation could
+not remove is removed first, and while that fails the lift is answered `500` and
+the revocation stays. The list holds at most 100 000 entries; an entry for a
+certificate the register held is dropped once neither that certificate nor any
+renewal of it is valid. The register holds at most 100 000 certificates and at
+most 10 000 in one renewal chain, and keeps the last 1 000 places for
+enrolments.
 
 Every WebSocket session also ends when the certificate that admitted it expires,
 with `1008` and the reason `certificate expired`. A Client renews at two thirds
@@ -1808,7 +1816,7 @@ loopback.
 | `POST /api/v1/deployments/{name}/rollout`                                              | Roll it out to every Agent it claims and would move — its Packages and Configurations in one release, the moment a rollout starts. Agents another Deployment also claims are skipped and reported as conflicts. `409` while the channel holds no Package and no Configuration, and `409` naming each Package and platform while any entry of a Package it holds lacks a signature.                                                                                             |
 | `GET` / `POST` / `DELETE /api/v1/enrolment/window`                                     | Read, open or close the enrolment window — see [Enrolment](#enrolment-a-new-host-approved-by-an-operator). `POST` body: `{"open_for_secs": n}`, 1 to 86400. `404` while `[enrolment]` is not configured.                                                                                                                                                                                                                                                                       |
 | `GET /api/v1/enrolments`                                                               | The pending enrolment requests, oldest first, each with its `id` — the fingerprint the enrolling Client logs.                                                                                                                                                                                                                                                                                                                                                                  |
-| `POST /api/v1/enrolments/{id}/approve`                                                 | Sign that request and hand the host its certificate. `404` for an unknown or expired id.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `POST /api/v1/enrolments/{id}/approve`                                                 | Sign that request and hand the host its certificate. `404` for an unknown or expired id. `500` when the approval could not be written: it stands all the same and the host collects its certificate, but a restart may list the request again — do not approve it twice.                                                                                                                                                                                                       |
 | `POST /api/v1/enrolments/{id}/reject`                                                  | Refuse that request and close its connection. `404` for an unknown or expired id.                                                                                                                                                                                                                                                                                                                                                                                              |
 | `GET` / `POST /api/v1/bootstrap-certificates`                                          | List the valid bootstrap certificates the Server issued, or issue one — see [Bootstrap certificates](#bootstrap-certificates-issued-by-the-server). `POST` body: `{"subject": {…}, "validity_days": n, "password": "…"}`, `subject.organization`, `subject.organizational_unit` and `password` required (`400` naming the one missing); the answer carries the certificate and never its key, which is in the PKCS#12 file. `409` without `[enrolment] bootstrap_ca_key_file`. |
 

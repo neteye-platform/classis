@@ -53,11 +53,12 @@ configurable share of the enrolment queue, a quarter of it by default.
    else, so the Client learns it may send one. The CSR enters a pending queue
    keyed by its public key, so a re-sent CSR joins its own entry; the Client
    keeps its pending key and re-sends the same CSR until it is answered. The
-   queue holds at most 1024 requests. The requests of one bootstrap certificate,
-   by its issuer and serial, hold at most
+   queue holds at most 1024 requests waiting for an operator. The waiting
+   requests of one bootstrap certificate, by its issuer and serial, hold at most
    `[enrolment] max_pending_per_bootstrap` of them, 256 by default; the value
-   runs from 1 to 1024, and anything else fails startup naming the key. A CSR
-   beyond either bound is answered `ServerErrorResponse` `Unavailable` with
+   runs from 1 to 1024, and anything else fails startup naming the key. A
+   request an operator approved or rejected holds no place in either bound. A
+   CSR beyond either bound is answered `ServerErrorResponse` `Unavailable` with
    `retry_info`, and one beyond the share of its bootstrap certificate is
    logged once per certificate and window as `enrolment.refused` with the
    reason. A re-sent CSR that already has its entry is never refused by either

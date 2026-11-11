@@ -24,3 +24,19 @@ section carries a date once its tag exists.
 - **`[audit]` in `server.toml`** is refused at startup as an unknown key, like
   any other.
 - **`server audit-verify`** is gone.
+
+### Fixed
+
+- **Lifting the revocation of a bootstrap certificate never hands out its
+  PKCS#12 file again.** When its revocation could not remove the file, the lift
+  removes it first; while that fails, the lift is answered `500` and the
+  revocation stays.
+- **`500` on approving an enrolment request** now means approved and not
+  persisted: the certificate is signed and recorded, and its host collects it.
+  A restart may list the request again; do not approve it twice.
+- **Closing an enrolment window that is not open** is answered `204` and logs
+  no event; a close that could not be persisted is persisted by the next one.
+- **Approved and rejected requests no longer count** toward the queue's 1024
+  places or toward `max_pending_per_bootstrap`.
+- **Opening a window that has run out starts a new one**: the requests of the
+  old window expire with it instead of carrying over.

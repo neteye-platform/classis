@@ -24,7 +24,8 @@ use crate::revocation::{CertId, Signed, SubjectValues};
 /// The longest an enrolment window may stay open.
 pub const MAX_WINDOW_SECS: u64 = 86_400;
 
-/// The most requests the queue holds at once.
+/// The most requests the queue holds waiting for an operator at once; a decided one holds no
+/// place.
 pub const MAX_PENDING: usize = 1024;
 
 /// The most requests of one bootstrap certificate the queue holds at once, unless
@@ -84,8 +85,9 @@ pub type Record<'a> = dyn Fn(&Signed, &[u8]) -> Result<(), String> + 'a;
 /// What a submitted request comes to.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Submitted {
-    /// Waiting for an operator; the Client asks again.
-    Waiting,
+    /// Waiting for an operator; the Client asks again. `new` is set when this submission took the
+    /// request in, and clear when it was waiting already.
+    Waiting { new: bool },
     /// Approved: the issued certificate, PEM.
     Issued(String),
     /// Rejected by an operator.
@@ -112,8 +114,21 @@ pub enum DecisionError {
     Subject(String),
     /// The CA could not sign the request.
     Sign(String),
-    /// The decision could not be persisted (ADR-0037 clause 9); the request still waits.
+    /// The decision could not be persisted (ADR-0037 clause 9). A rejection is not taken, and the
+    /// request still waits. An approval stands: its certificate is signed and in the register, so
+    /// its host collects it, and leaving the request waiting would let a second approval sign
+    /// another; a restart may list it again.
     Store(String),
+}
+
+/// What an operator's close came to.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Closed {
+    /// The requests that were still waiting and expired with the window, or `None` when no
+    /// window was open.
+    pub expired_requests: Option<usize>,
+    /// Whether the closed window was persisted.
+    pub saved: Result<(), String>,
 }
 
 /// Why the window could not be opened.
@@ -332,6 +347,9 @@ impl Enrolment {
         }
         let until = self.clock.now_ms() + secs * 1000;
         let mut state = self.state.lock().expect("enrolment lock");
+        // A window that ran out unnoticed is closed first, its requests expiring with it: what is
+        // opened now is a new window, not the old one's end moved.
+        self.expire(&mut state);
         let mut opened = state.clone();
         opened.window_until_ms = Some(until);
         self.save(&opened).map_err(WindowError::Store)?;
@@ -342,20 +360,29 @@ impl Enrolment {
     }
 
     /// Closes the window now; every pending request expires. It is closed in memory whatever
-    /// happens to the write, the safe direction.
-    ///
-    /// # Errors
-    /// Returns an error when the closed window cannot be persisted: a restart may then find it
-    /// open until its end.
-    pub fn close(&self) -> Result<(), String> {
+    /// happens to the write, the safe direction, and written every time, so a close whose write
+    /// failed is written by the next. Answers how many requests expired with it when a window was
+    /// open — one that ran out is closed by then — and whether the closed window was persisted:
+    /// when it was not, a restart may find it open until its end.
+    pub fn close(&self) -> Closed {
         let mut state = self.state.lock().expect("enrolment lock");
+        let expired_requests = self.expire(&mut state).map(|_| {
+            state
+                .entries
+                .values()
+                .filter(|entry| entry.decision.is_none())
+                .count()
+        });
         state.window_until_ms = None;
         state.entries.clear();
         state.over_share.clear();
         let saved = self.save(&state);
         drop(state);
         self.changed();
-        saved
+        Closed {
+            expired_requests,
+            saved,
+        }
     }
 
     /// When the open window closes, or `None` while it is closed.
@@ -376,20 +403,22 @@ impl Enrolment {
             return Submitted::Closed;
         }
         if let Some(entry) = state.entries.get(&request.key_fingerprint) {
-            return match &entry.decision {
-                None => Submitted::Waiting,
-                Some(Decision::Approved(cert)) => Submitted::Issued(cert.clone()),
-                Some(Decision::Rejected) => Submitted::Rejected,
-            };
+            return answered(entry);
         }
-        if state.entries.len() >= MAX_PENDING {
+        // Only the requests that wait for an operator hold a place and a share: a decided one
+        // stays until its host collects it or the window closes, and holds neither (ADR-0046).
+        let waiting = || {
+            state
+                .entries
+                .values()
+                .filter(|entry| entry.decision.is_none())
+        };
+        if waiting().count() >= MAX_PENDING {
             return Submitted::Full;
         }
         // A re-sent request has its entry and was answered above; only a new one is counted
         // against its bootstrap certificate's share (ADR-0046).
-        let held = state
-            .entries
-            .values()
+        let held = waiting()
             .filter(|entry| entry.pending.requester.bootstrap == requester.bootstrap)
             .count();
         if held >= self.max_per_bootstrap {
@@ -421,7 +450,16 @@ impl Enrolment {
         }
         drop(state);
         self.changed();
-        Submitted::Waiting
+        Submitted::Waiting { new: true }
+    }
+
+    /// What the request for `key` has come to, without taking one in: `None` when the window is
+    /// closed or the queue holds no such request — withdrawn, expired or never filed. What a push
+    /// to a waiting connection reads; only an enrolment message files a request.
+    pub fn answer(&self, key: &str) -> Option<Submitted> {
+        let mut state = self.state.lock().expect("enrolment lock");
+        self.expire(&mut state)?;
+        state.entries.get(key).map(answered)
     }
 
     /// The requests waiting for an operator, oldest first.
@@ -447,7 +485,8 @@ impl Enrolment {
     /// (ADR-0036 clause 3), and [`DecisionError::Sign`] when the CA refuses the request.
     /// Answers what was signed, and the `instance_uid` the request arrived under, for the register.
     /// `record` keeps what was signed before the host can collect it (ADR-0021 clause 33); a
-    /// failure there leaves the request pending.
+    /// failure there leaves the request pending. Once it is recorded the approval stands, persisted
+    /// or not ([`DecisionError::Store`]).
     ///
     /// The bootstrap certificate the request came with is checked against `revoked` under the same
     /// lock that signs, so a revocation that lands before the approval always wins (ADR-0021
@@ -488,16 +527,12 @@ impl Enrolment {
         record(&signed, &entry.instance_uid).map_err(DecisionError::Sign)?;
         entry.decision = Some(Decision::Approved(signed.pem));
         // Persisted before it is answered, the certificate included, so a restart before the host
-        // collects it hands it over all the same (ADR-0037 clause 9).
-        if let Err(e) = self.save(&state) {
-            if let Some(entry) = state.entries.get_mut(id) {
-                entry.decision = None;
-            }
-            return Err(DecisionError::Store(e));
-        }
+        // collects it hands it over all the same (ADR-0037 clause 9). A failed write leaves the
+        // approval standing in memory, where the next write persists it: the certificate exists.
+        let saved = self.save(&state);
         drop(state);
         self.changed();
-        Ok(())
+        saved.map_err(DecisionError::Store)
     }
 
     /// Rejects one request.
@@ -592,6 +627,15 @@ impl Enrolment {
 
     fn changed(&self) {
         self.changes.send_modify(|rev| *rev += 1);
+    }
+}
+
+/// What a request already in the queue is answered.
+fn answered(entry: &Entry) -> Submitted {
+    match &entry.decision {
+        None => Submitted::Waiting { new: false },
+        Some(Decision::Approved(cert)) => Submitted::Issued(cert.clone()),
+        Some(Decision::Rejected) => Submitted::Rejected,
     }
 }
 
@@ -690,6 +734,40 @@ pub(crate) mod tests {
         }
     }
 
+    /// A store whose writes fail while it is told to, and that keeps the last write that did not.
+    #[derive(Clone, Default)]
+    struct Failing {
+        failing: Arc<std::sync::atomic::AtomicBool>,
+        saved: Arc<Mutex<Option<Persisted>>>,
+    }
+
+    impl Failing {
+        fn fail(&self, failing: bool) {
+            self.failing.store(failing, Ordering::SeqCst);
+        }
+    }
+
+    impl EnrolmentStore for Failing {
+        fn load(&self) -> Result<Option<Persisted>, String> {
+            Ok(None)
+        }
+        fn save(&self, persisted: &Persisted) -> Result<(), String> {
+            if self.failing.load(Ordering::SeqCst) {
+                return Err("the disk is full".to_string());
+            }
+            *self.saved.lock().expect("saved") = Some(persisted.clone());
+            Ok(())
+        }
+    }
+
+    /// An enrolment over a [`Failing`] store, and the store.
+    fn failing() -> (Enrolment, Failing) {
+        let clock = Arc::new(Manual(AtomicU64::new(1_000_000)));
+        let store = Failing::default();
+        let enrolment = Enrolment::open_on(clock, Box::new(store.clone())).expect("open");
+        (enrolment, store)
+    }
+
     /// An approved enrolment survives a restart: the window stays open until its end, a waiting
     /// request still waits, and the approved one hands its host the certificate it was issued.
     /// Verifies: ADR-0037
@@ -762,36 +840,21 @@ pub(crate) mod tests {
         restarted.open(60).expect("open again");
         assert_eq!(
             restarted.submit(request("a"), requester()),
-            Submitted::Waiting,
+            Submitted::Waiting { new: true },
             "the host enrols again in the next window"
         );
     }
 
     /// An act whose result cannot be persisted is not taken: the window stays as it was, and a
-    /// decision leaves the request waiting.
+    /// rejection leaves the request waiting. An approval, whose certificate is signed once it is
+    /// recorded, is the exception: `an_approval_that_cannot_be_persisted_signs_nothing_twice`.
     /// Verifies: ADR-0037
     #[test]
     fn an_act_that_cannot_be_persisted_changes_nothing() {
-        #[derive(Clone, Default)]
-        struct Failing(Arc<std::sync::atomic::AtomicBool>);
-        impl EnrolmentStore for Failing {
-            fn load(&self) -> Result<Option<Persisted>, String> {
-                Ok(None)
-            }
-            fn save(&self, _: &Persisted) -> Result<(), String> {
-                if self.0.load(Ordering::SeqCst) {
-                    Err("the disk is full".to_string())
-                } else {
-                    Ok(())
-                }
-            }
-        }
-        let clock = Arc::new(Manual(AtomicU64::new(1_000_000)));
-        let store = Failing::default();
-        let enrolment = Enrolment::open_on(clock, Box::new(store.clone())).expect("open");
+        let (enrolment, store) = failing();
         enrolment.open(600).expect("open the window");
         enrolment.submit(request("a"), requester());
-        store.0.store(true, Ordering::SeqCst);
+        store.fail(true);
         assert!(matches!(enrolment.open(60), Err(WindowError::Store(_))));
         assert_eq!(
             enrolment.submit(request("b"), requester()),
@@ -799,15 +862,11 @@ pub(crate) mod tests {
             "a request that cannot be kept is not taken in"
         );
         assert!(matches!(
-            enrolment.approve("a", &Echo, "host", &|_, _| Ok(()), &|_| false),
-            Err(DecisionError::Store(_))
-        ));
-        assert!(matches!(
             enrolment.reject("a"),
             Err(DecisionError::Store(_))
         ));
         assert_eq!(enrolment.pending().len(), 1, "the request still waits");
-        assert!(enrolment.close().is_err());
+        assert!(enrolment.close().saved.is_err());
         assert!(!enrolment.is_open(), "closed all the same");
     }
 
@@ -835,11 +894,11 @@ pub(crate) mod tests {
         enrolment.open(600).expect("open");
         assert_eq!(
             enrolment.submit(request("a"), requester()),
-            Submitted::Waiting
+            Submitted::Waiting { new: true }
         );
         assert_eq!(
             enrolment.submit(request("a"), requester()),
-            Submitted::Waiting,
+            Submitted::Waiting { new: false },
             "a re-sent request joins its own entry"
         );
         assert_eq!(enrolment.pending().len(), 1);
@@ -874,7 +933,7 @@ pub(crate) mod tests {
         let (enrolment, clock) = enrolment();
         enrolment.open(60).expect("open");
         enrolment.submit(request("a"), requester());
-        enrolment.close().expect("close");
+        enrolment.close().saved.expect("close");
         assert!(enrolment.pending().is_empty());
         enrolment.open(60).expect("open");
         enrolment.submit(request("b"), requester());
@@ -898,7 +957,7 @@ pub(crate) mod tests {
             };
             assert_eq!(
                 enrolment.submit(request(&n.to_string()), one_each),
-                Submitted::Waiting
+                Submitted::Waiting { new: true }
             );
         }
         assert_eq!(
@@ -918,11 +977,11 @@ pub(crate) mod tests {
         enrolment.open(600).expect("open");
         assert_eq!(
             enrolment.submit(request("a"), requester()),
-            Submitted::Waiting
+            Submitted::Waiting { new: true }
         );
         assert_eq!(
             enrolment.submit(request("b"), requester()),
-            Submitted::Waiting
+            Submitted::Waiting { new: true }
         );
         assert_eq!(
             enrolment.submit(request("c"), requester()),
@@ -935,17 +994,20 @@ pub(crate) mod tests {
         );
         assert_eq!(
             enrolment.submit(request("a"), requester()),
-            Submitted::Waiting,
+            Submitted::Waiting { new: false },
             "a re-sent request is never refused"
         );
         let other = Requester {
             bootstrap: CertId::new(b"bootstrap CA", "c6"),
             ..requester()
         };
-        assert_eq!(enrolment.submit(request("e"), other), Submitted::Waiting);
+        assert_eq!(
+            enrolment.submit(request("e"), other),
+            Submitted::Waiting { new: true }
+        );
         assert_eq!(enrolment.pending().len(), 3);
 
-        enrolment.close().expect("close");
+        enrolment.close().saved.expect("close");
         enrolment.open(600).expect("open again");
         enrolment.submit(request("a"), requester());
         enrolment.submit(request("b"), requester());
@@ -1090,6 +1152,221 @@ pub(crate) mod tests {
                 Submitted::Issued(_)
             ),
             "a decided request is left to its connection, which the revocation refuses"
+        );
+    }
+
+    /// A window that ran out while nothing looked at it is closed before it is opened again: its
+    /// requests expire with it, and the new window starts with an empty queue.
+    /// Verifies: ADR-0021
+    #[test]
+    fn a_window_that_ran_out_unnoticed_is_closed_before_it_opens_again() {
+        let (enrolment, clock) = enrolment();
+        let enrolment = enrolment.with_max_pending_per_bootstrap(1);
+        enrolment.open(60).expect("open");
+        enrolment.submit(request("a"), requester());
+        enrolment.submit(request("b"), requester());
+        clock.0.fetch_add(61_000, Ordering::SeqCst);
+        // Nothing reads the window between its end and the next opening.
+        enrolment.open(60).expect("open again");
+        assert!(
+            enrolment.pending().is_empty(),
+            "the requests of the window that ran out carried into the new one"
+        );
+        assert!(
+            matches!(
+                enrolment.submit(request("c"), requester()),
+                Submitted::Waiting { .. }
+            ),
+            "the old window's request still held the bootstrap certificate's share"
+        );
+        assert_eq!(
+            enrolment.submit(request("d"), requester()),
+            Submitted::OverShare { first: true },
+            "the old window's refusal of the share carried into the new one"
+        );
+    }
+
+    /// Only a request that waits for an operator holds a place in the queue and a share of its
+    /// bootstrap certificate: one an operator decided does not, so a site that enrols more hosts
+    /// than the share in one window goes on once some are approved (ADR-0046).
+    /// Verifies: ADR-0046
+    #[test]
+    fn a_decided_request_holds_no_share_and_no_place() {
+        let (enrolment, _) = enrolment();
+        let enrolment = enrolment.with_max_pending_per_bootstrap(2);
+        enrolment.open(600).expect("open");
+        enrolment.submit(request("a"), requester());
+        enrolment.submit(request("b"), requester());
+        enrolment
+            .approve("a", &Echo, "host", &|_, _| Ok(()), &|_| false)
+            .expect("approve");
+        enrolment.reject("b").expect("reject");
+        assert!(matches!(
+            enrolment.submit(request("c"), requester()),
+            Submitted::Waiting { .. }
+        ));
+        assert!(matches!(
+            enrolment.submit(request("d"), requester()),
+            Submitted::Waiting { .. }
+        ));
+        assert_eq!(
+            enrolment.submit(request("e"), requester()),
+            Submitted::OverShare { first: true },
+            "two waiting requests hold the share"
+        );
+
+        let (enrolment, _) = self::enrolment();
+        enrolment.open(600).expect("open");
+        let one_each = |n: usize| Requester {
+            bootstrap: CertId::new(b"bootstrap CA", &format!("{n:x}")),
+            ..requester()
+        };
+        for n in 0..MAX_PENDING {
+            enrolment.submit(request(&n.to_string()), one_each(n));
+        }
+        enrolment.reject("0").expect("reject");
+        assert!(
+            matches!(
+                enrolment.submit(request("one more"), one_each(MAX_PENDING)),
+                Submitted::Waiting { .. }
+            ),
+            "a decided request frees its place in the queue"
+        );
+        assert_eq!(
+            enrolment.submit(request("and another"), one_each(MAX_PENDING + 1)),
+            Submitted::Full
+        );
+    }
+
+    /// An approval whose decision cannot be persisted stands all the same: its certificate was
+    /// signed and recorded, so the request is not left waiting for a second approval that would
+    /// sign another, and its host collects the one that was signed.
+    /// Verifies: ADR-0021, ADR-0037
+    #[test]
+    fn an_approval_that_cannot_be_persisted_signs_nothing_twice() {
+        let (enrolment, store) = failing();
+        enrolment.open(600).expect("open the window");
+        enrolment.submit(request("a"), requester());
+        store.fail(true);
+        let recorded = AtomicU64::new(0);
+        let record = |_: &Signed, _: &[u8]| {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+        assert!(matches!(
+            enrolment.approve("a", &Echo, "host", &record, &|_| false),
+            Err(DecisionError::Store(_))
+        ));
+        assert_eq!(
+            enrolment.approve("a", &Echo, "host", &record, &|_| false),
+            Err(DecisionError::NotFound),
+            "the request was approved once already"
+        );
+        assert_eq!(recorded.load(Ordering::SeqCst), 1, "one certificate signed");
+        assert_eq!(
+            enrolment.submit(request("a"), requester()),
+            Submitted::Issued("issued for csr-a".to_string()),
+            "its host collects the certificate that was signed"
+        );
+    }
+
+    /// `submit` says whether it took the request in, decided under the lock that takes it: the
+    /// first submission of a key is new and a re-sent one is not, and a request filed anew after
+    /// it was withdrawn is new again.
+    /// Verifies: ADR-0021
+    #[test]
+    fn a_submission_says_whether_it_took_the_request_in() {
+        let (enrolment, _) = enrolment();
+        enrolment.open(600).expect("open");
+        assert_eq!(
+            enrolment.submit(request("a"), requester()),
+            Submitted::Waiting { new: true }
+        );
+        assert_eq!(
+            enrolment.submit(request("a"), requester()),
+            Submitted::Waiting { new: false }
+        );
+        assert_eq!(enrolment.withdraw(&|_| true), 1);
+        assert_eq!(
+            enrolment.submit(request("a"), requester()),
+            Submitted::Waiting { new: true },
+            "withdrawn, then filed anew"
+        );
+    }
+
+    /// Answering a request reads it and never takes one in: a request the queue does not hold is
+    /// answered nothing, and stays out of the queue.
+    /// Verifies: ADR-0021
+    #[test]
+    fn answering_a_request_never_takes_one_in() {
+        let (enrolment, clock) = enrolment();
+        assert_eq!(enrolment.answer("a"), None, "no window");
+        enrolment.open(60).expect("open");
+        assert_eq!(enrolment.answer("a"), None);
+        assert!(enrolment.pending().is_empty());
+        enrolment.submit(request("a"), requester());
+        assert_eq!(
+            enrolment.answer("a"),
+            Some(Submitted::Waiting { new: false })
+        );
+        enrolment
+            .approve("a", &Echo, "host", &|_, _| Ok(()), &|_| false)
+            .expect("approve");
+        assert_eq!(
+            enrolment.answer("a"),
+            Some(Submitted::Issued("issued for csr-a".to_string()))
+        );
+        clock.0.fetch_add(61_000, Ordering::SeqCst);
+        assert_eq!(enrolment.answer("a"), None, "the window ran out");
+    }
+
+    /// Closing answers how many requests were still waiting, counted under the lock that closes,
+    /// and no count at all when no window was open — one that ran out included.
+    /// Verifies: ADR-0021
+    #[test]
+    fn closing_says_what_expired_and_only_when_a_window_was_open() {
+        let (enrolment, clock) = enrolment();
+        assert_eq!(
+            enrolment.close().expired_requests,
+            None,
+            "closed by default"
+        );
+        enrolment.open(60).expect("open");
+        enrolment.submit(request("a"), requester());
+        enrolment.submit(request("b"), requester());
+        enrolment.reject("b").expect("reject");
+        assert_eq!(
+            enrolment.close(),
+            Closed {
+                expired_requests: Some(1),
+                saved: Ok(())
+            }
+        );
+        assert_eq!(enrolment.close().expired_requests, None, "closed already");
+        enrolment.open(60).expect("open");
+        clock.0.fetch_add(61_000, Ordering::SeqCst);
+        assert_eq!(
+            enrolment.close().expired_requests,
+            None,
+            "it ran out before"
+        );
+    }
+
+    /// A close whose write failed is written by the next close: the window is closed in memory
+    /// already, and the store must not be left saying it is open, or a restart reopens it.
+    /// Verifies: ADR-0037
+    #[test]
+    fn a_close_that_could_not_be_persisted_is_persisted_by_the_next() {
+        let (enrolment, store) = failing();
+        enrolment.open(600).expect("open the window");
+        store.fail(true);
+        assert!(enrolment.close().saved.is_err());
+        store.fail(false);
+        assert!(enrolment.close().saved.is_ok());
+        let saved = store.saved.lock().expect("saved").clone().expect("written");
+        assert_eq!(
+            saved.window_until_ms, None,
+            "the store still says the window is open"
         );
     }
 }

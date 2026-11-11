@@ -952,8 +952,10 @@ impl Handler for Fleet {
                 return Vec::new();
             };
             let uid = enrolling.instance_uid.lock().expect("uid lock").clone();
-            return match enrolment.submit(request, enrolling.requester.clone()) {
-                Submitted::Issued(cert) => vec![self.0.enrolment_answer(&uid, Some(cert))],
+            // Read, never filed: a request withdrawn meanwhile stays out of the queue, which only
+            // an enrolment message, checked against the revocations, enters.
+            return match enrolment.answer(&request.key_fingerprint) {
+                Some(Submitted::Issued(cert)) => vec![self.0.enrolment_answer(&uid, Some(cert))],
                 _ => Vec::new(),
             };
         }
@@ -1250,10 +1252,9 @@ impl Fleet {
         instance_uid: &[u8],
     ) -> ServerToAgent {
         let key = request.key_fingerprint.clone();
-        let new = !enrolment.pending().iter().any(|pending| pending.id == key);
         let subject = request.subject.clone();
         let answer = match enrolment.submit(request, requester.clone()) {
-            Submitted::Waiting => {
+            Submitted::Waiting { new } => {
                 // A new request at `info`; the same one asked again — every few seconds while it
                 // waits — at `debug`.
                 if new {
@@ -1325,5 +1326,59 @@ fn proves_the_handshake(csr_pem: &str, handshake: &Requester) -> Result<(), Stri
                 .to_string(),
         ),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A push to an enrolling connection only reads its request's decision: a request that is no
+    /// longer in the queue — withdrawn when its bootstrap certificate was revoked — is not filed
+    /// again behind the revocation check an enrolment message passes (ADR-0021 clause 35).
+    /// Verifies: ADR-0021
+    #[test]
+    fn a_push_never_files_a_request_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let enrolment = Arc::new(Enrolment::new(Arc::new(crate::clock::SystemClock)));
+        enrolment.open(600).expect("open");
+        let state = Arc::new(
+            AppState::new(dir.path().join("configs"))
+                .expect("state")
+                .with_enrolment(Some(enrolment.clone())),
+        );
+        let fleet = Fleet(state, Issuers::default());
+        let request = crate::enrolment::Request {
+            csr_pem: "csr".to_string(),
+            subject: "CN=edge-01".to_string(),
+            key_fingerprint: "k1".to_string(),
+            instance_uid: vec![7; 16],
+        };
+        let requester = crate::enrolment::tests::requester();
+        assert!(matches!(
+            enrolment.submit(request.clone(), requester.clone()),
+            Submitted::Waiting { new: true }
+        ));
+        // Revoked: the waiting request is withdrawn.
+        assert_eq!(enrolment.withdraw(&|_| true), 1);
+        let mut carrier = Carrier {
+            transport: Transport::WebSocket,
+            enrolling: Some(Enrolling {
+                requester,
+                request: Arc::new(Mutex::new(Some(request))),
+                instance_uid: Arc::new(Mutex::new(vec![7; 16])),
+            }),
+            conn: None,
+            seen: Vec::new(),
+            proofs: Proofs::default(),
+            peer: None,
+            subject: Subject::peer(None),
+            ended: Arc::new(Mutex::new(None)),
+        };
+        assert!(fleet.on_outbound(&mut carrier, Push::Enrolment).is_empty());
+        assert!(
+            enrolment.pending().is_empty(),
+            "the push filed the withdrawn request again"
+        );
     }
 }

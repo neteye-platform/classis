@@ -574,8 +574,10 @@ impl BootstrapCertificates {
 
     /// Deletes a revoked certificate's entry and any PKCS#12 file of it (ADR-0029 clause 15).
     /// `revoked` tells whether the entry is revoked; it runs under the record's lock with the
-    /// removal, so a second request, or a revocation lifted meanwhile, cannot slip between the
-    /// check and the deletion.
+    /// removal, so a second deletion cannot slip between the check and the removal. A lift can:
+    /// the revocation list has a lock of its own. The entry then goes although its revocation no
+    /// longer stands, which costs nothing — the certificate is admitted or refused by the list and
+    /// its CA alone, a lift never brings a PKCS#12 file back, and the serial can be revoked again.
     ///
     /// # Errors
     /// See [`DeleteError`]; on every error the entry is kept.

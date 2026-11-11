@@ -2836,7 +2836,7 @@ async fn open_enrolment_window(
     path = "/api/v1/enrolment/window",
     tag = "enrolment",
     responses(
-        (status = 204, description = "Closed"),
+        (status = 204, description = "Closed, or no window was open"),
         (status = 404, description = "Enrolment is not configured", body = ErrorBody),
         (status = 500, description = "Closed, but not persisted: a restart may find the window open until its end", body = ErrorBody)
     )
@@ -2845,15 +2845,18 @@ async fn close_enrolment_window(State(state): State<Arc<AppState>>) -> Response 
     let Some(enrolment) = state.enrolment() else {
         return enrolment_off();
     };
-    let expired = enrolment.pending().len();
-    let saved = enrolment.close();
-    info!(
-        event = "enrolment.window",
-        outcome = "closed",
-        expired_requests = expired,
-        "enrolment window closed"
-    );
-    match saved {
+    // Written every time, so a close whose write failed is written by the next; only the close of
+    // a window that was open is an event.
+    let closed = enrolment.close();
+    if let Some(expired) = closed.expired_requests {
+        info!(
+            event = "enrolment.window",
+            outcome = "closed",
+            expired_requests = expired,
+            "enrolment window closed"
+        );
+    }
+    match closed.saved {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2920,7 +2923,7 @@ fn through_gateway(state: &AppState, id: &str) -> Option<String> {
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
         (status = 404, description = "No such pending request, or enrolment is not configured", body = ErrorBody),
         (status = 409, description = "The CA could not sign the request, its bootstrap certificate is revoked, or that certificate's subject breaks the rules of ADR-0036 clause 1 — the message names the attribute, and nothing is signed", body = ErrorBody),
-        (status = 500, description = "The approval could not be persisted; the request still waits", body = ErrorBody)
+        (status = 500, description = "Approved and its certificate recorded, but the approval could not be persisted: its host collects the certificate, and a restart may list the request again", body = ErrorBody)
     )
 )]
 async fn approve_enrolment(
@@ -2948,10 +2951,25 @@ async fn approve_enrolment(
         Err(
             crate::enrolment::DecisionError::Subject(e) | crate::enrolment::DecisionError::Sign(e),
         ) => error(StatusCode::CONFLICT, e),
-        Err(crate::enrolment::DecisionError::Store(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("the approval could not be persisted, and the request still waits: {e}"),
-        ),
+        Err(crate::enrolment::DecisionError::Store(e)) => {
+            // Approved all the same: the certificate is signed and recorded.
+            info!(
+                event = "enrolment.approved",
+                request = %id,
+                gateway,
+                persisted = false,
+                error = %e,
+                "enrolment request approved, but the approval could not be persisted"
+            );
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "approved, and its certificate recorded, but the approval could not be \
+                     persisted — its host collects the certificate; a restart may list the \
+                     request again: {e}"
+                ),
+            )
+        }
     }
 }
 
@@ -3387,7 +3405,9 @@ async fn revoke(
     }
 }
 
-/// Lifts one revocation. It takes effect at the next connection.
+/// Lifts one revocation. It takes effect at the next connection. A lifted bootstrap certificate
+/// gets no PKCS#12 file back (ADR-0029 clause 4): one its revocation could not forget is forgotten
+/// first, and the revocation stays while that fails.
 #[utoipa::path(
     delete,
     path = "/api/v1/revocations/{id}",
@@ -3396,7 +3416,8 @@ async fn revoke(
     responses(
         (status = 204, description = "Lifted"),
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
-        (status = 404, description = "No such revocation, or revocation is not configured", body = ErrorBody)
+        (status = 404, description = "No such revocation, or revocation is not configured", body = ErrorBody),
+        (status = 500, description = "Not lifted: the list could not be written, or the revoked bootstrap certificate's PKCS#12 file could not be removed", body = ErrorBody)
     )
 )]
 async fn lift_revocation(
@@ -3407,6 +3428,30 @@ async fn lift_revocation(
     let Some(revocations) = state.revocations() else {
         return revocation_off();
     };
+    // The file goes before the revocation does. Its entry on disk and in memory change together,
+    // so a file still marked as kept is one the revocation still stands over, also after a
+    // restart.
+    let bootstrap_serial = revocations
+        .list()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .and_then(|entry| match entry.revoked {
+            crate::revocation::Revoked::Certificate {
+                authority, serial, ..
+            } => (authority == "bootstrap").then_some(serial),
+        });
+    if let (Some(serial), Some(bootstrap)) = (bootstrap_serial, state.bootstrap()) {
+        if let Err(e) = bootstrap.forget_p12(&serial) {
+            warn!(revocation = %id, serial = %serial, "cannot remove the revoked PKCS#12 file: {e}");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "not lifted: the PKCS#12 file of the bootstrap certificate {serial} could not \
+                     be removed, and lifting the revocation would hand it out again: {e}"
+                ),
+            );
+        }
+    }
     match revocations.lift(&id) {
         Ok(true) => {
             info!(event = "revocation.lifted", revocation = %id, "revocation lifted");
