@@ -20,7 +20,7 @@ unset "${git_env[@]}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELF_TESTS=(
-  test-git-hooks.sh test-sensor-revision-due.sh test-sensor-tests-kept.sh test-check-docs.sh
+  test-git-hooks.sh test-sensor-revision-due.sh test-sensor-tests-kept.sh
   test-check-traceability.sh
 )
 

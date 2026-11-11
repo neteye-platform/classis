@@ -102,11 +102,11 @@ container.
 ### Reaching it from the Dev Container
 
 The Dev Container has no Docker socket
-([ADR-0002](../docs/adr/0002-dev-container-runtime.md)) and needs none for this:
+(ADR-0002) and needs none for this:
 it reaches the Collector **through the host**, over the ports published above.
 
 The Client sends own telemetry in plaintext to a loopback IP literal and nowhere
-else ([ADR-0016](../docs/adr/0016-what-an-agent-reports-about-itself.md)), so
+else (ADR-0016), so
 `http://host.docker.internal:4318` is refused inside the container just like any
 other address. That is why the container forwards the host's Collector onto its
 own loopback:
@@ -165,7 +165,7 @@ status means the store is reached, a connection error that it is not.
 
 The stack carries rustfs, an S3-compatible store, for a development Server that
 keeps its artifacts in a bucket
-([ADR-0049](../docs/adr/0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md)).
+(ADR-0049).
 It is published on port 9100 and forwarded onto the Dev Container's loopback
 like the Collector, so `http://127.0.0.1:9100` is the same store on the host and
 in the container. The Server creates no bucket; create `fleet` once, with the
@@ -188,7 +188,7 @@ cargo test -p fleet-server s3::`.
 
 The stack carries PostgreSQL for a development Server that keeps its records in
 a database
-([ADR-0050](../docs/adr/0050-the-servers-records-may-live-in-postgresql.md)). It
+(ADR-0050). It
 is published on port 5432 and forwarded onto the Dev Container's loopback like
 the Collector, so `127.0.0.1:5432` is the same database on the host and in the
 container. The image creates the database and the role `fleet`, password
@@ -227,7 +227,7 @@ Two things this stack is shaped around:
 - **`http://` only to `127.0.0.1` or `[::1]`.** The Client refuses every other
   cleartext destination — a private address, a host name, even `localhost` — and
   reports the refusal rather than warning about it
-  ([ADR-0016](../docs/adr/0016-what-an-agent-reports-about-itself.md)). An Agent
+  (ADR-0016). An Agent
   on the host, or in the Dev Container through its forwarder, reaches
   `http://127.0.0.1:4318` and is satisfied. An Agent on another machine is not:
   terminate TLS in front of the Collector and offer the `https://` URL.
@@ -302,7 +302,7 @@ folder, each with a **(Doris)** twin over the Doris copy of the data
 | **Fleet Agents — Traces**   | Operation rate, error rate, p50/p95/p99 duration, which phase fails most, and a trace detail view.                                                                                                                 |
 
 **What fills the traces dashboard.** Five fleet operations, and nothing else
-([ADR-0016](../docs/adr/0016-what-an-agent-reports-about-itself.md)):
+(ADR-0016):
 `package.install`, `config.apply` (twice over — a Managed Process's
 configuration, and the Supervisor set), `connection.settings.apply`, and
 `self.update`. Each is a root span whose children are its phases, and whose

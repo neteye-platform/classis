@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-protocol-baseline.sh. Verifies: G-13 ADR-0011
+# Self-test of scripts/check-protocol-baseline.sh. Verifies: G-13
 #
 # A divergence from upstream is detected automatically rather than noticed by chance (G-13): each
 # case writes a conformance document with or without the Baseline marker, puts a stub `curl` first

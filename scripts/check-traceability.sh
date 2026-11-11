@@ -138,6 +138,10 @@ while IFS= read -r -d '' rel; do
       case "$id" in
         ADR-*)
           if ! _contains "$id" "${known_adrs[@]}"; then
+            # TRANSITIONAL: markers under crates/ still cite the ADRs inherited from upstream,
+            # which were removed (git tag upstream-import). They go with the code that is cut
+            # from the repository; remove this exception when the cut has landed.
+            [[ "$rel" == crates/* ]] && continue
             add_error "$rel:$lineno: cites '$id', which does not exist in $ADR_DIR/"
           elif _contains "$id" "${inactive[@]}"; then
             add_error "$rel:$lineno: cites '$id', which is superseded or rejected — a test cannot verify a decision no longer in force"

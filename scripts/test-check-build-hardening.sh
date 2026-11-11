@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-build-hardening.sh. Verifies: ADR-0010
+# Self-test of scripts/check-build-hardening.sh.
 #
 # Each case builds a fixture under a temporary directory — a release workflow, a second workflow,
 # rust-toolchain.toml, Cargo.toml and the crate roots the check names — runs the check against

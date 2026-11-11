@@ -12,7 +12,7 @@ description:
 The rule is
 [`AGENTS.md` §5](../../../AGENTS.md#5-quality-bar--definition-of-done). This
 skill is what the reviewer is given and the order in which it reports; it states
-no rule of its own ([ADR-0005](../../../docs/adr/0005-procedures-as-skills.md)).
+no rule of its own.
 
 ## 1. Inputs — and nothing else
 

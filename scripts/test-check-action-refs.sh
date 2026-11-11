@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-action-refs.sh. Verifies: ADR-0060
+# Self-test of scripts/check-action-refs.sh.
 #
 # Each case builds a fixture under a temporary directory — one workflow with one 'uses:' line and
 # a renovate.json that extends the organisation preset and carries the cargo rule — runs the check

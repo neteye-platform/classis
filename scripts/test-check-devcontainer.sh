@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-devcontainer.sh. Verifies: ADR-0002
+# Self-test of scripts/check-devcontainer.sh.
 #
 # Each case builds a fixture under a temporary directory — a devcontainer.json with comments and
 # one pinned Feature, the lock that resolves it, and the editor settings that pin the

@@ -23,7 +23,7 @@ jobs:
   #
   # Both are required status checks (README.md → "Repository settings"). A ruleset names a check
   # by the job's rendered name, so these two are plain jobs without a 'name:' or a matrix: the
-  # check is then called by the job id, which scripts/check-docs.sh compares with the README.
+  # check is then called by the job id.
   # fleet-tools too: the release packs every Client archive with `opamp-fleetctl`, Windows
   # included, and publishes it for macOS (ADR-0028).
   client-windows:

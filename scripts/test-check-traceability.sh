@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-traceability.sh. Verifies: ADR-0003
+# Self-test of scripts/check-traceability.sh.
 #
 # Each case builds a throwaway git repository under a temporary directory — a specification with
 # the two criteria sections, a few ADRs, and a file carrying markers — runs the check against it,
