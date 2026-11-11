@@ -98,6 +98,6 @@ fixes, which [`SECURITY.md`](../../SECURITY.md) states.
 
 ## Enforcement
 
-**Not mechanically decidable:** no check reads the `Template release` line of
+**Not checked:** no check reads the `Template release` line of
 `README.md`. That it names a `vX.Y.Z` tag or `unreleased`, and that it moved with
 a release, is the release pull request's review.

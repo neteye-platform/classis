@@ -49,7 +49,7 @@ permissions:
   contents: read
 
 # Cancel a pull request's superseded runs: a new push makes the previous run's verdict irrelevant,
-# while a queued run keeps a required check pending. Runs on 'main' are never cancelled — every
+# while a queued run keeps a check pending. Runs on 'main' are never cancelled — every
 # commit there keeps a result of its own.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

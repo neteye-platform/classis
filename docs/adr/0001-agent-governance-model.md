@@ -168,7 +168,7 @@ template drops.
 
 ## Enforcement
 
-**Not mechanically decidable:** no check runs over the documents. That the ADR
+**Not checked:** no check verifies the document set's consistency. That the ADR
 record and its index agree, that links between the documents resolve, that
 section references point at the section they name, that no other document holds
 a rule, that the overview matches the system, that the glossary's terms are the

@@ -109,8 +109,10 @@ supersession of the specification, which is not an ADR and changes by rule 7 of
 
 ## Enforcement
 
-**Not mechanically decidable:** no check reads the `Supersedes` fields and the
-`Status` lines. That a clause-naming `Supersedes` entry is mirrored by a suffix
-on the old ADR's `Status` line and the reverse, that a partially superseded ADR
-stays active, and that a successor restates exactly the clauses it names and
-nothing else of the old decision, is review.
+**Not checked:** no check reads the `Supersedes` fields and the `Status` lines.
+That a clause-naming `Supersedes` entry is mirrored by a suffix on the old ADR's
+`Status` line and the reverse, and that a partially superseded ADR stays active,
+is review.
+
+**Not mechanically decidable:** that a successor restates exactly the clauses it
+names and nothing else of the old decision is review.

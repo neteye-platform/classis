@@ -553,11 +553,11 @@ holds one symlink per skill into `.agents/skills/`; a directory-level symlink is
 not followed. The symlinks are pointers of the same kind as `CLAUDE.md`, tracked
 upstream as
 [anthropics/claude-code#31005](https://github.com/anthropics/claude-code/issues/31005).
-Delete them when that lands, and add one for every skill added meanwhile; the
-documentation check fails on a skill without its pointer. A rule is enforced
-only by what every agent hits: the git hooks under [`.githooks/`](.githooks/),
-the checks, and the repository settings below. A tool's own configuration is not
-used to enforce one, because a gate that one agent honours and the next does not
+Delete them when that lands, and add one for every skill added meanwhile. A rule
+is enforced only by what every agent hits: the git hooks under
+[`.githooks/`](.githooks/), the checks, and the repository settings below. A
+tool's own configuration is not used to enforce one, because a gate that one
+agent honours and the next does not
 looks like a rule and is not one.
 
 ## Repository settings
@@ -568,12 +568,13 @@ repository itself, configured once by a maintainer and worth re-checking after a
 repository move or transfer:
 
 - a **ruleset on `main`** that requires pull requests with one approving review
-  (a code owner's, after the last push), merges by squash only, keeps the
-  history linear, blocks force pushes and branch deletion, and requires the
+  after the last push (it also asks for a code owner's, which nothing enforces
+  while the repository has no `CODEOWNERS` file), merges by squash only, keeps
+  the history linear, blocks force pushes and branch deletion, and requires the
   organisation's **common-pull-request-checks** (CodeQL, the pull request title,
-  pre-commit, Semgrep, Trivy) as status checks. The jobs of the **Checks** and
-  **CI** workflows run on every pull request but are not required by the
-  ruleset;
+  pre-commit, Semgrep, Trivy FS and Trivy Config) as status checks. The jobs of
+  the **Checks** and **CI** workflows run on every pull request but are not
+  required by the ruleset;
 - a **ruleset on every branch** that requires signed commits;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
