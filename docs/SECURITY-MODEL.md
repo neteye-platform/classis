@@ -13,7 +13,7 @@ properties shape its security posture:
 
 - **The Dev Container has no access to the host container engine.** The host
   Docker or Podman socket is **not** mounted into the container
-  ([ADR-0002](adr/0002-dev-container-runtime.md)), so code or agents running
+  (ADR-0002), so code or agents running
   inside cannot control the host engine. Host containers are managed from a
   host-side VS Code extension (see the README), which keeps that capability
   outside the container's reach. The container is still not a strong security
@@ -83,7 +83,7 @@ own `neteye-platform` repositories, which publish no tags, the branch
 commit: a tag must point to it, a branch must contain it. The organisation
 enforces the same pinning as a GitHub setting, which refuses a run that
 references an action by a tag. This is
-[ADR-0060](adr/0060-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md),
+ADR-0060,
 held by [`scripts/check-action-refs.sh`](../scripts/check-action-refs.sh).
 Renovate, on the organisation preset, raises every update; a branch comment says
 only that the commit was on the branch, not which state of it was reviewed.
@@ -92,7 +92,7 @@ only that the commit was on the branch, not which state of it was reviewed.
 
 **Admission is a fleet-wide trust boundary; within it the host is the only bound
 between Agents**
-([ADR-0021](adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
+(ADR-0021
 clauses 7, 14 and 27). A peer reaches the OpAMP endpoint by proving _fleet
 membership_ with a client certificate in the TLS handshake, the one proof the
 Agent plane admits by. The certificate also names the **host** it was issued to,
@@ -100,7 +100,7 @@ and an `instance_uid` first reported with one host's certificate is not spoken
 for by another's: such a reporter is re-keyed to an identity of its own. A
 certificate is not bound to one `instance_uid`, which is self-asserted and which
 the Server may re-key, and a Gateway
-([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md))
+(ADR-0015)
 forwards many Agents' reports under its own certificate.
 
 The consequence, which is a design property rather than a defect: **a host
@@ -111,7 +111,7 @@ cross-fleet or unauthenticated exposure: it is bounded by admission.
 
 **A host receives from the Server only what is released to an Agent it speaks
 for**
-([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
+(ADR-0026).
 A composed configuration travels only to the Agent it was released to, and the
 package download serves an uploaded artifact only to a host one of whose Agents
 is offered it; every other request is answered `404`, as for an artifact the

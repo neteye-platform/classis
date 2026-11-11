@@ -8,5 +8,5 @@ an upgrade. The reasoning behind each change lives in the ADR it names
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A
 version is the one `[workspace.package] version` in `Cargo.toml` names, which
 the release pipeline creates the `version/*` tag from
-([ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)). A
+(ADR-0012). A
 section carries a date once its tag exists.

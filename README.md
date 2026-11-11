@@ -209,7 +209,7 @@ here).
   Every release also publishes it for Linux and macOS (ADR-0028).
 
 Both binaries read a TOML configuration file
-([ADR-0010](docs/adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md));
+(ADR-0010);
 every setting has a default except the TLS material, without which neither
 starts. The annotated examples live in [`config/`](config/).
 [`scripts/check-rust.sh`](scripts/check-rust.sh) runs exactly these
@@ -221,8 +221,8 @@ Client on Windows and macOS and release-builds the Client for Linux, Windows,
 and macOS and the Server for Linux.
 
 **Releases**
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md),
-[ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)): the
+(ADR-0019,
+ADR-0012): the
 version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml), and the
 `Release` workflow makes the `version/*` tag from it before it builds — so
 bumping the version is an ordinary reviewed commit and nobody types a tag.
@@ -232,25 +232,25 @@ architectures each ships on, a CycloneDX SBOM `<stem>.cdx.json` beside each
 archive of the Client and of the operator tool, and a `SHA256SUMS` file. Every
 asset is a subject of one build-provenance attestation, which the workflow
 verifies before it creates the release
-([ADR-0045](docs/adr/0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md));
+(ADR-0045);
 an operator checks a download with
 `gh attestation verify SHA256SUMS --repo neteye-platform/classis
 --signer-workflow neteye-platform/classis/.github/workflows/release.yml`
 and then `sha256sum -c --ignore-missing SHA256SUMS`. The files are named after
 the **Set** an operator uploads them to, not after the product inside them
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md))
+(ADR-0019)
 — and the program inside them and its configuration file are called `supervisor`
 too. The dpkg/rpm/MSI package and the service carry the **product's** name,
 `opamp-fleet`
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)):
+(ADR-0019):
 that is the name that identifies an _installation_, and a second one is a second
 build rather than a flag. The fields are separated by `_` because a name and a
 version both contain `-`
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)),
+(ADR-0019),
 and the last two are exactly what an Agent reports as `os.type` and `host.arch`
 (`linux_amd64`, `darwin_arm64`, …), so uploading a whole release under one
 package name needs no translation
-([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
+(ADR-0026).
 Started with `dry_run` (the default) it builds and packs everything and
 publishes nothing. Before it builds anything at all it checks that the version
 is still free — a `version/*` tag or a release already carrying that number
@@ -261,7 +261,7 @@ same file an operator downloads is the one a fleet is handed for a Client
 [self-update](docs/manual/client.md#updating-the-client-itself).
 
 The **Server** ships as a container image and nowhere else
-([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)):
+(ADR-0052):
 `ghcr.io/mbrigl/opamp-fleet-server:<version>` for `linux/amd64` and
 `linux/arm64`, built by
 [`packaging/container/Containerfile`](packaging/container/Containerfile) from
@@ -289,16 +289,16 @@ A minimal closed control loop on one machine:
 1. **Start the Server:**
    `cargo run -p fleet-server -- --config config/server.toml` — it serves two
    planes on two ports
-   ([ADR-0013](docs/adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
+   (ADR-0013).
    The **Agent plane** on `4320`: the OpAMP endpoint at `/v1/opamp` (plain HTTP
    **and** WebSocket,
-   [ADR-0013](docs/adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md))
+   ADR-0013)
    and the package downloads the offers point at. The **Operator plane** on
    `127.0.0.1:4321`: the REST API under `/api/v1/`
-   ([ADR-0023](docs/adr/0023-configurations-and-the-rest-api.md)), the API docs,
+   (ADR-0023), the API docs,
    and the bundled UI at `/` — on loopback, because it is open until
    `[rest.auth]` guards it with Basic credentials
-   ([ADR-0021](docs/adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)).
+   (ADR-0021).
 2. **Start a Client:**
    `cargo run -p fleet-agent -- --config config/supervisor.toml` — it connects
    over WebSocket by default (`ws://127.0.0.1:4320/v1/opamp`), reports its
@@ -311,7 +311,7 @@ A minimal closed control loop on one machine:
    must equal, never empty) matches the Agent, add the Configuration, press
    **OK**, and press the row's **Roll out** — a Configuration reaches Agents
    only through a Deployment
-   ([ADR-0034](docs/adr/0034-a-deployment-carries-configurations-and-is-the-one-thing-rolled-out.md)).
+   (ADR-0034).
 4. **Watch the loop close:** a WebSocket Client the Deployment claims receives
    the configuration within a second, an HTTP Client on its next poll. The Agent
    stores it (under its `state_dir`), reports it **Applied** with the matching
@@ -368,7 +368,7 @@ certificate of their own, for example from your organization's PKI, under
 
 The Client registers _itself_ as a native service on Linux (systemd), macOS
 (launchd), and Windows (SCM) —
-[ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md):
+ADR-0019:
 
 ```sh
 supervisor service install --config /etc/opamp/supervisor.toml     # system service (root/Administrator)
@@ -382,7 +382,7 @@ supervisor service uninstall                                   # never deletes l
   `opamp-fleet`, with no suffix and nothing to look up — so the verbs above take
   no name at all. A second installation on one host is a second _build_ with its
   own `PRODUCT_NAME`, not a runtime flag
-  ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)).
+  (ADR-0019).
 - **Two roots:** `--root <dir>` given alone puts everything under the one
   directory it names; nothing is ever installed to a fixed path. Without it, a
   Linux system install splits the defaults: the executable layout —
@@ -402,7 +402,7 @@ supervisor service uninstall                                   # never deletes l
   Unix, an SCM stop control on Windows); after a crash the manager restarts the
   service, after an explicit stop it stays down.
 - **Self-update**
-  ([ADR-0018](docs/adr/0018-the-client-updates-itself-under-its-own-agent-type.md)):
+  (ADR-0018):
   the Client is always its own Agent, so the Server can see which version each
   host runs. Letting the Server _replace_ that version is a consent that stands
   by default, takes effect once a verification key is set, and takes only the
@@ -442,7 +442,7 @@ must start — a service dying with `status=203/EXEC` and an AVC denial in
 wrapped kind — Telegraf, Icinga 2 with its plugins, GLPI Agent with its tasks —
 under the packaged account `opamp-fleet` and under `--run-as root`: it starts,
 reports, and its `sudo` or setuid helpers still work
-([ADR-0042](docs/adr/0042-the-linux-packages-run-the-client-under-its-own-account.md)).
+(ADR-0042).
 Known platform gaps (tracked in the ADR): launchd `status` is advisory and
 `install` does not auto-start there. The SCM still discards a Windows service's
 stderr, but the service now writes its own rotating log under `<state_dir>/logs`
@@ -467,7 +467,6 @@ crates/               # Cargo workspace: opamp (shared) · fleet-core · fleet-s
 config/               # annotated example configuration files (server.toml, supervisor.toml)
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
-scripts/check-docs.sh # documentation & protocol-baseline consistency checks
 interop/              # the Go side of the interop check against opamp-go (ADR-0011)
 observability/        # the development observability stack — Collector, ClickHouse, Grafana — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
@@ -507,7 +506,7 @@ docker compose -f observability/compose.yaml up -d     # on the host, from the r
 
 The container reaches the Collector through the host. Since the Client sends own
 telemetry in plaintext to a loopback IP literal alone
-([ADR-0016](docs/adr/0016-what-an-agent-reports-about-itself.md)),
+(ADR-0016),
 [`.devcontainer/forward-otlp.sh`](.devcontainer/forward-otlp.sh) puts the host's
 Collector on the container's loopback on every start: `http://127.0.0.1:4318`
 inside the container is the Collector on the host, so a `server.toml` naming
@@ -517,7 +516,7 @@ on <http://localhost:3001> in the host's browser.
 ### Host container management
 
 The Dev Container deliberately has **no access to the host Docker daemon**: the
-socket is not mounted ([ADR-0002](docs/adr/0002-dev-container-runtime.md)). To
+socket is not mounted (ADR-0002). To
 manage the host's containers from VS Code, run the **Container Tools** extension
 (`ms-azuretools.vscode-containers`) on the **host** side: install it in your
 host VS Code. [`.vscode/settings.json`](.vscode/settings.json) already pins it
@@ -534,7 +533,7 @@ them.
 
 The rules every agent follows live in [`AGENTS.md`](AGENTS.md); that there is
 exactly one such file is decided in
-[ADR-0001](docs/adr/0001-agent-governance-model.md). An agent that cannot read
+ADR-0001. An agent that cannot read
 it natively gets a pointer file instead.
 [`.claude/CLAUDE.md`](.claude/CLAUDE.md) is the one shipped here; it carries the
 pointer and no rules of its own ([`AGENTS.md` §3](AGENTS.md#3-adr-rules)). It
@@ -547,7 +546,7 @@ maintain.
 The procedures those rules name (proposing an ADR, planning a feature, reviewing
 a change, revising the design) are Agent Skills under
 [`.agents/skills/`](.agents/skills/), the open format and the directory Codex,
-Gemini CLI, and Cursor read ([ADR-0005](docs/adr/0005-procedures-as-skills.md)).
+Gemini CLI, and Cursor read (ADR-0005).
 An agent invokes one by name (`/review`) or picks it up when the task matches
 its description. Claude Code reads `.claude/skills/` only, so that directory
 holds one symlink per skill into `.agents/skills/`; a directory-level symlink is
@@ -570,7 +569,7 @@ repository move or transfer:
 
 - a **ruleset on `main`** that requires pull requests with one approving review,
   requires the
-  <!-- required-checks begin: check-docs.sh compares the workflow's jobs -->
+  <!-- required-checks begin -->
   `docs`, `traceability`, `devcontainer`, `actions`, `sensors`, `shell`, `rust`,
   `client-windows`, `client-macos`, `s3-store`, and `postgres-store`
   <!-- required-checks end -->
@@ -586,14 +585,7 @@ repository move or transfer:
   **`opamp-fleet-server`** on `ghcr.io` to **public** and linked to this
   repository: a package a workflow publishes for the first time is private, and
   operators pull the image without an account
-  ([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)).
-
-## Template
-
-- **Template release:** unreleased — the release of
-  [NUC](https://github.com/hivevm/nuc) this repository carries; a project moves
-  the line when it takes up a later one
-  ([ADR-0008](docs/adr/0008-template-releases.md)).
+  (ADR-0052).
 
 ## Contributing
 
