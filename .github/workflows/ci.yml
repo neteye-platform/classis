@@ -21,9 +21,9 @@ jobs:
   # real platforms. Actual service registration still needs the manual smoke checklist
   # (README.md → "Running as an OS service") — CI runners cannot exercise systemd/launchd/SCM.
   #
-  # Both are required status checks (README.md → "Repository settings"). A ruleset names a check
-  # by the job's rendered name, so these two are plain jobs without a 'name:' or a matrix: the
-  # check is then called by the job id, which scripts/check-docs.sh compares with the README.
+  # Both are listed as required status checks (README.md → "Repository settings"). A ruleset names
+  # a check by the job's rendered name, so these two are plain jobs without a 'name:' or a matrix:
+  # the check is then called by the job id.
   # fleet-tools too: the release packs every Client archive with `opamp-fleetctl`, Windows
   # included, and publishes it for macOS (ADR-0028).
   client-windows:

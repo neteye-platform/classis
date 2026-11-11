@@ -4,7 +4,7 @@
 - **Date:** 2026-10-07
 - **Deciders:** Markus Brigl
 - **Applies to:** docs/CONFORMANCE.md, crates/opamp/build.rs,
-  crates/opamp/proto/, the Protocol Baseline check in scripts/check-docs.sh,
+  crates/opamp/proto/, scripts/check-protocol-baseline.sh,
   interop/, crates/fleet-agent/tests/interop_opamp_go.rs,
   .github/workflows/interop.yml, and every change that adds or alters protocol
   behaviour
@@ -89,12 +89,12 @@ on the endpoint as it ships as well as in plaintext on the loopback.
 3. **The matrix changes with the behaviour.** A change that adds, removes or
    alters protocol behaviour updates `CONFORMANCE.md` in the same change.
 
-4. **Divergence from upstream warns, never fails.** `check_protocol_baseline` in
-   [`scripts/check-docs.sh`](../../scripts/check-docs.sh) reads the
-   `<!-- protocol-baseline: vX.Y.Z -->` marker, compares it with the newest
-   entry of upstream's releases list, and warns on a difference. A missing
-   marker is an error. Without network it prints a note and skips, so the other
-   documentation checks stay usable offline.
+4. **Divergence from upstream warns, never fails.**
+   [`scripts/check-protocol-baseline.sh`](../../scripts/check-protocol-baseline.sh)
+   reads the `<!-- protocol-baseline: vX.Y.Z -->` marker, compares it with the
+   newest entry of upstream's releases list, and warns on a difference. A
+   missing marker is an error. Without network it prints a note and skips, so
+   the other checks stay usable offline.
 
 5. **The schema is vendored unchanged under a version-named directory.**
    `opamp.proto` and `anyvalue.proto` sit byte-identical to the upstream tag in
@@ -286,10 +286,9 @@ packages, own telemetry and Gateway Mode.
 
 ## Enforcement
 
-- `check_protocol_baseline` in
-  [`scripts/check-docs.sh`](../../scripts/check-docs.sh) fails on a missing
-  Baseline marker and warns on divergence from upstream's newest release
-  (clauses 1, 4).
+- [`scripts/check-protocol-baseline.sh`](../../scripts/check-protocol-baseline.sh)
+  fails on a missing Baseline marker and warns on divergence from upstream's
+  newest release (clauses 1, 4).
 - [`ci.yml`](../../.github/workflows/ci.yml) builds the workspace on Linux,
   Windows and macOS, and neither it nor the Dev Container installs `protoc`;
   every build compiles the generated types from the vendored files through

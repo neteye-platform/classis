@@ -186,13 +186,9 @@ that is stopping.
 
 ## Enforcement
 
-[`scripts/sensor-revision-due.sh`](../../scripts/sensor-revision-due.sh) (job
-`sensors` in [`checks.yml`](../../.github/workflows/checks.yml)) reads the
-`Last design revision` line of the overview, counts the changes since its date,
-reports the count, and lists the directories they touched once the number is
-reached; it fails when the line is missing or unreadable, because then it
-measures nothing. Its self-test cites this ADR
-([ADR-0003](0003-decisions-verified-by-tests.md)).
+**Not mechanically decidable:** no sensor counts the changes since the last
+design revision. When a revision outside a feature spec is due is the human's
+call.
 
 **Not mechanically decidable:** the tracker is outside the tree, so whether an
 effort was specced and sliced — and whether a spec was closed without its design

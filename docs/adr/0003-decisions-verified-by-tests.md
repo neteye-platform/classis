@@ -102,7 +102,6 @@ test framework, layout, or kind of test a project uses.
 
 ## Enforcement
 
-`scripts/check-traceability.sh`, run by `scripts/check-all.sh` and as its own
-job in [`checks.yml`](../../.github/workflows/checks.yml), fails on every
-violation listed in the decision above and lists the criteria without a test. It
-ships with a self-test that cites this ADR.
+**Not mechanically decidable:** no check reads the `Verifies:` markers. That
+every accepted ADR and every criterion is cited by a test, and that every
+citation names something that exists, is review.

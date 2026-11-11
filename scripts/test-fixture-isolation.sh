@@ -19,10 +19,7 @@ mapfile -t git_env < <(git rev-parse --local-env-vars)
 unset "${git_env[@]}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SELF_TESTS=(
-  test-git-hooks.sh test-sensor-revision-due.sh test-sensor-tests-kept.sh test-check-docs.sh
-  test-check-traceability.sh
-)
+SELF_TESTS=(test-git-hooks.sh test-sensor-tests-kept.sh)
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

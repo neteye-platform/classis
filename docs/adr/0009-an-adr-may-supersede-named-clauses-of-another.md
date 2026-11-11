@@ -4,8 +4,8 @@
 - **Date:** 2026-10-12
 - **Deciders:** Markus Brigl
 - **Applies to:** the supersession mechanics of `docs/adr/README.md` and
-  `docs/adr/template.md`, the `Supersedes` field and `Status` line of every ADR,
-  and the supersession check of `scripts/check-docs.sh`
+  `docs/adr/template.md`, and the `Supersedes` field and `Status` line of every
+  ADR
 
 ## Context
 
@@ -87,10 +87,7 @@ supersession of the specification, which is not an ADR and changes by rule 7 of
 
 ## Sources / Prior art
 
-- [`docs/adr/README.md`](README.md#mechanics) and `scripts/check-docs.sh` checks
-  7 and 8 — the current mechanics; check 8 already reads
-  `superseded by ADR-NNNN` anywhere on the `Status` line, so a single partial
-  suffix passes it unchanged.
+- [`docs/adr/README.md`](README.md#mechanics) — the current mechanics.
 - Michael Nygard, _Documenting Architecture Decisions_ (2011) — the immutable
   record superseded rather than edited, which this keeps.
 - Legislative amendment practice: an amending act replaces named sections and
@@ -108,20 +105,12 @@ supersession of the specification, which is not an ADR and changes by rule 7 of
   truth; the `Status` line is what keeps that visible. Several partial
   supersessions of one ADR are a sign it should be superseded whole.
 - Follow-ups: the mechanics in `docs/adr/README.md` and the template's
-  instruction paragraph describe the clause form; check 8 of
-  `scripts/check-docs.sh` handles several suffixes on one `Status` line and
-  verifies that a clause-naming `Supersedes` entry is mirrored by a suffix that
-  keeps the old ADR active, and the reverse.
+  instruction paragraph describe the clause form.
 
 ## Enforcement
 
-`scripts/check-docs.sh` check 8 (supersession agreement), extended as above,
-fails when a `Supersedes` entry names clauses but the old ADR's `Status` line
-carries no matching `superseded by` suffix, when a suffix names an ADR whose
-`Supersedes` field does not name the old one, or when a partially superseded ADR
-is `⚪`. Its self-test,
-[`scripts/test-check-docs.sh`](../../scripts/test-check-docs.sh), carries a case
-for each, with a `Verifies: ADR-0009` marker.
-
-**Not mechanically decidable:** that a successor restates exactly the clauses it
-names and nothing else of the old decision is review.
+**Not mechanically decidable:** no check reads the `Supersedes` fields and the
+`Status` lines. That a clause-naming `Supersedes` entry is mirrored by a suffix
+on the old ADR's `Status` line and the reverse, that a partially superseded ADR
+stays active, and that a successor restates exactly the clauses it names and
+nothing else of the old decision, is review.

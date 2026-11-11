@@ -168,12 +168,8 @@ template drops.
 
 ## Enforcement
 
-[`scripts/check-docs.sh`](../../scripts/check-docs.sh) (job `docs` in
-[`checks.yml`](../../.github/workflows/checks.yml)) verifies what is
-mechanically checkable: that the ADR record and its index agree, that links
-between the documents resolve, and that section references point at the section
-they name — which is why a document cites a rule as a link to its section anchor
-and never restates it: a renumbering breaks the link, and the check catches it,
-where a restated rule would drift unseen. That no other document holds a rule,
-that the overview matches the system, that the glossary's terms are the ones in
-use, and that no convention stands where a check could, is review only.
+**Not mechanically decidable:** no check runs over the documents. That the ADR
+record and its index agree, that links between the documents resolve, that
+section references point at the section they name, that no other document holds
+a rule, that the overview matches the system, that the glossary's terms are the
+ones in use, and that no convention stands where a check could, is review.

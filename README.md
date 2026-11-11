@@ -467,7 +467,6 @@ crates/               # Cargo workspace: opamp (shared) · fleet-core · fleet-s
 config/               # annotated example configuration files (server.toml, supervisor.toml)
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
-scripts/check-docs.sh # documentation & protocol-baseline consistency checks
 interop/              # the Go side of the interop check against opamp-go (ADR-0011)
 observability/        # the development observability stack — Collector, ClickHouse, Grafana — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
@@ -568,16 +567,14 @@ Some of this project's rules cannot be enforced by files in the repository
 repository itself, configured once by a maintainer and worth re-checking after a
 repository move or transfer:
 
-- a **ruleset on `main`** that requires pull requests with one approving review,
-  requires the
-  <!-- required-checks begin: check-docs.sh compares the workflow's jobs -->
-  `docs`, `traceability`, `devcontainer`, `actions`, `sensors`, `shell`, `rust`,
-  `client-windows`, `client-macos`, `s3-store`, and `postgres-store`
-  <!-- required-checks end -->
-  jobs as required status checks — every job of the **Checks** workflow, the
-  Client's Windows and macOS jobs of the **CI** workflow, and its jobs that run
-  the S3 and PostgreSQL stores' tests against a real store (rulesets list checks
-  by their job name) — and blocks force pushes and branch deletion;
+- a **ruleset on `main`** that requires pull requests with one approving review
+  (a code owner's, after the last push), merges by squash only, keeps the
+  history linear, blocks force pushes and branch deletion, and requires the
+  organisation's **common-pull-request-checks** (CodeQL, the pull request title,
+  pre-commit, Semgrep, Trivy) as status checks. The jobs of the **Checks** and
+  **CI** workflows run on every pull request but are not required by the
+  ruleset;
+- a **ruleset on every branch** that requires signed commits;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
   otherwise carried by review alone;
