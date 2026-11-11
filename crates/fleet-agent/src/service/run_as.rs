@@ -266,7 +266,10 @@ fn group_members(gid: u32) -> std::io::Result<Vec<String>> {
     let mut buffer = vec![0 as libc::c_char; 4096];
     loop {
         let mut entry = std::mem::MaybeUninit::<libc::group>::uninit();
-        let mut found: *mut libc::group = std::ptr::null_mut();
+        // `getgrgid_r` sets `found` on every return, to null or to `entry`, so its starting value
+        // is never read. It starts at `entry` rather than null because CodeQL follows a null it
+        // starts with into the `gr_mem` walk below, past the null check, and reports it there.
+        let mut found: *mut libc::group = entry.as_mut_ptr();
         // SAFETY: every pointer is valid for the call and the buffer's length is the one passed;
         // `found` is either null or points at `entry`, whose strings live in `buffer`.
         let rc = unsafe {
