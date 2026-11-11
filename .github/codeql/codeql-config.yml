@@ -1,0 +1,34 @@
+# CodeQL configuration, read by the organisation's codeql-scan workflow, which fails on any alert
+# it reports. CodeQL has no in-source suppression for Rust and cannot tell `#[cfg(test)]` code from
+# the rest, so what it may not see is decided here, each entry with its reason.
+name: classis
+
+# Test code: fixtures carry literal passwords and keys, and assertion messages name accounts and
+# uids, by design. Test modules inside `src/` are not reached by these paths; the rule filters
+# below cover what they raise.
+paths-ignore:
+  - "**/tests/**"
+  - fuzz
+  # The filesystem store, removed with the move to PostgreSQL and S3 only. Its file names come
+  # from validated domain names (a Package's type and version, a Configuration's name), which
+  # CodeQL does not see as a barrier.
+  - crates/fleet-server/src/fs
+
+query-filters:
+  # rustc's `unused_variables`, denied by `-D warnings` in CI, decides this, and it sees a
+  # variable used by an inline format argument (`"{other}"`), which CodeQL reports as unused.
+  - exclude:
+      id: rust/unused-variable
+  # Every hit is a test fixture in a `#[cfg(test)]` module inside `src/`. Production secrets are
+  # read from owner-only files (the `*_file` keys) and zeroized (ADR-0057).
+  - exclude:
+      id: rust/hard-coded-cryptographic-value
+  # A name heuristic: it takes values named `uid`, `account` or `certificate` for secrets. What
+  # the code writes under those names is an instance UID, an account name, a uid, or a
+  # certificate's path or public PEM; no hit was a secret.
+  - exclude:
+      id: rust/cleartext-logging
+  # Plaintext is allowed on loopback literals alone, decided and tested in code (ADR-0013). The one
+  # hit is the test of that rule, whose refused `http://` endpoint flows into the probe.
+  - exclude:
+      id: rust/non-https-url

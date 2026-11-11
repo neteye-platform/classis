@@ -238,18 +238,19 @@ pub fn account_of(uid: u32) -> std::io::Result<Option<Account>> {
         if rc != 0 {
             return Err(std::io::Error::from_raw_os_error(rc));
         }
-        if found.is_null() {
+        // SAFETY: `found` is either null or points at the filled `entry`.
+        let Some(found) = (unsafe { found.as_ref() }) else {
             return Ok(None);
-        }
-        // SAFETY: `found` points at the filled `entry`, and `pw_name` and `pw_dir` at
-        // NUL-terminated strings inside `buffer`, which outlives these reads.
-        let (name, home, gid) = unsafe {
+        };
+        // SAFETY: `pw_name` and `pw_dir` point at NUL-terminated strings inside `buffer`, which
+        // outlives these reads.
+        let (name, home) = unsafe {
             (
-                std::ffi::CStr::from_ptr((*found).pw_name),
-                std::ffi::CStr::from_ptr((*found).pw_dir),
-                (*found).pw_gid,
+                std::ffi::CStr::from_ptr(found.pw_name),
+                std::ffi::CStr::from_ptr(found.pw_dir),
             )
         };
+        let gid = found.pw_gid;
         return Ok(Some(Account {
             name: name.to_string_lossy().into_owned(),
             home: PathBuf::from(std::ffi::OsStr::from_bytes(home.to_bytes())),
@@ -284,9 +285,10 @@ fn group_members(gid: u32) -> std::io::Result<Vec<String>> {
         if rc != 0 {
             return Err(std::io::Error::from_raw_os_error(rc));
         }
-        if found.is_null() {
+        // SAFETY: `found` is either null or points at the filled `entry`.
+        let Some(found) = (unsafe { found.as_ref() }) else {
             return Ok(Vec::new());
-        }
+        };
         let mut members = Vec::new();
         // SAFETY: `gr_mem` is a null-terminated array of NUL-terminated strings inside `buffer`,
         // which outlives these reads. Each slot is read unaligned: where in the buffer
@@ -294,7 +296,7 @@ fn group_members(gid: u32) -> std::io::Result<Vec<String>> {
         // at an offset that follows from the lengths of what it copied there first — so no
         // alignment of the buffer itself makes it aligned.
         unsafe {
-            let mut member = (*found).gr_mem;
+            let mut member = found.gr_mem;
             while !member.is_null() {
                 let name = member.read_unaligned();
                 if name.is_null() {
