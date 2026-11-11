@@ -595,6 +595,8 @@ async fn a_downstream_connection_that_never_finishes_its_headers_is_hung_up_on()
 /// Verifies: ADR-0026
 #[tokio::test]
 async fn the_gateway_serves_no_artifact_it_relayed_no_offer_for() {
+    // The reqwest clients below need the process provider; run alone, no other test installs it.
+    opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let store =
         fleet_server::packages::PackageStore::open(dir.path().join("packages")).expect("store");
