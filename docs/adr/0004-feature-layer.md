@@ -67,13 +67,13 @@ rather than on a date. [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) carries on
 one line the date of the last revision and the number of changes after which the
 next is due —
 `**Last design revision:** <YYYY-MM-DD or none yet>, due after <N> changes.` —
-and a sensor counts the changes since that date. A **change** is a commit that
+and the human counts the changes since that date. A **change** is a commit that
 touches anything outside `docs/`, merges excluded. The number ships as 20 and is
-the project's to set, on the line rather than in the sensor. The count is
-reported, never enforced: once the number is reached the revision runs over the
-modules those changes touched, and it moves the date. The line sits in the
-overview because the revision corrects that document anyway, and because the
-overview is the one document that says how the system stands (ADR-0001).
+the project's to set, on that line. The count is never enforced: once the number
+is reached the revision runs over the modules those changes touched, and it
+moves the date. The line sits in the overview because the revision corrects that
+document anyway, and because the overview is the one document that says how the
+system stands (ADR-0001).
 
 **Out of scope:** how work smaller than one session is planned; an artifact for
 an effort too foggy to be written as a spec; triage states for issues that
@@ -113,9 +113,6 @@ own tracker.
 - **A failing check once the revision is due.** Blocks every pull request until
   a session that ships no behaviour has run; this layer makes entropy visible,
   not impossible.
-- **The number of changes inside the sensor.** The sensor belongs to the
-  template and travels with it; how much drift a project tolerates belongs in
-  the project's own document.
 - **Counting lines changed rather than commits.** Nearer to entropy and far
   noisier: a formatter run is thousands of lines and no structure at all.
 
@@ -186,13 +183,9 @@ that is stopping.
 
 ## Enforcement
 
-[`scripts/sensor-revision-due.sh`](../../scripts/sensor-revision-due.sh) (job
-`sensors` in [`checks.yml`](../../.github/workflows/checks.yml)) reads the
-`Last design revision` line of the overview, counts the changes since its date,
-reports the count, and lists the directories they touched once the number is
-reached; it fails when the line is missing or unreadable, because then it
-measures nothing. Its self-test cites this ADR
-([ADR-0003](0003-decisions-verified-by-tests.md)).
+**Not checked:** no sensor counts the changes since the last
+design revision. When a revision outside a feature spec is due is the human's
+call.
 
 **Not mechanically decidable:** the tracker is outside the tree, so whether an
 effort was specced and sliced — and whether a spec was closed without its design

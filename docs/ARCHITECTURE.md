@@ -11,8 +11,8 @@
 > owns is the one that goes stale.
 >
 > **Last design revision:** none yet, due after 20 changes. The revision that
-> ran moves the date; the number is this project's to set; a sensor counts the
-> changes outside `docs/` since the date and says when the next is due
+> ran moves the date; the number is this project's to set; the human counts the
+> changes outside `docs/` since the date
 > ([ADR-0004](adr/0004-feature-layer.md)).
 
 ## Context

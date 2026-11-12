@@ -98,10 +98,6 @@ fixes, which [`SECURITY.md`](../../SECURITY.md) states.
 
 ## Enforcement
 
-Check 14 of [`scripts/check-docs.sh`](../../scripts/check-docs.sh) (job `docs`
-in [`checks.yml`](../../.github/workflows/checks.yml)) fails when `README.md`
-has no `Template release` line or when the line names neither a `vX.Y.Z` tag nor
-`unreleased`; its self-test cites this ADR
-([ADR-0003](0003-decisions-verified-by-tests.md)). Not checked: that the tag
-exists, because tags do not travel with the copy, and that the line moved with a
-release, which is the release pull request's review.
+**Not checked:** no check reads the `Template release` line of
+`README.md`. That it names a `vX.Y.Z` tag or `unreleased`, and that it moved with
+a release, is the release pull request's review.

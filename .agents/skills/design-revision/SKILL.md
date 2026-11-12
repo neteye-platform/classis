@@ -25,10 +25,8 @@ Take the feature spec and its merged tickets. The modules those pull requests
 touched are the scope; the rest of the tree is context, not a target. One
 session, one spec.
 
-Without a spec, when
-[`scripts/sensor-revision-due.sh`](../../../scripts/sensor-revision-due.sh) says
-the revision is due, the scope is the directories it lists: the changes since
-the last revision. One session, one count.
+Without a spec, when the human asks for a revision, the scope is what they name,
+or else the changes since the last revision. One session, one scope.
 
 ## 2. Survey the modules
 

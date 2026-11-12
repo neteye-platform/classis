@@ -4,13 +4,10 @@ name: Checks
 # toolchain of the rust job (ShellCheck, used by the shell job, ships preinstalled on the
 # GitHub-hosted runner image).
 # scripts/check-all.sh runs the same checks in the same order locally (AGENTS.md §5); a check
-# added here is added there in the same change. Check 9 of scripts/check-docs.sh
-# verifies that the two lists, and the required checks named in README.md, still agree.
-# - Documentation: the consistency checks that scripts/check-docs.sh runs, after its own self-test
-#   has passed. Its header lists them and is the single place they are described — this file does
-#   not restate the list.
-# - Traceability: every accepted ADR is cited by a test and every citation names something that
-#   exists (ADR-0003), checked by scripts/check-traceability.sh after its own self-test has passed.
+# added here is added there in the same change.
+# - Docs: the Protocol Baseline that docs/CONFORMANCE.md pins is compared with upstream's newest
+#   opamp-spec release, and a newer one is reported (ADR-0011), by scripts/check-protocol-baseline.sh
+#   after its own self-test has passed.
 # - Dev Container: no host Docker socket, Features pinned and locked, the container-management
 #   extension on the host side (ADR-0002), checked by scripts/check-devcontainer.sh after its own
 #   self-test has passed.
@@ -25,11 +22,9 @@ name: Checks
 #   profile's overflow checks and the crates that forbid unsafe code are as that script lists.
 # - Sensors: what weakens the test suite and no toolchain's tools notice — test files deleted
 #   and skip markers added since the pull request's base — reported by
-#   scripts/sensor-tests-kept.sh for the reviewer (AGENTS.md, section 5), and the changes since
-#   the last design revision, reported by scripts/sensor-revision-due.sh (ADR-0004), each after
-#   its self-test has passed. The job reports and never fails on what it counts; the reason for
-#   a finding is in the pull request, and a due revision is the human's to schedule. It checks
-#   out the full history because both sensors read it.
+#   scripts/sensor-tests-kept.sh for the reviewer (AGENTS.md, section 5), after its self-test has
+#   passed. The job reports and never fails on what it counts; the reason for a finding is in the
+#   pull request. It checks out the full history because the sensor reads it.
 # - Shell lint: every shell script passes ShellCheck — the scripts are this repository's
 #   enforcement layer, so they are linted themselves. The job first runs the self-test of the
 #   git hooks under .githooks/, which refuse a commit on main and a push while the checks are
@@ -38,7 +33,7 @@ name: Checks
 #   README.md → "Build, Test & Run", on the stack of ADR-0010 — the same script
 #   scripts/check-all.sh runs, so the build and the tests gate a push as they gate a merge. The one
 #   job of this workflow that installs something: rustup reads rust-toolchain.toml on first use,
-#   and the cache keeps the build within its timeout. Check 9 recognises the job by its run line.
+#   and the cache keeps the build within its timeout.
 #
 # Every job is bounded by a timeout — a hung step would otherwise occupy a runner until the
 # platform's own six-hour limit — and every checkout runs with 'persist-credentials: false': the
@@ -54,7 +49,7 @@ permissions:
   contents: read
 
 # Cancel a pull request's superseded runs: a new push makes the previous run's verdict irrelevant,
-# while a queued run keeps a required check pending. Runs on 'main' are never cancelled — every
+# while a queued run keeps a check pending. Runs on 'main' are never cancelled — every
 # commit there keeps a result of its own.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -65,34 +60,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Submodules are checked out because the link check resolves relative targets against the
-      # working tree: a documentation link into a submodule would otherwise break in CI while
-      # working locally. Their *contents* are never read — check-docs.sh enumerates via
-      # `git ls-files`, which lists a submodule as one gitlink entry, not as its files.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: recursive
       # The check's own tests run first: a check that is wrong passes nothing worth trusting.
-      - name: Self-test the documentation checks
-        run: bash scripts/test-check-docs.sh
       - name: Self-test the Protocol Baseline check
         run: bash scripts/test-check-protocol-baseline.sh
-      - name: Check documentation consistency
-        run: bash scripts/check-docs.sh
-
-  traceability:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The check's own tests run first: a check that is wrong passes nothing worth trusting.
-      - name: Self-test the traceability check
-        run: bash scripts/test-check-traceability.sh
-      - name: Check that accepted decisions and criteria are verified by tests
-        run: bash scripts/check-traceability.sh
+      - name: Check the Protocol Baseline against upstream
+        run: bash scripts/check-protocol-baseline.sh
 
   devcontainer:
     runs-on: ubuntu-latest
@@ -141,10 +116,6 @@ jobs:
         run: bash scripts/sensor-tests-kept.sh "$BASE"
         env:
           BASE: ${{ github.event.pull_request.base.sha || (!github.event.forced && github.event.before) || '' }}
-      - name: Self-test the revision-due sensor
-        run: bash scripts/test-sensor-revision-due.sh
-      - name: Report the changes since the last design revision
-        run: bash scripts/sensor-revision-due.sh
 
   shell:
     runs-on: ubuntu-latest

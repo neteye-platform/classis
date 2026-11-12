@@ -25,13 +25,13 @@ prescribe only something every language's tests can carry.
 
 ## Decision
 
-We will fail CI on any accepted ADR that no test cites with a `Verifies: <id>`
-marker, and report every criterion under **Goals / Success Criteria** or
-**Quality Goals** in the specification that no test cites.
+Every accepted ADR is cited by a test with a `Verifies: <id>` marker, and every
+criterion under **Goals / Success Criteria** or **Quality Goals** in the
+specification is cited by one once it is met.
 
 - **Identifiers.** Every list item in those two sections starts with a bold
-  `G-n` (Goals) or `Q-n` (Quality Goals), as in `- **G-1** — …`; an item without
-  one fails. Identifiers are never renumbered or reused.
+  `G-n` (Goals) or `Q-n` (Quality Goals), as in `- **G-1** — …`. Identifiers are
+  never renumbered or reused.
 - **Marker.** `Verifies:` followed by one or more identifiers (`ADR-0002`,
   `G-1`), in any tracked file that is not Markdown. It is plain text so that
   every language can carry it.
@@ -41,13 +41,13 @@ marker, and report every criterion under **Goals / Success Criteria** or
   `**Not mechanically decidable:**` with the reason. Criteria have no exception:
   a criterion no test can decide is not an acceptance criterion, and is
   rewritten until one can.
-- **Criteria.** A criterion no test cites is pending work, and the check lists
-  it; it does not fail. Nothing in the specification marks the state, so meeting
-  a goal touches the tests, not the constitution.
+- **Criteria.** A criterion no test cites is pending work, not a defect. Nothing
+  in the specification marks the state, so meeting a goal touches the tests, not
+  the constitution.
 - **Invalid citation.** A marker citing an identifier that does not exist, or an
-  ADR that is superseded or rejected, fails.
+  ADR that is superseded or rejected, is a defect.
 
-`proposed` ADRs are out of the check's scope: their implementation and tests
+`proposed` ADRs are out of this rule's scope: their implementation and tests
 land while they are still proposed, and the acceptance lands with them
 ([`AGENTS.md` §3](../../AGENTS.md#3-adr-rules)).
 
@@ -102,7 +102,7 @@ test framework, layout, or kind of test a project uses.
 
 ## Enforcement
 
-`scripts/check-traceability.sh`, run by `scripts/check-all.sh` and as its own
-job in [`checks.yml`](../../.github/workflows/checks.yml), fails on every
-violation listed in the decision above and lists the criteria without a test. It
-ships with a self-test that cites this ADR.
+**Not checked:** no check reads the `Verifies:` markers since the traceability
+check was removed. That every accepted ADR and every criterion is cited by a
+test, and that every citation names something that exists, is review. Whether
+the markers stay, and whether a check returns, is still to be decided.

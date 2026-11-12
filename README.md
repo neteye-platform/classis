@@ -467,7 +467,6 @@ crates/               # Cargo workspace: opamp (shared) · fleet-core · fleet-s
 config/               # annotated example configuration files (server.toml, supervisor.toml)
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
-scripts/check-docs.sh # documentation & protocol-baseline consistency checks
 interop/              # the Go side of the interop check against opamp-go (ADR-0011)
 dev/                  # the development stores — rustfs (S3) and PostgreSQL — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
@@ -550,11 +549,11 @@ holds one symlink per skill into `.agents/skills/`; a directory-level symlink is
 not followed. The symlinks are pointers of the same kind as `CLAUDE.md`, tracked
 upstream as
 [anthropics/claude-code#31005](https://github.com/anthropics/claude-code/issues/31005).
-Delete them when that lands, and add one for every skill added meanwhile; the
-documentation check fails on a skill without its pointer. A rule is enforced
-only by what every agent hits: the git hooks under [`.githooks/`](.githooks/),
-the checks, and the repository settings below. A tool's own configuration is not
-used to enforce one, because a gate that one agent honours and the next does not
+Delete them when that lands, and add one for every skill added meanwhile. A rule
+is enforced only by what every agent hits: the git hooks under
+[`.githooks/`](.githooks/), the checks, and the repository settings below. A
+tool's own configuration is not used to enforce one, because a gate that one
+agent honours and the next does not
 looks like a rule and is not one.
 
 ## Repository settings
@@ -564,16 +563,15 @@ Some of this project's rules cannot be enforced by files in the repository
 repository itself, configured once by a maintainer and worth re-checking after a
 repository move or transfer:
 
-- a **ruleset on `main`** that requires pull requests with one approving review,
-  requires the
-  <!-- required-checks begin: check-docs.sh compares the workflow's jobs -->
-  `docs`, `traceability`, `devcontainer`, `actions`, `sensors`, `shell`, `rust`,
-  `client-windows`, `client-macos`, `s3-store`, and `postgres-store`
-  <!-- required-checks end -->
-  jobs as required status checks — every job of the **Checks** workflow, the
-  Client's Windows and macOS jobs of the **CI** workflow, and its jobs that run
-  the S3 and PostgreSQL stores' tests against a real store (rulesets list checks
-  by their job name) — and blocks force pushes and branch deletion;
+- a **ruleset on `main`** that requires pull requests with one approving review
+  after the last push (it also asks for a code owner's, which nothing enforces
+  while the repository has no `CODEOWNERS` file), merges by squash only, keeps
+  the history linear, blocks force pushes and branch deletion, and requires the
+  organisation's **common-pull-request-checks** (CodeQL, the pull request title,
+  pre-commit, Semgrep, Trivy FS and Trivy Config) as status checks. The jobs of
+  the **Checks** and **CI** workflows run on every pull request but are not
+  required by the ruleset;
+- a **ruleset on every branch** that requires signed commits;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
   otherwise carried by review alone;
