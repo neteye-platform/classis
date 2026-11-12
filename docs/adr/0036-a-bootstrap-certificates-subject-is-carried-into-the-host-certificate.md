@@ -3,14 +3,14 @@
 - **Status:** 🟢 accepted · clause 3 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the bootstrap-certificate routes and the subject they take in
-  `crates/fleet-server/src/api.rs` and `crates/fleet-server/src/bootstrap.rs`,
-  the signing of host certificates in `crates/fleet-server/src/ca.rs` and the
-  approval and renewal paths in `crates/fleet-server/src/fleet.rs`, the
-  enrolment queue's view in `crates/fleet-server/src/enrolment.rs` and
-  `crates/fleet-server/src/api.rs`, the Enrolments tab of the bundled UI in
-  `crates/fleet-server/static/index.html`, and every document that shows a
+  `crates/classis-server/src/api.rs` and `crates/classis-server/src/bootstrap.rs`,
+  the signing of host certificates in `crates/classis-server/src/ca.rs` and the
+  approval and renewal paths in `crates/classis-server/src/fleet.rs`, the
+  enrolment queue's view in `crates/classis-server/src/enrolment.rs` and
+  `crates/classis-server/src/api.rs`, the Enrolments tab of the bundled UI in
+  `crates/classis-server/static/index.html`, and every document that shows a
   certificate's subject or tells an operator how to issue a bootstrap
   certificate
 - **Supersedes:**
@@ -216,8 +216,8 @@ issues from it and into every renewal after it.
    `not_after` and `certificate_pem`, and no `private_key_pem`. The key exists
    in plaintext only in the Server's memory while it issues; it leaves the
    Server only inside that file. A host that needs the pair as PEM takes it out
-   of the file with `opamp-fleetctl pki p12-extract`
-   ([ADR-0031](0031-opamp-fleetctl-extracts-a-bootstrap-pkcs12-file-into-pem.md)).
+   of the file with `classisctl pki p12-extract`
+   ([ADR-0031](0031-classisctl-extracts-a-bootstrap-pkcs12-file-into-pem.md)).
 
 **Out of scope:** attributes beyond the six; per-host values (an asset number, a
 hostname), which a bootstrap certificate shared by many hosts cannot carry;
@@ -235,7 +235,7 @@ which a private fleet PKI does not need.
   clause 3).** It needs no password to be passed on. But the private key then
   travels unencrypted in an HTTP answer and sits in the page's memory; with the
   password required it never leaves the Server unencrypted, and
-  `opamp-fleetctl pki p12-extract` gives a host the PEM it may need.
+  `classisctl pki p12-extract` gives a host the PEM it may need.
 - **Keep O and OU only (ADR-0028 as it stands).** It is enough for customer and
   site, but the human wanted the location and a customer number optional beside
   them.
@@ -268,9 +268,9 @@ which a private fleet PKI does not need.
 - ADR-0021 clauses 7, 22 and 27, its consequence "A Gateway hides its downstream
   certificates", ADR-0028 clauses 22, 28 and 29 with its alternatives, and
   ADR-0029 clauses 3, 4, 5 and 15.
-- `crates/fleet-server/src/ca.rs` (the host certificate's subject is set, the
-  CSR's discarded) and `crates/fleet-server/src/bootstrap.rs` (`Subject` with O
-  and OU). Read in the source.
+- `crates/classis-server/src/ca.rs` (the host certificate's subject is set, the
+  CSR's discarded) and `crates/classis-server/src/bootstrap.rs` (`Subject` with
+  O and OU). Read in the source.
 - The working note of 2026-10-17 on the Server's data model, in which the human
   chose each point.
 

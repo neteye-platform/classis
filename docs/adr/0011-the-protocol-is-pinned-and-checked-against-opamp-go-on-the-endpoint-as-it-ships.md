@@ -2,10 +2,10 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-07
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** docs/CONFORMANCE.md, crates/opamp/build.rs,
   crates/opamp/proto/, the Protocol Baseline check in scripts/check-docs.sh,
-  interop/, crates/fleet-agent/tests/interop_opamp_go.rs,
+  interop/, crates/classis-agent/tests/interop_opamp_go.rs,
   .github/workflows/interop.yml, and every change that adds or alters protocol
   behaviour
 
@@ -158,7 +158,7 @@ on the endpoint as it ships as well as in plaintext on the loopback.
 
 15. **It runs like the service smoke test.** An `#[ignore]`d Rust test drives
     the scenarios, and a dedicated workflow runs it on a schedule and on demand,
-    never on every push, as `crates/fleet-agent/tests/service_smoke.rs` and
+    never on every push, as `crates/classis-agent/tests/service_smoke.rs` and
     [`service-smoke.yml`](../../.github/workflows/service-smoke.yml) do.
     `cargo test --workspace` stays self-contained.
 
@@ -296,7 +296,7 @@ packages, own telemetry and Gateway Mode.
   `BASELINE` (clauses 5 to 7).
 - `crates/opamp/src/frame.rs`: `round_trips_a_message`,
   `rejects_a_non_zero_header`, `rejects_a_truncated_header` (clause 8).
-- `crates/fleet-agent/tests/interop_opamp_go.rs`, run by
+- `crates/classis-agent/tests/interop_opamp_go.rs`, run by
   [`interop.yml`](../../.github/workflows/interop.yml), cites this ADR on every
   scenario (clauses 9, 10, 13 to 16).
 

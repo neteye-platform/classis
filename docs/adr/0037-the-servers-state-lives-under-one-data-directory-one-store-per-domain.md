@@ -7,14 +7,14 @@
   clauses 1, 2, 6, 7, 8, 9, 11 and 13 superseded by
   [ADR-0050](0050-the-servers-records-may-live-in-postgresql.md)
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
-- **Applies to:** the storage ports in `crates/fleet-server/src/`
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the storage ports in `crates/classis-server/src/`
   (`agent_store.rs`, `configs.rs`, `deployments.rs`, `packages.rs`,
   `bootstrap.rs`, `enrolment.rs`, `revocation.rs`, `audit.rs`) and every adapter
-  under `crates/fleet-server/src/fs/`, the wiring in
-  `crates/fleet-server/src/lib.rs` and `crates/fleet-server/src/main.rs`,
+  under `crates/classis-server/src/fs/`, the wiring in
+  `crates/classis-server/src/lib.rs` and `crates/classis-server/src/main.rs`,
   `data_dir`, `config_dir` and `packages_dir` in `server.toml` and
-  `crates/fleet-server/src/config.rs`, the `server migrate` command,
+  `crates/classis-server/src/config.rs`, the `server migrate` command,
   `config/server.toml`, `docs/ARCHITECTURE.md`, and every document that names
   where the Server keeps its state
 - **Supersedes:**
@@ -354,7 +354,7 @@ first such change decides.
 
 ## Sources / Prior art
 
-- `crates/fleet-server/src/lib.rs`, `main.rs`, `fs/*.rs`: today's roots,
+- `crates/classis-server/src/lib.rs`, `main.rs`, `fs/*.rs`: today's roots,
   subdirectories and loaders. Read in the source.
 - ADR-0006 (ports and adapters), ADR-0021 clauses 20, 33 and 37, ADR-0022 clause
   4, ADR-0023 clause 10, ADR-0024 clauses 3 and 20, ADR-0026 clauses 1 and 19

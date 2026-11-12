@@ -2,13 +2,13 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
-- **Applies to:** every storage port in `crates/fleet-server/src/`
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** every storage port in `crates/classis-server/src/`
   (`agent_store.rs`, `configs.rs`, `deployments.rs`, `packages.rs`,
   `bootstrap.rs`, `enrolment.rs`, `revocation.rs`) and every PostgreSQL adapter
   beside the filesystem adapters, the embedded schema and its migrations, the
-  wiring in `crates/fleet-server/src/main.rs`, the `[database]` section of
-  `server.toml` and its parsing in `crates/fleet-server/src/config.rs`,
+  wiring in `crates/classis-server/src/main.rs`, the `[database]` section of
+  `server.toml` and its parsing in `crates/classis-server/src/config.rs`,
   `config/server.toml`, the `server migrate-to-postgres` command, the
   `tokio-postgres`, `deadpool-postgres` and `tokio-postgres-rustls` dependencies
   in `Cargo.toml` and `deny.toml`, the PostgreSQL adapter's tests and the CI job
@@ -351,10 +351,10 @@ per database schema.
       reaches it at `127.0.0.1:5432`, with `tls = false` as clause 7 allows on
       the loopback.
     - The PostgreSQL adapter's tests run against the database that
-      `FLEET_TEST_POSTGRES_HOST`, `FLEET_TEST_POSTGRES_PORT`,
-      `FLEET_TEST_POSTGRES_DBNAME`, `FLEET_TEST_POSTGRES_USER` and
-      `FLEET_TEST_POSTGRES_PASSWORD_FILE` name, over TLS against the root
-      `FLEET_TEST_POSTGRES_CA_FILE` names when it is set. CI runs them in a job
+      `CLASSIS_TEST_POSTGRES_HOST`, `CLASSIS_TEST_POSTGRES_PORT`,
+      `CLASSIS_TEST_POSTGRES_DBNAME`, `CLASSIS_TEST_POSTGRES_USER` and
+      `CLASSIS_TEST_POSTGRES_PASSWORD_FILE` name, over TLS against the root
+      `CLASSIS_TEST_POSTGRES_CA_FILE` names when it is set. CI runs them in a job
       against a PostgreSQL it starts with TLS 1.3 and a certificate of a CA made
       for the run, its image pinned. Where no database is named, the tests are
       skipped and say so; they never start a database of their own. Each test
@@ -421,11 +421,11 @@ anything that runs, provisions, replicates or monitors a production database.
 - [PostgreSQL: SSL support in libpq](https://www.postgresql.org/docs/current/libpq-ssl.html),
   for `verify-full`, and
   [explicit locking: advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS).
-- The code as it stands: the ports in `crates/fleet-server/src/` (`AgentStore`,
+- The code as it stands: the ports in `crates/classis-server/src/` (`AgentStore`,
   `ConfigBackend`, `DeploymentBackend`, `PackageBackend`, `BootstrapStore`,
   `EnrolmentStore`, `LedgerStore`), their adapters under
-  `crates/fleet-server/src/fs/`, `server migrate` in
-  `crates/fleet-server/src/main.rs` and `crates/fleet-server/src/migrate.rs`,
+  `crates/classis-server/src/fs/`, `server migrate` in
+  `crates/classis-server/src/main.rs` and `crates/classis-server/src/migrate.rs`,
   and the TLS 1.3 provider in `crates/opamp/src/tls.rs`.
 
 ## Consequences

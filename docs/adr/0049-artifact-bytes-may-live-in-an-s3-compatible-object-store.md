@@ -2,12 +2,12 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
-- **Applies to:** the blob port in `crates/fleet-server/src/blobs.rs`, its
-  filesystem adapter in `crates/fleet-server/src/fs/blobs.rs` and every S3
-  adapter beside it, the wiring in `crates/fleet-server/src/main.rs`, the
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the blob port in `crates/classis-server/src/blobs.rs`, its
+  filesystem adapter in `crates/classis-server/src/fs/blobs.rs` and every S3
+  adapter beside it, the wiring in `crates/classis-server/src/main.rs`, the
   `[blobs]` section of `server.toml` and its parsing in
-  `crates/fleet-server/src/config.rs`, `config/server.toml`, the `object_store`
+  `crates/classis-server/src/config.rs`, `config/server.toml`, the `object_store`
   dependency in `Cargo.toml` and `deny.toml`, the S3 adapter's tests and the CI
   job that runs them, the rustfs service in `dev/compose.yaml` and its
   forward into the Dev Container, `docs/ARCHITECTURE.md`, and every document
@@ -176,8 +176,8 @@ through the Server in both directions.
      forwards its port onto its own loopback, so a development Server reaches it
      at an `http://127.0.0.1` endpoint that clause 5 allows, through
      `[blobs.s3]` like any other store.
-   - The S3 adapter's tests run against the store that `FLEET_TEST_S3_ENDPOINT`,
-     `FLEET_TEST_S3_BUCKET` and the credentials of clause 6 name. CI runs them
+   - The S3 adapter's tests run against the store that `CLASSIS_TEST_S3_ENDPOINT`,
+     `CLASSIS_TEST_S3_BUCKET` and the credentials of clause 6 name. CI runs them
      in a job with a rustfs service, its image pinned. Where no store is named,
      the tests are skipped and say so; they never start a store of their own.
    - The project supports S3-compatible stores in general; rustfs is the one
@@ -232,7 +232,7 @@ a production store.
 - **MinIO as the reference store.** The working note named it. MinIO no longer
   maintains its open source distribution; rustfs is S3-compatible, Apache-2.0,
   and reached 1.0 in 2026. Rejected in favour of rustfs.
-- **An explicit copy command in `opamp-fleetctl` instead of copying at
+- **An explicit copy command in `classisctl` instead of copying at
   startup.** It keeps startup free of a long first run, but adds a command and a
   state in which the Server refuses to start until it has run. Rejected.
 
@@ -256,8 +256,8 @@ a production store.
   Apache-2.0, S3-compatible, multipart uploads, and MinIO's end of maintenance
   of its open source products.
 - The code as it stands: the `BlobStore` port in
-  `crates/fleet-server/src/blobs.rs`, the filesystem adapter in
-  `crates/fleet-server/src/fs/blobs.rs`, and the TLS 1.3 provider in
+  `crates/classis-server/src/blobs.rs`, the filesystem adapter in
+  `crates/classis-server/src/fs/blobs.rs`, and the TLS 1.3 provider in
   `crates/opamp/src/tls.rs`.
 
 ## Consequences

@@ -3,14 +3,15 @@
 - **Status:** 🟢 accepted · clauses 1, 5 and 9 superseded by
   [ADR-0040](0040-a-connection-settings-offer-never-moves-the-client-to-plaintext.md)
 - **Date:** 2026-10-06
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the `[connection_offer]` section of `server.toml`, the offer
-  composition and capability declaration in `crates/fleet-server/src/fleet.rs`,
-  the Client's offer handling in `crates/fleet-agent/src/connection.rs`,
-  `crates/fleet-agent/src/transport/mod.rs` and
-  `crates/fleet-agent/src/engine.rs`, its persisted `connection-settings.pb`,
+  composition and capability declaration in
+  `crates/classis-server/src/fleet.rs`, the Client's offer handling in
+  `crates/classis-agent/src/connection.rs`,
+  `crates/classis-agent/src/transport/mod.rs` and
+  `crates/classis-agent/src/engine.rs`, its persisted `connection-settings.pb`,
   and every gate on a Server capability in
-  `crates/fleet-agent/src/supervisor/agent.rs`
+  `crates/classis-agent/src/supervisor/agent.rs`
 
 ## Context
 
@@ -369,19 +370,19 @@ Server's own use of Agent capabilities under the same rule.
 
 The tests below verify the clauses that stand unchanged.
 
-- [`crates/fleet-server/src/config.rs`](../../crates/fleet-server/src/config.rs)
+- [`crates/classis-server/src/config.rs`](../../crates/classis-server/src/config.rs)
   — `a_connection_offer_needs_at_least_one_field`,
   `a_connection_offer_rejects_a_bad_endpoint_scheme`,
   `a_connection_offer_refuses_a_plaintext_endpoint_off_loopback_naming_the_setting`,
   `a_connection_offer_accepts_a_plaintext_endpoint_on_a_loopback_ip_literal`,
   `a_connection_offer_refuses_a_plaintext_endpoint_on_localhost` (clause 1).
-- [`crates/fleet-server/tests/connection_settings.rs`](../../crates/fleet-server/tests/connection_settings.rs)
+- [`crates/classis-server/tests/connection_settings.rs`](../../crates/classis-server/tests/connection_settings.rs)
   — `no_offer_without_the_capability_or_without_a_configured_section`,
   `the_reported_hash_gates_reoffering` (clause 2).
-- [`crates/fleet-server/tests/own_telemetry.rs`](../../crates/fleet-server/tests/own_telemetry.rs)
+- [`crates/classis-server/tests/own_telemetry.rs`](../../crates/classis-server/tests/own_telemetry.rs)
   — `a_telemetry_only_server_declares_that_it_offers_connection_settings`
   (clauses 2, 3).
-- [`crates/fleet-agent/src/connection.rs`](../../crates/fleet-agent/src/connection.rs)
+- [`crates/classis-agent/src/connection.rs`](../../crates/classis-agent/src/connection.rs)
   — `verify_refuses_a_plaintext_endpoint_off_loopback_without_connecting`,
   `verify_refuses_a_plaintext_endpoint_on_a_host_name`,
   `verify_presents_the_client_certificate_in_force`,
@@ -395,12 +396,12 @@ The tests below verify the clauses that stand unchanged.
   `apply_overrides_client_toml_where_the_server_spoke`,
   `apply_leaves_untouched_what_the_offer_omits` (clauses 9, 10). The fold and
   apply tests carry endpoint, heartbeat and certificate in their fixtures.
-- [`crates/fleet-agent/tests/connection_settings_e2e.rs`](../../crates/fleet-agent/tests/connection_settings_e2e.rs)
+- [`crates/classis-agent/tests/connection_settings_e2e.rs`](../../crates/classis-agent/tests/connection_settings_e2e.rs)
   — `an_offer_is_verified_persisted_and_reported_applied`;
-  [`crates/fleet-agent/tests/gateway_and_supervisor_e2e.rs`](../../crates/fleet-agent/tests/gateway_and_supervisor_e2e.rs)
+  [`crates/classis-agent/tests/gateway_and_supervisor_e2e.rs`](../../crates/classis-agent/tests/gateway_and_supervisor_e2e.rs)
   — `a_verified_offer_restarts_the_gateway_and_leaves_the_supervisors_running`
   (clauses 5, 11).
-- [`crates/fleet-agent/src/supervisor/agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs)
+- [`crates/classis-agent/src/supervisor/agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs)
   — `an_offer_carries_settings_when_it_names_anything_this_client_applies`
   (clause 4);
   `a_connection_offer_is_acknowledged_applying_and_handed_to_the_transport`,
@@ -414,24 +415,24 @@ The tests below verify the clauses that stand unchanged.
   (clauses 13, 14);
   `a_remote_config_status_rides_to_a_server_that_offers_no_remote_config`
   (clause 16).
-- [`crates/fleet-server/tests/mutual_tls.rs`](../../crates/fleet-server/tests/mutual_tls.rs)
+- [`crates/classis-server/tests/mutual_tls.rs`](../../crates/classis-server/tests/mutual_tls.rs)
   — `a_csr_to_a_server_that_signs_nothing_is_a_bad_request`, the error clause 15
   keeps a Client from provoking.
-- [`crates/fleet-server/src/fleet.rs`](../../crates/fleet-server/src/fleet.rs) —
-  `an_offered_heartbeat_interval_sets_the_budget` (clause 10).
+- [`crates/classis-server/src/fleet.rs`](../../crates/classis-server/src/fleet.rs)
+  — `an_offered_heartbeat_interval_sets_the_budget` (clause 10).
 - TLS 1.3 is the provider's: `the_provider_offers_tls_1_3_suites_alone` in
   [`crates/opamp/src/tls.rs`](../../crates/opamp/src/tls.rs) (clause 5).
 
 These tests carry `Verifies: ADR-0014`:
 
-- [`crates/fleet-server/src/config.rs`](../../crates/fleet-server/src/config.rs)
+- [`crates/classis-server/src/config.rs`](../../crates/classis-server/src/config.rs)
   — `a_connection_offer_refuses_a_credential_key_naming_it`, for each of
   `bearer_token_file`, `username`, `password_file`, `bearer_token` and
   `password` (clause 1).
-- [`crates/fleet-server/tests/connection_settings.rs`](../../crates/fleet-server/tests/connection_settings.rs)
+- [`crates/classis-server/tests/connection_settings.rs`](../../crates/classis-server/tests/connection_settings.rs)
   — `the_offer_reaches_a_capable_agent_and_carries_no_headers` (clauses 1, 2,
   3).
-- [`crates/fleet-agent/src/connection.rs`](../../crates/fleet-agent/src/connection.rs)
+- [`crates/classis-agent/src/connection.rs`](../../crates/classis-agent/src/connection.rs)
   — `offered_headers_are_neither_stored_nor_claimed`, which also checks that the
   `error_message` names the header keys and no value (clause 8);
   `verify_sends_no_authorization_even_when_one_is_offered` (clauses 5, 8);
@@ -439,6 +440,6 @@ These tests carry `Verifies: ADR-0014`:
 
 **Not mechanically decidable:** clause 6's "no reconnect" for a telemetry-only
 offer is held by the `OfferOutcome::Applied` path in
-[`transport/mod.rs`](../../crates/fleet-agent/src/transport/mod.rs) and review;
-clause 17 governs capabilities not yet added, which only review of each new gate
-can hold.
+[`transport/mod.rs`](../../crates/classis-agent/src/transport/mod.rs) and
+review; clause 17 governs capabilities not yet added, which only review of each
+new gate can hold.

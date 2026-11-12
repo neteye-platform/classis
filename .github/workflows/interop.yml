@@ -2,7 +2,7 @@ name: Interop
 
 # Conformance against a second reading of the specification (ADR-0011). The Client and the Server
 # share `crates/opamp` and were written from the same sentences, so a misread MUST is symmetric and
-# the rest of the suite cannot see it. `crates/fleet-agent/tests/interop_opamp_go.rs` meets each end
+# the rest of the suite cannot see it. `crates/classis-agent/tests/interop_opamp_go.rs` meets each end
 # with `opamp-go`, the reference implementation, pinned in `interop/go.mod`.
 #
 # Deliberately not on `push` or `pull_request`: it needs a Go toolchain the ordinary build does not,
@@ -40,6 +40,6 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Built as its own step so a compile failure is not reported as an interop failure.
       - name: Build
-        run: cargo test -p fleet-agent --test interop_opamp_go --locked --no-run
+        run: cargo test -p classis-agent --test interop_opamp_go --locked --no-run
       - name: Both ends against opamp-go, on both transports
-        run: cargo test -p fleet-agent --test interop_opamp_go --locked -- --ignored --nocapture --test-threads=1
+        run: cargo test -p classis-agent --test interop_opamp_go --locked -- --ignored --nocapture --test-threads=1

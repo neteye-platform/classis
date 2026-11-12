@@ -3,17 +3,17 @@
 - **Status:** 🟢 accepted · clause 1 superseded by
   [ADR-0047](0047-a-host-and-its-bindings-end-with-its-last-valid-certificate.md)
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
-- **Applies to:** the host register in `crates/fleet-server/src/revocation.rs`
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the host register in `crates/classis-server/src/revocation.rs`
   and its filesystem adapter, the host an Agent record names and the effective
-  description in `crates/fleet-server/src/fleet.rs` and
-  `crates/fleet-server/src/labels.rs`, the persisted Agent record in
-  `crates/fleet-server/src/agent_store.rs` and
-  `crates/fleet-server/src/fs/agents.rs`, the label store in
-  `crates/fleet-server/src/fs/labels.rs`, the `/api/v1/hosts` and
+  description in `crates/classis-server/src/fleet.rs` and
+  `crates/classis-server/src/labels.rs`, the persisted Agent record in
+  `crates/classis-server/src/agent_store.rs` and
+  `crates/classis-server/src/fs/agents.rs`, the label store in
+  `crates/classis-server/src/fs/labels.rs`, the `/api/v1/hosts` and
   `/api/v1/agents/{instance_uid}/labels` routes of
-  `crates/fleet-server/src/api.rs`, the Hosts and Agents tabs of the bundled UI
-  in `crates/fleet-server/static/index.html`, and every document that tells an
+  `crates/classis-server/src/api.rs`, the Hosts and Agents tabs of the bundled UI
+  in `crates/classis-server/static/index.html`, and every document that tells an
   operator what a host is or how labels and Selectors work
 - **Supersedes:** [ADR-0024](0024-the-fleet-record.md) clauses 17, 18, 19 and
   20;
@@ -219,8 +219,8 @@ storage decision).
 - ADR-0017 clause 18 (`supervisor.kind.*`).
 - ADR-0016: `host.name`, `host.id`, `host.ip` and `host.mac` are reported
   attributes.
-- `crates/fleet-server/src/revocation.rs` `check_report` (the host entry is
-  written at the first report) and `crates/fleet-server/src/fleet.rs` (the host
+- `crates/classis-server/src/revocation.rs` `check_report` (the host entry is
+  written at the first report) and `crates/classis-server/src/fleet.rs` (the host
   minted at approval). Read in the source.
 - The working note of 2026-10-17 on the Server's data model, in which the human
   chose each point.

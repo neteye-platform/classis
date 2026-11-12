@@ -1,7 +1,7 @@
-# OpAMP Fleet Client configuration. Every setting is optional; the values shown are the
+# Classis Client configuration. Every setting is optional; the values shown are the
 # defaults. For development, scripts/dev-pki.sh writes a supervisor.toml with the certificates
 # a Client needs. Start with:
-# cargo run -p fleet-agent -- --config .dev-pki/supervisor.toml
+# cargo run -p classis-agent -- --config .dev-pki/supervisor.toml
 
 # The Server's OpAMP endpoint. The URL scheme selects the transport:
 #   wss:// → WebSocket (the default: Server pushes changes within seconds)
@@ -62,7 +62,7 @@ state_dir = "client-state"
 # noexec, and it is sized for state rather than for a few hundred megabytes of Collector.
 # Outside the data root, the layout root and the state directory, `service install` creates and
 # hands over nothing for it: create it yourself, writable by the service's account only.
-# supervisor_dir = "/opt/opamp-fleet/supervisors"
+# supervisor_dir = "/opt/classis/supervisors"
 
 # Operator-defined attributes describing this *host*, reported by every Agent this Client presents
 # so the Server's Selectors can target them. They are what a fresh Agent carries into its very
@@ -134,8 +134,8 @@ state_dir = "client-state"
 # takes package delivery by naming its program with a bare file name (see the blocks below);
 # *which* artifact it then receives is the Server's decision, expressed as that package's
 # Deployment — never a key in this file.
-# Generate a key and sign artifacts with the operator tool (`opamp-fleetctl package keygen`, then
-# `opamp-fleetctl package sign`): its keygen output is this value.
+# Generate a key and sign artifacts with the operator tool (`classisctl package keygen`, then
+# `classisctl package sign`): its keygen output is this value.
 #
 # A download goes to this Client's own Server origin — the scheme, host and port of its endpoint —
 # and nowhere else, every redirect hop included: every artifact is uploaded to the Server. There

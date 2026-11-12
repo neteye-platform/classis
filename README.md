@@ -1,4 +1,4 @@
-# OpAMP Fleet
+# Classis
 
 [![Release](https://img.shields.io/github/v/release/neteye-platform/classis?display_name=release&label=release)](https://github.com/neteye-platform/classis/releases/latest)
 [![CI](https://github.com/neteye-platform/classis/actions/workflows/ci.yml/badge.svg)](https://github.com/neteye-platform/classis/actions/workflows/ci.yml)
@@ -6,7 +6,7 @@
 [![Audit](https://github.com/neteye-platform/classis/actions/workflows/audit.yml/badge.svg)](https://github.com/neteye-platform/classis/actions/workflows/audit.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-**OpAMP Fleet** is a Rust implementation of OpenTelemetry
+**Classis** is a Rust implementation of OpenTelemetry
 [OpAMP](https://opentelemetry.io/docs/specs/opamp/)-based fleet management: an
 API-first **Server** that manages a fleet over the protocol and exposes an
 OpenAPI-described REST API for any UI or portal, and a **Client** that
@@ -42,7 +42,7 @@ rather than as a report.
 
 [OpAMP](https://opentelemetry.io/docs/specs/opamp/) — the Open Agent Management
 Protocol — closes that loop: an agent accepts configuration over the protocol
-and reports back what it applied and how it is doing. **OpAMP Fleet** is a Rust
+and reports back what it applied and how it is doing. **Classis** is a Rust
 implementation of both ends, built for a _heterogeneous_ fleet — OpenTelemetry
 Collectors **and** agents that were never built to speak OpAMP:
 
@@ -89,7 +89,7 @@ reasoning behind each structural choice lives in the ADRs
 The picture keeps the shape of the
 [OpAMP reference architecture](https://opentelemetry.io/docs/specs/opamp/) — a
 supervisor owning a Collector, exchanging OpAMP with a backend — and extends it
-with what makes OpAMP Fleet different: an **API-first Server** on two listeners,
+with what makes Classis different: an **API-first Server** on two listeners,
 whose contract is an OpenAPI REST API, a single **Client** whose two modes
 compose freely, **Supervisors** whose compiled-in kinds each know their agent
 behind a hexagonal core — each exposing a **Supervisor Endpoint** for a
@@ -146,8 +146,8 @@ The toolchain is **Rust stable**, provided by the Dev Container; the code is one
 Cargo workspace with five crates — `opamp` (the OpAMP communication layer,
 publishable on its own, with an Agent's client and a server endpoint with their
 TLS and listener behind the `client` and `server` features, ADR-0010),
-`fleet-core` (what both ends share beyond the protocol), `fleet-server` (the
-Server), `fleet-agent` (the Client, in all its modes), and `fleet-tools` (the
+`classis-core` (what both ends share beyond the protocol), `classis-server` (the
+Server), `classis-agent` (the Client, in all its modes), and `classis-tools` (the
 operator command-line tools, ADR-0010). This section is the single source for
 build/test/run commands — both humans and agents rely on it (AGENTS.md links
 here).
@@ -162,13 +162,13 @@ here).
   — inside the workspace Cargo builds `opamp` once with every feature any crate
   asks for, so only a build of each feature on its own shows that it stands
   alone (ADR-0010).
-- **Lint and test `fleet-agent` with fewer Supervisor kinds:**
-  `cargo clippy -p fleet-agent --all-targets --no-default-features -- -D
-  warnings && cargo test -p fleet-agent --no-default-features`
+- **Lint and test `classis-agent` with fewer Supervisor kinds:**
+  `cargo clippy -p classis-agent --all-targets --no-default-features -- -D
+  warnings && cargo test -p classis-agent --no-default-features`
   — a wrapped kind, when the code base carries one, is a feature, so only these
   show that a build leaving one out compiles and refuses its `type` (ADR-0017).
 - **Check the Windows build:**
-  `cargo xwin clippy -p fleet-agent --all-targets --target
+  `cargo xwin clippy -p classis-agent --all-targets --target
   x86_64-pc-windows-msvc -- -D warnings`
   (needs `cargo install cargo-xwin` and
   `rustup target add x86_64-pc-windows-msvc`; the Dev Container carries the
@@ -185,26 +185,26 @@ here).
   listed in [`fuzz/Cargo.toml`](fuzz/Cargo.toml), and every parser that reads
   bytes from the network or a downloaded artifact has one (specification Q-2)
 - **Check interop against `opamp-go`:**
-  `cargo test -p fleet-agent --test interop_opamp_go -- --ignored --nocapture --test-threads=1`
-  (needs a Go toolchain on `PATH`, which nothing else here needs and the Dev
-  Container does not ship); the scheduled `Interop` workflow runs it weekly, and
-  [`interop/README.md`](interop/README.md) says what it covers and how a red run
-  is triaged (ADR-0011)
+  `cargo test -p classis-agent --test interop_opamp_go -- --ignored --nocapture
+  --test-threads=1` (needs a Go toolchain on `PATH`, which nothing else here
+  needs and the Dev Container does not ship); the scheduled `Interop` workflow
+  runs it weekly, and [`interop/README.md`](interop/README.md) says what it
+  covers and how a red run is triaged (ADR-0011)
 - **Make development certificates:** `scripts/dev-pki.sh` — both binaries refuse
   to run without TLS (ADR-0013); it runs the operator tool's
-  `opamp-fleetctl pki init` (ADR-0028), no other tool, and writes the set and a
+  `classisctl pki init` (ADR-0028), no other tool, and writes the set and a
   `server.toml` and `supervisor.toml` that use it to `.dev-pki/`. The
   development Client enrols with the bootstrap certificate;
   `scripts/seed_test_configs.sh --enrol` approves it. The VS Code launch
   configurations run it when `.dev-pki/` has no configuration yet
 - **Run the Server:**
-  `cargo run -p fleet-server -- --config .dev-pki/server.toml`
+  `cargo run -p classis-server -- --config .dev-pki/server.toml`
 - **Run the Client:**
-  `cargo run -p fleet-agent -- --config .dev-pki/supervisor.toml`
-- **Run the operator tool:** `cargo run --bin opamp-fleetctl -- package fetch`
+  `cargo run -p classis-agent -- --config .dev-pki/supervisor.toml`
+- **Run the operator tool:** `cargo run --bin classisctl -- package fetch`
   (fetch a known agent's release and hand it to the Server),
-  `cargo run --bin opamp-fleetctl -- package --help` (build, hash, and sign an
-  artifact out of any program) or `cargo run --bin opamp-fleetctl -- pki --help`
+  `cargo run --bin classisctl -- package --help` (build, hash, and sign an
+  artifact out of any program) or `cargo run --bin classisctl -- pki --help`
   (the fleet's certificates) — documented in [the manual](docs/manual/tools.md).
   Every release also publishes it for Linux and macOS (ADR-0028).
 
@@ -241,7 +241,7 @@ the **Set** an operator uploads them to, not after the product inside them
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md))
 — and the program inside them and its configuration file are called `supervisor`
 too. The dpkg/rpm/MSI package and the service carry the **product's** name,
-`opamp-fleet`
+`classis`
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)):
 that is the name that identifies an _installation_, and a second one is a second
 build rather than a flag. The fields are separated by `_` because a name and a
@@ -262,7 +262,7 @@ same file an operator downloads is the one a fleet is handed for a Client
 
 The **Server** ships as a container image and nowhere else
 ([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)):
-`ghcr.io/mbrigl/opamp-fleet-server:<version>` for `linux/amd64` and
+`ghcr.io/neteye-platform/classis-server:<version>` for `linux/amd64` and
 `linux/arm64`, built by
 [`packaging/container/Containerfile`](packaging/container/Containerfile) from
 the Server binaries the release built and checked, on a distroless base pinned
@@ -271,9 +271,9 @@ attests the digest, verifies it, and only then tags it with the version; there
 is no `latest` tag, and the release notes name the digest to deploy. Its SBOMs
 are `server_<version>_linux_<arch>.cdx.json` beside the other assets. Check an
 image with
-`gh attestation verify oci://ghcr.io/mbrigl/opamp-fleet-server@<digest>
---repo mbrigl/opamp-fleet
---signer-workflow mbrigl/opamp-fleet/.github/workflows/release.yml`;
+`gh attestation verify oci://ghcr.io/neteye-platform/classis-server@<digest>
+--repo neteye-platform/classis
+--signer-workflow neteye-platform/classis/.github/workflows/release.yml`;
 running it is in [the Server's manual](docs/manual/server.md#in-a-container).
 
 ## Usage
@@ -287,7 +287,7 @@ configuration key of both ends — is the
 A minimal closed control loop on one machine:
 
 1. **Start the Server:**
-   `cargo run -p fleet-server -- --config config/server.toml` — it serves two
+   `cargo run -p classis-server -- --config config/server.toml` — it serves two
    planes on two ports
    ([ADR-0013](docs/adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
    The **Agent plane** on `4320`: the OpAMP endpoint at `/v1/opamp` (plain HTTP
@@ -300,7 +300,7 @@ A minimal closed control loop on one machine:
    `[rest.auth]` guards it with Basic credentials
    ([ADR-0021](docs/adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)).
 2. **Start a Client:**
-   `cargo run -p fleet-agent -- --config config/supervisor.toml` — it connects
+   `cargo run -p classis-agent -- --config config/supervisor.toml` — it connects
    over WebSocket by default (`ws://127.0.0.1:4320/v1/opamp`), reports its
    description and health, and appears in the fleet. Point `endpoint` at an
    `http(s)://` URL to use the polling transport instead.
@@ -379,7 +379,7 @@ supervisor service uninstall                                   # never deletes l
 ```
 
 - **One service per build:** the service is named after the product,
-  `opamp-fleet`, with no suffix and nothing to look up — so the verbs above take
+  `classis`, with no suffix and nothing to look up — so the verbs above take
   no name at all. A second installation on one host is a second _build_ with its
   own `PRODUCT_NAME`, not a runtime flag
   ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)).
@@ -387,13 +387,13 @@ supervisor service uninstall                                   # never deletes l
   directory it names; nothing is ever installed to a fixed path. Without it, a
   Linux system install splits the defaults: the executable layout —
   `versions/supervisor-<version>-<commit>/` and the `current` pointer the
-  service runs from — lives at `/opt/opamp-fleet`, while `supervisor.toml` and
-  the default `state/` directory stay at `/var/lib/opamp-fleet` (SELinux never
+  service runs from — lives at `/opt/classis`, while `supervisor.toml` and
+  the default `state/` directory stay at `/var/lib/classis` (SELinux never
   lets systemd execute a binary under `/var/lib`). `--data-root <dir>` names
   that second half explicitly. macOS, Windows and user scope keep one directory
   for everything — including a Windows host installed by the MSI, where
   `Program Files` holds the delivered payload and the layout goes under
-  `%ProgramData%\opamp-fleet`, because the self-update rewrites the layout at
+  `%ProgramData%\classis`, because the self-update rewrites the layout at
   runtime and `Program Files` is not a tree a service account should be able to
   write.
 - **Scope:** `--user` targets the user-level manager (development); the default
@@ -430,17 +430,17 @@ and an install that enrols with a `bootstrap.p12` from `--fleet-files`, whose
 service then reaches the Server on the certificate it was issued. It runs weekly
 and on demand rather than per push (it installs a system service and waits on
 timers), on Linux, macOS and Windows. The test is
-`crates/fleet-agent/tests/service_smoke.rs`; it is `#[ignore]`d, so an ordinary
+`crates/classis-agent/tests/service_smoke.rs`; it is `#[ignore]`d, so an ordinary
 `cargo test` never installs anything.
 
 What still needs a human, per platform: starting at **boot** (a runner never
-reboots), the logs (`journalctl -u opamp-fleet` on Linux, Console/`log show` on
+reboots), the logs (`journalctl -u classis` on Linux, Console/`log show` on
 macOS), the Agent in the fleet UI, and an **SELinux-enforcing host** (Fedora,
 RHEL, or SUSE 16 with `getenforce` answering `Enforcing`): the `.rpm` install
 must start — a service dying with `status=203/EXEC` and an AVC denial in
 `ausearch -m avc` is the failure ADR-0019 clause 8 exists to prevent. Each
 wrapped kind — Telegraf, Icinga 2 with its plugins, GLPI Agent with its tasks —
-under the packaged account `opamp-fleet` and under `--run-as root`: it starts,
+under the packaged account `classis` and under `--run-as root`: it starts,
 reports, and its `sudo` or setuid helpers still work
 ([ADR-0042](docs/adr/0042-the-linux-packages-run-the-client-under-its-own-account.md)).
 Known platform gaps (tracked in the ADR): launchd `status` is advisory and
@@ -463,7 +463,7 @@ docs/CONFORMANCE.md   # OpAMP Protocol Baseline + capability conformance matrix
 docs/SECURITY-MODEL.md # the Dev Container, secrets, pinned actions, the fleet trust model, supported versions
 docs/HARDENING.md     # candidate hardening measures for the Client-Server link (a backlog, not decisions)
 docs/adr/             # Architecture Decision Records (+ template)
-crates/               # Cargo workspace: opamp (shared) · fleet-core · fleet-server · fleet-agent · fleet-tools (operator CLIs)
+crates/               # Cargo workspace: opamp (shared) · classis-core · classis-server · classis-agent · classis-tools (operator CLIs)
 config/               # annotated example configuration files (server.toml, supervisor.toml)
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
@@ -579,7 +579,7 @@ repository move or transfer:
   otherwise carried by review alone;
 - enable **private vulnerability reporting** (see [`SECURITY.md`](SECURITY.md)).
 - after the first release that pushes the Server's image, set the package
-  **`opamp-fleet-server`** on `ghcr.io` to **public** and linked to this
+  **`classis-server`** on `ghcr.io` to **public** and linked to this
   repository: a package a workflow publishes for the first time is private, and
   operators pull the image without an account
   ([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)).

@@ -3,11 +3,11 @@
 - **Status:** 🟢 accepted · clauses 2, 3, 4, 5 and 8 superseded by
   [ADR-0052](0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `.github/workflows/release.yml` (the `sbom` job, the
   permissions and the attestation and verification steps of the `publish` job,
   the assets it publishes and the release notes),
-  `crates/fleet-tools/tests/release_workflow.rs`, and every document that tells
+  `crates/classis-tools/tests/release_workflow.rs`, and every document that tells
   an operator how to check a release asset (`README.md`, `docs/manual/tools.md`,
   `CHANGELOG.md`)
 - **Supersedes:**
@@ -25,7 +25,7 @@ clause 34):
 
 - the Client's five `.tar.gz` archives;
 - two `.deb`, two `.rpm` and one `.msi`;
-- the four archives of the operator tool `opamp-fleetctl`
+- the four archives of the operator tool `classisctl`
   ([ADR-0028](0028-one-operator-program-that-makes-the-fleets-certificates.md)
   clauses 17 and 18);
 - one `SHA256SUMS`.
@@ -101,12 +101,12 @@ target, and attest those SBOMs as release assets like the rest.
 
 2. **One CycloneDX SBOM per shipped program and target.** The release publishes
    `supervisor_<version>_<os>_<arch>.cdx.json` for each of the Client's five
-   targets, and `opamp-fleetctl_<version>_<os>_<arch>.cdx.json` for each of the
+   targets, and `classisctl_<version>_<os>_<arch>.cdx.json` for each of the
    operator tool's four. The stem is that of the archive it describes (ADR-0019
    clause 32), and `.cdx.json` is the extension the CycloneDX specification
    recommends. Each SBOM is CycloneDX 1.5 JSON written by `cargo cyclonedx` with
    `--describe binaries` and `--target <triple>`, for:
-   - the one binary that ships, `supervisor` or `opamp-fleetctl`;
+   - the one binary that ships, `supervisor` or `classisctl`;
    - the default features, which the release builds with;
    - every transitive dependency on that target, resolved from the committed
      `Cargo.lock`.
@@ -320,7 +320,7 @@ target, and attest those SBOMs as release assets like the rest.
 
 ## Enforcement
 
-Tests in `crates/fleet-tools/tests/release_workflow.rs` will carry
+Tests in `crates/classis-tools/tests/release_workflow.rs` will carry
 `Verifies: ADR-0045`. They read the workflow as text, as the tests of ADR-0028
 there do.
 
@@ -339,7 +339,7 @@ there do.
   beyond the top level, and installs `cargo-cyclonedx@<MAJOR.MINOR.PATCH>` with
   `cargo install --locked`. For every matrix row it writes
   `supervisor_…_<os>_<arch>.cdx.json`, and for every `operator_tool: true` row
-  `opamp-fleetctl_…_<os>_<arch>.cdx.json`, each with
+  `classisctl_…_<os>_<arch>.cdx.json`, each with
   `--describe binaries --target <triple> --spec-version 1.5`, beside a
   `.sha256`. It fails when `Cargo.lock` changed (clauses 2 and 3).
 - **The notes.** The release notes contain `gh attestation verify` and

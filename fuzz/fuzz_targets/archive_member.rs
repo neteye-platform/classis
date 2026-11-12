@@ -3,7 +3,7 @@
 //! Verifies: Q-2
 #![no_main]
 
-use fleet_agent::archive;
+use classis_agent::archive;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

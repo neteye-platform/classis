@@ -1,7 +1,7 @@
 name: Release
 
 # Builds the Client for every target it ships on and publishes one `.tar.gz` per target
-# (ADR-0019, the container and the artifact name included), and the operator tool `opamp-fleetctl`
+# (ADR-0019, the container and the artifact name included), and the operator tool `classisctl`
 # for Linux and macOS beside it (ADR-0028).
 #
 # The version comes from `[workspace.package] version` in Cargo.toml and this workflow creates the
@@ -9,7 +9,7 @@ name: Release
 # HEAD and bakes the same number into the binary with its commit metadata. The binary learns its
 # version as any build does; this workflow decides the number and types the tag.
 #
-# The artifacts are packed by this project's own `opamp-fleetctl package pack`, so each Client archive
+# The artifacts are packed by this project's own `classisctl package pack`, so each Client archive
 # is also a valid package artifact for a fleet self-update (ADR-0026, ADR-0018) — the file an operator
 # downloads is the file they hand the Server. The operator tool's archives are not packages of the
 # fleet: they are downloaded, never uploaded (ADR-0028 clause 19).
@@ -18,7 +18,7 @@ name: Release
 # `publish` before the release exists, and each shipped program has a CycloneDX SBOM per target
 # beside its archive (ADR-0045).
 #
-# The Server ships as a multi-architecture image, `ghcr.io/mbrigl/opamp-fleet-server:<version>`,
+# The Server ships as a multi-architecture image, `ghcr.io/neteye-platform/classis-server:<version>`,
 # built from packaging/container/Containerfile by copying the Server binaries the Linux rows built
 # and checked. `image` pushes it untagged; `publish` attests it, verifies it, and only then tags it
 # with the version (ADR-0052).
@@ -47,14 +47,14 @@ env:
   #
   # The names that are *not* this are the ones that identify an installation rather than a program:
   # the dpkg/rpm/MSI package, the service, and the `PATH` symlink all carry the **product's** name,
-  # `opamp-fleet` (ADR-0019). Keeping the program's name off the product's is what lets one
-  # published Set serve every variant build. They live in crates/fleet-agent/Cargo.toml and
+  # `classis` (ADR-0019). Keeping the program's name off the product's is what lets one
+  # published Set serve every variant build. They live in crates/classis-agent/Cargo.toml and
   # packaging/windows/supervisor.wxs, not here.
   ARTIFACT: supervisor
   # The operator tool's program and the stem of its archives (ADR-0028 clause 18).
-  OPERATOR_TOOL: opamp-fleetctl
+  OPERATOR_TOOL: classisctl
   # The Server's image, tagged with the exact version and nothing else (ADR-0052 clause 6).
-  IMAGE: ghcr.io/mbrigl/opamp-fleet-server
+  IMAGE: ghcr.io/neteye-platform/classis-server
 
 jobs:
   # A version with a known advisory is never tagged: the gate of audit.yml, over the lockfile the
@@ -102,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "fleet-agent") | .version')
+            | jq -r '.packages[] | select(.name == "classis-agent") | .version')
           echo "Cargo.toml says $version"
           case "$version" in
             "" | *[!0-9.]* ) echo "::error::$version is not a release version (MAJOR.MINOR.PATCH)"; exit 1 ;;
@@ -183,9 +183,9 @@ jobs:
         id: baked
         run: |
           set -euo pipefail
-          # `-p fleet-agent` is the package (its name is a build-time identifier); the binary it
+          # `-p classis-agent` is the package (its name is a build-time identifier); the binary it
           # produces is the shipped name (ADR-0019).
-          cargo build -p fleet-agent --bin supervisor --locked
+          cargo build -p classis-agent --bin supervisor --locked
           full=$(./target/debug/supervisor --version | awk '{print $NF}')
           echo "the binary reports $full"
           version='${{ steps.read.outputs.version }}'
@@ -228,12 +228,12 @@ jobs:
           # Linux alone, in its image, and its SBOM is named after the binary in the image.
           while read -r triple os arch tool; do
             cargo cyclonedx --describe binaries --target "$triple" --format json --spec-version 1.5
-            keep crates/fleet-agent supervisor "${ARTIFACT}_${v}_${os}_${arch}"
+            keep crates/classis-agent supervisor "${ARTIFACT}_${v}_${os}_${arch}"
             if [ "$tool" = true ]; then
-              keep crates/fleet-tools opamp-fleetctl "${OPERATOR_TOOL}_${v}_${os}_${arch}"
+              keep crates/classis-tools classisctl "${OPERATOR_TOOL}_${v}_${os}_${arch}"
             fi
             if [ "$os" = linux ]; then
-              keep crates/fleet-server server "server_${v}_${os}_${arch}"
+              keep crates/classis-server server "server_${v}_${os}_${arch}"
             fi
             rm -f crates/*/*_bin.cdx.json
           done <<'EOF'
@@ -265,7 +265,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `operator_tool`: this row also builds and publishes `opamp-fleetctl` for its target
+          # `operator_tool`: this row also builds and publishes `classisctl` for its target
           # (ADR-0028 clause 17). Every row builds it for its runner as the packer.
           - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, os: linux, arch: amd64, suffix: "", native: true, operator_tool: true }
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, os: linux, arch: arm64, suffix: "", native: true, operator_tool: true }
@@ -289,18 +289,18 @@ jobs:
       - name: Add the target
         run: rustup target add ${{ matrix.target }}
       - name: Build the Client
-        run: cargo build --release -p fleet-agent --bin supervisor --target ${{ matrix.target }} --locked
+        run: cargo build --release -p classis-agent --bin supervisor --target ${{ matrix.target }} --locked
       # A host build: it runs here, on this runner, to pack the artifacts.
       - name: Build the packer
-        run: cargo build --release -p fleet-tools --bin opamp-fleetctl --locked
+        run: cargo build --release -p classis-tools --bin classisctl --locked
       # A target build: the program this row publishes (ADR-0028 clause 17).
       - name: Build the operator tool
         if: matrix.operator_tool
-        run: cargo build --release -p fleet-tools --bin opamp-fleetctl --target ${{ matrix.target }} --locked
+        run: cargo build --release -p classis-tools --bin classisctl --target ${{ matrix.target }} --locked
       # A target build: the Server, which ships in the image and nowhere else (ADR-0052 clause 2).
       - name: Build the Server
         if: matrix.os == 'linux'
-        run: cargo build --release -p fleet-server --bin server --target ${{ matrix.target }} --locked
+        run: cargo build --release -p classis-server --bin server --target ${{ matrix.target }} --locked
       - name: The binary agrees with the name it will be given
         if: matrix.native
         run: |
@@ -313,7 +313,7 @@ jobs:
       - name: The operator tool agrees with the name it will be given
         if: matrix.native && matrix.operator_tool
         run: |
-          reported=$(./target/${{ matrix.target }}/release/opamp-fleetctl --version | awk '{print $NF}')
+          reported=$(./target/${{ matrix.target }}/release/classisctl --version | awk '{print $NF}')
           expected='${{ needs.version.outputs.full }}'
           if [ "$reported" != "$expected" ]; then
             echo "::error::this target's operator tool reports $reported, the release is $expected"
@@ -350,7 +350,7 @@ jobs:
           # The packer names the single member after the program — `supervisor`, which is
           # what a Client looks for in a package it is offered — and prints the SHA-256 on stdout.
           # The *file* is named after the Set (ADR-0019); the member inside it is the product.
-          sha=$(./target/release/opamp-fleetctl${{ matrix.suffix }} package pack \
+          sha=$(./target/release/classisctl${{ matrix.suffix }} package pack \
             --format tar.gz \
             --out "$name" \
             "target/${{ matrix.target }}/release/supervisor${{ matrix.suffix }}")
@@ -367,12 +367,12 @@ jobs:
         run: |
           set -euo pipefail
           name="${OPERATOR_TOOL}_${{ needs.version.outputs.version }}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz"
-          # One member, `opamp-fleetctl`, with its executable mode; the checksum joins SHA256SUMS
+          # One member, `classisctl`, with its executable mode; the checksum joins SHA256SUMS
           # like every other asset's.
-          sha=$(./target/release/opamp-fleetctl package pack \
+          sha=$(./target/release/classisctl package pack \
             --format tar.gz \
             --out "$name" \
-            "target/${{ matrix.target }}/release/opamp-fleetctl")
+            "target/${{ matrix.target }}/release/classisctl")
           echo "$sha  $name" > "$name.sha256"
           echo "name=$name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -403,10 +403,10 @@ jobs:
           # make "the same bytes" a claim rather than a fact. `--no-strip` for the same reason —
           # cargo-deb strips by default, which would leave the `.deb` holding a *different*
           # binary from its sibling archive.
-          cargo deb -p fleet-agent --no-build --no-strip \
+          cargo deb -p classis-agent --no-build --no-strip \
             --target ${{ matrix.target }} \
             -o "$STEM.deb"
-          cargo generate-rpm -p crates/fleet-agent \
+          cargo generate-rpm -p crates/classis-agent \
             --target ${{ matrix.target }} \
             -o "$STEM.rpm"
 
@@ -444,7 +444,7 @@ jobs:
           # ADR-0042 clause 5: the account is created, a first registration names it, and the
           # package requires what creates it.
           grep -q 'useradd --system' <<<"$scripts"
-          grep -q -- '--run-as opamp-fleet' <<<"$scripts"
+          grep -q -- '--run-as classis' <<<"$scripts"
           rpm -qp --requires "$STEM.rpm" | grep -q '^/usr/sbin/useradd'
           # And the arch inside the package is the ecosystem's, not the file name's (ADR-0019).
           test "$(rpm -qp --qf '%{ARCH}' "$STEM.rpm")" = "$([ '${{ matrix.arch }}' = amd64 ] && echo x86_64 || echo aarch64)"
@@ -551,12 +551,12 @@ jobs:
             --platform linux/amd64 \
             --build-arg VERSION='${{ needs.version.outputs.version }}' \
             --build-arg REVISION="$GITHUB_SHA" \
-            --load --tag opamp-fleet-server:check \
+            --load --tag classis-server:check \
             image
       - name: The image checks out
         run: |
           set -euo pipefail
-          img=opamp-fleet-server:check
+          img=classis-server:check
           inspect() { docker image inspect --format "$1" "$img"; }
 
           reported=$(docker run --rm "$img" --version | awk '{print $NF}')
@@ -589,8 +589,8 @@ jobs:
           docker create --name check "$img" > /dev/null
           docker export check | tar --numeric-owner -tvf - > files.txt
           docker rm -v check > /dev/null
-          if ! grep -E ' 65532/65532 .* var/lib/opamp-fleet/?$' files.txt; then
-            echo "::error::/var/lib/opamp-fleet is not owned by 65532"
+          if ! grep -E ' 65532/65532 .* var/lib/classis/?$' files.txt; then
+            echo "::error::/var/lib/classis is not owned by 65532"
             exit 1
           fi
           echo "the image runs the Server ${reported} as 65532, with no shell"
@@ -780,15 +780,15 @@ jobs:
           and GID 65532 (ADR-0052). Deploy it by its digest, not by its tag:
 
           \`\`\`console
-          docker run -d --name opamp-fleet-server \\
+          docker run -d --name classis-server \\
             -p 4320:4320 -p 4321:4321 \\
-            -v opamp-fleet-data:/var/lib/opamp-fleet \\
-            -v /etc/opamp-fleet:/etc/opamp-fleet:ro \\
+            -v classis-data:/var/lib/classis \\
+            -v /etc/classis:/etc/classis:ro \\
             ${{ env.IMAGE }}@${{ needs.image.outputs.digest }} \\
-            --config /etc/opamp-fleet/server.toml
+            --config /etc/classis/server.toml
           \`\`\`
 
-          Its data directory is the volume \`/var/lib/opamp-fleet\`, and both planes listen on
+          Its data directory is the volume \`/var/lib/classis\`, and both planes listen on
           \`0.0.0.0\` inside the container, \`4320\` for the fleet and \`4321\` for operators. Off
           the loopback the Server requires TLS and \`[rest.auth]\`, so an image started with nothing
           mounted names what is missing and stops. Certificates, keys and every secret are mounted as
@@ -828,7 +828,7 @@ jobs:
 
           The installers deliver the binary and then run \`supervisor service install\`
           themselves — the same install every platform gets, not a second one. \`supervisor\` is the
-          **program**; what lands on your \`PATH\` is \`opamp-fleet\`, the **product**, as a symlink
+          **program**; what lands on your \`PATH\` is \`classis\`, the **product**, as a symlink
           through the layout's \`current\` pointer, so the command always answers for the version the
           service runs (ADR-0019). **They register the service and leave it stopped**: a Client with no configuration would dial the development
           default and manage nothing (ADR-0019), so starting it is the last step and it is yours.
@@ -839,8 +839,8 @@ jobs:
           # RHEL, Fedora, openSUSE
           sudo dnf install ./${{ env.ARTIFACT }}_${{ needs.version.outputs.version }}_linux_amd64.rpm
 
-          sudo opamp-fleet service install --interactive
-          sudo systemctl start opamp-fleet
+          sudo classis service install --interactive
+          sudo systemctl start classis
           \`\`\`
 
           \`--interactive\` asks for the endpoint, the private CA, the client certificate and its key,
@@ -852,18 +852,18 @@ jobs:
           file. Neither form overwrites a configuration that is already there.
 
           On Windows the \`.msi\` asks for the installation folder and the endpoint. That folder
-          holds the program; the configuration and the state go to \`%ProgramData%\opamp-fleet\`,
+          holds the program; the configuration and the state go to \`%ProgramData%\classis\`,
           which is what an uninstall leaves behind (ADR-0019). The same file installs unattended,
           which is how Intune, Group Policy and SCCM deploy it:
 
           \`\`\`console
           msiexec /i ${{ env.ARTIFACT }}_${{ needs.version.outputs.version }}_windows_amd64.msi /qn ^
-            INSTALLFOLDER="C:\Program Files\opamp-fleet" ^
+            INSTALLFOLDER="C:\Program Files\classis" ^
             ENDPOINT="wss://<server>:4320/v1/opamp"
           \`\`\`
 
           As with \`--endpoint\`, the service refuses to start until \`[tls] cert_file\` and \`key_file\`
-          are added to \`%ProgramData%\opamp-fleet\supervisor.toml\`.
+          are added to \`%ProgramData%\classis\supervisor.toml\`.
 
           Removing the package stops and unregisters the service and leaves the configuration and
           state behind, deliberately: they hold the host's identity and its certificate.

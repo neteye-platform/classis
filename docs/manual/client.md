@@ -153,7 +153,7 @@ through `current` — so the installed command reports the running version rathe
 than whichever one a package happened to deliver.
 
 That command is named after the **product**, while the file it resolves to is
-named after the **program**: `opamp-fleet` on your `PATH`, `supervisor` on disk.
+named after the **program**: `classis` on your `PATH`, `supervisor` on disk.
 The split is the same one the directories make, and it is what lets two products
 built from this source sit on one host without fighting over a single `/usr/bin`
 entry. From an unpacked archive there is no symlink and you run the file itself.
@@ -313,7 +313,7 @@ managing nothing, which is the failure hardest to notice.
 ```sh
 supervisor --config /etc/opamp/supervisor.toml     # foreground; `run` is implied
 supervisor run --config /etc/opamp/supervisor.toml # the same thing, said explicitly
-opamp-fleet --version
+classis --version
 ```
 
 | Global flag         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -335,23 +335,23 @@ The Client registers _itself_ with systemd, launchd, or the Windows SCM — ther
 is no packaging step and no unit file to write:
 
 ```sh
-opamp-fleet service install --config /etc/opamp/supervisor.toml   # root / Administrator
-opamp-fleet service start
-opamp-fleet service status
-opamp-fleet service stop
-opamp-fleet service uninstall      # deregisters; never deletes the install layout or state
+classis service install --config /etc/opamp/supervisor.toml   # root / Administrator
+classis service start
+classis service status
+classis service stop
+classis service uninstall      # deregisters; never deletes the install layout or state
 ```
 
-| Flag                          | Applies to                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ----------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--user`                      | every `service` action              | Target the current user's service manager instead of the system one. Useful in development; the default is a system service that starts at boot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--root <dir>`                | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/opamp-fleet` for the layout, `/var/lib/opamp-fleet` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. macOS uses `/Library/Application Support/opamp-fleet`, Windows `%ProgramData%\opamp-fleet`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout). |
-| `--data-root <dir>`           | `service install`, `service config` | The data root — `supervisor.toml` and `state/` — when it is to differ from the layout root. A packaged install, the MSI included, passes neither flag and takes the platform defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--interactive`               | `service install`                   | Ask for the settings a fresh host cannot guess, write or edit the configuration file, and enrol a host that holds no certificate yet, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--endpoint <url>`            | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no siblings for the CA file or the client identity: it takes them from [beside the program](#files-beside-the-program), or they are files the operator names in the file.                                                                                                                                                                                                                                   |
-| `--run-as <account>`          | `service install`                   | Run the service as this account, and hand its files over to it. Without it, a re-registration keeps the account the existing registration names. `--run-as root` chooses root. See [Running it under its own account](#running-it-under-its-own-account). System scope only — a `--user` service already runs as its user.                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `--process-account <account>` | `service install`                   | Run every Managed Process under this account, through a second service that runs under it. Without it, a re-registration keeps the account the second service's registration names. See [Managed Processes under a process account](#managed-processes-under-a-process-account). System scope only.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--no-process-account`        | `service install`                   | Stop and deregister the second service; the Client starts its Managed Processes itself again. Mutually exclusive with `--process-account`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Flag                          | Applies to                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--user`                      | every `service` action              | Target the current user's service manager instead of the system one. Useful in development; the default is a system service that starts at boot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--root <dir>`                | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/classis` for the layout, `/var/lib/classis` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. macOS uses `/Library/Application Support/classis`, Windows `%ProgramData%\classis`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout). |
+| `--data-root <dir>`           | `service install`, `service config` | The data root — `supervisor.toml` and `state/` — when it is to differ from the layout root. A packaged install, the MSI included, passes neither flag and takes the platform defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `--interactive`               | `service install`                   | Ask for the settings a fresh host cannot guess, write or edit the configuration file, and enrol a host that holds no certificate yet, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--endpoint <url>`            | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no siblings for the CA file or the client identity: it takes them from [beside the program](#files-beside-the-program), or they are files the operator names in the file.                                                                                                                                                                                                                   |
+| `--run-as <account>`          | `service install`                   | Run the service as this account, and hand its files over to it. Without it, a re-registration keeps the account the existing registration names. `--run-as root` chooses root. See [Running it under its own account](#running-it-under-its-own-account). System scope only — a `--user` service already runs as its user.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `--process-account <account>` | `service install`                   | Run every Managed Process under this account, through a second service that runs under it. Without it, a re-registration keeps the account the second service's registration names. See [Managed Processes under a process account](#managed-processes-under-a-process-account). System scope only.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--no-process-account`        | `service install`                   | Stop and deregister the second service; the Client starts its Managed Processes itself again. Mutually exclusive with `--process-account`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### Running it under its own account
 
@@ -375,20 +375,20 @@ Which account it is:
 | no flag, the unit names none, the data root belongs to an account | the data root's owner, and the install says so                                           |
 | no flag, first registration                                       | root (systemd, launchd), `LocalSystem` (Windows)                                         |
 
-The Linux packages create the account `opamp-fleet` and name it on a first
+The Linux packages create the account `classis` and name it on a first
 installation — see
 [Installing from a native package](#installing-from-a-native-package). A
 re-registration reads the account from the file the Client wrote,
-`/etc/systemd/system/opamp-fleet.service` or
-`/Library/LaunchDaemons/opamp-fleet.plist`, not from a drop-in. Windows keeps
+`/etc/systemd/system/classis.service` or
+`/Library/LaunchDaemons/classis.plist`, not from a drop-in. Windows keeps
 the logon account the SCM holds. The install prints the account and where it
 came from:
 
 ```sh
-# opamp-fleet service install
-installed opamp-fleet
+# classis service install
+installed classis
   …
-  runs as:   opamp-fleet (kept from /etc/systemd/system/opamp-fleet.service)
+  runs as:   classis (kept from /etc/systemd/system/classis.service)
 ```
 
 On Linux and macOS the account must already exist, named or kept; the install
@@ -396,9 +396,9 @@ refuses before it writes anything if it does not, and names the file a kept
 account came from. The binary never creates an account:
 
 ```sh
-# useradd --system --user-group --no-create-home --home-dir /var/lib/opamp-fleet \
-    --shell /usr/sbin/nologin opamp-fleet
-# opamp-fleet service install --run-as opamp-fleet
+# useradd --system --user-group --no-create-home --home-dir /var/lib/classis \
+    --shell /usr/sbin/nologin classis
+# classis service install --run-as classis
 ```
 
 The hand-over never follows a link: each directory is opened as itself and
@@ -411,7 +411,7 @@ process list. The recommended form is the service's own virtual account, which
 Windows provisions and password-manages by itself:
 
 ```sh
-> opamp-fleet service install --run-as "NT SERVICE\opamp-fleet"
+> classis service install --run-as "NT SERVICE\classis"
 ```
 
 A group-managed service account (`DOMAIN\name$`) and the built-ins
@@ -426,15 +426,15 @@ service will not start.
 Two consequences to weigh before using it:
 
 - **The account is a trust boundary.** Whoever holds it can replace the binary
-  in the layout, and the packaged `/usr/bin/opamp-fleet` symlink resolves
+  in the layout, and the packaged `/usr/bin/classis` symlink resolves
   through that layout's `current` pointer — an administrator invoking the CLI
   executes account-owned code.
 - **The account's limits are the fleet's.** Under an account other than root,
   GLPI Agent's full inventory and its Deploy task, a Telegraf input without a
   `sudo` rule, a listener on a port below 1024, and a log receiver reading
   `root:adm` files fail — that trade-off is the point. Grant what is missing (a
-  `sudoers` entry, `usermod -aG adm opamp-fleet`, or a drop-in, below), or
-  choose root with `opamp-fleet service install --run-as root`.
+  `sudoers` entry, `usermod -aG adm classis`, or a drop-in, below), or
+  choose root with `classis service install --run-as root`.
 
 Re-running `install` with a different `--run-as` re-registers and re-owns the
 same directories. Without the flag it keeps the account; a plain re-install does
@@ -457,12 +457,12 @@ working for the service and every Managed Process.
 `NoNewPrivileges=`, `ProtectSystem=`, `ProtectHome=`, `PrivateTmp=`,
 `CapabilityBoundingSet=` and the rest are left out, because a supported agent
 needs what each takes away. A re-registration rewrites the unit;
-`service install` never touches `/etc/systemd/system/opamp-fleet.service.d/`, so
+`service install` never touches `/etc/systemd/system/classis.service.d/`, so
 what a host can take, or must not have, goes into a drop-in there and survives
 every upgrade:
 
 ```ini
-# /etc/systemd/system/opamp-fleet.service.d/host.conf
+# /etc/systemd/system/classis.service.d/host.conf
 [Service]
 # Nothing on this host uses sudo or a setuid helper:
 NoNewPrivileges=yes
@@ -473,7 +473,7 @@ SupplementaryGroups=adm
 ```
 
 ```sh
-# systemctl daemon-reload && systemctl restart opamp-fleet
+# systemctl daemon-reload && systemctl restart classis
 ```
 
 A drop-in that removes a directive the unit sets assigns it its default, for
@@ -488,14 +488,14 @@ and can read what the Client can: its private key `client-key.pem`, every other
 Supervisor's `config/`, and the program it runs, which it can also rewrite. A
 **process account** separates them.
 `service install --process-account <account>` registers a **second service**,
-`opamp-fleet-agents`, that runs under that account and starts, signals and stops
+`classis-agents`, that runs under that account and starts, signals and stops
 every program a Supervisor starts — the Managed Process, its version probe, and
 the preflight of a staged package — on the Client's request. The Client starts
 none of them itself.
 
 ```text
-service manager ─┬─ opamp-fleet         Client, its own account   (supervisor run --service …)
-                 └─ opamp-fleet-agents  the process account        (supervisor run --agents …)
+service manager ─┬─ classis         Client, its own account   (supervisor run --service …)
+                 └─ classis-agents  the process account        (supervisor run --agents …)
                         ▲
                         └── Unix socket / named pipe; only the Client's account is admitted
 ```
@@ -524,7 +524,7 @@ What the separation gives and what it does not:
   200 ms. The log names the socket or pipe and the process that served it:
 
   ```text
-  ERROR fleet_agent::supervisor::channel: refused a peer that is not the second service, before writing anything to it; no program starts until the service manager's second service serves the socket socket=/run/opamp-fleet-agents/agents.sock peer_pid=4711 error=/run/opamp-fleet-agents/agents.sock is served by process 4711, not by the second service (process 812) unlogged=0
+  ERROR classis_agent::supervisor::channel: refused a peer that is not the second service, before writing anything to it; no program starts until the service manager's second service serves the socket socket=/run/classis-agents/agents.sock peer_pid=4711 error=/run/classis-agents/agents.sock is served by process 4711, not by the second service (process 812) unlogged=0
   ```
 
   Find the process with `ps -p <peer_pid>`, or on Windows
@@ -538,7 +538,7 @@ What the separation gives and what it does not:
   directories, a supplementary group such as `adm`. On Linux, what a Managed
   Process needs from systemd — a capability for a port below 1024, a
   supplementary group — goes into a drop-in for the second service,
-  `/etc/systemd/system/opamp-fleet-agents.service.d/`, which `service install`
+  `/etc/systemd/system/classis-agents.service.d/`, which `service install`
   never touches either.
 - A restart of the second service stops every Managed Process; the Client starts
   them again once it reaches the service.
@@ -557,16 +557,16 @@ The rules every platform holds the account to:
   `--user` is refused with it.
 - **It is kept.** A re-registration without the flag — every package upgrade,
   every MSI upgrade — keeps the account the second service's registration names:
-  `/etc/systemd/system/opamp-fleet-agents.service`,
-  `/Library/LaunchDaemons/opamp-fleet-agents.plist`, or the SCM's entry. The
+  `/etc/systemd/system/classis-agents.service`,
+  `/Library/LaunchDaemons/classis-agents.plist`, or the SCM's entry. The
   install prints it:
 
   ```console
-  # opamp-fleet service install
-  installed opamp-fleet
+  # classis service install
+  installed classis
     …
-    runs as:   opamp-fleet (kept from /etc/systemd/system/opamp-fleet.service)
-    processes: opamp-fleet-agents (kept from /etc/systemd/system/opamp-fleet-agents.service), started by opamp-fleet-agents
+    runs as:   classis (kept from /etc/systemd/system/classis.service)
+    processes: classis-agents (kept from /etc/systemd/system/classis-agents.service), started by classis-agents
   ```
 
 `service install`, `start`, `stop` and `uninstall` act on both services. The
@@ -576,8 +576,8 @@ their programs do not start, and they start again once it is back. A package
 offered meanwhile is staged and stays `Installing`, and a Configuration stays
 `APPLYING`, each naming the second service as the reason, until it is reached
 again. `service status` reports the Client; ask the service manager for the
-second service (`systemctl status opamp-fleet-agents`,
-`launchctl print system/opamp-fleet-agents`, `sc query opamp-fleet-agents`).
+second service (`systemctl status classis-agents`,
+`launchctl print system/classis-agents`, `sc query classis-agents`).
 
 Both services run the same program from the same `current` pointer, and a
 self-update restarts the one that is behind: two ends of different builds refuse
@@ -587,17 +587,17 @@ started again by its service manager.
 #### On Linux
 
 The Client must run under its own account, which the `.deb` and `.rpm` make
-`opamp-fleet`. The process account needs a primary group of its own whose one
+`classis`. The process account needs a primary group of its own whose one
 member is the Client's account: the install refuses a group that is gid 0, that
 is the Client's primary group, that has another member, or that is another
 account's primary group, and a process account that is a member of the Client's
 primary group. Create it, put the Client's account into its group, and register:
 
 ```console
-# useradd --system --user-group --no-create-home --shell /usr/sbin/nologin opamp-fleet-agents
-# usermod --append --groups opamp-fleet-agents opamp-fleet
-# opamp-fleet service install --process-account opamp-fleet-agents
-# opamp-fleet service stop && opamp-fleet service start
+# useradd --system --user-group --no-create-home --shell /usr/sbin/nologin classis-agents
+# usermod --append --groups classis-agents classis
+# classis service install --process-account classis-agents
+# classis service stop && classis service start
 ```
 
 Adding a process account where there was none stops nothing; the Client that
@@ -606,14 +606,14 @@ line does.
 
 What the install registers:
 
-- `/etc/systemd/system/opamp-fleet-agents.service`, `User=opamp-fleet-agents`,
-  running `run --agents /run/opamp-fleet-agents/agents.sock --client-uid <uid>`,
-  with `RuntimeDirectory=opamp-fleet-agents`, `RuntimeDirectoryMode=0750`,
+- `/etc/systemd/system/classis-agents.service`, `User=classis-agents`,
+  running `run --agents /run/classis-agents/agents.sock --client-uid <uid>`,
+  with `RuntimeDirectory=classis-agents`, `RuntimeDirectoryMode=0750`,
   `TimeoutStopSec=30`, `Restart=on-failure` and `ProtectControlGroups=yes`.
   systemd creates the socket's directory at every start, owned by the process
   account, and removes it at the stop.
-- In the Client's unit, `Wants=opamp-fleet-agents.service` and
-  `After=opamp-fleet-agents.service`, never `Requires=`, and
+- In the Client's unit, `Wants=classis-agents.service` and
+  `After=classis-agents.service`, never `Requires=`, and
   `--agents-socket <socket> --process-uid <uid>` on its command line.
 
 No data root or layout root may be, or lie in, the socket's directory. The
@@ -656,17 +656,17 @@ its own (not root), and the process account a role account whose name begins
 with `_`, with a primary group of its own that the Client's account joins:
 
 ```console
-# dseditgroup -o create -i <gid> _opamp-fleet-agents
-# sysadminctl -addUser _opamp-fleet-agents -UID <uid> -GID <gid> -roleAccount
-# dseditgroup -o edit -a <client account> -t user _opamp-fleet-agents
-# opamp-fleet service install --run-as <client account> --process-account _opamp-fleet-agents
-# opamp-fleet service stop && opamp-fleet service start
+# dseditgroup -o create -i <gid> _classis-agents
+# sysadminctl -addUser _classis-agents -UID <uid> -GID <gid> -roleAccount
+# dseditgroup -o edit -a <client account> -t user _classis-agents
+# classis service install --run-as <client account> --process-account _classis-agents
+# classis service stop && classis service start
 ```
 
 `<gid>` and `<uid>` are ones no group or account holds. The install registers
-`/Library/LaunchDaemons/opamp-fleet-agents.plist` with `UserName` naming the
+`/Library/LaunchDaemons/classis-agents.plist` with `UserName` naming the
 process account, and creates the socket's directory
-`/Library/Application Support/opamp-fleet-agents/`, owned by the process account
+`/Library/Application Support/classis-agents/`, owned by the process account
 and its group, `0750`; the socket is `agents.sock` in it. The install refuses to
 create it where `/Library/Application Support` is writable by an account other
 than root, and it removes the directory with the second service's registration.
@@ -678,13 +678,13 @@ The Client must run under an account of its own, so name it with `--run-as` on
 the same install; a registration that runs as `LocalSystem`, which is what the
 MSI's first install makes, is refused. The process account is passwordless, as
 `--run-as` is: the second service's own virtual account
-`NT SERVICE\opamp-fleet-agents` (recommended), a gMSA (`DOMAIN\name$`), which is
+`NT SERVICE\classis-agents` (recommended), a gMSA (`DOMAIN\name$`), which is
 looked up in its domain, or `NT AUTHORITY\LocalService` / `NetworkService`,
 which other services share and so separate less. From an elevated prompt:
 
 ```console
-> opamp-fleet service install --run-as "NT SERVICE\opamp-fleet" ^
-    --process-account "NT SERVICE\opamp-fleet-agents"
+> classis service install --run-as "NT SERVICE\classis" ^
+    --process-account "NT SERVICE\classis-agents"
 ```
 
 Where the Client ran, the install starts it again afterwards, and the second
@@ -692,14 +692,14 @@ service before it.
 
 What the install registers and sets:
 
-- The SCM entry `opamp-fleet-agents`, automatic start, under the process
+- The SCM entry `classis-agents`, automatic start, under the process
   account, running
-  `run --agents \\.\pipe\opamp-fleet-agents --client-sid <SID>`, with the
+  `run --agents \\.\pipe\classis-agents --client-sid <SID>`, with the
   Client's recovery actions. Its required privileges are
   `SeChangeNotifyPrivilege` alone, so no Managed Process holds
   `SeImpersonatePrivilege`. The Client's entry does not depend on it:
   `service start` starts the second service first, then the Client.
-- The named pipe `\\.\pipe\opamp-fleet-agents`, owned by the process account.
+- The named pipe `\\.\pipe\classis-agents`, owned by the process account.
   Only the Client's account may read and write data on it, and nobody may create
   an instance of it but the process account; it rejects remote clients, and a
   pipe of that name made by anyone first fails the second service's start. Each
@@ -720,12 +720,12 @@ What the install registers and sets:
 **Every `service install` stops both services first**, with a process account or
 without one, and every MSI upgrade among them: the Managed Processes stop for as
 long as the install runs. Before it stops anything it writes which of the two
-ran to `HKLM\SOFTWARE\opamp-fleet\WithdrawalPending` (the value `Pending`), and
+ran to `HKLM\SOFTWARE\classis\WithdrawalPending` (the value `Pending`), and
 once it has succeeded it starts again what ran, the second service first, and
 strikes the record. A first install finds nothing to stop and starts nothing. An
 install that fails after its stop leaves both stopped and says how the SCM
 reports them; the next `service install` that succeeds starts again what ran,
-and `opamp-fleet service start` starts both at once. Only this program's
+and `classis service start` starts both at once. Only this program's
 `service start` and `service stop` strike the record — `sc.exe` and the Services
 console do not.
 
@@ -750,10 +750,10 @@ never in the middle of an upgrade.
 and the Client starts its programs itself again:
 
 ```console
-# opamp-fleet service install --no-process-account
-installed opamp-fleet
+# classis service install --no-process-account
+installed classis
   …
-  processes: started by the Client itself once it restarts; opamp-fleet-agents was stopped and removed
+  processes: started by the Client itself once it restarts; classis-agents was stopped and removed
 ```
 
 Either way the former account keeps nothing in the roots the install acts on —
@@ -773,7 +773,7 @@ delete it once nothing else uses it.
   install starts again what it stopped and changes nothing but the configuration
   it wrote. An install that fails after the stop leaves the services stopped and
   names them; nothing records them, so no later install starts them —
-  `opamp-fleet service start` does.
+  `classis service start` does.
 - **On Windows** every entry that allows the former account anything is removed
   from the layout root, the data root, the state directory, `supervisor.toml`
   and the fleet files copied beside it, and what it owns there is given to the
@@ -789,8 +789,8 @@ it in a warning.
 #### Uninstalling
 
 `service uninstall` deregisters both services and leaves the files on disk. Stop
-them first, as the `.deb` and `.rpm` removal does: `opamp-fleet service stop`,
-then `opamp-fleet service uninstall`. On macOS the socket's directory goes with
+them first, as the `.deb` and `.rpm` removal does: `classis service stop`,
+then `classis service uninstall`. On macOS the socket's directory goes with
 the second service. On Windows `service uninstall` stops both itself and starts
 neither again; where it holds the install lock and both are stopped it completes
 a recorded withdrawal and removes the record, otherwise it says that the next
@@ -801,11 +801,11 @@ services in every case.
 
 A release before the second service knows nothing of it: its `service install`
 rewrites the Client's registration without the second service, but neither
-stops, rewrites nor removes `opamp-fleet-agents`, withdraws nothing from the
+stops, rewrites nor removes `classis-agents`, withdraws nothing from the
 process account, and leaves a Windows record unread. The second service then
 runs a program that does not know `run --agents` and fails at every start.
 Before installing such a release, drop the process account with the release you
-run — `opamp-fleet service install --no-process-account` — and then install the
+run — `classis service install --no-process-account` — and then install the
 older one.
 
 #### When the install refuses
@@ -818,7 +818,7 @@ you will meet:
 | `… does not exist on this host. Create it first (…)`                                          | Linux and macOS: create the account with the command it shows, or name another.                                         |
 | `… cannot be found on this host or its domain`                                                | Windows: name an account that exists, or a gMSA whose domain is reachable.                                              |
 | `… is root, and a process account never is` / `it is LocalSystem`                             | Run everything as root (`--run-as root`, no `--process-account`), or name an account of its own.                        |
-| `the Client runs as root` / `the Client runs as LocalSystem`                                  | Name the Client's account with `--run-as`; on Windows `NT SERVICE\opamp-fleet`.                                         |
+| `the Client runs as root` / `the Client runs as LocalSystem`                                  | Name the Client's account with `--run-as`; on Windows `NT SERVICE\classis`.                                             |
 | `… is the account the Client runs as`                                                         | Name another account for the processes.                                                                                 |
 | `… has the primary group …, and the Client's account … is not in it`                          | Add the Client's account to the group with the command it shows.                                                        |
 | `… is a member of it beside the Client's account`, `… also the primary group of …`, `(gid 0)` | Give the process account a group of its own whose one member is the Client's account.                                   |
@@ -826,7 +826,7 @@ you will meet:
 | `… names no account for the second service`                                                   | The unit or plist was edited: name one with `--process-account`, or drop it with `--no-process-account`.                |
 | `a process account needs the second service, which only a system service under systemd …`     | Not available at user scope or under another service manager.                                                           |
 | `… is, or lies in, …, the directory of the second service's socket`                           | Name a data root and a layout root outside it.                                                                          |
-| `would need a password` / `belongs to another service`                                        | Use a passwordless form: `NT SERVICE\opamp-fleet-agents`, a gMSA, `LocalService`, `NetworkService`.                     |
+| `would need a password` / `belongs to another service`                                        | Use a passwordless form: `NT SERVICE\classis-agents`, a gMSA, `LocalService`, `NetworkService`.                         |
 | `what the former account … was granted cannot be withdrawn`                                   | Windows: the former account, a gMSA among them, cannot be resolved. Run the install again once its domain is reachable. |
 | `… records what an install left to finish and cannot be read`                                 | Windows: the record's key is not the install's own. Look at it, remove it, and install again.                           |
 | `another install, uninstall, start or stop still holds the install lock`                      | Windows: wait for the other run, or end it.                                                                             |
@@ -855,15 +855,15 @@ So a host is set up by copying the program and these four files into one
 directory and running, from there:
 
 ```console
-$ cd /root/fleet-files && sudo ./opamp-fleet service install --endpoint wss://fleet.example.com:4320/v1/opamp
+$ cd /root/fleet-files && sudo ./classis service install --endpoint wss://fleet.example.com:4320/v1/opamp
 took the package verification key 3b6a27bc… from beside the program
-copied /var/lib/opamp-fleet/server-ca.pem
-wrote /var/lib/opamp-fleet/supervisor.toml for wss://fleet.example.com:4320/v1/opamp
+copied /var/lib/classis/server-ca.pem
+wrote /var/lib/classis/supervisor.toml for wss://fleet.example.com:4320/v1/opamp
 enrolling with /root/fleet-files/bootstrap.pem and /root/fleet-files/bootstrap-key.pem from beside the program
 enrolling with wss://fleet.example.com:4320/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
 INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-enrolled: the issued certificate is in /var/lib/opamp-fleet/state
-installed opamp-fleet
+enrolled: the issued certificate is in /var/lib/classis/state
+installed classis
 ```
 
 A value the configuration file already holds wins over a file beside the
@@ -884,7 +884,7 @@ anything, so a missing flag, a password that does not open the file, or the flag
 with no `bootstrap.p12` to open stops it with nothing changed:
 
 ```console
-$ sudo ./opamp-fleet service install --endpoint wss://fleet.example.com:4320/v1/opamp \
+$ sudo ./classis service install --endpoint wss://fleet.example.com:4320/v1/opamp \
     --bootstrap-password-file /root/fleet-files/bootstrap.pass
 …
 enrolling with /root/fleet-files/bootstrap.p12
@@ -903,20 +903,20 @@ the way past that. It needs the Server reachable and its
 before it registers the service:
 
 ```console
-$ opamp-fleet service install --interactive        # root / Administrator
-No configuration at /var/lib/opamp-fleet/supervisor.toml — answering these writes it (everything else keeps its default).
+$ classis service install --interactive        # root / Administrator
+No configuration at /var/lib/classis/supervisor.toml — answering these writes it (everything else keeps its default).
 Server OpAMP endpoint [wss://127.0.0.1:4320/v1/opamp]: wss://fleet.example.com/v1/opamp
 This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/ca.pem
 Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
 Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
 Package verification key (hex Ed25519 public key; empty takes no packages): 3b6a27bc…
-copied /var/lib/opamp-fleet/server-ca.pem
-wrote /var/lib/opamp-fleet/supervisor.toml
+copied /var/lib/classis/server-ca.pem
+wrote /var/lib/classis/supervisor.toml
 enrolling with wss://fleet.example.com/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
 INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-enrolled: the issued certificate is in /var/lib/opamp-fleet/state
-installed opamp-fleet
+enrolled: the issued certificate is in /var/lib/classis/state
+installed classis
 …
 ```
 
@@ -925,15 +925,15 @@ nothing. Each question offers what the file holds as its default, so Enter keeps
 it; afterwards restart the service to apply what changed:
 
 ```console
-$ opamp-fleet service config                       # root / Administrator
-Editing /var/lib/opamp-fleet/supervisor.toml — Enter keeps the value shown (everything not asked stays as it is).
+$ classis service config                       # root / Administrator
+Editing /var/lib/classis/supervisor.toml — Enter keeps the value shown (everything not asked stays as it is).
 Server OpAMP endpoint [wss://fleet.example.com/v1/opamp]:
 This Agent's name (service.instance.name) [host-01]: web-01
-CA certificate of the Server — the CA that signed its certificate (PEM path) [/var/lib/opamp-fleet/server-ca.pem]:
+CA certificate of the Server — the CA that signed its certificate (PEM path) [/var/lib/classis/server-ca.pem]:
 enrolled: this Client holds a certificate the Server issued
 Package verification key (hex Ed25519 public key; - removes it) [3b6a27bc…]:
-copied /var/lib/opamp-fleet/server-ca.pem
-wrote /var/lib/opamp-fleet/supervisor.toml
+copied /var/lib/classis/server-ca.pem
+wrote /var/lib/classis/supervisor.toml
 restart the service to apply: supervisor service stop && supervisor service start
 ```
 
@@ -1002,10 +1002,10 @@ Where there is an answer but no terminal — a provisioning run, an MSI dialog, 
 `%post` script — `--endpoint` writes the same file without asking:
 
 ```console
-$ opamp-fleet service install --endpoint wss://fleet.example.com/v1/opamp
-wrote /var/lib/opamp-fleet/supervisor.toml for wss://fleet.example.com/v1/opamp
-warning: /var/lib/opamp-fleet/supervisor.toml: [tls] cert_file and key_file are required — … The service is registered, and refuses to start until this is set (or re-run with --interactive).
-installed opamp-fleet
+$ classis service install --endpoint wss://fleet.example.com/v1/opamp
+wrote /var/lib/classis/supervisor.toml for wss://fleet.example.com/v1/opamp
+warning: /var/lib/classis/supervisor.toml: [tls] cert_file and key_file are required — … The service is registered, and refuses to start until this is set (or re-run with --interactive).
+installed classis
 …
 ```
 
@@ -1017,11 +1017,11 @@ particular, an existing file is kept.
 ### Installing from a native package
 
 A release also ships a `.deb`, an `.rpm` and an `.msi`. They deliver the binary
-to `/usr/libexec/opamp-fleet` (Windows: the folder you choose) and then run
+to `/usr/libexec/classis` (Windows: the folder you choose) and then run
 `service install` themselves — the layout, the unit and the SCM entry are the
 same ones this page describes, because they are made by the same command. No
 package ships a unit file of its own. What lands on `PATH` —
-`/usr/bin/opamp-fleet` — is a symlink through the layout's `current` pointer, so
+`/usr/bin/classis` — is a symlink through the layout's `current` pointer, so
 the command you type is always the binary the service runs.
 
 ```sh
@@ -1034,8 +1034,8 @@ with no configuration holds no client certificate, and it is refused at startup.
 Two steps remain:
 
 ```sh
-sudo opamp-fleet service install --interactive
-sudo systemctl start opamp-fleet
+sudo classis service install --interactive
+sudo systemctl start classis
 ```
 
 The first asks for the endpoint, the client certificate and its key, and the
@@ -1044,13 +1044,13 @@ add the certificate and its key. An upgrade of a host whose service was running
 restarts it on the delivered binary.
 
 **The `.deb` and the `.rpm` run the service under the system account
-`opamp-fleet`.** The post-install creates it where it is missing — no password,
+`classis`.** The post-install creates it where it is missing — no password,
 `/usr/sbin/nologin`, the data root as its home — and passes
-`--run-as opamp-fleet` only when no unit is registered yet. Every upgrade runs
+`--run-as classis` only when no unit is registered yet. Every upgrade runs
 `service install` without the flag, which keeps the account the unit names, so a
 host moved to another account or to root with `--run-as` stays there. A host
 that already ran as root before the packages created the account stays root;
-move it with `sudo opamp-fleet service install --run-as opamp-fleet` and a
+move it with `sudo classis service install --run-as classis` and a
 restart. No removal, not even a purge, deletes the account. See
 [Running it under its own account](#running-it-under-its-own-account) for what
 an account cannot do and how to grant it.
@@ -1062,9 +1062,9 @@ fleet's files in a directory and name it:
 
 ```console
 $ sudo dnf install -y ./supervisor_1.2.3_linux_amd64.rpm
-$ sudo opamp-fleet service install --endpoint wss://fleet.example.com:4320/v1/opamp \
+$ sudo classis service install --endpoint wss://fleet.example.com:4320/v1/opamp \
     --fleet-files /root/fleet --bootstrap-password-file /root/fleet/bootstrap.pass
-$ sudo systemctl start opamp-fleet
+$ sudo systemctl start classis
 ```
 
 The second step waits for an operator's approval, as every enrolment does; run
@@ -1076,20 +1076,20 @@ On Windows the `.msi` asks for the installation folder, the endpoint, and the
 self-update consent. The endpoint field is prefilled with
 `wss://127.0.0.1:4320/v1/opamp` in the interactive install only. The folder
 holds only the delivered program; `service install` puts the layout,
-`supervisor.toml` and the state under `%ProgramData%\opamp-fleet`. The same file
+`supervisor.toml` and the state under `%ProgramData%\classis`. The same file
 installs unattended with the same answers, which is how Intune, Group Policy and
 SCCM deploy it:
 
 ```sh
 C:\> msiexec /i supervisor_1.2.3_windows_amd64.msi /qn ^
-       INSTALLFOLDER="C:\Program Files\opamp-fleet" ^
+       INSTALLFOLDER="C:\Program Files\classis" ^
        ENDPOINT="wss://fleet.example.com/v1/opamp"
 ```
 
 A silent install that names no `ENDPOINT` writes no configuration. The MSI asks
 for no client identity, because the certificate and its key are files you put on
 the host, and it starts no service. Name them as `cert_file` and `key_file`
-under `[tls]` in `%ProgramData%\opamp-fleet\supervisor.toml`, then start the
+under `[tls]` in `%ProgramData%\classis\supervisor.toml`, then start the
 service.
 
 Two things to know about living with a packaged install:
@@ -1099,7 +1099,7 @@ Two things to know about living with a packaged install:
   ([Updating the Client itself](#updating-the-client-itself)) the service runs
   the binary under `<root>/current/`, which no package manager owns — that
   separation is what keeps the next `apt upgrade` from silently reverting the
-  Server's decision. `opamp-fleet --version` goes through `current` and answers
+  Server's decision. `classis --version` goes through `current` and answers
   for the running binary, as does the fleet view; those two are the truth.
 - **Removing the package stops and unregisters the service and uninstalls every
   staged version.** `versions/` and the `current` pointer go with the package;
@@ -1117,23 +1117,23 @@ macOS has no native installer; there, unpack the `.tar.gz` and run
 One name on every platform, and it is the **product's** name — not the
 program's:
 
-| Platform            | Service                       |
-| ------------------- | ----------------------------- |
-| **Linux** (systemd) | `opamp-fleet.service`         |
-| **macOS** (launchd) | `opamp-fleet` (job and plist) |
-| **Windows** (SCM)   | `opamp-fleet`                 |
+| Platform            | Service                   |
+| ------------------- | ------------------------- |
+| **Linux** (systemd) | `classis.service`         |
+| **macOS** (launchd) | `classis` (job and plist) |
+| **Windows** (SCM)   | `classis`                 |
 
-So the same command works everywhere it exists: `systemctl status opamp-fleet`,
-`launchctl list opamp-fleet`, `sc query opamp-fleet`. Where a
+So the same command works everywhere it exists: `systemctl status classis`,
+`launchctl list classis`, `sc query classis`. Where a
 [process account](#managed-processes-under-a-process-account) is registered, the
-second service is `opamp-fleet-agents` on every platform.
+second service is `classis-agents` on every platform.
 
 The name is fixed when the program is built, which is why there is no flag to
 change it. A second Client on one host is a second build with its own product
 name, and it therefore has its own service, its own package and its own
 directories — nothing about it collides with the first.
 
-Where a platform has a second, human-readable name, it is **OpAMP Fleet Agent**.
+Where a platform has a second, human-readable name, it is **Classis Agent**.
 That is the Windows services list; systemd shows the unit name as its
 `Description`, and a launchd job has no name besides its label.
 
@@ -1149,7 +1149,7 @@ A Client started by the service manager writes its own log to
 **On Windows this is the only copy there is** — the SCM discards a service's
 stderr, so `sc query` telling you the service will not start is all the platform
 itself offers. On Linux and macOS the same lines are also in
-`journalctl -u opamp-fleet` and Console/`log show`; the file is written anyway
+`journalctl -u classis` and Console/`log show`; the file is written anyway
 so the answer to "where are the logs" is the same everywhere, including in a
 container where neither exists.
 
@@ -1190,7 +1190,7 @@ is what explains those.
 The Windows services list has a **Description** column beside that name, and it
 is a separate field that nothing fills on its own — a service can carry a
 display name and still show an empty description, which is what this one did. It
-now reads **OpAMP Fleet Agent for Windows** — the display name beside it says
+now reads **Classis Agent for Windows** — the display name beside it says
 what the service is, and the description says what it is for.
 
 Both are set right after the registration, with `sc.exe config` and
@@ -1214,7 +1214,7 @@ manager up front whether this process may register a service at all, and stops
 with a message naming the fix if it may not:
 
 ```sh
-C:\> opamp-fleet service install
+C:\> classis service install
 the Windows service control manager denied access: registering a machine-wide service needs
 Administrator, and a running process cannot raise its own rights. Open a shell with "Run as
 administrator" — from PowerShell, `Start-Process powershell -Verb RunAs` — and run this command
@@ -1434,7 +1434,7 @@ structure by a different route.
 
 The process account stays in every case, after `apt purge` too: you created it,
 and you delete it once nothing else uses it. On Windows an uninstall that did
-not hold the install lock leaves `HKLM\SOFTWARE\opamp-fleet\WithdrawalPending`
+not hold the install lock leaves `HKLM\SOFTWARE\classis\WithdrawalPending`
 in place and says so; the next `service install` or `service uninstall`
 completes it (see [Uninstalling](#uninstalling)).
 
@@ -1623,7 +1623,7 @@ on the verification of an offered setting, or to anything else upstream. A
 whatever keys it holds, sends nothing from it, and says so once at startup:
 
 ```text
-WARN [auth] is ignored: the Server admits this Client by its client certificate alone, and nothing from the section is sent — it can be deleted from the file config=/var/lib/opamp-fleet/supervisor.toml
+WARN [auth] is ignored: the Server admits this Client by its client certificate alone, and nothing from the section is sent — it can be deleted from the file config=/var/lib/classis/supervisor.toml
 ```
 
 It is not refused, because a Client the Server updates starts with the file it
@@ -1643,11 +1643,11 @@ verification_key = "<hex-encoded Ed25519 public key>"
 archive_key = "the key an encrypted .7z was packed with"
 ```
 
-| Key                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `self_update`      | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. It takes effect only while `verification_key` is set. See [Updating the Client itself](#updating-the-client-itself).                                                                                                                                                                                                                                                                                      |
-| `verification_key` | **Required to take any package.** Every Server-offered package must carry a valid Ed25519 signature over its artifact, and the signature must verify against this key. Without it, no Agent of this Client declares `AcceptsPackages` — neither a Supervisor nor the Client's own Agent — and the Client says so once at startup. A package offered regardless is refused before anything is downloaded and reported `InstallFailed`, naming the key. A malformed key fails startup. Generate the key with `opamp-fleetctl package keygen` (see [the Server](server.md#packages-and-deployments-distributing-software)). |
-| `archive_key`      | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                                                                                                                                                                                                                                                                                                                                                                     |
+| Key                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `self_update`      | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. It takes effect only while `verification_key` is set. See [Updating the Client itself](#updating-the-client-itself).                                                                                                                                                                                                                                                                                  |
+| `verification_key` | **Required to take any package.** Every Server-offered package must carry a valid Ed25519 signature over its artifact, and the signature must verify against this key. Without it, no Agent of this Client declares `AcceptsPackages` — neither a Supervisor nor the Client's own Agent — and the Client says so once at startup. A package offered regardless is refused before anything is downloaded and reported `InstallFailed`, naming the key. A malformed key fails startup. Generate the key with `classisctl package keygen` (see [the Server](server.md#packages-and-deployments-distributing-software)). |
+| `archive_key`      | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Note what is _not_ here: which artifact a Supervisor receives is the Server's
 decision, expressed as the Deployment that holds the package, never a key in
@@ -2145,7 +2145,7 @@ one, is a Cargo feature named after its `type`, so a build for hosts that run
 only some of them leaves the others out:
 
 ```sh
-cargo build --release -p fleet-agent --no-default-features --features <type>
+cargo build --release -p classis-agent --no-default-features --features <type>
 ```
 
 `collector` and `command` are always there. A block naming a kind the build does
@@ -2540,7 +2540,7 @@ On an accepted offer the artifact is verified like any other, staged as a new
 version _beside_ the running one in the install layout, and proved by running
 `supervisor self-check` on it before the `current` pointer moves — which asks
 two things at once: does this binary run at all on this host, and is it actually
-an OpAMP Fleet Agent at the version offered. The process then shuts down exactly
+a Classis Agent at the version offered. The process then shuts down exactly
 as an ordinary stop does — Managed Processes stopped gracefully, the goodbyes
 sent — and exits, asking the service manager to restart it; it does not restart
 itself. A marker in `state_dir` carries the outcome across that restart: the new
@@ -2591,7 +2591,7 @@ reaches a Client only through a Deployment that holds it.
 release archive: a file named `supervisor_<version>_<os>_<arch>.tar.gz` fills
 the agent type, the version and the platform by itself. Press **OK**, add each
 further platform's archive with **＋ Add entry**, then press **Signing info**
-and sign the downloaded file with `opamp-fleetctl package sign --signing-info`
+and sign the downloaded file with `classisctl package sign --signing-info`
 ([Signing a whole Package at once](tools.md#signing-a-whole-package-at-once)),
 then **Import signing file** on the same tab. On the **Deployments** tab, add
 the Package to the channel, press **OK**, and press the row's **Roll out**.
@@ -2619,7 +2619,7 @@ release, and the content hash is what pins _which_ bytes arrived. What is
 **not** ignored is the pre-release: a `1.2.3-dev` build offered as `1.2.3` is
 refused, because a build heading for a release is not that release.
 
-`opamp-fleet --version` prints the full string on any host, which is what to
+`classis --version` prints the full string on any host, which is what to
 quote when asking which build a host runs.
 
 ## Connecting to the Server

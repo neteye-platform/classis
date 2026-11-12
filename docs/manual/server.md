@@ -57,14 +57,14 @@ server --config /etc/opamp/server.toml
 server --version
 ```
 
-| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--config <path>` | The TOML configuration file. Without it, the file `FLEET_SERVER_CONFIG` names; without both, `server.toml` in the working directory when it exists, and otherwise none — the Server then starts from its defaults and its environment ([Configuration from the environment](#configuration-from-the-environment)). A file named by `--config` or `FLEET_SERVER_CONFIG` that does not exist fails startup, naming the path. The defaults hold no `[tls]`, so a Server configured by nothing refuses to start and names `[tls]`. |
-| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                                                           |
+| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--config <path>` | The TOML configuration file. Without it, the file `CLASSIS_SERVER_CONFIG` names; without both, `server.toml` in the working directory when it exists, and otherwise none — the Server then starts from its defaults and its environment ([Configuration from the environment](#configuration-from-the-environment)). A file named by `--config` or `CLASSIS_SERVER_CONFIG` that does not exist fails startup, naming the path. The defaults hold no `[tls]`, so a Server configured by nothing refuses to start and names `[tls]`. |
+| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                                                               |
 
 Any other argument prints usage and exits with status 2. Logging goes to stderr
 and is controlled by the `RUST_LOG` environment variable (default `info`);
-everything else is in the configuration file and the `FLEET_SERVER__…` variables
+everything else is in the configuration file and the `CLASSIS_SERVER__…` variables
 over it. `server pki status` reads the same configuration, from the same places.
 
 Stopping the Server is `SIGTERM`/`Ctrl-C`. Configurations and packages are
@@ -76,7 +76,7 @@ refusal names what is missing. It also refuses an `[auth]` section, and a
 credential key in `[connection_offer]`: the Agent plane admits by client
 certificate alone (see
 [Upgrading to admission by certificate alone](#upgrading-to-admission-by-certificate-alone)).
-For a fleet, `opamp-fleetctl pki init` makes every certificate the Server and a
+For a fleet, `classisctl pki init` makes every certificate the Server and a
 new host need ([Setting up a fleet](setup.md#1-make-the-certificates)); for a
 first run on one machine, [`scripts/dev-pki.sh`](../../scripts/dev-pki.sh) makes
 a development set with it, and a `server.toml` that uses it; the
@@ -127,16 +127,16 @@ already held keep working. See
 ### In a container
 
 The Server ships as an image and nowhere else:
-`ghcr.io/mbrigl/opamp-fleet-server`, for `linux/amd64` and `linux/arm64`, tagged
+`ghcr.io/neteye-platform/classis-server`, for `linux/amd64` and `linux/arm64`, tagged
 with each release's exact version and with nothing else — there is no `latest`.
 Deploy it **by its digest**, which the release notes name, not by its tag: the
 attestation names the digest, and a tag is only a name for it. Verify the digest
 before you deploy it:
 
 ```console
-$ gh attestation verify oci://ghcr.io/mbrigl/opamp-fleet-server@sha256:<digest> \
-    --repo mbrigl/opamp-fleet \
-    --signer-workflow mbrigl/opamp-fleet/.github/workflows/release.yml
+$ gh attestation verify oci://ghcr.io/neteye-platform/classis-server@sha256:<digest> \
+    --repo neteye-platform/classis \
+    --signer-workflow neteye-platform/classis/.github/workflows/release.yml
 ```
 
 The image holds the binary the release built and checked for its version, on
@@ -146,15 +146,15 @@ asset `server_<version>_linux_<arch>.cdx.json` for the image's architecture; the
 base's own packages are not in it and are named by the
 `org.opencontainers.image.base.digest` annotation.
 
-| Property                                   | Value                                                                                                                                           |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Entrypoint                                 | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                    |
-| User                                       | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                |
-| Data directory                             | `/var/lib/opamp-fleet`, a volume owned by `65532`                                                                                               |
-| Working directory                          | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                        |
-| Ports                                      | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                |
-| Environment it sets                        | `FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet`, `FLEET_SERVER__LISTEN=0.0.0.0:4320`, `FLEET_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
-| Configuration, certificates, keys, secrets | none; you mount them as files                                                                                                                   |
+| Property                                   | Value                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entrypoint                                 | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                      |
+| User                                       | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                  |
+| Data directory                             | `/var/lib/classis`, a volume owned by `65532`                                                                                                     |
+| Working directory                          | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                          |
+| Ports                                      | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                  |
+| Environment it sets                        | `CLASSIS_SERVER__DATA_DIR=/var/lib/classis`, `CLASSIS_SERVER__LISTEN=0.0.0.0:4320`, `CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
+| Configuration, certificates, keys, secrets | none; you mount them as files                                                                                                                     |
 
 Because both planes listen off the loopback inside the container, the Server
 requires `[tls]` and `[rest.auth]` there. The image carries neither, so started
@@ -165,12 +165,12 @@ configuration. The image works with a read-only root filesystem; the Server
 writes under its data directory alone.
 
 ```console
-$ docker run -d --name opamp-fleet-server --read-only \
+$ docker run -d --name classis-server --read-only \
     -p 4320:4320 -p 4321:4321 \
-    -v opamp-fleet-data:/var/lib/opamp-fleet \
-    -v /etc/opamp-fleet:/etc/opamp-fleet:ro \
-    ghcr.io/mbrigl/opamp-fleet-server@sha256:<digest> \
-    --config /etc/opamp-fleet/server.toml
+    -v classis-data:/var/lib/classis \
+    -v /etc/classis:/etc/classis:ro \
+    ghcr.io/neteye-platform/classis-server@sha256:<digest> \
+    --config /etc/classis/server.toml
 ```
 
 A bind mount for the data directory must be writable by UID `65532`. There is no
@@ -183,9 +183,9 @@ To build the image yourself from a checkout, on a system whose glibc is no newer
 than Debian 13's, copy the binary under the name the Containerfile expects:
 
 ```console
-$ cargo build --release -p fleet-server --bin server
+$ cargo build --release -p classis-server --bin server
 $ mkdir -p image && cp target/release/server image/server-linux-amd64
-$ docker buildx build --platform linux/amd64 --load -t opamp-fleet-server:dev \
+$ docker buildx build --platform linux/amd64 --load -t classis-server:dev \
     -f packaging/container/Containerfile image
 ```
 
@@ -201,15 +201,15 @@ being ignored.
 Every key can also be set by an environment variable, which is how a container
 is configured without a file. The configuration is built from the defaults, then
 the file, then the variables, each later one winning per key. A variable is
-`FLEET_SERVER__` followed by the key's path, its segments joined by `__` and
+`CLASSIS_SERVER__` followed by the key's path, its segments joined by `__` and
 upper-cased:
 
 ```console
-FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet
-FLEET_SERVER__TLS__CERT_FILE=/run/secrets/server.pem
-FLEET_SERVER__REST__LISTEN=0.0.0.0:4321
-FLEET_SERVER__CONNECTION_OFFER__HEARTBEAT_INTERVAL_SECS=30
-FLEET_SERVER__REST__AUTH__BASIC_USERS_FILE=/run/secrets/basic-users.toml
+CLASSIS_SERVER__DATA_DIR=/var/lib/classis
+CLASSIS_SERVER__TLS__CERT_FILE=/run/secrets/server.pem
+CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321
+CLASSIS_SERVER__CONNECTION_OFFER__HEARTBEAT_INTERVAL_SECS=30
+CLASSIS_SERVER__REST__AUTH__BASIC_USERS_FILE=/run/secrets/basic-users.toml
 ```
 
 - **A value is a TOML value.** `30` is an integer, `true` a boolean,
@@ -217,8 +217,8 @@ FLEET_SERVER__REST__AUTH__BASIC_USERS_FILE=/run/secrets/basic-users.toml
   A value that is not TOML is the string it is, so a path needs no quotes; a
   string that looks like another type is quoted: `"1234"`.
 - **A variable is checked as strictly as a key.** One that names no key, has an
-  empty segment (`FLEET_SERVER__REST____TLS`), or holds a value of the wrong
-  type fails startup, naming the variable. So does any `FLEET_SERVER__…`
+  empty segment (`CLASSIS_SERVER__REST____TLS`), or holds a value of the wrong
+  type fails startup, naming the variable. So does any `CLASSIS_SERVER__…`
   variable in the environment of a process that starts the Server.
 - **The environment carries paths to secrets, never secrets.** Every secret is a
   file named by a `*_file` key. The two tables keyed by names you choose,
@@ -229,7 +229,7 @@ FLEET_SERVER__REST__AUTH__BASIC_USERS_FILE=/run/secrets/basic-users.toml
   at `info`, the name of every key a variable set, and never its value. A key
   set in both places takes the variable's value.
 
-`FLEET_SERVER_CONFIG`, with one underscore, names the file and sets no key. No
+`CLASSIS_SERVER_CONFIG`, with one underscore, names the file and sets no key. No
 other variable configures the Server.
 
 ### Top level
@@ -309,9 +309,9 @@ checks every entry's signature — as feedback, never as a gate.
 verification_key = "<hex-encoded Ed25519 public key>"
 ```
 
-| Key                | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verification_key` | unset   | The hex-encoded Ed25519 public key — the same value as the Clients' `[packages] verification_key`, as `opamp-fleetctl package keygen` prints it. With it, each entry's signature is checked when it is written and when the store is loaded, and reported `valid` or `invalid`; without it, `unchecked`. An `invalid` signature is stored and offered all the same: each Client's own check decides what is installed. A key that is not hex, or not 32 bytes, fails startup naming it. |
+| Key                | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verification_key` | unset   | The hex-encoded Ed25519 public key — the same value as the Clients' `[packages] verification_key`, as `classisctl package keygen` prints it. With it, each entry's signature is checked when it is written and when the store is loaded, and reported `valid` or `invalid`; without it, `unchecked`. An `invalid` signature is stored and offered all the same: each Client's own check decides what is installed. A key that is not hex, or not 32 bytes, fails startup naming it. |
 
 ### `[blobs]`
 
@@ -621,8 +621,8 @@ stopped, with the `server.toml` that names the database in
 [`[database]`](#database):
 
 ```sh
-server migrate-to-postgres --from /var/lib/opamp-fleet/fleet-data \
-    --data-dir /var/lib/opamp-fleet/fleet-data-pg --config /etc/opamp-fleet/server.toml
+server migrate-to-postgres --from /var/lib/classis/fleet-data \
+    --data-dir /var/lib/classis/fleet-data-pg --config /etc/classis/server.toml
 ```
 
 - It refuses a database that holds any of the Server's tables, and a
@@ -659,9 +659,9 @@ reads neither: a `server.toml` naming either key stops it at startup.
    it refuses a `data_dir` that is not empty:
 
    ```text
-   $ server migrate --config-dir /var/lib/opamp-fleet-server/configs \
-       --packages-dir /var/lib/opamp-fleet-server/packages \
-       --data-dir /var/lib/opamp-fleet-server/data
+   $ server migrate --config-dir /var/lib/classis-server/configs \
+       --packages-dir /var/lib/classis-server/packages \
+       --data-dir /var/lib/classis-server/data
    ```
 
    It copies and never moves: the old directories stay as they were, as your
@@ -699,7 +699,7 @@ reads neither: a `server.toml` naming either key stops it at startup.
    open — then empty the new directory, fix what it named, and run it again.
 
 3. **Edit `server.toml`**: remove `config_dir` and `packages_dir`, and set
-   `data_dir = "/var/lib/opamp-fleet-server/data"`.
+   `data_dir = "/var/lib/classis-server/data"`.
 4. **Start the Server**, put each listed Configuration into its Deployment, sign
    any entry named unsigned, and roll the Deployments out. Keep the old
    directories until you are satisfied, then delete them.
@@ -926,7 +926,7 @@ keeps the file, and hands it out as often as it is asked, until the certificate
 ends or is revoked. It keeps the certificate's serial, subject, key fingerprint
 and end beside it. The answer carries the certificate and no `private_key_pem`,
 with `Cache-Control: no-store`. A host or a tool that needs the pair as PEM
-takes it out of the file with `opamp-fleetctl pki p12-extract`
+takes it out of the file with `classisctl pki p12-extract`
 ([`pki`](tools.md#pki)).
 
 A short password is quicker to break offline. Eight characters are out of
@@ -944,7 +944,7 @@ $ cat request.json        # written with an editor, so the password stays out of
  "validity_days": 14, "password": "correct horse battery staple"}
 $ curl --cacert ca.pem -X POST -H 'Content-Type: application/json' -d @request.json \
        https://127.0.0.1:4321/api/v1/bootstrap-certificates
-{"serial":"6723…","subject":"C=AT, O=Example Customer, OU=Vienna, organizationIdentifier=K-4711, CN=OpAMP Fleet Bootstrap Certificate",
+{"serial":"6723…","subject":"C=AT, O=Example Customer, OU=Vienna, organizationIdentifier=K-4711, CN=Classis Bootstrap Certificate",
  "not_before_ms":…,"not_after_ms":…,"certificate_pem":"-----BEGIN CERTIFICATE-----…"}
 $ curl --cacert ca.pem -o bootstrap.p12 \
        https://127.0.0.1:4321/api/v1/bootstrap-certificates/6723…/p12
@@ -994,7 +994,7 @@ elsewhere offers nothing to save.
 
 ```console
 $ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/bootstrap-certificates
-[{"serial":"6723…","subject":"O=Example Customer, OU=Vienna, CN=OpAMP Fleet Bootstrap Certificate",
+[{"serial":"6723…","subject":"O=Example Customer, OU=Vienna, CN=Classis Bootstrap Certificate",
   "key_fingerprint":"…","issued_ms":…,"not_after_ms":…,"revoked":false,"p12":true}]
 ```
 
@@ -1175,8 +1175,8 @@ listed and approved by:
 
 ```console
 $ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/certificates
-[{"authority":"client","issuer":"CN=OpAMP Fleet Client CA","serial":"5c0f…",
-  "subject":"CN=OpAMP Fleet Client Certificate",
+[{"authority":"client","issuer":"CN=Classis Client CA","serial":"5c0f…",
+  "subject":"CN=Classis Client Certificate",
   "key_fingerprint":"…","not_after_ms":1797772400000,"instance_uid":"0192…",
   "issued_ms":1789996400000,"predecessor":{"authority":"client","serial":"41ab…"},
   "host":"0192…"}]
@@ -1248,10 +1248,10 @@ certificate, a WebSocket session every time. No line holds a secret in any form
 operator presented it or an Agent sent it unasked — nor a key or a CSR body.
 
 ```console
-$ tail -n1 /var/lib/opamp-fleet-server/audit/audit-1.jsonl
+$ tail -n1 /var/lib/classis-server/audit/audit-1.jsonl
 {"event":"revocation.revoked","id":"9d2e…","kind":"certificate","authority":"client",
  "serial":"5c0f…","outcome":"revoked","prev":"41b7…","seq":5113,"time":"2026-10-04T09:12:44Z"}
-$ server audit-verify /var/lib/opamp-fleet-server/audit
+$ server audit-verify /var/lib/classis-server/audit
 5113 entries in 1 files, the chain holds
 ```
 
@@ -1468,7 +1468,7 @@ request for a package anywhere; a Client fetches from its own Server's origin
 alone (see [the Client](client.md#where-a-download-may-come-from)).
 
 **Sign each entry** on its own route, with the hex signature
-`opamp-fleetctl package sign` prints:
+`classisctl package sign` prints:
 
 ```console
 $ curl --cacert ca.pem -X PUT -H 'Content-Type: application/json' -d "{\"signature\": \"$sig\"}" \
@@ -1681,9 +1681,9 @@ Deployment, or forget them, first. Nothing is uninstalled by any of them.
 artifact, hashes it, and signs it:
 
 ```console
-$ opamp-fleetctl package pack --out promtail-3.0.0.tar.gz ./promtail   # prints the sha256
-$ opamp-fleetctl package keygen --out fleet-signing.pk8                # prints the public key
-$ sig=$(opamp-fleetctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
+$ classisctl package pack --out promtail-3.0.0.tar.gz ./promtail   # prints the sha256
+$ classisctl package keygen --out fleet-signing.pk8                # prints the public key
+$ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
       promtail-3.0.0.tar.gz)
 ```
 
@@ -2087,7 +2087,7 @@ flag:
 
 ```sh
 curl --cacert ca.pem -u "fleet-admin:$PASSWORD" https://127.0.0.1:4321/api/v1/agents
-opamp-fleetctl package fetch … --server "https://fleet-admin:$PASSWORD@127.0.0.1:4321"
+classisctl package fetch … --server "https://fleet-admin:$PASSWORD@127.0.0.1:4321"
 ```
 
 Two limits worth stating plainly. It is **authentication, not authorization**:

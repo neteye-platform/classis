@@ -2,9 +2,9 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-03
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `Cargo.toml` `[workspace.package] version`,
-  `crates/fleet-core/build.rs`, `crates/fleet-core/src/version.rs`, the
+  `crates/classis-core/build.rs`, `crates/classis-core/src/version.rs`, the
   `version` job of `.github/workflows/release.yml`, and every surface that
   states, compares or displays a version
 
@@ -52,9 +52,9 @@ Forces:
 
 We will take the version number from `Cargo.toml`, resolve the full version
 string once at compile time in the build script of the internal shared crate,
-`fleet-core` — the number, a `-dev` pre-release unless HEAD carries the matching
+`classis-core` — the number, a `-dev` pre-release unless HEAD carries the matching
 `version/*` tag, and the commit as build metadata — read it everywhere through
-`fleet_core::version::current()`, let the release pipeline create the tag from
+`classis_core::version::current()`, let the release pipeline create the tag from
 the file, and treat the build metadata as provenance that is recorded everywhere
 and compared nowhere.
 
@@ -87,17 +87,17 @@ and compared nowhere.
    7 hex characters of HEAD's commit id. Nothing time-dependent enters the
    string, so rebuilding a commit reproduces the byte-identical version.
 
-4. **The resolution runs in `crates/fleet-core/build.rs`, through `git2`, with
+4. **The resolution runs in `crates/classis-core/build.rs`, through `git2`, with
    no `git` binary.** The script discovers the repository upward from the
    manifest directory, reads HEAD and the `refs/tags/version/*` references, and
    emits `cargo:rustc-env=OPAMP_PRODUCT_RELEASE=<full string>` with
    `rerun-if-changed` on the repository's `HEAD`, `refs` and `packed-refs` and
    `rerun-if-env-changed=OPAMP_PRODUCT_VERSION`. `git2` (libgit2, vendored and
-   statically built) is a **build**-dependency of `fleet-core` only: nothing of
+   statically built) is a **build**-dependency of `classis-core` only: nothing of
    it reaches a shipped binary, nothing parses CLI output, and the result does
    not vary with the host's git version or locale.
 
-5. **`fleet_core::version::current()` is the one version helper, on both ends.**
+5. **`classis_core::version::current()` is the one version helper, on both ends.**
    Every surface that states a version calls it, so all agree: the OpAMP
    `service.version` attribute, both CLIs' `--version` (clap's `version` is
    wired to it explicitly, because clap's default would report
@@ -126,7 +126,7 @@ and compared nowhere.
    `dry_run` input, `true` by default: it builds and packs every target and
    stops. A `-dev` version is expected there and only there.
 
-9. **One parser, in the internal shared crate.** `fleet_core::version::parse`
+9. **One parser, in the internal shared crate.** `classis_core::version::parse`
    splits a version string into its `MAJOR.MINOR.PATCH` base, an optional
    pre-release and optional build metadata. It refuses a string that does not
    begin with three numeric components, leading zeros, and any pre-release or
@@ -137,7 +137,7 @@ and compared nowhere.
    refusal
    ([ADR-0018](0018-the-client-updates-itself-under-its-own-agent-type.md)) and
    the rollout ([ADR-0025](0025-rollout-and-what-reaches-an-agent.md)) order by.
-   It lives in `fleet-core` because the Client writes these strings and the
+   It lives in `classis-core` because the Client writes these strings and the
    Server displays them, and it is this project's grammar, not OpAMP's.
 
 10. **A version's identity is its base and its pre-release; the build metadata
@@ -213,7 +213,7 @@ wanted.
   breaks reproducibility.
 - **Reading the version at runtime** — the reported version would describe the
   deployment, and a copied binary would change identity.
-- **A second `build.rs` in `crates/fleet-server`, or an `include!`d shared
+- **A second `build.rs` in `crates/classis-server`, or an `include!`d shared
   fragment** — duplicates the tag grammar and the failure modes where they can
   drift. **A crate holding only build support** — a further crate for one
   function, where a shared crate already sits between the two ends
@@ -230,7 +230,7 @@ wanted.
 - **Leave `service_version` holding the full string and add a base field beside
   it** — leaves a field called `service_version` holding something nobody would
   call a version.
-- **Name the variables for this project (`OPAMP_FLEET_VERSION`,
+- **Name the variables for this project (`CLASSIS_VERSION`,
   `OPAMP_BUILD_VERSION`)** — a variant build (ADR-0019 clause 2) would set a
   variable that names a product it is not, and a _build_ version beside a
   _fleet_ version does not say which is the input and which the result.
@@ -277,7 +277,7 @@ wanted.
 - Negative / trade-offs: `git2` compiles vendored libgit2 for the build script,
   lengthening cold builds and requiring a C compiler on build hosts (which
   `ring` already requires); because the shared crate bakes the version, every
-  commit rebuilds `fleet-core` and both binaries, and a Server-only build
+  commit rebuilds `classis-core` and both binaries, and a Server-only build
   compiles libgit2 too. A build outside a git checkout fails.
 - Negative / trade-offs: the drift between file and tag is caught rather than
   prevented; a forgotten bump is a failed run. A release cannot be re-run once
@@ -292,16 +292,16 @@ wanted.
 
 ## Enforcement
 
-- `crates/fleet-core/src/version.rs` reads `OPAMP_PRODUCT_RELEASE` through
+- `crates/classis-core/src/version.rs` reads `OPAMP_PRODUCT_RELEASE` through
   `env!`, so a build script that emits another name fails the compilation, and
   the self-update end-to-end tests in
-  `crates/fleet-agent/tests/self_update_e2e.rs` build their newer Client with
+  `crates/classis-agent/tests/self_update_e2e.rs` build their newer Client with
   `OPAMP_PRODUCT_VERSION` and fail when the override is not read, because that
   Client then reports no upgrade.
-- `crates/fleet-core/build.rs` fails the build on a malformed `Cargo.toml`
+- `crates/classis-core/build.rs` fails the build on a malformed `Cargo.toml`
   version or override, on a `version/*` tag on HEAD that names another version,
   and outside a git repository.
-- `crates/fleet-core/src/version.rs` tests:
+- `crates/classis-core/src/version.rs` tests:
   `the_baked_version_has_the_prescribed_shape`,
   `takes_apart_the_shapes_this_project_produces`,
   `a_release_matches_the_build_that_carries_it`,
@@ -310,17 +310,17 @@ wanted.
   `a_version_that_would_escape_a_path_is_refused`,
   `leading_zeros_are_not_a_version`,
   `precedence_orders_versions_by_semver_rules`.
-- `crates/fleet-server/tests/version_flag.rs`
+- `crates/classis-server/tests/version_flag.rs`
   (`the_version_flag_prints_the_baked_version_and_nothing_of_its_own`,
   `the_baked_version_says_more_than_the_manifest_does`) and
-  `crates/fleet-agent/src/cli.rs`
+  `crates/classis-agent/src/cli.rs`
   `the_version_flag_reports_the_baked_in_version` hold both CLIs to `current()`.
-- `crates/fleet-agent/src/update/installer.rs` probe tests:
+- `crates/classis-agent/src/update/installer.rs` probe tests:
   `the_probe_ignores_the_commit_a_build_came_from`,
   `the_probe_refuses_a_development_build_offered_as_a_release`,
   `the_probe_refuses_a_client_of_the_wrong_version`,
   `the_probe_refuses_an_offer_that_is_not_a_version`.
-- `crates/fleet-server/src/fleet.rs`
+- `crates/classis-server/src/fleet.rs`
   `the_displayed_version_drops_the_commit_and_keeps_the_pre_release`.
 - The `version` job of
   [`.github/workflows/release.yml`](../../.github/workflows/release.yml): the

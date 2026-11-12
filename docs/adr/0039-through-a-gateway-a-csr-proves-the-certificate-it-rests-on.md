@@ -5,23 +5,23 @@
   superseded by
   [ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the CSR handling on a member connection in
-  `crates/fleet-server/src/fleet.rs` (the host and predecessor a CSR is issued
-  to), the certificate register in `crates/fleet-server/src/revocation.rs`, the
-  renewal and bootstrap proofs and the reading of a CSR in `crates/fleet-core/`
-  and `crates/fleet-server/src/ca.rs`, the Client's renewal and enrolment CSR in
-  `crates/fleet-agent/src/csr.rs` and `crates/fleet-agent/src/service/enrol.rs`,
-  the requester an enrolment request is filed under in
-  `crates/fleet-server/src/enrolment.rs` and
-  `crates/fleet-server/src/transport.rs`, the admission throttle's buckets in
-  `crates/fleet-server/src/transport.rs` and
-  `crates/fleet-server/src/agent_rate.rs`, the downstream admission, the
+  `crates/classis-server/src/fleet.rs` (the host and predecessor a CSR is issued
+  to), the certificate register in `crates/classis-server/src/revocation.rs`, the
+  renewal and bootstrap proofs and the reading of a CSR in `crates/classis-core/`
+  and `crates/classis-server/src/ca.rs`, the Client's renewal and enrolment CSR
+  in `crates/classis-agent/src/csr.rs` and
+  `crates/classis-agent/src/service/enrol.rs`, the requester an enrolment
+  request is filed under in `crates/classis-server/src/enrolment.rs` and
+  `crates/classis-server/src/transport.rs`, the admission throttle's buckets in
+  `crates/classis-server/src/transport.rs` and
+  `crates/classis-server/src/agent_rate.rs`, the downstream admission, the
   enrolling peer, the forwarding and routing of reports and replies and the
-  bindings in `crates/fleet-agent/src/gateway/`, the host derived for a
-  certificate that names none in `crates/fleet-core/src/host.rs`, the
+  bindings in `crates/classis-agent/src/gateway/`, the host derived for a
+  certificate that names none in `crates/classis-core/src/host.rs`, the
   `[gateway.tls]` section of `supervisor.toml` and its parsing in
-  `crates/fleet-agent/src/config.rs`, and every document that tells an operator
+  `crates/classis-agent/src/config.rs`, and every document that tells an operator
   what a Gateway passes on, how an Agent behind one renews its certificate, or
   how a host behind one enrols
 - **Supersedes:**
@@ -362,7 +362,7 @@ the Server decides as any enrolment.
 
 13. **Restates ADR-0013 clause 22. Which bucket a message or a download is
     counted in.** The key comes from the certificate admission proved (`Proofs`
-    in [`transport.rs`](../../crates/fleet-server/src/transport.rs)):
+    in [`transport.rs`](../../crates/classis-server/src/transport.rs)):
 
 - **A certificate that names a host:** that host.
 - **A member's certificate that names no host** (one an operator provisioned
@@ -463,11 +463,11 @@ address.
 
 ## Sources / Prior art
 
-- The code as it stood: `renews` in `crates/fleet-server/src/fleet.rs` fell back
+- The code as it stood: `renews` in `crates/classis-server/src/fleet.rs` fell back
   to the presented certificate's host; `forward_from_socket` and
-  `forward_exchange` in `crates/fleet-agent/src/gateway/mod.rs` forwarded
+  `forward_exchange` in `crates/classis-agent/src/gateway/mod.rs` forwarded
   without consulting the binding that `PackageCache::bind` already held;
-  `renewal_proof` and `sign` in `crates/fleet-server/src/ca.rs` read one CSR
+  `renewal_proof` and `sign` in `crates/classis-server/src/ca.rs` read one CSR
   through x509-parser's and the `pem` crate's PEM readers, which select
   different blocks of a crafted input.
 - The OpAMP specification's Agent-initiated CSR flow: the Agent requests, and

@@ -2,11 +2,11 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
-- **Applies to:** the pending queue in `crates/fleet-server/src/enrolment.rs`
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the pending queue in `crates/classis-server/src/enrolment.rs`
   and its answer on an enrolment connection in
-  `crates/fleet-server/src/transport.rs`, the `[enrolment]` section of
-  `server.toml` and its parsing in `crates/fleet-server/src/config.rs`, and
+  `crates/classis-server/src/transport.rs`, the `[enrolment]` section of
+  `server.toml` and its parsing in `crates/classis-server/src/config.rs`, and
   every document that tells an operator how many requests may wait
 - **Supersedes:**
   [ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
@@ -20,7 +20,7 @@ file a CSR, and the CSR waits in a pending queue for an operator
 clause 21). The queue is keyed by the request's public key, so a re-sent CSR
 joins its own entry. It holds at most 1024 requests in all, and nothing counts
 them per bootstrap certificate (`MAX_PENDING` in
-`crates/fleet-server/src/enrolment.rs`). One connection may file a request for
+`crates/classis-server/src/enrolment.rs`). One connection may file a request for
 one key after another.
 
 Whoever holds one bootstrap certificate can therefore fill the whole queue with
@@ -87,11 +87,11 @@ enrolment through a Gateway.
 ## Sources / Prior art
 
 - The code as it stands: `MAX_PENDING` and `submit` in
-  `crates/fleet-server/src/enrolment.rs`; `enrol` in
-  `crates/fleet-server/src/transport.rs`, which files one request per CSR
+  `crates/classis-server/src/enrolment.rs`; `enrol` in
+  `crates/classis-server/src/transport.rs`, which files one request per CSR
   whatever key it names.
 - The bootstrap certificate's `CertId` is already part of every request's
-  `Requester` (`crates/fleet-server/src/enrolment.rs`), and revocation already
+  `Requester` (`crates/classis-server/src/enrolment.rs`), and revocation already
   withdraws by it.
 
 ## Consequences

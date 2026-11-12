@@ -49,7 +49,7 @@
           string, and [name] would be replaced by the property of that name.
         -->
         <Control Id="IdentityNote" Type="Text" X="20" Y="160" Width="320" Height="44" NoPrefix="yes"
-                 Text="The client certificate and its key — a bootstrap certificate to enrol with, or one already issued — are files you put on this host. Name them as cert_file and key_file in the tls section of %ProgramData%\opamp-fleet\supervisor.toml afterwards, or run &quot;supervisor service config&quot; from an elevated prompt to enrol this host." />
+                 Text="The client certificate and its key — a bootstrap certificate to enrol with, or one already issued — are files you put on this host. Name them as cert_file and key_file in the tls section of %ProgramData%\classis\supervisor.toml afterwards, or run &quot;supervisor service config&quot; from an elevated prompt to enrol this host." />
 
         <Control Id="StartNote" Type="Text" X="20" Y="207" Width="320" Height="25" NoPrefix="yes"
                  Text="The service is registered but not started, so that a Client which is not yet fully configured never runs against the wrong Server." />

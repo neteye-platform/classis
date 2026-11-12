@@ -3,15 +3,15 @@
 - **Status:** 🟢 accepted · clause 1 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** every read, write, rename, removal, mode change and ownership
   change `service install` and `service config` make in the data root, the state
-  directory and the layout root in `crates/fleet-agent/src/main.rs`,
-  `crates/fleet-agent/src/service/layout.rs` and
-  `crates/fleet-agent/src/service/run_as.rs`, the state the Client keeps in
-  `crates/fleet-agent/src/storage.rs`, `crates/fleet-agent/src/csr.rs`,
-  `crates/fleet-agent/src/connection.rs` and `crates/fleet-agent/src/tls.rs`,
-  and the adapter `crates/fleet-agent/src/nofollow.rs` they go through
+  directory and the layout root in `crates/classis-agent/src/main.rs`,
+  `crates/classis-agent/src/service/layout.rs` and
+  `crates/classis-agent/src/service/run_as.rs`, the state the Client keeps in
+  `crates/classis-agent/src/storage.rs`, `crates/classis-agent/src/csr.rs`,
+  `crates/classis-agent/src/connection.rs` and `crates/classis-agent/src/tls.rs`,
+  and the adapter `crates/classis-agent/src/nofollow.rs` they go through
 - **Supersedes:**
   [ADR-0042](0042-the-linux-packages-run-the-client-under-its-own-account.md)
   clause 2
@@ -299,7 +299,7 @@ placed.
 ## Enforcement
 
 The tests that will cite this ADR with `Verifies: ADR-0054`, in
-`crates/fleet-agent/tests/install_follows_no_link.rs` unless named otherwise:
+`crates/classis-agent/tests/install_follows_no_link.rs` unless named otherwise:
 
 - Unix:
   - A link at the pending key or the request is replaced by the request, and the
@@ -324,7 +324,7 @@ The tests that will cite this ADR with `Verifies: ADR-0054`, in
     refusal too.
   - A file symbolic link at the connection settings is replaced. The test fails
     when the run cannot create one.
-- `crates/fleet-agent/src/storage.rs`:
+- `crates/classis-agent/src/storage.rs`:
   - No entry is lost to another entry's temporary name.
   - A replaced entry is the runtime's own and owner-only.
 - The hand-over's tests of ADR-0042 clause 2

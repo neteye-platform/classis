@@ -1,4 +1,4 @@
-# Specification — OpAMP Fleet
+# Specification — Classis
 
 > The **specification** of this project: the problem it solves, where it is
 > going, and the vocabulary everyone (humans and agents) must use. This document
@@ -26,7 +26,7 @@ slice of it is. Third, implementations tend to cover a convenient **subset** of
 the protocol and leave the rest undone and undocumented, so an operator cannot
 tell what a given pairing of Server and Client will actually do.
 
-**OpAMP Fleet** is a Rust implementation that closes all three: the Server, a
+**Classis** is a Rust implementation that closes all three: the Server, a
 Client that manages OpAMP-native and non-OpAMP processes alike behind the same
 protocol, and a written record of exactly how much of the protocol each end
 implements.
@@ -460,7 +460,7 @@ Use these exact words in code, comments, documentation, and ADRs.
 
 ## Non-Goals
 
-- **Being a telemetry backend.** OpAMP Fleet manages agents; it does not
+- **Being a telemetry backend.** Classis manages agents; it does not
   receive, store, or query the telemetry they produce.
 - **Replacing an agent's configuration language.** The Server distributes each
   Managed Process's own configuration; it does not invent an abstraction over

@@ -3,12 +3,12 @@
 - **Status:** 🟢 accepted · clause 5 superseded by
   [ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
 - **Date:** 2026-10-12
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the signing file format `opamp-fleet-signing-v1`, the
-  `package sign` command of `opamp-fleetctl` in
-  `crates/fleet-tools/src/package.rs` and the module that reads the file, the
+  `package sign` command of `classisctl` in
+  `crates/classis-tools/src/package.rs` and the module that reads the file, the
   signing-info download of the Packages tab and the signature import of the
-  Deployments tab of the bundled UI in `crates/fleet-server/static/index.html`,
+  Deployments tab of the bundled UI in `crates/classis-server/static/index.html`,
   and every document that tells an operator how to sign a Deployment
 
 ## Context
@@ -18,8 +18,8 @@ for it, and a rollout is refused while any entry lacks one
 ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
 clauses 28 and 54). The signature covers a statement, not the artifact's bytes:
 `opamp-fleet-package-v1`, the Agent type, the version and the artifact's SHA-256
-in lowercase hex, one per line (`fleet_core::package::statement`). Today
-`opamp-fleetctl package sign` makes it from the **artifact file**, one entry per
+in lowercase hex, one per line (`classis_core::package::statement`). Today
+`classisctl package sign` makes it from the **artifact file**, one entry per
 call, and the operator types each signature into the Deployment form with its
 Agent type, version, OS and architecture.
 
@@ -47,7 +47,7 @@ because signing a hash the Server supplied is signing what the Server claims.
 
 We will carry what a Package's signatures cover in one JSON file,
 `opamp-fleet-signing-v1`, that the UI offers for download per Package, that
-`opamp-fleetctl package sign --signing-info <file>` signs entry by entry from
+`classisctl package sign --signing-info <file>` signs entry by entry from
 its hashes alone and writes back with each entry's signature, and that the UI
 imports into a Deployment's signatures.
 
@@ -82,7 +82,7 @@ imports into a Deployment's signatures.
    the page already read. No new route: the file is a projection of an existing
    response.
 
-3. **Signing.** `opamp-fleetctl package sign --key <file> --signing-info <file>`
+3. **Signing.** `classisctl package sign --key <file> --signing-info <file>`
    is the second form of `sign`, exclusive with the artifact form. It checks the
    whole file first — the format, every hash's shape, no platform twice — and
    signs nothing if any of it fails; then it signs
@@ -95,7 +95,7 @@ imports into a Deployment's signatures.
 4. **The hashes are the operator's to check.** `sign --signing-info` verifies
    nothing against the artifacts or upstream; it prints each entry's platform
    and hash as it signs, and the manual states the duty: compare the hashes with
-   the checksums upstream published or with `opamp-fleetctl package sha256` over
+   the checksums upstream published or with `classisctl package sha256` over
    the files before signing. This is the decision's deliberate trade-off, and
    the reason it is recorded (Consequences).
 
@@ -148,7 +148,7 @@ file — the statement is documented in ADR-0026 for whoever wants to build one.
 - [ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
   clauses 28 (the signature lives on the Deployment per Package and platform)
   and 54 (what a signature covers, and that the Client verifies it), and
-  `fleet_core::package::statement`.
+  `classis_core::package::statement`.
 - [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032), section 5.1.6: Ed25519
   signing is deterministic, which is why re-signing an entry with the same key
   is harmless.
@@ -175,7 +175,7 @@ file — the statement is documented in ADR-0026 for whoever wants to build one.
   available and documented as the stronger path; this form trades some of it for
   convenience, by the decider's choice.
 - Negative / trade-offs: the file format is an interface between the UI and
-  `opamp-fleetctl`, and the two ship together; a change to it is a new `format`
+  `classisctl`, and the two ship together; a change to it is a new `format`
   value, never an edit of `v1`.
 - Follow-ups: whether to tighten point 4 into a check (the first alternative)
   once the fleet runs releases this way; a Server-side check of imported
@@ -184,8 +184,8 @@ file — the statement is documented in ADR-0026 for whoever wants to build one.
 
 ## Enforcement
 
-- `opamp-fleetctl`'s tests sign a signing file and verify every written
-  signature against `fleet_core::package::statement` with the public key, as the
+- `classisctl`'s tests sign a signing file and verify every written
+  signature against `classis_core::package::statement` with the public key, as the
   Client does; they refuse a file whose `format` is not
   `opamp-fleet-signing-v1`, whose hash is not 64 lowercase hex characters, or
   that names a platform twice, and assert that nothing was signed then. These

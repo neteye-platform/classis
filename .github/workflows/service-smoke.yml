@@ -1,7 +1,7 @@
 name: Service smoke
 
 # The one thing every other test stands in for: the machine's *real* service manager (ADR-0019,
-# ADR-0018). `crates/fleet-agent/tests/service_smoke.rs` installs the Client as a system service, starts
+# ADR-0018). `crates/classis-agent/tests/service_smoke.rs` installs the Client as a system service, starts
 # it, kills its process, and asserts the manager brings it back — the restart a self-update depends
 # on and that no in-process stand-in can prove.
 #
@@ -60,27 +60,27 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Built as its own step so a compile failure is not reported as a smoke-test failure.
       - name: Build
-        run: cargo test -p fleet-agent --test service_smoke --locked --no-run
+        run: cargo test -p classis-agent --test service_smoke --locked --no-run
       - name: Install, start, kill, restart, stop, uninstall
         if: runner.os == 'Windows'
-        run: cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+        run: cargo test -p classis-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
       - name: Install, start, kill, restart, stop, uninstall; keep the account and the privileges; the process account
         if: runner.os == 'Linux'
-        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+        run: sudo -E env "PATH=$PATH" cargo test -p classis-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
       - name: Install, start, kill, restart, stop, uninstall; the process account
         if: runner.os == 'macOS'
-        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
+        run: sudo -E env "PATH=$PATH" cargo test -p classis-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
       # Run as root, every link the test places is root's, and none beneath the Client's
       # directories is followed all the same (ADR-0059 clause 6). The unprivileged run in CI covers
       # the links of every other account.
       - name: No link of root's beneath the Client's directories is followed
         if: runner.os == 'Linux'
-        run: sudo -E env "PATH=$PATH" cargo test -p fleet-agent --lib --locked -- --exact storage::tests::no_link_beneath_the_root_is_followed_whoever_owns_it
+        run: sudo -E env "PATH=$PATH" cargo test -p classis-agent --lib --locked -- --exact storage::tests::no_link_beneath_the_root_is_followed_whoever_owns_it
       # Run as root, the test gives a link above the Supervisors' root to another account: the
       # second service follows one of the Client's account and refuses one of a third (ADR-0059
       # clause 5). The unprivileged run in CI covers a link of the service's own account.
       - name: The second service follows the Client's links above the root, not its own
         if: runner.os == 'Linux'
         run: |
-          sudo -E env "PATH=$PATH" cargo test -p fleet-agent --lib --locked -- --exact \
+          sudo -E env "PATH=$PATH" cargo test -p classis-agent --lib --locked -- --exact \
             supervisor::channel::tests::a_purge_follows_the_clients_links_above_the_root_and_not_the_services

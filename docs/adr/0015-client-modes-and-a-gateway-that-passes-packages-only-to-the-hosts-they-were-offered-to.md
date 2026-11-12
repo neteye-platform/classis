@@ -5,12 +5,12 @@
   · clause 7 superseded by
   [ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)
 - **Date:** 2026-10-06
-- **Deciders:** Markus Brigl
-- **Applies to:** crates/fleet-agent/src/gateway/,
-  crates/fleet-agent/src/supervisor/endpoint.rs, the [gateway] configuration
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** crates/classis-agent/src/gateway/,
+  crates/classis-agent/src/supervisor/endpoint.rs, the [gateway] configuration
   section, every place either end keeps per-Agent state, the token threaded
   through `SupervisorContext` and `Runner` in
-  crates/fleet-agent/src/supervisor/, the environment every Managed Process is
+  crates/classis-agent/src/supervisor/, the environment every Managed Process is
   started with, and the `opampextension` configuration the documentation shows
 
 ## Context
@@ -150,7 +150,7 @@ any connection to its Supervisor Endpoint that does not present it as
    clause 17).
 
 6. **axum serves it, as an ordinary dependency of the Client crate behind no
-   Cargo feature.** The mode lives in `crates/fleet-agent/src/gateway/`
+   Cargo feature.** The mode lives in `crates/classis-agent/src/gateway/`
    (`mod.rs` the endpoint, `pool.rs` the upstream pool, `registry.rs` the
    downstream routes), beside `supervisor/`. The HTTP engine under axum is
    linked through `reqwest` anyway; axum adds the routing layer. TLS on the
@@ -446,7 +446,7 @@ Supervisor to the Managed Process; a Supervisor Endpoint token on disk.
 
 ## Enforcement
 
-- [`crates/fleet-agent/tests/gateway_e2e.rs`](../../crates/fleet-agent/tests/gateway_e2e.rs):
+- [`crates/classis-agent/tests/gateway_e2e.rs`](../../crates/classis-agent/tests/gateway_e2e.rs):
   `two_agents_reach_the_server_over_one_folded_connection` (clauses 3, 13),
   `one_agent_opens_one_upstream_connection` (clause 8),
   `a_downstream_connection_carries_no_more_than_its_agent_cap` (clause 4),
@@ -454,27 +454,27 @@ Supervisor to the Managed Process; a Supervisor Endpoint token on disk.
   `a_downstream_peer_may_gzip_its_report`,
   `a_gzip_bomb_is_refused_by_the_gateway` and
   `an_oversized_downstream_message_closes_with_1009` (clause 5).
-- [`crates/fleet-agent/tests/gateway_tls.rs`](../../crates/fleet-agent/tests/gateway_tls.rs):
+- [`crates/classis-agent/tests/gateway_tls.rs`](../../crates/classis-agent/tests/gateway_tls.rs):
   `a_downstream_agent_with_a_certificate_reaches_the_server_over_tls`,
   `a_downstream_peer_without_a_certificate_is_refused` and
   `the_tls_endpoint_does_not_answer_plaintext` (clause 11).
-- [`crates/fleet-agent/tests/gateway_and_supervisor_e2e.rs`](../../crates/fleet-agent/tests/gateway_and_supervisor_e2e.rs):
+- [`crates/classis-agent/tests/gateway_and_supervisor_e2e.rs`](../../crates/classis-agent/tests/gateway_and_supervisor_e2e.rs):
   `a_host_supervises_and_gateways_at_the_same_time`,
   `a_verified_offer_restarts_the_gateway_and_leaves_the_supervisors_running` and
   `a_gateway_that_cannot_bind_is_loud` (clauses 1, 4).
-- [`crates/fleet-server/tests/ws_transport.rs`](../../crates/fleet-server/tests/ws_transport.rs)
+- [`crates/classis-server/tests/ws_transport.rs`](../../crates/classis-server/tests/ws_transport.rs)
   `two_agents_share_one_connection` and
-  [`crates/fleet-agent/tests/e2e.rs`](../../crates/fleet-agent/tests/e2e.rs)
+  [`crates/classis-agent/tests/e2e.rs`](../../crates/classis-agent/tests/e2e.rs)
   `a_config_change_reaches_both_supervised_agents_over_one_connection` (clause
   3).
-- `crates/fleet-agent/src/supervisor/endpoint.rs`:
+- `crates/classis-agent/src/supervisor/endpoint.rs`:
   `extension_reports_are_folded_into_process_events` and
-  `shutdown_stops_the_endpoint` (clause 2); `crates/fleet-agent/src/config.rs`:
+  `shutdown_stops_the_endpoint` (clause 2); `crates/classis-agent/src/config.rs`:
   `the_gateway_agent_cap_defaults_and_rejects_zero` (clause 4).
-- Each marked `Verifies: ADR-0015`: `crates/fleet-agent/src/config.rs`
+- Each marked `Verifies: ADR-0015`: `crates/classis-agent/src/config.rs`
   `a_gateway_without_mutual_tls_is_refused_at_load` — no `[gateway.tls]`, and a
   section without `client_ca_file` (clause 4);
-  [`crates/fleet-agent/tests/gateway_tls.rs`](../../crates/fleet-agent/tests/gateway_tls.rs)
+  [`crates/classis-agent/tests/gateway_tls.rs`](../../crates/classis-agent/tests/gateway_tls.rs)
   `a_gateway_without_tls_on_loopback_does_not_start`,
   `a_gateway_without_a_client_ca_does_not_start` and
   `a_downstream_peer_with_a_certificate_from_another_ca_is_refused` (clauses 4,
@@ -483,32 +483,32 @@ Supervisor to the Managed Process; a Supervisor Endpoint token on disk.
   `a_client_offering_only_tls_1_2_is_refused`, against the listener and
   `ServerTls` the downstream endpoint is served with (clause 11).
 - Clause 14:
-  [`crates/fleet-agent/tests/gateway_revocation_e2e.rs`](../../crates/fleet-agent/tests/gateway_revocation_e2e.rs)
+  [`crates/classis-agent/tests/gateway_revocation_e2e.rs`](../../crates/classis-agent/tests/gateway_revocation_e2e.rs)
   `a_certificate_the_server_revokes_is_refused_behind_the_gateway`,
   `an_unmarked_gateway_admits_nobody` and
   `a_gateway_whose_list_goes_stale_admits_nobody`, run against a Server that
-  reads no `Authorization`; `crates/fleet-agent/src/gateway/revocations.rs`
+  reads no `Authorization`; `crates/classis-agent/src/gateway/revocations.rs`
   `the_verdict_follows_the_list_and_its_age`.
 - Through the real Gateway and Server, each marked `Verifies: ADR-0015`:
-  [`crates/fleet-agent/tests/gateway_tls.rs`](../../crates/fleet-agent/tests/gateway_tls.rs)
+  [`crates/classis-agent/tests/gateway_tls.rs`](../../crates/classis-agent/tests/gateway_tls.rs)
   `downstream_peers_with_different_certificates_share_one_upstream_connection` —
   two peers, an `upstream_connections` of `1`, both Agents reach the Server
   (clauses 7, 11);
   `a_downstream_authorization_header_is_ignored_and_not_forwarded` — a peer that
   sends one is admitted and the Server receives none (clause 11);
-  `crates/fleet-agent/src/gateway/revocations.rs`
+  `crates/classis-agent/src/gateway/revocations.rs`
   `the_revocation_list_is_fetched_without_authorization`, even with an `[auth]`
   section left in `supervisor.toml` (clause 14).
 
 - The download bound of clause 11, marked `Verifies: ADR-0015` beside ADR-0026:
-  [`crates/fleet-agent/tests/gateway_package_cache.rs`](../../crates/fleet-agent/tests/gateway_package_cache.rs)
+  [`crates/classis-agent/tests/gateway_package_cache.rs`](../../crates/classis-agent/tests/gateway_package_cache.rs)
   `another_host_and_a_certificate_naming_no_host_are_answered_as_for_an_artifact_not_held`
   and `a_revoked_certificate_is_refused_on_the_download_route`.
 
 - The Supervisor Endpoint token:
-  [`crates/fleet-agent/src/supervisor/endpoint.rs`](../../crates/fleet-agent/src/supervisor/endpoint.rs)
+  [`crates/classis-agent/src/supervisor/endpoint.rs`](../../crates/classis-agent/src/supervisor/endpoint.rs)
   `the_endpoint_admits_only_the_token_it_handed_out` (clauses 15, 17);
-  [`crates/fleet-agent/tests/supervisor_process.rs`](../../crates/fleet-agent/tests/supervisor_process.rs)
+  [`crates/classis-agent/tests/supervisor_process.rs`](../../crates/classis-agent/tests/supervisor_process.rs)
   `the_managed_process_is_handed_the_endpoint_token` (clause 16).
 
 **Not mechanically decidable:** that no message is synthesised on an Agent's

@@ -24,7 +24,7 @@ jobs:
   # Both are required status checks (README.md → "Repository settings"). A ruleset names a check
   # by the job's rendered name, so these two are plain jobs without a 'name:' or a matrix: the
   # check is then called by the job id, which scripts/check-docs.sh compares with the README.
-  # fleet-tools too: the release packs every Client archive with `opamp-fleetctl`, Windows
+  # classis-tools too: the release packs every Client archive with `classisctl`, Windows
   # included, and publishes it for macOS (ADR-0028).
   client-windows:
     runs-on: windows-latest
@@ -34,9 +34,9 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Clippy
-        run: cargo clippy -p fleet-agent -p fleet-tools --all-targets --locked -- -D warnings
+        run: cargo clippy -p classis-agent -p classis-tools --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test -p fleet-agent --locked
+        run: cargo test -p classis-agent --locked
 
   client-macos:
     runs-on: macos-latest
@@ -46,9 +46,9 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Clippy
-        run: cargo clippy -p fleet-agent -p fleet-tools --all-targets --locked -- -D warnings
+        run: cargo clippy -p classis-agent -p classis-tools --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test -p fleet-agent --locked
+        run: cargo test -p classis-agent --locked
 
   # ADR-0049 clause 9: the S3 store's tests, which a plain `cargo test` skips, run here against a
   # rustfs service, its image pinned by digest. The key pair is the throwaway one of this job's
@@ -84,14 +84,14 @@ jobs:
           exit 1
       - name: Test against rustfs
         env:
-          FLEET_TEST_S3_ENDPOINT: http://127.0.0.1:9000
-          FLEET_TEST_S3_BUCKET: fleet
-          FLEET_TEST_S3_ACCESS_KEY_ID: fleet-ci
-          FLEET_TEST_S3_SECRET_ACCESS_KEY_FILE: ${{ runner.temp }}/s3-secret
+          CLASSIS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          CLASSIS_TEST_S3_BUCKET: fleet
+          CLASSIS_TEST_S3_ACCESS_KEY_ID: fleet-ci
+          CLASSIS_TEST_S3_SECRET_ACCESS_KEY_FILE: ${{ runner.temp }}/s3-secret
         run: |
           set -euo pipefail
-          (umask 077 && printf '%s' fleet-ci-secret > "$FLEET_TEST_S3_SECRET_ACCESS_KEY_FILE")
-          cargo test -p fleet-server --lib --locked s3:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/s3.log"
+          (umask 077 && printf '%s' fleet-ci-secret > "$CLASSIS_TEST_S3_SECRET_ACCESS_KEY_FILE")
+          cargo test -p classis-server --lib --locked s3:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/s3.log"
           # Skipped is not passed: the store was named, so every S3 test must have reached it.
           if grep -q "skipped: no S3 store" "$RUNNER_TEMP/s3.log"; then
             echo "an S3 test was skipped although a store is named" >&2
@@ -141,16 +141,16 @@ jobs:
       - name: Test against PostgreSQL
         # Over TLS against the CA above; each test works in a schema of its own (clause 16).
         env:
-          FLEET_TEST_POSTGRES_HOST: 127.0.0.1
-          FLEET_TEST_POSTGRES_PORT: "5432"
-          FLEET_TEST_POSTGRES_DBNAME: fleet
-          FLEET_TEST_POSTGRES_USER: fleet
-          FLEET_TEST_POSTGRES_PASSWORD_FILE: ${{ runner.temp }}/postgres-password
-          FLEET_TEST_POSTGRES_CA_FILE: ${{ runner.temp }}/postgres-tls/ca.pem
+          CLASSIS_TEST_POSTGRES_HOST: 127.0.0.1
+          CLASSIS_TEST_POSTGRES_PORT: "5432"
+          CLASSIS_TEST_POSTGRES_DBNAME: fleet
+          CLASSIS_TEST_POSTGRES_USER: fleet
+          CLASSIS_TEST_POSTGRES_PASSWORD_FILE: ${{ runner.temp }}/postgres-password
+          CLASSIS_TEST_POSTGRES_CA_FILE: ${{ runner.temp }}/postgres-tls/ca.pem
         run: |
           set -euo pipefail
-          (umask 077 && printf '%s' fleet-ci > "$FLEET_TEST_POSTGRES_PASSWORD_FILE")
-          cargo test -p fleet-server --lib --locked postgres:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/postgres.log"
+          (umask 077 && printf '%s' fleet-ci > "$CLASSIS_TEST_POSTGRES_PASSWORD_FILE")
+          cargo test -p classis-server --lib --locked postgres:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/postgres.log"
           # Skipped is not passed: the database was named, so every PostgreSQL test must have
           # reached it.
           if grep -q "skipped: no PostgreSQL" "$RUNNER_TEMP/postgres.log"; then
@@ -166,10 +166,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: client-linux, os: ubuntu-latest, package: fleet-agent, binary: target/release/supervisor }
-          - { name: client-windows, os: windows-latest, package: fleet-agent, binary: target/release/supervisor.exe }
-          - { name: client-macos, os: macos-latest, package: fleet-agent, binary: target/release/supervisor }
-          - { name: server-linux, os: ubuntu-latest, package: fleet-server, binary: target/release/server }
+          - { name: client-linux, os: ubuntu-latest, package: classis-agent, binary: target/release/supervisor }
+          - { name: client-windows, os: windows-latest, package: classis-agent, binary: target/release/supervisor.exe }
+          - { name: client-macos, os: macos-latest, package: classis-agent, binary: target/release/supervisor }
+          - { name: server-linux, os: ubuntu-latest, package: classis-server, binary: target/release/server }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

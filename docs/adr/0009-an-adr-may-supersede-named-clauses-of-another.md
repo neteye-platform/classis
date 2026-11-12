@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-12
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the supersession mechanics of `docs/adr/README.md` and
   `docs/adr/template.md`, the `Supersedes` field and `Status` line of every ADR,
   and the supersession check of `scripts/check-docs.sh`
@@ -28,7 +28,7 @@ decisions again — the opposite of proportionality
 ([`AGENTS.md` §1](../../AGENTS.md#1-principles)). The record has numbered
 clauses for exactly this reason: ADR-0019 already cites its own clauses by
 number, and so does the code (`ADR-0019 clause 8` in
-`crates/fleet-agent/src/service/manager.rs`).
+`crates/classis-agent/src/service/manager.rs`).
 
 No ADR has been superseded yet, so nothing depends on the current form being the
 only one.

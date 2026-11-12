@@ -5,12 +5,12 @@
   · clauses 9 and 14 superseded by
   [ADR-0043](0043-a-package-version-is-semver-and-never-installed-below-the-high-water-mark.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the assignments and rollout acts in
-  `crates/fleet-server/src/fleet.rs`, the saved and retained revisions in
-  `crates/fleet-server/src/configs.rs`, the matching and offer functions of
-  `crates/fleet-server/src/packages.rs`, the rollout routes of
-  `crates/fleet-server/src/api.rs`, the persisted Agent record, the rollout
+  `crates/classis-server/src/fleet.rs`, the saved and retained revisions in
+  `crates/classis-server/src/configs.rs`, the matching and offer functions of
+  `crates/classis-server/src/packages.rs`, the rollout routes of
+  `crates/classis-server/src/api.rs`, the persisted Agent record, the rollout
   column of the bundled UI, the Client's check of an offer for its own package
 
 ## Context
@@ -163,7 +163,7 @@ version it claims to have).
     program that self-reports an orderable version — the Client and any
     OpAMP-aware Managed Process — a package numbered below it can never reach
     it. An operator numbering a package by hand takes the program's own number;
-    `opamp-fleetctl package fetch` already names a release that way
+    `classisctl package fetch` already names a release that way
     ([ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)).
 
 15. **The Client applies the same rule to an offer it receives.** For the
@@ -342,18 +342,18 @@ holds back; a Server-driven downgrade.
 
 ## Enforcement
 
-- `crates/fleet-server/src/configs.rs`:
+- `crates/classis-server/src/configs.rs`:
   `a_saved_configuration_reaches_nobody_without_an_assignment`,
   `an_assignment_pins_a_snapshot_and_later_edits_wait`,
   `retain_only_collects_unreferenced_revisions`,
   `candidates_follow_the_fit_and_none_means_nothing_to_roll_out`.
-- `crates/fleet-server/src/fleet.rs`:
+- `crates/classis-server/src/fleet.rs`:
   `rollout_acts_assign_and_a_late_agent_waits`.
-- `crates/fleet-server/tests/rest_api.rs`:
+- `crates/classis-server/tests/rest_api.rs`:
   `a_configuration_waits_until_it_is_rolled_out`,
   `an_agent_that_appears_later_waits`,
   `a_label_moves_an_agent_into_a_rollout_ring`.
-- `crates/fleet-server/src/packages.rs`:
+- `crates/classis-server/src/packages.rs`:
   `a_saved_set_reaches_nobody_without_an_assignment`,
   `fits_agent_checks_fit_but_neither_aim_nor_the_ranking`,
   `fits_agent_refuses_what_is_not_an_upgrade`,
@@ -364,11 +364,11 @@ holds back; a Server-driven downgrade.
   `a_claim_above_the_set_no_longer_holds_it_back_either`,
   `a_program_version_nothing_can_order_leaves_the_set_reaching`,
   `the_aggregate_hash_is_per_agent_and_follows_the_assignment`.
-- `crates/fleet-server/tests/packages.rs`:
+- `crates/classis-server/tests/packages.rs`:
   `a_set_reaches_an_agent_only_as_an_upgrade`,
   `a_set_waits_until_rolled_out_and_is_immutable_while_assigned`,
   `the_act_names_the_version_it_releases`,
   `the_aggregate_hash_an_agent_echoes_is_the_one_it_was_offered`.
-- `crates/fleet-agent/src/supervisor/agent.rs`:
+- `crates/classis-agent/src/supervisor/agent.rs`:
   `the_clients_own_offer_is_settled_by_the_version_it_runs_not_by_a_recorded_hash`;
-  `crates/fleet-agent/src/update/installer.rs`: `install_refuses_a_downgrade`.
+  `crates/classis-agent/src/update/installer.rs`: `install_refuses_a_downgrade`.

@@ -3,19 +3,19 @@
 - **Status:** 🟢 accepted · clause 5 superseded by
   [ADR-0043](0043-a-package-version-is-semver-and-never-installed-below-the-high-water-mark.md)
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the entries and their signatures in
-  `crates/fleet-server/src/packages.rs` and
-  `crates/fleet-server/src/fs/packages.rs`, the signatures in
-  `crates/fleet-server/src/deployments.rs`, the package and signature routes of
-  `crates/fleet-server/src/api.rs`, the `[packages]` section and the
+  `crates/classis-server/src/packages.rs` and
+  `crates/classis-server/src/fs/packages.rs`, the signatures in
+  `crates/classis-server/src/deployments.rs`, the package and signature routes of
+  `crates/classis-server/src/api.rs`, the `[packages]` section and the
   `advertised_url` key of `server.toml` and their parsing in
-  `crates/fleet-server/src/config.rs`, the Packages and Deployments tabs of the
-  bundled UI in `crates/fleet-server/static/index.html`, the signing-file
+  `crates/classis-server/src/config.rs`, the Packages and Deployments tabs of the
+  bundled UI in `crates/classis-server/static/index.html`, the signing-file
   import, the download source rules and the `[packages]` section of
-  `supervisor.toml` in `crates/fleet-agent/src/packages.rs` and
-  `crates/fleet-agent/src/config.rs`, the Gateway's rule for what it caches in
-  `crates/fleet-agent/src/gateway/cache.rs`, and every document that tells an
+  `supervisor.toml` in `crates/classis-agent/src/packages.rs` and
+  `crates/classis-agent/src/config.rs`, the Gateway's rule for what it caches in
+  `crates/classis-agent/src/gateway/cache.rs`, and every document that tells an
   operator how to add, sign or reference an artifact
 - **Supersedes:**
   [ADR-0013](0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)
@@ -35,7 +35,7 @@ Package holds one entry per platform with the artifact's hash, size and
 signature, and every artifact is uploaded to the Server.
 
 What the signature covers decides where it belongs. The signed statement
-(`fleet_core::package::statement`, ADR-0026 clause 54) is
+(`classis_core::package::statement`, ADR-0026 clause 54) is
 `opamp-fleet-package-v1`, the Agent type, the version and the artifact's
 SHA-256. It names no Deployment. Signing the same Package in two Deployments
 therefore stores the same signature twice. A Deployment as the place of the
@@ -58,7 +58,7 @@ Keeping the signature on the Deployment has also cost integrity in the data:
 Referenced entries cost more than they save in this project. A base URL per
 Package was considered and rejected with the human: it yields neither asset
 names nor hashes, which differ for every upstream and which
-`opamp-fleetctl package fetch` already knows. A referenced entry makes every
+`classisctl package fetch` already knows. A referenced entry makes every
 host fetch from upstream: hosts need internet access, the Gateway does not cache
 such an artifact (clause 43), and a host behind a Gateway without internet
 receives nothing. Its optional headers are stored in cleartext and handed to
@@ -130,7 +130,7 @@ the Agent's own check alone decides what is installed.
    is unchanged.**
    - `PUT|DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature`
      writes or removes the hex Ed25519 signature, as
-     `opamp-fleetctl package sign` prints it.
+     `classisctl package sign` prints it.
    - A signature for an entry that does not exist is `404`, an empty or
      malformed one `400`.
    - Writing new bytes to an entry removes its signature, because a signature
@@ -278,7 +278,7 @@ carrying Configurations settles.
   Gateway not caching. The human removed the reference entirely.
 - **A base URL per Package from which entries and hashes are loaded.** A URL
   yields neither asset names nor hashes. That knowledge per agent lives in
-  `opamp-fleetctl package fetch`, which uploads.
+  `classisctl package fetch`, which uploads.
 - **Keep `advertised_url` for a mirror or another host in front of the
   download.** With the Client downloading only from its own Server's origin, an
   `advertised_url` naming another host reaches no Client, and one naming the
@@ -290,11 +290,11 @@ carrying Configurations settles.
 
 ## Sources / Prior art
 
-- `crates/fleet-core/src/package.rs`, `statement`: the signed bytes name type,
+- `crates/classis-core/src/package.rs`, `statement`: the signed bytes name type,
   version and hash, not a Deployment. Read in the source.
 - ADR-0013 clause 8, ADR-0026 clauses 4, 5, 13, 14, 15, 20, 28, 31, 35, 43, 53
   and 54, its alternatives, and ADR-0027 clauses 1–5.
-- `crates/fleet-agent/src/archive.rs`: the Client detects raw, `.tar.gz`, `.7z`
+- `crates/classis-agent/src/archive.rs`: the Client detects raw, `.tar.gz`, `.7z`
   and `.zip` by their leading bytes. The Server never inspects an artifact, so
   no format field is needed.
 - OpAMP specification, `DownloadableFile`: `download_url`, `content_hash`,

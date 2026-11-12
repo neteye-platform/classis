@@ -18,33 +18,33 @@
   superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
-- **Applies to:** `crates/fleet-server/src/packages.rs`,
-  `crates/fleet-server/src/deployments.rs`, the package, deployment and download
-  routes of `crates/fleet-server/src/api.rs` with the download handler
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** `crates/classis-server/src/packages.rs`,
+  `crates/classis-server/src/deployments.rs`, the package, deployment and download
+  routes of `crates/classis-server/src/api.rs` with the download handler
   `download_package`, `packages_dir` and the package limits in
-  `crates/fleet-server/src/config.rs`, the package assignment in
-  `crates/fleet-server/src/fleet.rs` and
-  `crates/fleet-server/src/agent_store.rs`, what a host speaks for in
-  `crates/fleet-server/src/revocation.rs` and
-  `crates/fleet-server/src/fleet.rs`, the `download.refused` audit entry, the
-  startup notice of `crates/fleet-server/src/main.rs` when `[client_ca]` is
+  `crates/classis-server/src/config.rs`, the package assignment in
+  `crates/classis-server/src/fleet.rs` and
+  `crates/classis-server/src/agent_store.rs`, what a host speaks for in
+  `crates/classis-server/src/revocation.rs` and
+  `crates/classis-server/src/fleet.rs`, the `download.refused` audit entry, the
+  startup notice of `crates/classis-server/src/main.rs` when `[client_ca]` is
   absent, the platform table in `crates/opamp/src/attributes.rs`, the
   `host.arch` the Client reports, the Packages and Deployments tabs of the
   bundled UI, `docs/SPECIFICATION.md` and its Non-Goal "Authorization and
   multi-tenancy", the Gateway's package cache and its download route in
-  `crates/fleet-agent/src/gateway/` (`cache.rs`, the route in `mod.rs`, the
+  `crates/classis-agent/src/gateway/` (`cache.rs`, the route in `mod.rs`, the
   offers `registry.rs` records), the cache directory under the Client's
-  `state_dir`, `crates/fleet-agent/src/packages.rs` and the Client's waiting on
-  `Retry-After` there, `crates/fleet-agent/src/archive.rs`,
-  `crates/fleet-agent/src/install.rs`,
-  `crates/fleet-agent/src/supervisor/process.rs`, the package handling in
-  `crates/fleet-agent/src/supervisor/agent.rs`, the `[packages]` and `[updates]`
+  `state_dir`, `crates/classis-agent/src/packages.rs` and the Client's waiting on
+  `Retry-After` there, `crates/classis-agent/src/archive.rs`,
+  `crates/classis-agent/src/install.rs`,
+  `crates/classis-agent/src/supervisor/process.rs`, the package handling in
+  `crates/classis-agent/src/supervisor/agent.rs`, the `[packages]` and `[updates]`
   sections, the `[gateway] package_cache_bytes` key and the `program_path` and
   `retain_previous_secs` keys of `supervisor.toml` and their parsing in
-  `crates/fleet-agent/src/config.rs`, `crates/fleet-core/src/package.rs`, the
-  `package sign` command of `opamp-fleetctl`, and the deterministic repack of
-  `opamp-fleetctl package fetch`
+  `crates/classis-agent/src/config.rs`, `crates/classis-core/src/package.rs`, the
+  `package sign` command of `classisctl`, and the deterministic repack of
+  `classisctl package fetch`
 
 ## Context
 
@@ -209,7 +209,7 @@ Forces on the download route and the Gateway:
   plane serves configurations.
 - **Without a cache in the Gateway, downloads behind it do not reach the
   Server.** A Client resolves a path `download_url` against its own OpAMP
-  endpoint (`resolve_url` in `crates/fleet-agent/src/packages.rs`). Behind a
+  endpoint (`resolve_url` in `crates/classis-agent/src/packages.rs`). Behind a
   Gateway that endpoint is the Gateway, which serves only `/v1/opamp`
   (`opamp::server::router` without `any_path`). The `GET` is answered `404`
   there. With `advertised_url` set, the offered URL is absolute and names the
@@ -633,7 +633,7 @@ three failed starts, and keep the superseded version for a configurable window.
 28. **The signature lives on the Deployment, per `(Package, Platform)`, and the
     wire is unchanged.**
     `PUT|DELETE /api/v1/deployments/{name}/signatures/{type}/{version}/{os}/{arch}`
-    with the hex Ed25519 signature (as `opamp-fleetctl package sign` prints it).
+    with the hex Ed25519 signature (as `classisctl package sign` prints it).
     A signature for a Package the Deployment does not hold is `404`, an empty
     one `400`; removing a Package from a Deployment takes its signatures with
     it. What an Agent receives in `DownloadableFile.signature` is the signature
@@ -1099,8 +1099,8 @@ was taken is why this object is called a Deployment.
     statement of what the artifact is, not its bytes: `opamp-fleet-package-v1`,
     the Agent type (the offered package's name), the version and the artifact's
     SHA-256 in lowercase hex, one per line, each ended by a newline
-    (`fleet_core::package::statement`).
-    `opamp-fleetctl package sign --agent-type … --version …` makes it. Since the
+    (`classis_core::package::statement`).
+    `classisctl package sign --agent-type … --version …` makes it. Since the
     hash is in the statement and checked against the streamed bytes first, the
     signature still covers the artifact exactly as published, archive and all —
     and holds for that type and version alone. Where a Deployment keeps the
@@ -1249,7 +1249,7 @@ was taken is why this object is called a Deployment.
     byte: the hash an Agent verifies is upstream's own, and the artifact may
     even be a referenced package pointing at the release asset.
 
-67. **Every repack `opamp-fleetctl package fetch` makes is deterministic.**
+67. **Every repack `classisctl package fetch` makes is deterministic.**
     Where an upstream publishes no artifact a Client can run as published, the
     tool repacks it on the operator's host, before it is signed, into a
     `.tar.gz` that keeps file modes. The repack has a fixed member order and
@@ -1279,7 +1279,7 @@ the Gateway's own Supervisors fetching through the cache; resuming an
 interrupted download with range requests; distributing the archive key, the
 verification key or the allow-list; keeping more than one predecessor; scoping
 an offered header to a path below an allowed origin; a reproducible tree mode
-for `opamp-fleetctl package pack`.
+for `classisctl package pack`.
 
 ## Alternatives considered
 
@@ -1649,21 +1649,21 @@ for `opamp-fleetctl package pack`.
   the LRU bound of clauses 42 and 47 follow that established shape, with offers
   deciding what is evicted first.
 - The code read for the download route: `offer_for_assigned`, `assigned_entry`
-  and `to_available` in `crates/fleet-server/src/packages.rs`; `packages_offer`
-  and `AgentRecord` in `crates/fleet-server/src/fleet.rs`; `check_report` and
-  `Host` in `crates/fleet-server/src/revocation.rs`; `download_package` in
-  `crates/fleet-server/src/api.rs`; `admit_download` and `Proofs` in
-  `crates/fleet-server/src/transport.rs`; `resolve_url`, `Sources` and
-  `send_download` in `crates/fleet-agent/src/packages.rs`; the Gateway's router
-  in `crates/fleet-agent/src/gateway/mod.rs`.
+  and `to_available` in `crates/classis-server/src/packages.rs`; `packages_offer`
+  and `AgentRecord` in `crates/classis-server/src/fleet.rs`; `check_report` and
+  `Host` in `crates/classis-server/src/revocation.rs`; `download_package` in
+  `crates/classis-server/src/api.rs`; `admit_download` and `Proofs` in
+  `crates/classis-server/src/transport.rs`; `resolve_url`, `Sources` and
+  `send_download` in `crates/classis-agent/src/packages.rs`; the Gateway's router
+  in `crates/classis-agent/src/gateway/mod.rs`.
 - The code read for the Gateway clauses: `Forwarding`, `run_on_timed` and
-  `server_tls` in `crates/fleet-agent/src/gateway/mod.rs`; `Registry::deliver`
-  in `crates/fleet-agent/src/gateway/registry.rs`; the pool's reader in
-  `crates/fleet-agent/src/gateway/pool.rs`; `RevocationList::verdict` in
-  `crates/fleet-agent/src/gateway/revocations.rs`; `download_and_verify`,
-  `write_stream` and `download_client` in `crates/fleet-agent/src/packages.rs`;
-  `to_available` in `crates/fleet-server/src/packages.rs`; `HOST_URI_PREFIX` and
-  `facts` in `crates/fleet-server/src/ca.rs`.
+  `server_tls` in `crates/classis-agent/src/gateway/mod.rs`; `Registry::deliver`
+  in `crates/classis-agent/src/gateway/registry.rs`; the pool's reader in
+  `crates/classis-agent/src/gateway/pool.rs`; `RevocationList::verdict` in
+  `crates/classis-agent/src/gateway/revocations.rs`; `download_and_verify`,
+  `write_stream` and `download_client` in `crates/classis-agent/src/packages.rs`;
+  `to_available` in `crates/classis-server/src/packages.rs`; `HOST_URI_PREFIX` and
+  `facts` in `crates/classis-server/src/ca.rs`.
 - [`sevenz-rust2`](https://crates.io/crates/sevenz-rust2) — pure-Rust 7z with an
   `aes256` feature; its default features pull `bzip2`, so it is taken with
   `default-features = false`.
@@ -1896,17 +1896,17 @@ for `opamp-fleetctl package pack`.
 Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
 ([ADR-0003](0003-decisions-verified-by-tests.md)).
 
-- `crates/fleet-server/src/packages.rs` unit tests: `a_set_survives_a_reopen`,
+- `crates/classis-server/src/packages.rs` unit tests: `a_set_survives_a_reopen`,
   `fit_is_mandatory_platform_and_type`,
   `both_sides_of_the_comparison_are_canonicalised`,
   `the_offer_carries_a_download_url_naming_the_identity`,
   `deletion_frees_entries_and_sets`, `a_corrupt_artifact_fails_reopen`,
   `the_store_and_its_metadata_are_owner_only`, `identity_tokens_are_bounded`.
-- `crates/fleet-core/src/platform.rs`:
+- `crates/classis-core/src/platform.rs`:
   `folds_the_spellings_this_project_does_not_control`,
   `what_rust_calls_this_machine_folds_onto_a_canonical_token`,
   `an_unknown_token_passes_through_unchanged`.
-- `crates/fleet-server/tests/packages.rs`:
+- `crates/classis-server/tests/packages.rs`:
   `an_uploaded_set_is_offered_downloaded_and_gated`,
   `the_artifact_is_served_where_the_agents_are_and_not_on_the_operator_plane`,
   `no_offer_without_the_capability`, `an_entry_needs_its_set_first`,
@@ -1917,17 +1917,17 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `a_source_that_refuses_the_probe_is_rejected_but_an_unreachable_one_is_not`,
   `a_source_url_aimed_at_an_internal_address_is_refused`,
   `a_set_reaches_only_agents_of_its_type`.
-- `crates/fleet-server/tests/packages.rs`, clauses 4 and 5:
+- `crates/classis-server/tests/packages.rs`, clauses 4 and 5:
   `a_plaintext_source_off_the_loopback_is_refused` (a host name, `localhost`
   included, is refused; both loopback literals are accepted) and
   `the_probe_follows_no_redirect`.
-- `crates/fleet-server/src/labels.rs`:
+- `crates/classis-server/src/labels.rs`:
   `a_label_never_overrides_what_the_agent_reports`.
-- `crates/fleet-agent/src/config.rs`: `the_retired_package_keys_are_refused`.
-- `crates/fleet-agent/tests/packages_e2e.rs` and
-  `crates/fleet-agent/tests/self_update_e2e.rs` run the real Server and Client
+- `crates/classis-agent/src/config.rs`: `the_retired_package_keys_are_refused`.
+- `crates/classis-agent/tests/packages_e2e.rs` and
+  `crates/classis-agent/tests/self_update_e2e.rs` run the real Server and Client
   against one store across the reported Platform.
-- `crates/fleet-server/src/deployments.rs`:
+- `crates/classis-server/src/deployments.rs`:
   `two_deployments_matching_one_agent_are_a_conflict_that_names_them`,
   `a_narrower_selector_does_not_win_over_a_wider_one`,
   `an_agent_no_ring_claims_is_not_a_conflict`,
@@ -1935,14 +1935,14 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `a_deployment_holds_one_package_per_agent_type`,
   `a_signature_needs_its_package_and_leaves_with_it`,
   `the_selector_stays_editable_and_keeps_what_the_ring_holds`.
-- `crates/fleet-server/src/fs/deployments.rs`: `a_deployment_survives_a_reopen`,
+- `crates/classis-server/src/fs/deployments.rs`: `a_deployment_survives_a_reopen`,
   `an_unreadable_file_fails_the_open_and_names_it`,
   `the_store_and_its_files_are_owner_only`.
-- `crates/fleet-server/src/packages.rs`:
+- `crates/classis-server/src/packages.rs`:
   `only_the_package_its_ring_holds_is_a_candidate`,
   `a_store_in_an_older_layout_refuses_to_open_and_names_what_is_in_the_way`,
   `identity_tokens_are_bounded`.
-- `crates/fleet-server/tests/packages.rs`:
+- `crates/classis-server/tests/packages.rs`:
   `a_selector_aims_a_rollout_at_part_of_the_fleet`,
   `a_canary_ring_is_a_selector_aim_and_two_acts`,
   `an_agent_two_rings_claim_is_offered_nothing_and_the_view_says_why`,
@@ -1960,36 +1960,36 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `a_packages_entry_shows_the_hash_an_agent_verifies_against`,
   `the_fleet_view_tells_no_ring_apart_from_a_ring_with_nothing_for_this_agent`,
   `a_set_says_how_many_agents_it_reaches`.
-- `crates/fleet-server/tests/rest_api.rs`:
+- `crates/classis-server/tests/rest_api.rs`:
   `the_openapi_document_describes_the_contract` (the Deployment routes are in
   the contract, and no Selector or rollout route on a Package is).
-- `crates/fleet-server/src/fleet.rs`:
+- `crates/classis-server/src/fleet.rs`:
   `a_record_without_assignments_loads_assigned_to_nothing`;
-  `crates/fleet-server/src/fs/agents.rs`:
+  `crates/classis-server/src/fs/agents.rs`:
   `a_record_without_assignments_restores_with_none`.
-- `crates/fleet-agent/src/supervisor/agent.rs`:
+- `crates/classis-agent/src/supervisor/agent.rs`:
   `an_addon_package_is_refused_instead_of_overwriting_the_binary`.
 - The signature (clauses 28 and 29):
   `an_entry_its_deployment_has_not_signed_is_not_a_candidate` in
-  `crates/fleet-server/src/packages.rs`;
+  `crates/classis-server/src/packages.rs`;
   `a_rollout_of_a_deployment_with_an_unsigned_package_is_refused_naming_it` and
   `the_per_agent_act_refuses_a_deployment_with_an_unsigned_package` in
-  `crates/fleet-server/tests/packages.rs`.
-- `crates/fleet-server/src/packages.rs`:
+  `crates/classis-server/tests/packages.rs`.
+- `crates/classis-server/src/packages.rs`:
   - `the_download_and_the_offer_test_one_predicate`: for every combination, the
     offer and the download agree on what is offered (clause 35).
   - `an_agent_reporting_another_type_is_offered_nothing` (clause 35).
   - `an_entry_its_deployment_does_not_sign_is_not_offered` (clause 35).
   - `a_referenced_entry_is_never_offered_for_the_route` (clause 35, 38).
-- `crates/fleet-server/src/revocation.rs`:
+- `crates/classis-server/src/revocation.rs`:
   - `a_host_speaks_for_the_agents_bound_to_it_and_a_gateway_for_any` (clause
     37).
-- `crates/fleet-server/src/fleet.rs`:
+- `crates/classis-server/src/fleet.rs`:
   - `an_artifact_is_offered_to_a_host_only_through_an_agent_it_speaks_for`
     (clauses 35, 37).
   - `an_offer_still_stands_after_its_hash_is_echoed` (clause 36).
   - `a_version_waiting_for_its_press_is_offered_to_no_host` (clause 36).
-- `crates/fleet-server/tests/mutual_tls.rs`:
+- `crates/classis-server/tests/mutual_tls.rs`:
   - `a_host_fetches_the_artifact_offered_to_its_own_agent` (clause 37).
   - `a_host_is_answered_404_for_an_artifact_offered_only_to_another_host`
     (clauses 37, 38).
@@ -2001,24 +2001,24 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
     also checks that the throttle did not count it (clause 39).
   - `a_malformed_token_is_answered_400_before_the_offer_is_tested` (clause 39).
   - `a_download_costs_a_token_of_the_hosts_bucket` (clause 40).
-- `crates/fleet-server/src/main.rs`:
+- `crates/classis-server/src/main.rs`:
   - `a_server_without_client_ca_says_uploaded_artifacts_need_a_host` (clause
     37).
 - Tests served over `Admission::open`, where no certificate is presented, are
   unchanged (clause 37):
-  - `crates/fleet-agent/tests/packages_e2e.rs`;
-  - `crates/fleet-agent/tests/http_transport_e2e.rs`, the two Servers it starts.
-- `crates/fleet-server/tests/packages.rs`:
+  - `crates/classis-agent/tests/packages_e2e.rs`;
+  - `crates/classis-agent/tests/http_transport_e2e.rs`, the two Servers it starts.
+- `crates/classis-server/tests/packages.rs`:
   - `an_uploaded_set_is_offered_downloaded_and_gated` and
     `an_artifact_larger_than_the_framework_default_uploads_and_downloads_intact`
     use a member certificate that names the reporting Agent's host, so that they
     exercise the offered test.
   - `a_version_waiting_for_its_rollout_cannot_be_fetched` (clause 36).
-- `crates/fleet-agent/tests/gateway_tls.rs`:
+- `crates/classis-agent/tests/gateway_tls.rs`:
   - `the_gateway_serves_no_artifact_it_relayed_no_offer_for`: the Server serves
     the artifact, and the Gateway, which relayed no offer of it, answers `404`
     (clause 45).
-- `crates/fleet-agent/tests/gateway_package_cache.rs`, against an upstream the
+- `crates/classis-agent/tests/gateway_package_cache.rs`, against an upstream the
   test controls:
   - `a_relayed_artifact_is_fetched_once_before_any_request_and_served_to_its_host`
     — two Agents of one host are offered the same artifact, the Gateway fetches
@@ -2045,14 +2045,14 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
     — the upstream is held until the Client's own download has been answered
     `503` by the Gateway, and its download then completes and verifies (clauses
     45, 49).
-- `crates/fleet-agent/tests/gateway_package_cache.rs`, against the real Server
+- `crates/classis-agent/tests/gateway_package_cache.rs`, against the real Server
   on mutual TLS:
   - `a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_it`
     — the Gateway fetches with its own certificate what the Server offers an
     Agent behind it, and the downstream Client's own download code
     (`download_and_verify`) fetches it from the Gateway and verifies its hash
     and signature (clauses 37, 42, 44, 45).
-- `crates/fleet-agent/src/gateway/cache.rs`:
+- `crates/classis-agent/src/gateway/cache.rs`:
   - `room_is_made_from_artifacts_no_longer_offered_first` (clause 47).
   - `only_a_path_on_the_servers_route_is_cached` (clause 43).
   - `requests_while_fetching_are_answered_busy_and_the_upstream_serves_one`
@@ -2076,7 +2076,7 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   - `a_shutdown_ends_a_fetch_that_waits_out_retry_after` (clause 42).
   - `an_artifact_evicted_between_lookup_and_open_is_fetched_again` (clauses 45,
     47).
-- `crates/fleet-agent/src/packages.rs`:
+- `crates/classis-agent/src/packages.rs`:
   - `a_download_waits_out_retry_after_from_its_server_origin`,
     `a_download_gives_up_once_its_waits_reach_the_bound` and
     `a_retry_after_from_another_host_fails_the_download`,
@@ -2085,16 +2085,16 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
     `an_unusable_retry_after_is_not_waited_out` and
     `a_retry_after_after_a_redirect_off_the_origin_is_not_waited_out` (clause
     49).
-- `crates/fleet-agent/src/transport/mod.rs`:
+- `crates/classis-agent/src/transport/mod.rs`:
   - `a_shutdown_stops_a_download_waiting_out_retry_after` (clause 49).
-- `crates/fleet-agent/src/config.rs`:
+- `crates/classis-agent/src/config.rs`:
   - `the_package_cache_defaults_to_ten_gib_and_rejects_zero` (clause 47).
-- [`crates/fleet-core/src/package.rs`](../../crates/fleet-core/src/package.rs)
+- [`crates/classis-core/src/package.rs`](../../crates/classis-core/src/package.rs)
   test: `the_statement_names_type_version_and_hash` (clause 54).
-- [`crates/fleet-agent/src/packages.rs`](../../crates/fleet-agent/src/packages.rs)
+- [`crates/classis-agent/src/packages.rs`](../../crates/classis-agent/src/packages.rs)
   test: `a_signature_does_not_carry_over_to_another_type_or_version` (clause
   54).
-- [`crates/fleet-agent/src/supervisor/agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs)
+- [`crates/classis-agent/src/supervisor/agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs)
   test: `a_package_for_another_type_or_an_older_version_is_refused` (clause 65).
 - Download and verification: `content_hash_mismatch_is_refused`,
   `signature_policy_is_enforced`, `a_traversing_package_name_is_refused`,
@@ -2102,7 +2102,7 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `the_cap_triggers_only_past_the_limit`,
   `the_download_source_drops_whatever_authorises_it`,
   `a_download_never_debug_prints_its_header_values` in
-  [`packages.rs`](../../crates/fleet-agent/src/packages.rs);
+  [`packages.rs`](../../crates/classis-agent/src/packages.rs);
   `a_body_too_large_by_its_content_length_is_refused`,
   `a_chunked_body_is_stopped_once_it_crosses_the_ceiling`,
   `a_download_follows_a_redirect_to_the_mirror`,
@@ -2110,23 +2110,23 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `an_offered_header_does_not_follow_a_redirect_to_another_origin`,
   `an_unusable_offered_header_fails_the_download_by_name`,
   `the_staging_directory_is_kept_owner_only` in
-  [`tests/packages_download.rs`](../../crates/fleet-agent/tests/packages_download.rs);
+  [`tests/packages_download.rs`](../../crates/classis-agent/tests/packages_download.rs);
   `the_artifact_size_limit_defaults_is_configurable_and_rejects_zero` in
-  [`config.rs`](../../crates/fleet-agent/src/config.rs); end to end,
+  [`config.rs`](../../crates/classis-agent/src/config.rs); end to end,
   `a_signed_package_is_downloaded_verified_swapped_and_reported_installed` in
-  [`tests/packages_e2e.rs`](../../crates/fleet-agent/tests/packages_e2e.rs).
+  [`tests/packages_e2e.rs`](../../crates/classis-agent/tests/packages_e2e.rs).
 - Offer and status:
   `an_addon_package_is_refused_instead_of_overwriting_the_binary`,
   `a_package_offer_for_the_named_package_is_acknowledged_installing_and_handed_over`,
   `a_package_offer_hands_its_download_headers_to_the_transport`,
   `a_failed_package_reports_installed_failed_and_keeps_the_old_version` in
-  [`supervisor/agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs);
+  [`supervisor/agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs);
   `every_supervisor_declares_package_acceptance` in
-  [`supervisor/mod.rs`](../../crates/fleet-agent/src/supervisor/mod.rs);
+  [`supervisor/mod.rs`](../../crates/classis-agent/src/supervisor/mod.rs);
   `a_slow_download_is_reported_as_downloading_with_progress` in
-  [`transport/mod.rs`](../../crates/fleet-agent/src/transport/mod.rs).
+  [`transport/mod.rs`](../../crates/classis-agent/src/transport/mod.rs).
 - Containers, single file and tree: in
-  [`archive.rs`](../../crates/fleet-agent/src/archive.rs) the detection tests
+  [`archive.rs`](../../crates/classis-agent/src/archive.rs) the detection tests
   (`detects_gzip_by_its_leading_bytes_and_anything_else_as_raw`,
   `detects_a_7z_by_its_signature`,
   `detects_a_zip_by_its_signature_and_an_empty_one_too`),
@@ -2149,9 +2149,9 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `a_zip_past_the_budget_is_refused`;
   `a_program_path_must_stay_inside_the_package` and
   `a_tree_spawns_from_the_path_written_inside_the_package` in
-  [`config.rs`](../../crates/fleet-agent/src/config.rs).
+  [`config.rs`](../../crates/classis-agent/src/config.rs).
 - Swap, rollback, hold and retention: in
-  [`tests/supervisor_process.rs`](../../crates/fleet-agent/tests/supervisor_process.rs)
+  [`tests/supervisor_process.rs`](../../crates/classis-agent/tests/supervisor_process.rs)
   `apply_package_swaps_the_binary_and_acknowledges_installed`,
   `a_package_delivered_as_a_tar_gz_is_unpacked_and_installed`,
   `an_install_with_nothing_to_run_yet_keeps_the_binary_and_succeeds`,
@@ -2162,38 +2162,38 @@ Each test of clauses 35–49 carries a `Verifies:` marker citing this decision
   `a_tree_package_lands_whole_and_replaces_the_one_before_it`,
   `a_tree_that_will_not_stay_up_is_rolled_back_whole`,
   `a_tree_missing_the_configured_program_is_refused_and_changes_nothing`; in
-  [`supervisor/process.rs`](../../crates/fleet-agent/src/supervisor/process.rs)
+  [`supervisor/process.rs`](../../crates/classis-agent/src/supervisor/process.rs)
   `a_retained_backup_is_swept_only_after_its_deadline`,
   `a_sweep_leaves_an_unmarked_backup_alone`,
   `dropping_a_backup_clears_its_marker`;
   `retention_defaults_globally_and_is_overridable_per_supervisor` in
-  [`config.rs`](../../crates/fleet-agent/src/config.rs).
+  [`config.rs`](../../crates/classis-agent/src/config.rs).
 - Deterministic repack (clause 67):
   `a_linked_directory_is_packed_under_both_names_and_a_cycle_does_not_hang` in
-  [`fetch.rs`](../../crates/fleet-tools/src/fetch.rs) — a linked directory's
+  [`fetch.rs`](../../crates/classis-tools/src/fetch.rs) — a linked directory's
   contents under both names, a link that names nothing dropped, a cycle that
   ends, and the packed tree one a Client installs.
 - Mandatory signature (clauses 50, 54):
   `without_a_verification_key_no_agent_takes_packages` in
-  [`supervisor/mod.rs`](../../crates/fleet-agent/src/supervisor/mod.rs),
+  [`supervisor/mod.rs`](../../crates/classis-agent/src/supervisor/mod.rs),
   covering the Client's own Agent too; `signature_policy_is_enforced` in
-  [`packages.rs`](../../crates/fleet-agent/src/packages.rs);
+  [`packages.rs`](../../crates/classis-agent/src/packages.rs);
   `an_unsigned_offer_or_an_unkeyed_client_fetches_nothing` in
-  [`tests/packages_download.rs`](../../crates/fleet-agent/tests/packages_download.rs).
+  [`tests/packages_download.rs`](../../crates/classis-agent/tests/packages_download.rs).
 - Sources (clause 53), in
-  [`packages.rs`](../../crates/fleet-agent/src/packages.rs):
+  [`packages.rs`](../../crates/classis-agent/src/packages.rs):
   `an_allowed_source_must_be_a_plain_https_prefix` (the rule startup applies to
   every entry) and `a_source_is_allowed_only_below_a_prefix_or_at_the_server`.
 - Download (clause 53), in
-  [`tests/packages_download.rs`](../../crates/fleet-agent/tests/packages_download.rs):
+  [`tests/packages_download.rs`](../../crates/classis-agent/tests/packages_download.rs):
   `a_source_that_is_not_allowed_is_refused_without_a_request`,
   `a_redirect_to_a_source_that_is_not_allowed_fails_the_download`,
   `an_offered_header_does_not_follow_a_redirect_to_another_origin`.
 
 **Not mechanically decidable:** that the Server never opens an artifact
 (clause 6) is an absence — no test can show a code path that does not exist;
-review of every change touching `crates/fleet-server/src/packages.rs` and
-`crates/fleet-server/src/api.rs` keeps it. That the probe speaks TLS 1.3 alone
+review of every change touching `crates/classis-server/src/packages.rs` and
+`crates/classis-server/src/api.rs` keeps it. That the probe speaks TLS 1.3 alone
 (clause 5) is a client setting no test can observe: a refused handshake counts
 as an unreachable source, which is stored like an answering one, so review keeps
 it. That every download on the Agent is TLS 1.3 and that the client certificate
@@ -2201,9 +2201,9 @@ reaches only the Server's own origin are settled by construction in
 `download_and_verify` — two download clients built on the Client's TLS settings,
 the identified one used only for that origin — and no test stands up a TLS
 source that inspects the handshake, so review of every change to
-[`packages.rs`](../../crates/fleet-agent/src/packages.rs) keeps them. That the
+[`packages.rs`](../../crates/classis-agent/src/packages.rs) keeps them. That the
 Client names the missing key at startup is a log line in
-[`service/runtime.rs`](../../crates/fleet-agent/src/service/runtime.rs) that no
+[`service/runtime.rs`](../../crates/classis-agent/src/service/runtime.rs) that no
 test reads. That a repack yields the same bytes twice (clause 67) has no test of
-its own: `pack_tree` in [`fetch.rs`](../../crates/fleet-tools/src/fetch.rs)
+its own: `pack_tree` in [`fetch.rs`](../../crates/classis-tools/src/fetch.rs)
 fixes order, times and ownership, and review of every change to it keeps them.

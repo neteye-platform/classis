@@ -1,5 +1,5 @@
 {
-  "name": "OpAMP Fleet DevContainer",
+  "name": "Classis DevContainer",
 
   // Pinned to a Debian *release*, not the floating `:debian` tag.
   "image": "mcr.microsoft.com/devcontainers/base:debian12",
@@ -94,8 +94,8 @@
   "appPort": ["0.0.0.0:4320:4320"],
   "forwardPorts": [4321],
   "portsAttributes": {
-    "4320": { "label": "OpAMP Fleet Server (Agent plane: OpAMP + downloads)" },
-    "4321": { "label": "OpAMP Fleet Server (Operator plane: REST + UI)" },
+    "4320": { "label": "Classis Server (Agent plane: OpAMP + downloads)" },
+    "4321": { "label": "Classis Server (Operator plane: REST + UI)" },
     // The forwarder of `postStartCommand` listens here and leads to the host's stores. VS Code
     // would offer to forward these ports back to the host, onto the ports the stores already
     // hold there; labelled for the Ports view, ignored by the auto-forwarder.

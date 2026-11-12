@@ -5,7 +5,7 @@ repos:
       # Vendored bundles (Redoc and Shiki, the latter's SHA-256 pinned in scripts/vendor-shiki.lock)
       # and fuzz seeds (inputs the fuzzer reads byte for byte) are kept as they came.
       - id: trailing-whitespace
-        exclude: &verbatim ^(crates/fleet-server/static/(redoc\.standalone|shiki)\.js|fuzz/seeds/.*)$
+        exclude: &verbatim ^(crates/classis-server/static/(redoc\.standalone|shiki)\.js|fuzz/seeds/.*)$
       - id: check-added-large-files
       - id: check-case-conflict
       - id: end-of-file-fixer
@@ -25,7 +25,7 @@ repos:
       - id: check-merge-conflict
       # A throwaway key the PEM fuzz target starts from, and a test that sets a PEM header alone.
       - id: detect-private-key
-        exclude: ^(fuzz/seeds/pem/ec-key|crates/fleet-agent/src/telemetry\.rs|crates/fleet-tools/src/pki\.rs)$
+        exclude: ^(fuzz/seeds/pem/ec-key|crates/classis-agent/src/telemetry\.rs|crates/classis-tools/src/pki\.rs)$
       - id: check-executables-have-shebangs
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -49,7 +49,7 @@ repos:
     hooks:
       # Vendored bundles and lockfiles are not prose; .codespellrc holds the words it must accept.
       - id: codespell
-        exclude: ^(crates/fleet-server/static/(redoc\.standalone|shiki)\.js|(fuzz/)?Cargo\.lock|scripts/vendor-shiki/package-lock\.json)$
+        exclude: ^(crates/classis-server/static/(redoc\.standalone|shiki)\.js|(fuzz/)?Cargo\.lock|scripts/vendor-shiki/package-lock\.json)$
 
   - repo: https://github.com/rhysd/actionlint
     rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # frozen: v1.7.12

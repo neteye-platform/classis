@@ -2,29 +2,29 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-24
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the `zeroize` crate in `Cargo.toml` and in the manifests of
-  `crates/fleet-core/`, `crates/fleet-agent/`, `crates/fleet-server/` and
-  `crates/fleet-tools/`, every value of those crates that holds a private key, a
-  password, the S3 secret access key, a `bootstrap.p12` being read or the
+  `crates/classis-core/`, `crates/classis-agent/`, `crates/classis-server/` and
+  `crates/classis-tools/`, every value of those crates that holds a private key,
+  a password, the S3 secret access key, a `bootstrap.p12` being read or the
   Supervisor Endpoint token (among them `BootstrapIdentity` in
-  `crates/fleet-agent/src/config.rs`, `crates/fleet-agent/src/tls.rs`,
-  `crates/fleet-agent/src/csr.rs`, `read_password_file` and the questionnaire in
-  `crates/fleet-agent/src/config_init.rs`, the token in
-  `crates/fleet-agent/src/supervisor/`, `crates/fleet-core/src/pkcs12/file.rs`,
-  `crates/fleet-server/src/ca.rs`, `Password` in
-  `crates/fleet-server/src/bootstrap.rs`, the Basic password in
-  `crates/fleet-server/src/credentials.rs`, the Server's own TLS key,
-  `read_secret_file` in `crates/fleet-server/src/config.rs`, the contents of
+  `crates/classis-agent/src/config.rs`, `crates/classis-agent/src/tls.rs`,
+  `crates/classis-agent/src/csr.rs`, `read_password_file` and the questionnaire
+  in `crates/classis-agent/src/config_init.rs`, the token in
+  `crates/classis-agent/src/supervisor/`,
+  `crates/classis-core/src/pkcs12/file.rs`, `crates/classis-server/src/ca.rs`,
+  `Password` in `crates/classis-server/src/bootstrap.rs`, the Basic password in
+  `crates/classis-server/src/credentials.rs`, the Server's own TLS key,
+  `read_secret_file` in `crates/classis-server/src/config.rs`, the contents of
   `[database.postgres] password_file` in
-  `crates/fleet-server/src/postgres/mod.rs` and of
-  `[blobs.s3] secret_access_key_file` in `crates/fleet-server/src/s3.rs`,
-  `[packages] archive_key` in `crates/fleet-agent/src/config.rs` and
-  `crates/fleet-agent/src/config_file.rs`, the text of `supervisor.toml` where
-  `crates/fleet-agent/src/reconfigure.rs` and
-  `crates/fleet-agent/src/config_init.rs` rewrite it, the Gateway's listener
-  key, and the password and key handling of `crates/fleet-tools/src/pki.rs` and
-  `crates/fleet-tools/src/package.rs` with `package pack --archive-key`)
+  `crates/classis-server/src/postgres/mod.rs` and of
+  `[blobs.s3] secret_access_key_file` in `crates/classis-server/src/s3.rs`,
+  `[packages] archive_key` in `crates/classis-agent/src/config.rs` and
+  `crates/classis-agent/src/config_file.rs`, the text of `supervisor.toml` where
+  `crates/classis-agent/src/reconfigure.rs` and
+  `crates/classis-agent/src/config_init.rs` rewrite it, the Gateway's listener
+  key, and the password and key handling of `crates/classis-tools/src/pki.rs`
+  and `crates/classis-tools/src/package.rs` with `package pack --archive-key`)
 
 ## Context
 
@@ -51,7 +51,7 @@ vulnerability can be ruled out. Both ends hold secrets in memory, as plain
   [ADR-0049](0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md));
 - the Supervisor Endpoint token
   ([ADR-0015](0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md));
-- the passwords and keys `opamp-fleetctl` reads and writes.
+- the passwords and keys `classisctl` reads and writes.
 
 Memory that is freed keeps its bytes until it is reused. A core dump, a swapped
 page, a heap read past a buffer, or a later allocation that is handed out
@@ -101,8 +101,8 @@ it is read or made until it is dropped.
    `[workspace.dependencies]`
    ([ADR-0010](0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)
    clause 11) with its default `alloc` feature and no derive, and named by
-   `fleet-core`, `fleet-agent`, `fleet-server` and `fleet-tools` where they hold
-   a secret. It pulls no TLS or crypto backend, so
+   `classis-core`, `classis-agent`, `classis-server` and `classis-tools` where
+   they hold a secret. It pulls no TLS or crypto backend, so
    [ADR-0013](0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)
    clause 5 holds.
 2. **`Zeroizing` is the whole mechanism.** A secret is a `Zeroizing<Vec<u8>>` or
@@ -185,7 +185,7 @@ lies on disk under `config_dir` anyway.
 Tests that will carry `Verifies: ADR-0057`: the types of the secrets the
 Applies-to line names are pinned at compile time, by a test in each crate that
 binds `BootstrapIdentity::key_pem`, what `key_file`, `read_password_file`, the
-Server's `read_secret_file` and `fleet_core::pkcs12::file::open` return,
+Server's `read_secret_file` and `classis_core::pkcs12::file::open` return,
 `Password`'s field and the Endpoint token to a `Zeroizing` type, so a change
 back to a plain buffer stops compiling. That the bytes are overwritten on drop
 is `zeroize`'s own tested behaviour; reading freed memory from a test is

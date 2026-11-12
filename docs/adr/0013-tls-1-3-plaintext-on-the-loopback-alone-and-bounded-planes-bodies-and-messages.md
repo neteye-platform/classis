@@ -7,24 +7,24 @@
   · clause 22 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
 - **Date:** 2026-10-04
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the OpAMP endpoint and both transports in
-  `crates/fleet-server/src/transport.rs` and
-  `crates/fleet-agent/src/transport/`, TLS in `crates/opamp/src/tls.rs`,
-  `crates/fleet-server/src/tls.rs` and `crates/fleet-agent/src/tls.rs`, the
+  `crates/classis-server/src/transport.rs` and
+  `crates/classis-agent/src/transport/`, TLS in `crates/opamp/src/tls.rs`,
+  `crates/classis-server/src/tls.rs` and `crates/classis-agent/src/tls.rs`, the
   plaintext rule in `crates/opamp/src/client/connection.rs`, how every listener
   binds and serves and how it reads a request body or a WebSocket message in
   `crates/opamp/src/server/`, the package upload in
-  `crates/fleet-server/src/api.rs`, `crates/fleet-server/src/listen.rs` and
-  `main.rs`, the package URL probe in `crates/fleet-server/src/api.rs`, the
+  `crates/classis-server/src/api.rs`, `crates/classis-server/src/listen.rs` and
+  `main.rs`, the package URL probe in `crates/classis-server/src/api.rs`, the
   `rustls` features in `Cargo.toml`, the `listen`, `max_connections`, `[rest]`
   and `[tls]` keys of `server.toml`, the message limit in
-  `crates/fleet-server/src/agent_rate.rs`, `on_message` and `on_unreadable` of
+  `crates/classis-server/src/agent_rate.rs`, `on_message` and `on_unreadable` of
   the Server's handler, the enrolment refusals in `Fleet::enrol` and the
-  download guard `admit_download` in `crates/fleet-server/src/transport.rs`,
-  every `Unavailable` reply in `crates/fleet-server/src/fleet.rs`, the
+  download guard `admit_download` in `crates/classis-server/src/transport.rs`,
+  every `Unavailable` reply in `crates/classis-server/src/fleet.rs`, the
   `[agent_rate_limit]` section of `server.toml` and its parsing and startup
-  warning in `crates/fleet-server/src/config.rs`, and the `agent_rate.throttled`
+  warning in `crates/classis-server/src/config.rs`, and the `agent_rate.throttled`
   audit event
 
 ## Context
@@ -145,7 +145,7 @@ Forces that shape the rate limit:
   nothing: a peer chooses a new uid for each message. A certificate an operator
   provisioned outside the CSR flow names no host until it is first renewed. It
   is still one certificate, told apart by its issuer and serial (`CertId` in
-  [`revocation.rs`](../../crates/fleet-server/src/revocation.rs)).
+  [`revocation.rs`](../../crates/classis-server/src/revocation.rs)).
 - **A Gateway carries other hosts' Agents.** Behind a marked Gateway every Agent
   arrives under the Gateway's certificate (ADR-0021 clause 13,
   [ADR-0015](0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)
@@ -154,7 +154,7 @@ Forces that shape the rate limit:
   cycle uids. The Gateway's `max_carried_agents` does not stop that either: it
   bounds one downstream connection, and a plain-HTTP downstream exchange is a
   connection of its own
-  ([`gateway/mod.rs`](../../crates/fleet-agent/src/gateway/mod.rs) creates a
+  ([`gateway/mod.rs`](../../crates/classis-agent/src/gateway/mod.rs) creates a
   `Downstream` per exchange).
 - **The protocol has one retryable refusal.** `ServerErrorResponseType` has
   three types. Only `UNAVAILABLE` tells the Agent to retry, and
@@ -168,7 +168,7 @@ Forces that shape the rate limit:
     to reconnect"_.
   - _"The minimum recommended retry interval is 30 seconds."_
   - This Server answers `Unavailable` with `retry_info` of 30 s (`RETRY_AFTER`
-    in [`fleet.rs`](../../crates/fleet-server/src/fleet.rs)) in four places
+    in [`fleet.rs`](../../crates/classis-server/src/fleet.rs)) in four places
     besides the rate limit: at the Agent-record ceiling, when the enrolment
     queue is full, when no enrolment window is open (ADR-0021 clause 21), and
     when the audit record holds back a CSR
@@ -188,9 +188,9 @@ Forces that shape the rate limit:
 - **A reply reaches an Agent only when it carries that Agent's `instance_uid`.**
   This project's own Client routes every reply by that field and drops one
   without it, on every connection (`Engine::handle` in
-  [`engine.rs`](../../crates/fleet-agent/src/engine.rs)). A Gateway drops one
+  [`engine.rs`](../../crates/classis-agent/src/engine.rs)). A Gateway drops one
   too (ADR-0015 clause 13,
-  [`pool.rs`](../../crates/fleet-agent/src/gateway/pool.rs)). An `Unavailable`
+  [`pool.rs`](../../crates/classis-agent/src/gateway/pool.rs)). An `Unavailable`
   reply built without an `instance_uid` reaches no Agent, and the Client never
   waits as told.
 - **A host speaks for at most 256 Agents** (ADR-0021 clause 7), and after a
@@ -427,7 +427,7 @@ for a host marked as a Gateway.
 
 22. **Which bucket a message or a download is counted in.** The key comes from
     the certificate admission proved (`Proofs` in
-    [`transport.rs`](../../crates/fleet-server/src/transport.rs)):
+    [`transport.rs`](../../crates/classis-server/src/transport.rs)):
     - **A certificate that names a host:** that host.
     - **A member's certificate that names no host** (one an operator provisioned
       that has not been renewed yet): its issuer and serial.
@@ -767,13 +767,13 @@ honours `Retry-After`.
 - [RFC 6585 §4](https://datatracker.ietf.org/doc/html/rfc6585#section-4)
   (`429`).
 - The code the rate limit builds on:
-  - [`transport.rs`](../../crates/fleet-server/src/transport.rs): `admit`,
+  - [`transport.rs`](../../crates/classis-server/src/transport.rs): `admit`,
     `admit_download`, `Proofs` and `Fleet::enrol`;
-  - [`throttle.rs`](../../crates/fleet-server/src/throttle.rs): the per-address
+  - [`throttle.rs`](../../crates/classis-server/src/throttle.rs): the per-address
     throttle and its bounded table;
-  - [`fleet.rs`](../../crates/fleet-server/src/fleet.rs): `unavailable`,
+  - [`fleet.rs`](../../crates/classis-server/src/fleet.rs): `unavailable`,
     `RETRY_AFTER` and the `sequence_num` gap;
-  - [`audit_log.rs`](../../crates/fleet-server/src/audit_log.rs): the
+  - [`audit_log.rs`](../../crates/classis-server/src/audit_log.rs): the
     `unrecorded_before` count;
   - [`server.rs`](../../crates/opamp/src/server.rs): the `Handler` dispatch;
   - the Client's handling of `Unavailable` in
@@ -781,11 +781,11 @@ honours `Retry-After`.
     [`ws.rs`](../../crates/opamp/src/client/ws.rs) and
     [`http.rs`](../../crates/opamp/src/client/http.rs);
   - its routing by `instance_uid` in
-    [`engine.rs`](../../crates/fleet-agent/src/engine.rs);
+    [`engine.rs`](../../crates/classis-agent/src/engine.rs);
   - the Gateway's per-exchange `Downstream` in
-    [`gateway/mod.rs`](../../crates/fleet-agent/src/gateway/mod.rs) and its
+    [`gateway/mod.rs`](../../crates/classis-agent/src/gateway/mod.rs) and its
     downward routing in
-    [`pool.rs`](../../crates/fleet-agent/src/gateway/pool.rs).
+    [`pool.rs`](../../crates/classis-agent/src/gateway/pool.rs).
 - [`CONFORMANCE.md`](../CONFORMANCE.md), the _Retrying, throttling, bad request_
   row.
 
@@ -883,37 +883,37 @@ honours `Retry-After`.
 
 ## Enforcement
 
-- [`crates/fleet-server/tests/http_transport.rs`](../../crates/fleet-server/tests/http_transport.rs)
+- [`crates/classis-server/tests/http_transport.rs`](../../crates/classis-server/tests/http_transport.rs)
   — `gzip_request_bodies_are_accepted`,
   `an_oversized_request_body_is_refused_with_413`,
   `a_gzip_body_that_inflates_past_the_limit_is_refused_with_413`,
   `transport_detection_rejects_a_missing_protobuf_content_type` (clauses 1, 3).
-- [`crates/fleet-server/tests/ws_transport.rs`](../../crates/fleet-server/tests/ws_transport.rs)
+- [`crates/classis-server/tests/ws_transport.rs`](../../crates/classis-server/tests/ws_transport.rs)
   — `a_framed_report_is_answered`,
   `an_oversized_frame_closes_the_connection_with_1009` (clauses 1, 3).
-- [`crates/fleet-agent/src/config.rs`](../../crates/fleet-agent/src/config.rs) —
-  `scheme_selects_the_transport`, `rejects_an_unknown_scheme_and_unknown_keys`
+- [`crates/classis-agent/src/config.rs`](../../crates/classis-agent/src/config.rs)
+  — `scheme_selects_the_transport`, `rejects_an_unknown_scheme_and_unknown_keys`
   (clause 2);
-  [`crates/fleet-agent/tests/http_transport_e2e.rs`](../../crates/fleet-agent/tests/http_transport_e2e.rs)
+  [`crates/classis-agent/tests/http_transport_e2e.rs`](../../crates/classis-agent/tests/http_transport_e2e.rs)
   — `a_configuration_rollout_reaches_a_polling_client` (clause 2).
-- [`crates/fleet-agent/src/transport/mod.rs`](../../crates/fleet-agent/src/transport/mod.rs)
+- [`crates/classis-agent/src/transport/mod.rs`](../../crates/classis-agent/src/transport/mod.rs)
   — `backoff_doubles_and_caps_within_its_jittered_bounds`,
   `two_backoffs_do_not_produce_the_same_ladder` (clause 4).
 - Clause 5: reqwest's `rustls-no-provider` feature refuses to build a client
   without the process-wide `ring` provider, and a dependency pulling `aws-lc-rs`
   fails to build in the Dev Container, which has no cmake;
-  [`crates/fleet-server/tests/mutual_tls.rs`](../../crates/fleet-server/tests/mutual_tls.rs)
+  [`crates/classis-server/tests/mutual_tls.rs`](../../crates/classis-server/tests/mutual_tls.rs)
   exercises the rustls stack on both ends.
-- [`crates/fleet-server/src/config.rs`](../../crates/fleet-server/src/config.rs)
+- [`crates/classis-server/src/config.rs`](../../crates/classis-server/src/config.rs)
   — `the_operator_plane_defaults_to_loopback_and_is_configurable`,
   `two_planes_on_one_address_are_refused` (clauses 6, 7, 10).
-- [`crates/fleet-server/tests/packages.rs`](../../crates/fleet-server/tests/packages.rs)
+- [`crates/classis-server/tests/packages.rs`](../../crates/classis-server/tests/packages.rs)
   — `the_artifact_is_served_where_the_agents_are_and_not_on_the_operator_plane`;
-  [`crates/fleet-server/tests/auth.rs`](../../crates/fleet-server/tests/auth.rs)
+  [`crates/classis-server/tests/auth.rs`](../../crates/classis-server/tests/auth.rs)
   —
   `the_rest_api_stays_open_on_its_own_listener_when_the_opamp_endpoint_is_guarded`
   (clauses 6, 8).
-- [`crates/fleet-server/tests/connection_setup.rs`](../../crates/fleet-server/tests/connection_setup.rs)
+- [`crates/classis-server/tests/connection_setup.rs`](../../crates/classis-server/tests/connection_setup.rs)
   — `a_connection_that_never_finishes_its_headers_is_hung_up_on`,
   `an_established_session_outlives_the_header_bound` (clauses 11, 14).
 - Clause 14's floor, over real connections to `opamp`'s listener with the floor
@@ -926,7 +926,7 @@ honours `Retry-After`.
   `a_websocket_message_that_trickles_closes_with_1008`,
   `a_message_kept_open_by_pings_between_its_fragments_closes_with_1008`,
   `an_idle_websocket_stays_open`;
-  [`crates/fleet-server/tests/packages.rs`](../../crates/fleet-server/tests/packages.rs)
+  [`crates/classis-server/tests/packages.rs`](../../crates/classis-server/tests/packages.rs)
   — `an_upload_that_stops_is_answered_408_and_leaves_nothing_staged`, on the
   Operator plane.
 
@@ -946,23 +946,23 @@ These tests carry `Verifies: ADR-0013`:
 - [`crates/opamp/src/client/connection.rs`](../../crates/opamp/src/client/connection.rs)
   — `plaintext_is_refused_off_the_loopback_literals`,
   `plaintext_off_the_loopback_is_refused_before_connecting` (clauses 2, 15).
-- [`crates/fleet-agent/src/config.rs`](../../crates/fleet-agent/src/config.rs) —
-  `the_default_endpoint_is_wss_on_the_loopback`,
+- [`crates/classis-agent/src/config.rs`](../../crates/classis-agent/src/config.rs)
+  — `the_default_endpoint_is_wss_on_the_loopback`,
   `a_plaintext_endpoint_off_the_loopback_is_refused_at_startup` (clause 2).
-- [`crates/fleet-server/src/config.rs`](../../crates/fleet-server/src/config.rs)
+- [`crates/classis-server/src/config.rs`](../../crates/classis-server/src/config.rs)
   — `the_agent_plane_defaults_to_the_loopback`,
   `a_server_without_tls_is_refused_at_startup` (clauses 6, 9),
   `the_operator_plane_requires_authentication_off_the_loopback` (clause 7),
   `max_connections_defaults_per_plane_and_zero_is_refused` (clause 16).
-- [`crates/fleet-server/tests/mutual_tls.rs`](../../crates/fleet-server/tests/mutual_tls.rs)
+- [`crates/classis-server/tests/mutual_tls.rs`](../../crates/classis-server/tests/mutual_tls.rs)
   — `a_client_certificate_is_required_in_the_handshake_on_the_agent_plane`
   (clause 8).
-- [`crates/fleet-server/tests/packages.rs`](../../crates/fleet-server/tests/packages.rs)
+- [`crates/classis-server/tests/packages.rs`](../../crates/classis-server/tests/packages.rs)
   — `a_plaintext_source_off_the_loopback_is_refused` (clause 18).
 
 Tests of the rate limit, each marked `Verifies: ADR-0013`:
 
-- `crates/fleet-server/src/agent_rate.rs`:
+- `crates/classis-server/src/agent_rate.rs`:
   - `a_bucket_starts_full_and_refills_at_the_configured_rate` (clause 19);
   - `a_host_is_one_bucket_whatever_its_agents_report`,
     `a_member_certificate_without_a_host_is_counted_by_issuer_and_serial`,
@@ -975,28 +975,28 @@ Tests of the rate limit, each marked `Verifies: ADR-0013`:
     (clause 22);
   - `a_full_table_evicts_the_bucket_used_least_recently` and
     `both_tables_are_bounded` (clause 26).
-- `crates/fleet-server/src/config.rs`:
+- `crates/classis-server/src/config.rs`:
   - `the_agent_rate_limit_defaults_and_refuses_zero`: the defaults are 10, 300,
     500 and 10 000, a `0` in any key is refused naming it, and an unknown key is
     refused (clause 19);
   - `a_limit_below_the_heartbeat_for_256_agents_warns_naming_both_keys`:
     `messages_per_sec = 5` with `heartbeat_interval_secs = 30` warns, naming
     both keys, and starts; the defaults do not warn (clause 20).
-- `crates/fleet-server/tests/ws_transport.rs`:
+- `crates/classis-server/tests/ws_transport.rs`:
   `a_session_past_its_burst_is_answered_unavailable_with_retry_info`. A member
   sends `burst + 1` messages, and the last reply carries `Unavailable`, a
   `retry_info` of exactly 30 s and the message's `instance_uid`. The connection
   stays open, the Agent's record is unchanged, and once the bucket refills the
   next message is processed with `ReportFullState` set (clauses 21, 23, 25).
-- `crates/fleet-server/tests/http_transport.rs`:
+- `crates/classis-server/tests/http_transport.rs`:
   `a_poller_past_its_burst_is_answered_unavailable_in_the_body`: a `200`
   carrying the same `ServerToAgent`, never a `429` or a `503` (clause 23).
-- `crates/fleet-server/tests/packages.rs`:
+- `crates/classis-server/tests/packages.rs`:
   `a_download_past_the_limit_is_answered_429_after_thirty_seconds`. A member
   over its rate gets `429` with `Retry-After: 30`, its next download is admitted
   once the bucket refills, and the refusal counts no failure toward the throttle
   of ADR-0021 clause 24 (clauses 21, 24).
-- `crates/fleet-server/tests/mutual_tls.rs`:
+- `crates/classis-server/tests/mutual_tls.rs`:
   - `two_certificates_of_one_host_share_a_bucket_and_two_hosts_do_not` and
     `a_bootstrap_certificate_shared_by_two_addresses_is_two_buckets` (clause
     22);
@@ -1010,10 +1010,10 @@ Tests of the rate limit, each marked `Verifies: ADR-0013`:
     - a CSR held back for its audit record;
     - the full enrolment queue;
     - the closed enrolment window.
-- `crates/fleet-server/src/audit_log.rs`:
+- `crates/classis-server/src/audit_log.rs`:
   `a_throttle_refusal_that_finds_the_channel_full_is_counted_unrecorded` (clause
   27).
-- `crates/fleet-agent/tests/gateway_revocation_e2e.rs`:
+- `crates/classis-agent/tests/gateway_revocation_e2e.rs`:
   `a_throttled_agent_behind_a_gateway_hears_unavailable_and_its_neighbour_does_not`.
   Two Agents ride one folded connection to a marked Gateway, and one floods. It
   alone receives the `Unavailable`, routed by its `instance_uid`, and the
