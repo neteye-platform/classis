@@ -15,7 +15,7 @@
 # manager. Debian 13's glibc is newer than the build runner's, so the binary built there loads. The
 # tag is named for the reader and the digest is what is pulled; a new digest arrives by a reviewed
 # commit.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:83b9b50586253821cf63ffcec87d3d94265a093ad30da232039af962dd8f4edf
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
 
 ARG TARGETARCH
 # The release passes its version and commit; a local build says what it is.
