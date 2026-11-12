@@ -2,12 +2,12 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the effective-configuration cell and dialog of the Agents tab
-  in `crates/fleet-server/static/index.html`, the vendored
-  `crates/fleet-server/static/shiki.js` and the route that serves it in
-  `crates/fleet-server/src/api.rs`, the token colours in
-  `crates/fleet-server/static/ui.css`, `ui-carbon.css` and `ui-quiet.css`, the
+  in `crates/classis-server/static/index.html`, the vendored
+  `crates/classis-server/static/shiki.js` and the route that serves it in
+  `crates/classis-server/src/api.rs`, the token colours in
+  `crates/classis-server/static/ui.css`, `ui-carbon.css` and `ui-quiet.css`, the
   script that builds the vendored file under `scripts/`, and `NOTICE`
 
 ## Context
@@ -51,7 +51,7 @@ version and SHA-256 are pinned and checked by a test, and whose colours come
 from each look's stylesheet.
 
 1. **One vendored file, built once, never in CI.**
-   - `crates/fleet-server/static/shiki.js` is a single browser script built from
+   - `crates/classis-server/static/shiki.js` is a single browser script built from
      `shiki@4.5.0` with `@shikijs/engine-javascript`, the grammars of clause 3
      and Shiki's CSS-variables theme. It exposes one function on `window`. The
      file starts with a header naming the packages, their versions and the
@@ -134,7 +134,7 @@ formatting (re-indenting) any configuration; WebAssembly in the browser.
 - Shiki documentation: the JavaScript regex engine and the CSS-variables theme.
 - ADR-0010 clause 14 and its alternative "A frontend framework and bundler for
   the UI"; `NOTICE` (Redoc vendored as a pre-built file); the Operator plane's
-  CSP in `crates/fleet-server/src/api.rs`.
+  CSP in `crates/classis-server/src/api.rs`.
 
 ## Consequences
 

@@ -3,9 +3,9 @@
 - **Status:** 🟢 accepted · clause 1 superseded by
   [ADR-0055](0055-an-agents-type-is-its-supervisors-and-a-process-never-chooses-it.md)
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the fold of a Managed Process's description and the operator
-  attributes in `crates/fleet-agent/src/supervisor/agent/description.rs`, the
+  attributes in `crates/classis-agent/src/supervisor/agent/description.rs`, the
   attribute keys in `crates/opamp/src/attributes.rs`, the `[attributes]` table
   of `supervisor.toml`, and every document that tells an operator what a Managed
   Process or `[attributes]` contributes to an Agent's description
@@ -144,28 +144,28 @@ clauses 3 and 5).
 
 ## Sources / Prior art
 
-- `crates/fleet-agent/src/supervisor/agent/description.rs:118-129`: operator
+- `crates/classis-agent/src/supervisor/agent/description.rs:118-129`: operator
   attributes are added only where nothing is reported. Lines 142-156: the fold,
   which exempts only `service.instance.id` and `service.instance.name` (143-145)
   and upserts every other key in the list the process used (161-166).
-- `crates/fleet-agent/src/supervisor/mod.rs:64-71` and `:104`:
+- `crates/classis-agent/src/supervisor/mod.rs:64-71` and `:104`:
   `supervisor.kind.*` is set only on the Client's own Agent. `:299`: a
   Supervisor-backed Agent gets the same `[attributes]` and none of the kinds.
-- `crates/fleet-agent/src/supervisor/process.rs:967-972`: the version probe
+- `crates/classis-agent/src/supervisor/process.rs:967-972`: the version probe
   reports `service.version` and nothing else.
-  `crates/fleet-agent/src/supervisor/endpoint.rs:220-225`: the Supervisor
+  `crates/classis-agent/src/supervisor/endpoint.rs:220-225`: the Supervisor
   Endpoint passes the whole description on as an event.
-- `crates/fleet-server/src/deployments.rs:35-50`: a Selector matches identifying
+- `crates/classis-server/src/deployments.rs:35-50`: a Selector matches identifying
   attributes first, then non-identifying ones.
-  `crates/fleet-server/src/labels.rs:122-125` and `:150-161`: a reported
+  `crates/classis-server/src/labels.rs:122-125` and `:150-161`: a reported
   attribute beats every label. `:165-179`: a shadowed label is listed.
-- `crates/fleet-server/src/packages.rs:66-80`: the platform comes from the
+- `crates/classis-server/src/packages.rs:66-80`: the platform comes from the
   reported `os.type` and `host.arch`.
-  `crates/fleet-server/src/configs.rs:152-170`: the fit uses the reported
+  `crates/classis-server/src/configs.rs:152-170`: the fit uses the reported
   `service.name`.
-- `crates/fleet-server/src/labels.rs:191-200`: any `supervisor.kind.*` key makes
+- `crates/classis-server/src/labels.rs:191-200`: any `supervisor.kind.*` key makes
   a Client Agent. `:202-217`: the machine behind a Gateway is the reported
-  `host.id`, else `host.name`. `crates/fleet-server/src/fleet.rs:821-826`: the
+  `host.id`, else `host.name`. `crates/classis-server/src/fleet.rs:821-826`: the
   group behind a Gateway. `:2694-2716`: two Client Agents in a group mean nobody
   inherits and all are marked ambiguous.
 - `docs/manual/rollout.md:418`: the manual suggests `channel` in `[attributes]`
@@ -197,7 +197,7 @@ clauses 3 and 5).
 
 Tests that will carry `Verifies: ADR-0041`:
 
-- In `crates/fleet-agent/src/supervisor/agent.rs`: a process that reports
+- In `crates/classis-agent/src/supervisor/agent.rs`: a process that reports
   `host.name`, `host.id`, `os.type`, `host.arch`, `os.description`,
   `supervisor.kind.collector` and `collector.pipeline`, each once in the
   identifying and once in the non-identifying list. The description carries the
@@ -212,7 +212,7 @@ Tests that will carry `Verifies: ADR-0041`:
 - A process that reports `service.name` among its non-identifying attributes
   replaces the Supervisor's value in the identifying list, and the description
   carries the key once.
-- In `crates/fleet-agent/tests/collector_extension_e2e.rs`: an extension report
+- In `crates/classis-agent/tests/collector_extension_e2e.rs`: an extension report
   carrying `host.name = elsewhere` and `supervisor.kind.collector = true`
   reaches the Server with the Supervisor's `host.name` and without the kind
   attribute, while its `service.version` and health arrive.

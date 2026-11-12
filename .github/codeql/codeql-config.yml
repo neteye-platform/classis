@@ -12,7 +12,7 @@ paths-ignore:
   # The filesystem store, removed with the move to PostgreSQL and S3 only. Its file names come
   # from validated domain names (a Package's type and version, a Configuration's name), which
   # CodeQL does not see as a barrier.
-  - crates/fleet-server/src/fs
+  - crates/classis-server/src/fs
 
 query-filters:
   # rustc's `unused_variables`, denied by `-D warnings` in CI, decides this, and it sees a

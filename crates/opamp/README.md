@@ -43,7 +43,7 @@ version, since `prost` types are part of this API — comes only with the next
 specification release.
 
 This crate is developed as part of
-[OpAMP Fleet](https://github.com/neteye-platform/classis), whose Server and
+[Classis](https://github.com/neteye-platform/classis), whose Server and
 Client are built on it.
 
 ## License

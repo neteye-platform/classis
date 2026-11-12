@@ -3,11 +3,11 @@
 - **Status:** 🟢 accepted · clauses 1, 2, 3 and 4 superseded by
   [ADR-0029](0029-a-bootstrap-certificate-as-a-password-protected-pkcs12-file-the-server-keeps.md)
 - **Date:** 2026-10-13
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `service install` and `service config` of the Client in
-  `crates/fleet-agent/src/main.rs`, the questionnaire and the installer's
-  answers in `crates/fleet-agent/src/config_init.rs`, the enrolment in
-  `crates/fleet-agent/src/service/enrol.rs`, and every document that tells an
+  `crates/classis-agent/src/main.rs`, the questionnaire and the installer's
+  answers in `crates/classis-agent/src/config_init.rs`, the enrolment in
+  `crates/classis-agent/src/service/enrol.rs`, and every document that tells an
   operator how to install a Client
 - **Supersedes:**
   [ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)

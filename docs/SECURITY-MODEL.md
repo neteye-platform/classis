@@ -1,13 +1,13 @@
 # Security model
 
-How OpAMP Fleet and this repository are secured: the Dev Container the agents
+How Classis and this repository are secured: the Dev Container the agents
 run in, what the repository does about secrets, how the workflows pin their
 actions, the trust model of a fleet, and which releases receive fixes. To report
 a vulnerability, follow [`SECURITY.md`](../SECURITY.md).
 
 ## Dev Container & agent execution
 
-OpAMP Fleet runs coding agents inside the Dev Container defined in
+Classis runs coding agents inside the Dev Container defined in
 [`.devcontainer/devcontainer.json`](../.devcontainer/devcontainer.json). Three
 properties shape its security posture:
 

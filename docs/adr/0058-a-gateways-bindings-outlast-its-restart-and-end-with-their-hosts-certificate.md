@@ -2,15 +2,15 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-24
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the assignment of Agents to upstream connections and its
-  release in `crates/fleet-agent/src/gateway/pool.rs` and the callers that
-  release a place in `crates/fleet-agent/src/gateway/mod.rs`, the bindings of
-  `instance_uid`s to hosts in `crates/fleet-agent/src/gateway/policy.rs` and
-  `crates/fleet-agent/src/gateway/cache.rs`, their store under
+  release in `crates/classis-agent/src/gateway/pool.rs` and the callers that
+  release a place in `crates/classis-agent/src/gateway/mod.rs`, the bindings of
+  `instance_uid`s to hosts in `crates/classis-agent/src/gateway/policy.rs` and
+  `crates/classis-agent/src/gateway/cache.rs`, their store under
   `<state_dir>/gateway-packages/bindings` and its loading and writing in
-  `crates/fleet-agent/src/gateway/`, the downstream refusal while that store
-  cannot be read in `crates/fleet-agent/src/gateway/mod.rs`, and every document
+  `crates/classis-agent/src/gateway/`, the downstream refusal while that store
+  cannot be read in `crates/classis-agent/src/gateway/mod.rs`, and every document
   that tells an operator what a Gateway keeps on disk or how an Agent behind one
   is bound to its host
 - **Supersedes:**
@@ -33,7 +33,7 @@ that sent it. Through that binding a host receives an Agent's configurations and
 package offers and speaks for it to the Server.
 
 The binding lasts only "since the Gateway started". The bindings are held in
-memory (`Bindings` in `crates/fleet-agent/src/gateway/policy.rs`), so after
+memory (`Bindings` in `crates/classis-agent/src/gateway/policy.rs`), so after
 every restart of the Gateway — an update, a reboot, a crash — whichever host
 reports an `instance_uid` first binds it. A host with a valid member certificate
 that knows another host's `instance_uid` can report for it first and take over
@@ -69,7 +69,7 @@ while that connection lives". Read as written, an assignment ends only when its
 upstream connection drops. The Gateway does not keep it that long. It already
 releases the place of every Agent a downstream WebSocket carried when that
 socket closes, and of an enrolling peer when its exchange ends
-(`crates/fleet-agent/src/gateway/mod.rs:430`, `:596`). A plain-HTTP Agent opens
+(`crates/classis-agent/src/gateway/mod.rs:430`, `:596`). A plain-HTTP Agent opens
 no socket that closes, so its place stayed until the upstream connection
 dropped, and a peer that polled under ever new `instance_uid`s grew the pool's
 assignments until then (`docs/HARDENING.md`, Gateway). ADR-0039 clause 6 already
@@ -284,9 +284,9 @@ reports through two keeps an end at each.
 
 ## Sources / Prior art
 
-- `crates/fleet-agent/src/gateway/pool.rs:1-14` and `:239-252`: stickiness by
+- `crates/classis-agent/src/gateway/pool.rs:1-14` and `:239-252`: stickiness by
   `instance_uid` and the release that skips an Agent still routed.
-- `crates/fleet-agent/src/gateway/mod.rs:430`, `:596`: the places released at
+- `crates/classis-agent/src/gateway/mod.rs:430`, `:596`: the places released at
   the end of an enrolment exchange and when a downstream WebSocket closes.
 - OpenSSH `known_hosts` (`ssh(1)`, _VERIFYING HOST KEYS_): trust on first use is
   only as good as the record of first use; a record that is forgotten makes
@@ -306,7 +306,7 @@ reports through two keeps an end at each.
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
   clauses 4–6,
   [ADR-0054](0054-no-privileged-install-step-follows-a-link-the-account-placed.md),
-  `crates/fleet-agent/src/gateway/policy.rs`, and the Gateway entry of _Where
+  `crates/classis-agent/src/gateway/policy.rs`, and the Gateway entry of _Where
   each bound applies today_ in `docs/HARDENING.md`, which names the plain-HTTP
   residual.
 
@@ -341,7 +341,7 @@ reports through two keeps an end at each.
 
 Tests that will carry `Verifies: ADR-0058`:
 
-- In `crates/fleet-agent/src/gateway/mod.rs`: a plain-HTTP peer that polls under
+- In `crates/classis-agent/src/gateway/mod.rs`: a plain-HTTP peer that polls under
   more new `instance_uid`s than `max_carried_agents` leaves exactly the bound
   ones assigned, and each of them on the connection it was first assigned to; a
   report on a downstream WebSocket that takes another Agent's binding releases

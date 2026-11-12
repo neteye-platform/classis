@@ -3,7 +3,7 @@
 [← User Manual](README.md) · [The Server](server.md) · [The Client](client.md) ·
 [Rollout walkthrough](rollout.md)
 
-One program, `opamp-fleetctl`, ships beside the Server and the Client for the
+One program, `classisctl`, ships beside the Server and the Client for the
 operator who sets a fleet up and gets software _into_ it. It is not part of the
 running system: nothing the Server or a Client does depends on it, and it
 belongs on the operator's own machine, not on the Server host — the keys it
@@ -23,20 +23,20 @@ and they are also where signing lives, which `fetch` deliberately does not do.
 ## Getting it
 
 Every release publishes it for Linux and macOS, on amd64 and arm64, as
-`opamp-fleetctl_<version>_<os>_<arch>.tar.gz` beside the Client's assets, with
-its CycloneDX SBOM `opamp-fleetctl_<version>_<os>_<arch>.cdx.json`, covered by
-the same `SHA256SUMS` and by the release's build-provenance attestation. Verify
-the archive before you run it, since this program makes the fleet's keys: the
+`classisctl_<version>_<os>_<arch>.tar.gz` beside the Client's assets, with its
+CycloneDX SBOM `classisctl_<version>_<os>_<arch>.cdx.json`, covered by the same
+`SHA256SUMS` and by the release's build-provenance attestation. Verify the
+archive before you run it, since this program makes the fleet's keys: the
 attestation proves it was built by this repository's release workflow, and its
 hash must match its line in `SHA256SUMS` (`sha256sum`, or `shasum -a 256` on
 macOS). The archive holds the one program, executable:
 
 ```console
-$ gh attestation verify opamp-fleetctl_<version>_linux_amd64.tar.gz --repo neteye-platform/classis \
+$ gh attestation verify classisctl_<version>_linux_amd64.tar.gz --repo neteye-platform/classis \
     --signer-workflow neteye-platform/classis/.github/workflows/release.yml
 $ sha256sum -c --ignore-missing SHA256SUMS
-$ tar xzf opamp-fleetctl_<version>_linux_amd64.tar.gz
-$ ./opamp-fleetctl --version
+$ tar xzf classisctl_<version>_linux_amd64.tar.gz
+$ ./classisctl --version
 ```
 
 These archives are downloaded, never uploaded to a Server: they are not packages
@@ -44,11 +44,11 @@ of the fleet, and no Client installs one. There is no Windows build; on Windows,
 build it from a checkout:
 
 ```sh
-cargo build --release --bin opamp-fleetctl
-./target/release/opamp-fleetctl --help
+cargo build --release --bin classisctl
+./target/release/classisctl --help
 ```
 
-`cargo run --bin opamp-fleetctl -- <command>` runs it from a checkout without
+`cargo run --bin classisctl -- <command>` runs it from a checkout without
 installing it.
 
 Every command writes its **status to stderr** and its **result to stdout**, so a
@@ -56,7 +56,7 @@ hash, a key or a signature composes into a shell variable while the running
 commentary stays on the terminal:
 
 ```sh
-sha=$(opamp-fleetctl package pack --out promtail-3.0.0.tar.gz ./promtail)
+sha=$(classisctl package pack --out promtail-3.0.0.tar.gz ./promtail)
 ```
 
 ## `package fetch`
@@ -92,7 +92,7 @@ Four things it does on every run:
 Run it with no arguments and it asks for what it cannot know:
 
 ```console
-$ opamp-fleetctl package fetch
+$ classisctl package fetch
 Which agent:
   otelcol          linux, darwin, windows — as the release publishes
 > otelcol-contrib  linux, darwin, windows — as the release publishes
@@ -135,7 +135,7 @@ because a package entry no Agent can match is one nobody would ever be offered.
 Every prompt has a flag; give all of them and nothing is asked:
 
 ```console
-$ opamp-fleetctl package fetch --agent otelcol-contrib --version 0.158.0 \
+$ classisctl package fetch --agent otelcol-contrib --version 0.158.0 \
       --platform linux/amd64 --platform windows/amd64 \
       --out-dir ./artifacts --server https://127.0.0.1:4321 --cacert offline/server-ca.pem
 ```
@@ -281,9 +281,9 @@ For a program `package fetch` does not know: these commands build the container,
 and they own signing.
 
 ```console
-$ opamp-fleetctl package keygen --out fleet-signing.pk8   # prints the public key (hex)
-$ sha=$(opamp-fleetctl package pack --out promtail-3.0.0.tar.gz ./promtail)
-$ sig=$(opamp-fleetctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
+$ classisctl package keygen --out fleet-signing.pk8   # prints the public key (hex)
+$ sha=$(classisctl package pack --out promtail-3.0.0.tar.gz ./promtail)
+$ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
       promtail-3.0.0.tar.gz)
 ```
 
@@ -338,7 +338,7 @@ artifact and typing each signature there, carry them in one file:
 
 2. **Compare every `sha256` with an independent source before you sign.** For an
    artifact `package fetch` uploaded as published, that is the checksums file of
-   the upstream release; for any artifact, it is `opamp-fleetctl package sha256`
+   the upstream release; for any artifact, it is `classisctl package sha256`
    over the file you hold. The tool signs the hashes as the file states them and
    checks them against nothing — a hash you did not compare is one you are
    taking the Server's word for, and a Client accepts whatever your key signed.
@@ -346,7 +346,7 @@ artifact and typing each signature there, carry them in one file:
 3. On the machine that holds the key:
 
    ```console
-   $ opamp-fleetctl package sign --key fleet-signing.pk8 --signing-info supervisor_1.2.3_signing.json
+   $ classisctl package sign --key fleet-signing.pk8 --signing-info supervisor_1.2.3_signing.json
      signing supervisor@1.2.3 linux/amd64  127f9a48…
      signing supervisor@1.2.3 windows/amd64  90cbb340…
    ```
@@ -372,13 +372,13 @@ entry's, and it covers the type, the version and the hash, not a Deployment.
 The fleet's certificates, made without `openssl` or any other tool.
 [Setting up a fleet](setup.md) walks through them in order; in short:
 
-| `pki` command                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init --server-dir <dir> --offline-dir <dir> --name <dns\|ip>…`    | makes the three CAs, the Server's certificate and the package signing key, the certificates named for `--product` (default `OpAMP Fleet`) and, with `--organization` and `--organizational-unit`, for your organization, split into what the Server host needs — the bootstrap CA's key among it — and what stays offline — the server CA's key and the package signing key — with a configuration fragment for each side |
-| `server-cert --offline-dir <dir> --name <dns\|ip>… --out <dir>`    | makes another server certificate from the offline server CA, for the Server or a Gateway; it carries the CA's organization unless `--organization` or `--organizational-unit` replaces it                                                                                                                                                                                                                                 |
-| `bootstrap-ca --product <name> --out <dir>`                        | makes a new bootstrap CA, valid for a year, to replace the Server's `[enrolment]` files                                                                                                                                                                                                                                                                                                                                   |
-| `status --offline-dir <dir>`                                       | says when the server CA in the offline directory ends; exits `0`, `1` when it is ending, `2` when it has ended                                                                                                                                                                                                                                                                                                            |
-| `p12-extract <bootstrap.p12> --out <dir> [--password-file <file>]` | writes the file's certificate as `bootstrap.pem` and its key, unencrypted and owner-only, as `bootstrap-key.pem`, the pair a Client's install takes; asks for the password with input hidden, or reads it from the first line of `--password-file`; overwrites neither file                                                                                                                                               |
+| `pki` command                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init --server-dir <dir> --offline-dir <dir> --name <dns\|ip>…`    | makes the three CAs, the Server's certificate and the package signing key, the certificates named for `--product` (default `Classis`) and, with `--organization` and `--organizational-unit`, for your organization, split into what the Server host needs — the bootstrap CA's key among it — and what stays offline — the server CA's key and the package signing key — with a configuration fragment for each side |
+| `server-cert --offline-dir <dir> --name <dns\|ip>… --out <dir>`    | makes another server certificate from the offline server CA, for the Server or a Gateway; it carries the CA's organization unless `--organization` or `--organizational-unit` replaces it                                                                                                                                                                                                                             |
+| `bootstrap-ca --product <name> --out <dir>`                        | makes a new bootstrap CA, valid for a year, to replace the Server's `[enrolment]` files                                                                                                                                                                                                                                                                                                                               |
+| `status --offline-dir <dir>`                                       | says when the server CA in the offline directory ends; exits `0`, `1` when it is ending, `2` when it has ended                                                                                                                                                                                                                                                                                                        |
+| `p12-extract <bootstrap.p12> --out <dir> [--password-file <file>]` | writes the file's certificate as `bootstrap.pem` and its key, unencrypted and owner-only, as `bootstrap-key.pem`, the pair a Client's install takes; asks for the password with input hidden, or reads it from the first line of `--password-file`; overwrites neither file                                                                                                                                           |
 
 None of them makes a bootstrap certificate: the Server issues those, on
 `POST /api/v1/bootstrap-certificates`

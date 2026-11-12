@@ -1,7 +1,7 @@
-# OpAMP Fleet Server configuration. Every setting has a default, shown here, except [tls]:
+# Classis Server configuration. Every setting has a default, shown here, except [tls]:
 # the Server refuses to start without a certificate and key. For development,
 # scripts/dev-pki.sh creates a set and a server.toml that uses it. Start with:
-# cargo run -p fleet-server -- --config .dev-pki/server.toml
+# cargo run -p classis-server -- --config .dev-pki/server.toml
 #
 # HOW THIS FILE IS ORDERED, AND WHY IT MATTERS. Every bare key comes first; every [section] comes
 # after them. That is not tidiness — it is the only layout in which the commented examples below can
@@ -10,17 +10,17 @@
 # anyone uncommented it, and the Server would refuse to start with "unknown field `data_dir`".
 # Add new settings accordingly: a bare key goes in the first half, a section in the second.
 #
-# THE ENVIRONMENT OVER THIS FILE. Every key can also be set by a variable, FLEET_SERVER__ followed
+# THE ENVIRONMENT OVER THIS FILE. Every key can also be set by a variable, CLASSIS_SERVER__ followed
 # by the key's path, its segments joined by __ and upper-cased; it wins over this file:
 #
-#   FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet       sets data_dir
-#   FLEET_SERVER__REST__TLS__CERT_FILE=ui.pem         sets [rest.tls] cert_file
+#   CLASSIS_SERVER__DATA_DIR=/var/lib/classis       sets data_dir
+#   CLASSIS_SERVER__REST__TLS__CERT_FILE=ui.pem         sets [rest.tls] cert_file
 #
 # The value is TOML (30 is an integer, "30" a string), and what is not TOML is a string, so a path
 # needs no quotes. A variable that names no key fails startup, naming it, as an unknown key here
 # does. Secrets travel as paths to files, never as values: [rest.auth.basic_users] and
 # [telemetry_offer.headers] are reached from the environment only through basic_users_file and
-# headers_file. Without --config, FLEET_SERVER_CONFIG names this file; with neither, server.toml in
+# headers_file. Without --config, CLASSIS_SERVER_CONFIG names this file; with neither, server.toml in
 # the working directory is read when it exists. The Server logs the name of every key the
 # environment set.
 
@@ -142,7 +142,7 @@ max_package_size_bytes = 1073741824
 # =============================================================================================
 
 # The operator's public package-signing key, hex — the same value as the Clients'
-# [packages] verification_key (`opamp-fleetctl package keygen` prints it). Optional. With it the
+# [packages] verification_key (`classisctl package keygen` prints it). Optional. With it the
 # Server checks each entry's signature when it is written and when the store is loaded, and the
 # Packages tab and GET /api/v1/packages report it valid or invalid; without it every signature is
 # reported unchecked. FEEDBACK ONLY: an invalid signature is stored and offered all the same — each

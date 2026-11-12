@@ -304,7 +304,7 @@ scheduled job
 [`interop.yml`](../.github/workflows/interop.yml)): `opamp-go`'s Client against
 our Server, and our Client against `opamp-go`'s Server, on the WebSocket and the
 plain HTTP transport. The scenarios are
-[`crates/fleet-agent/tests/interop_opamp_go.rs`](../crates/fleet-agent/tests/interop_opamp_go.rs);
+[`crates/classis-agent/tests/interop_opamp_go.rs`](../crates/classis-agent/tests/interop_opamp_go.rs);
 how a red run is triaged is in [`interop/README.md`](../interop/README.md).
 
 The oracle implements the Baseline's own `opamp-spec` version, so no row of this

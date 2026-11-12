@@ -9,7 +9,7 @@
 # every feature any crate asks for, so only a build of each feature on its own shows that it
 # stands alone (ADR-0010).
 #
-# fleet-agent is linted without any wrapped Supervisor kind and with each one alone, and tested
+# classis-agent is linted without any wrapped Supervisor kind and with each one alone, and tested
 # without any: the default build carries every kind, so only these show that a build leaving one
 # out still compiles and refuses the kind as unknown (ADR-0017 clause 2).
 #
@@ -32,5 +32,5 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 for feature in "" client server; do
   cargo clippy -p opamp --all-targets --locked --no-default-features --features "$feature" -- -D warnings
 done
-cargo clippy -p fleet-agent --all-targets --locked --no-default-features -- -D warnings
-cargo test -p fleet-agent --locked --no-default-features
+cargo clippy -p classis-agent --all-targets --locked --no-default-features -- -D warnings
+cargo test -p classis-agent --locked --no-default-features

@@ -16,7 +16,7 @@ None below is a conformance question: the Baseline requires none of it.
 
 The link this document is about is **Client ↔ Server**. In this project's
 vocabulary a Supervisor lives _inside_ the Client
-([`crates/fleet-agent/src/supervisor/`](../crates/fleet-agent/src/supervisor/))
+([`crates/classis-agent/src/supervisor/`](../crates/classis-agent/src/supervisor/))
 and does not speak to the Server itself — the Client carries every Supervisor's
 Agent over its one connection (ADR-0015, ADR-0017). Where other OpAMP material
 says "Supervisor ↔ Server", this is the link it means.
@@ -24,7 +24,7 @@ says "Supervisor ↔ Server", this is the link it means.
 One adjacent surface is in scope because it terminates on the same host and
 carries the same protocol: the **Supervisor Endpoint**, the loopback WebSocket
 each Supervisor serves for a Managed Process's `opampextension`
-([`endpoint.rs`](../crates/fleet-agent/src/supervisor/endpoint.rs)), which
+([`endpoint.rs`](../crates/classis-agent/src/supervisor/endpoint.rs)), which
 admits only the process its Supervisor started (ADR-0015).
 
 Out of scope, and deliberately so: **authorization and multi-tenancy**, which
@@ -60,7 +60,7 @@ the project already has:
   with the Agent keeping its private key — and with the request's
   `basicConstraints`, `keyUsage`, `extendedKeyUsage`, and SANs **overwritten**
   rather than carried over, so a CSR cannot ask for the powers of a CA
-  ([`ca.rs`](../crates/fleet-server/src/ca.rs)). Through a Gateway a CSR is
+  ([`ca.rs`](../crates/classis-server/src/ca.rs)). Through a Gateway a CSR is
   signed only with a renewal proof, so a member behind it cannot obtain a
   certificate for the Gateway's host and its powers; one with a bootstrap proof
   is an enrolment, which the Server checks and an operator approves for a host
@@ -296,7 +296,7 @@ worth seeing at a glance. ✅ in force, ⚠️ partial, ❌ absent.
     downstream `Authorization` forwarded; every upstream connection carries the
     Gateway's own certificate alone (ADR-0015)
   - ✅ a downstream peer that never finishes its headers after the handshake is
-    hung up on ([`gateway_tls.rs`](../crates/fleet-agent/tests/gateway_tls.rs))
+    hung up on ([`gateway_tls.rs`](../crates/classis-agent/tests/gateway_tls.rs))
   - ✅ an enrolling peer — a bootstrap certificate, with `bootstrap_ca_file` —
     is refused a WebSocket and anything but one enrolment request `403`, binds
     nothing, and its place upstream goes with its exchange (ADR-0039)
@@ -322,7 +322,7 @@ worth seeing at a glance. ✅ in force, ⚠️ partial, ❌ absent.
     concurrently · ✅ message size in both directions
   - ✅ a half-finished upgrade is dropped while other connections are served,
     and the endpoint serves the next one afterwards
-    ([`endpoint.rs`](../crates/fleet-agent/src/supervisor/endpoint.rs))
+    ([`endpoint.rs`](../crates/classis-agent/src/supervisor/endpoint.rs))
 
 What follows is therefore not "make it secure" but two narrower things: **close
 the windows during which a revoked certificate still works**, and **shrink the

@@ -64,9 +64,9 @@ Then point the Server at it with `[blobs] store = "s3"` and a `[blobs.s3]`
 section naming that endpoint, `bucket = "fleet"`, a `region`,
 `access_key_id = "fleet-dev"` and a `secret_access_key_file` holding the secret,
 mode `0600`. The same settings run the S3 store's tests:
-`FLEET_TEST_S3_ENDPOINT=http://127.0.0.1:9100 FLEET_TEST_S3_BUCKET=fleet
-FLEET_TEST_S3_ACCESS_KEY_ID=fleet-dev FLEET_TEST_S3_SECRET_ACCESS_KEY_FILE=<file>
-cargo test -p fleet-server s3::`.
+`CLASSIS_TEST_S3_ENDPOINT=http://127.0.0.1:9100 CLASSIS_TEST_S3_BUCKET=fleet
+CLASSIS_TEST_S3_ACCESS_KEY_ID=fleet-dev CLASSIS_TEST_S3_SECRET_ACCESS_KEY_FILE=<file>
+cargo test -p classis-server s3::`.
 
 ## The database
 
@@ -77,11 +77,11 @@ tables. Point the Server at it with `[database] store = "postgres"` and a
 `user = "fleet"`, `tls = false` — plaintext, which the loopback alone allows —
 and a `password_file` holding `fleet`, mode `0600`. The same settings run the
 PostgreSQL store's tests:
-`FLEET_TEST_POSTGRES_HOST=127.0.0.1 FLEET_TEST_POSTGRES_PORT=5432
-FLEET_TEST_POSTGRES_DBNAME=fleet FLEET_TEST_POSTGRES_USER=fleet
-FLEET_TEST_POSTGRES_PASSWORD_FILE=<file> cargo test -p fleet-server postgres::`;
+`CLASSIS_TEST_POSTGRES_HOST=127.0.0.1 CLASSIS_TEST_POSTGRES_PORT=5432
+CLASSIS_TEST_POSTGRES_DBNAME=fleet CLASSIS_TEST_POSTGRES_USER=fleet
+CLASSIS_TEST_POSTGRES_PASSWORD_FILE=<file> cargo test -p classis-server postgres::`;
 each test works in a schema of its own and drops it.
-`FLEET_TEST_POSTGRES_CA_FILE` runs them over TLS against a database whose
+`CLASSIS_TEST_POSTGRES_CA_FILE` runs them over TLS against a database whose
 certificate that root signs.
 
 ## Ports

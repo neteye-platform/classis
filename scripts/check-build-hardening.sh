@@ -35,9 +35,9 @@ WORKFLOWS=".github/workflows"
 RELEASE="$WORKFLOWS/release.yml"
 FORBID_UNSAFE=(
   crates/opamp/src/lib.rs
-  crates/fleet-core/src/lib.rs
-  crates/fleet-server/src/lib.rs
-  crates/fleet-tools/src/main.rs
+  crates/classis-core/src/lib.rs
+  crates/classis-server/src/lib.rs
+  crates/classis-tools/src/main.rs
 )
 
 errors=()

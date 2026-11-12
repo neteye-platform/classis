@@ -11,34 +11,34 @@
   · clause 21 superseded by
   [ADR-0046](0046-one-bootstrap-certificate-holds-at-most-a-quarter-of-the-enrolment-queue.md)
 - **Date:** 2026-10-06
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** Admission on `/v1/opamp` in
-  `crates/fleet-server/src/transport.rs`, `tls.rs` and `ca.rs`, the Operator
-  plane's credential in `crates/fleet-server/src/credentials.rs`, enrolment in
-  `crates/fleet-server/src/enrolment.rs`, admission throttling in
-  `crates/fleet-server/src/throttle.rs`, the Operator plane's guard and the
+  `crates/classis-server/src/transport.rs`, `tls.rs` and `ca.rs`, the Operator
+  plane's credential in `crates/classis-server/src/credentials.rs`, enrolment in
+  `crates/classis-server/src/enrolment.rs`, admission throttling in
+  `crates/classis-server/src/throttle.rs`, the Operator plane's guard and the
   `/api/v1/enrolment/window` and `/api/v1/enrolments` routes in
-  `crates/fleet-server/src/api.rs`, the admission of the package download route,
-  the Client's identity and enrolment in `crates/fleet-agent/src/config.rs`,
+  `crates/classis-server/src/api.rs`, the admission of the package download route,
+  the Client's identity and enrolment in `crates/classis-agent/src/config.rs`,
   `tls.rs` and `csr.rs`, the host a certificate is issued to and the renewal
-  proof in `crates/fleet-core/src/renewal.rs`,
-  `crates/fleet-server/src/revocation.rs` and `fleet.rs`, the `/api/v1/hosts`
+  proof in `crates/classis-core/src/renewal.rs`,
+  `crates/classis-server/src/revocation.rs` and `fleet.rs`, the `/api/v1/hosts`
   routes, the identity the Client presents on a download in
-  `crates/fleet-agent/src/packages.rs`, the reading of a CSR in
-  `crates/fleet-server/src/ca.rs`, the CSR handling on a member connection in
-  `crates/fleet-server/src/fleet.rs` and on an enrolment connection in
-  `crates/fleet-server/src/transport.rs`, the `[tls]`, `[client_ca]`,
+  `crates/classis-agent/src/packages.rs`, the reading of a CSR in
+  `crates/classis-server/src/ca.rs`, the CSR handling on a member connection in
+  `crates/classis-server/src/fleet.rs` and on an enrolment connection in
+  `crates/classis-server/src/transport.rs`, the `[tls]`, `[client_ca]`,
   `[enrolment]`, `[admission_throttle]` and `[rest.auth]` sections of
   `server.toml`, the `[tls]` section of `supervisor.toml`, an `[auth]` section
   in either file, and the Server's `hash-credential` command in
-  `crates/fleet-server/src/main.rs`; admission on `/v1/opamp` and on the
-  download route in `crates/fleet-server/src/transport.rs`, the WebSocket
+  `crates/classis-server/src/main.rs`; admission on `/v1/opamp` and on the
+  download route in `crates/classis-server/src/transport.rs`, the WebSocket
   session loop there, the certificate register and revocation list in
-  `crates/fleet-server/src/revocation.rs` and
-  `crates/fleet-server/src/fs/revocation.rs`, the close frame
+  `crates/classis-server/src/revocation.rs` and
+  `crates/classis-server/src/fs/revocation.rs`, the close frame
   `crates/opamp/src/server.rs` sends, the serial numbers
-  `crates/fleet-server/src/ca.rs` assigns, the `/api/v1/revocations` and
-  `/api/v1/certificates` routes in `crates/fleet-server/src/api.rs`, the
+  `crates/classis-server/src/ca.rs` assigns, the `/api/v1/revocations` and
+  `/api/v1/certificates` routes in `crates/classis-server/src/api.rs`, the
   Gateways' `/v1/gateway/revocations` route on the Agent plane, and the files
   they persist under `config_dir`
 
@@ -214,7 +214,7 @@ loopback, `localhost` included.
    checked, the attempt is counted against the throttle of clause 24 — failures
    and attempts under way together may not exceed `max_failures` — and an IPv6
    peer is counted by its /64
-   ([`credentials.rs`](../../crates/fleet-server/src/credentials.rs)). A
+   ([`credentials.rs`](../../crates/classis-server/src/credentials.rs)). A
    verification that succeeded is remembered for ten minutes by the SHA-256 of
    the whole header value, in a table of at most 1 024 entries, and compared in
    constant time with `constant_time_eq`; a failed one is never remembered and
@@ -968,7 +968,7 @@ revocations.
 
 ## Enforcement
 
-- [`crates/fleet-server/src/config.rs`](../../crates/fleet-server/src/config.rs)
+- [`crates/classis-server/src/config.rs`](../../crates/classis-server/src/config.rs)
   — `an_auth_section_is_refused_at_startup` (clause 1);
   `the_client_ca_is_required_at_startup` (clauses 5, 19);
   `rest_auth_verifies_its_hashes_and_carries_the_basic_challenge`,
@@ -977,7 +977,7 @@ revocations.
   `a_server_without_tls_is_refused_at_startup` (clause 17),
   `a_plaintext_credential_is_refused_naming_its_entry`, which holds the Basic
   cases alone, `a_weak_argon2id_hash_is_refused` (clause 26).
-- [`crates/fleet-server/tests/mutual_tls.rs`](../../crates/fleet-server/tests/mutual_tls.rs)
+- [`crates/classis-server/tests/mutual_tls.rs`](../../crates/classis-server/tests/mutual_tls.rs)
   — `a_member_is_admitted_on_its_certificate_alone` and
   `an_authorization_header_is_ignored` over both transports (clauses 1, 6);
   `a_client_certificate_is_required_in_the_handshake_on_the_agent_plane`
@@ -993,85 +993,85 @@ revocations.
   `repeated_failures_from_one_address_are_throttled`,
   `the_operator_plane_counts_its_failures_in_a_table_of_its_own` (clause 24),
   `an_operator_sees_each_host_and_can_mark_a_gateway` (clause 7).
-- [`crates/fleet-server/src/credentials.rs`](../../crates/fleet-server/src/credentials.rs)
+- [`crates/classis-server/src/credentials.rs`](../../crates/classis-server/src/credentials.rs)
   — `a_basic_password_is_verified_against_its_argon2id_hash`,
   `an_unknown_user_costs_the_same_verification`,
   `a_basic_verification_is_remembered_and_bounded`,
   `password_hashes_are_bounded_and_off_the_async_workers`,
   `the_comparison_hash_matches_the_costliest_user` (clause 2).
-- [`crates/fleet-server/src/throttle.rs`](../../crates/fleet-server/src/throttle.rs)
+- [`crates/classis-server/src/throttle.rs`](../../crates/classis-server/src/throttle.rs)
   — `attempts_under_way_count_and_a_slash_64_is_one_peer` (clause 2),
   `a_peer_that_fails_too_often_waits_out_the_back_off`,
   `a_full_table_keeps_an_address_in_back_off`,
   `the_table_is_bounded_and_drops_the_oldest` (clause 24).
-- [`crates/fleet-server/src/main.rs`](../../crates/fleet-server/src/main.rs) —
-  `hash_credential_hashes_a_basic_password_alone` (clause 26).
-- [`crates/fleet-agent/src/config.rs`](../../crates/fleet-agent/src/config.rs) —
-  `a_leftover_auth_section_is_ignored_with_a_notice` (clause 3);
-  [`config_file.rs`](../../crates/fleet-agent/src/config_file.rs)
+- [`crates/classis-server/src/main.rs`](../../crates/classis-server/src/main.rs)
+  — `hash_credential_hashes_a_basic_password_alone` (clause 26).
+- [`crates/classis-agent/src/config.rs`](../../crates/classis-agent/src/config.rs)
+  — `a_leftover_auth_section_is_ignored_with_a_notice` (clause 3);
+  [`config_file.rs`](../../crates/classis-agent/src/config_file.rs)
   `admission_needs_a_client_identity_and_nothing_else` (clause 5).
-- [`crates/fleet-server/src/tls.rs`](../../crates/fleet-server/src/tls.rs) —
+- [`crates/classis-server/src/tls.rs`](../../crates/classis-server/src/tls.rs) —
   `a_certificate_not_issued_by_the_client_ca_only_enrols` (clauses 6, 19, 21).
-- [`crates/fleet-server/src/enrolment.rs`](../../crates/fleet-server/src/enrolment.rs)
+- [`crates/classis-server/src/enrolment.rs`](../../crates/classis-server/src/enrolment.rs)
   — `the_window_is_closed_by_default_and_bounded`,
   `closing_the_window_expires_every_request` (clause 20),
   `a_request_waits_for_an_operator_and_is_answered_once_decided`,
   `the_queue_is_bounded` (clauses 21, 22).
-- [`crates/fleet-server/src/ca.rs`](../../crates/fleet-server/src/ca.rs) —
+- [`crates/classis-server/src/ca.rs`](../../crates/classis-server/src/ca.rs) —
   `signs_a_request_into_a_certificate`,
   `the_request_cannot_dictate_the_certificates_powers`,
   `refuses_a_request_that_does_not_parse` (clauses 7, 9),
   `a_renewal_proof_names_the_certificate_and_its_host` (clauses 7, 27).
-- [`crates/fleet-server/src/revocation.rs`](../../crates/fleet-server/src/revocation.rs)
+- [`crates/classis-server/src/revocation.rs`](../../crates/classis-server/src/revocation.rs)
   — `a_host_is_bounded_and_speaks_only_for_its_own_agents` (clause 7).
-- [`crates/fleet-server/src/fleet.rs`](../../crates/fleet-server/src/fleet.rs) —
-  `a_host_cannot_report_for_another_hosts_agent` (clauses 7, 14),
+- [`crates/classis-server/src/fleet.rs`](../../crates/classis-server/src/fleet.rs)
+  — `a_host_cannot_report_for_another_hosts_agent` (clauses 7, 14),
   `unavailable_tells_the_agent_when_to_retry` (clause 21).
-- [`crates/fleet-agent/tests/certificate_renewal_e2e.rs`](../../crates/fleet-agent/tests/certificate_renewal_e2e.rs)
+- [`crates/classis-agent/tests/certificate_renewal_e2e.rs`](../../crates/classis-agent/tests/certificate_renewal_e2e.rs)
   — `a_client_renews_each_certificate_before_it_expires` (clauses 9, 11, 27).
-- [`crates/fleet-agent/src/csr.rs`](../../crates/fleet-agent/src/csr.rs) —
+- [`crates/classis-agent/src/csr.rs`](../../crates/classis-agent/src/csr.rs) —
   `a_client_without_a_certificate_asks_and_keeps_its_key` (clauses 9, 21),
   `the_private_key_is_written_owner_only`,
   `an_issued_certificate_becomes_the_identity`,
   `a_certificate_without_a_pending_key_is_refused` (clause 8),
   `a_certificate_in_its_renewal_window_is_requested_again` (clause 11).
-- [`crates/fleet-agent/tests/packages_download.rs`](../../crates/fleet-agent/tests/packages_download.rs)
+- [`crates/classis-agent/tests/packages_download.rs`](../../crates/classis-agent/tests/packages_download.rs)
   — `the_client_certificate_goes_to_the_servers_origin_alone` (clause 23).
-- [`crates/fleet-agent/tests/gateway_tls.rs`](../../crates/fleet-agent/tests/gateway_tls.rs)
+- [`crates/classis-agent/tests/gateway_tls.rs`](../../crates/classis-agent/tests/gateway_tls.rs)
   — `a_downstream_agent_with_a_certificate_reaches_the_server_over_tls`,
   `a_downstream_peer_without_a_certificate_is_refused` (clause 13).
-- [`crates/fleet-server/tests/rest_auth.rs`](../../crates/fleet-server/tests/rest_auth.rs)
+- [`crates/classis-server/tests/rest_auth.rs`](../../crates/classis-server/tests/rest_auth.rs)
   — `a_request_without_credentials_is_answered_401_with_a_basic_challenge`,
   `the_configured_operator_reaches_the_api`,
   `the_ui_and_the_api_docs_are_guarded_too`,
   `the_agent_plane_is_untouched_by_the_operator_credential` (clauses 15, 18);
-  [`crates/fleet-server/tests/rest_api.rs`](../../crates/fleet-server/tests/rest_api.rs)
+  [`crates/classis-server/tests/rest_api.rs`](../../crates/classis-server/tests/rest_api.rs)
   — `a_cross_site_state_changing_post_is_refused` (clause 16).
-- [`crates/fleet-server/src/ca.rs`](../../crates/fleet-server/src/ca.rs) —
+- [`crates/classis-server/src/ca.rs`](../../crates/classis-server/src/ca.rs) —
   `a_canonical_uuid_anywhere_in_a_value_is_a_claim`,
   `hex_without_hyphens_is_no_claim`, `a_san_is_read_for_claims`,
   `a_claim_in_a_bmp_or_universal_string_is_read` (clauses 28, 29).
-- [`crates/fleet-server/tests/mutual_tls.rs`](../../crates/fleet-server/tests/mutual_tls.rs)
+- [`crates/classis-server/tests/mutual_tls.rs`](../../crates/classis-server/tests/mutual_tls.rs)
   — `a_csr_claiming_another_instance_uid_is_a_bad_request`,
   `a_csr_claiming_its_own_instance_uid_is_signed`,
   `a_csr_claiming_nothing_is_signed_as_before`, and
   `an_enrolment_csr_claiming_another_instance_uid_never_reaches_the_queue`
   (clauses 30, 31).
 
-- [`crates/fleet-server/src/revocation.rs`](../../crates/fleet-server/src/revocation.rs)
+- [`crates/classis-server/src/revocation.rs`](../../crates/classis-server/src/revocation.rs)
   tests: `a_revocation_follows_every_renewal` (clause 35),
   `the_list_survives_a_restart_and_can_be_lifted` (clauses 37, 38),
   `a_renewal_stays_revoked_after_its_revoked_ancestor_expires` (clauses 35, 37),
   `the_list_and_the_register_are_bounded`,
   `an_expired_register_entry_is_dropped_with_its_revocation` (clauses 33, 37).
-- [`crates/fleet-server/src/fs/revocation.rs`](../../crates/fleet-server/src/fs/revocation.rs)
+- [`crates/classis-server/src/fs/revocation.rs`](../../crates/classis-server/src/fs/revocation.rs)
   tests: `the_ledger_survives_a_reopen` (clauses 33, 37);
   `a_persisted_credential_entry_is_dropped_on_load` (clause 36): a list holding
   a credential entry beside a certificate entry loads with the certificate entry
   alone, is written back without the credential entry, and the drop is logged.
-- [`crates/fleet-server/src/ca.rs`](../../crates/fleet-server/src/ca.rs) test:
+- [`crates/classis-server/src/ca.rs`](../../crates/classis-server/src/ca.rs) test:
   `two_certificates_from_one_key_have_two_serials` (clause 32).
-- [`crates/fleet-server/tests/mutual_tls.rs`](../../crates/fleet-server/tests/mutual_tls.rs)
+- [`crates/classis-server/tests/mutual_tls.rs`](../../crates/classis-server/tests/mutual_tls.rs)
   tests: `a_revoked_certificate_is_refused_on_both_transports_and_the_download`
   (clauses 34, 38, 39), which also asserts that the `401` carries no
   `WWW-Authenticate` header;
@@ -1086,7 +1086,7 @@ revocations.
   `a_bootstrap_certificate_is_not_handed_the_list` (clause 43);
   `a_credential_revocation_is_answered_400` (clause 36): `{"credential": …}` is
   refused with `400` and the list is unchanged.
-- [`crates/fleet-agent/tests/gateway_revocation_e2e.rs`](../../crates/fleet-agent/tests/gateway_revocation_e2e.rs)
+- [`crates/classis-agent/tests/gateway_revocation_e2e.rs`](../../crates/classis-agent/tests/gateway_revocation_e2e.rs)
   test: `a_certificate_the_server_revokes_is_refused_behind_the_gateway`
   (clauses 42, 43).
 - The Server refuses to start on a bootstrap CA key that does not match

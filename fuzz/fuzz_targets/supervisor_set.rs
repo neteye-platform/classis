@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use fleet_agent::config::ClientConfig;
+use classis_agent::config::ClientConfig;
 use libfuzzer_sys::fuzz_target;
 use opamp::proto::{AgentConfigMap, AgentConfigObject, AgentRemoteConfig};
 
@@ -35,7 +35,7 @@ fuzz_target!(|data: &[u8]| {
         }),
         config_hash: Vec::new(),
     };
-    let Ok((blocks, tables)) = fleet_agent::reconfigure::offered_blocks(&offer) else {
+    let Ok((blocks, tables)) = classis_agent::reconfigure::offered_blocks(&offer) else {
         return;
     };
     assert_eq!(
@@ -44,6 +44,6 @@ fuzz_target!(|data: &[u8]| {
         "every block keeps its verbatim table"
     );
     for block in &blocks {
-        let _ = fleet_agent::supervisor::check_delivered_block(&RUNNING, block);
+        let _ = classis_agent::supervisor::check_delivered_block(&RUNNING, block);
     }
 });

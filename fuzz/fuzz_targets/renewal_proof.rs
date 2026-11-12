@@ -2,7 +2,7 @@
 //! peer chose. What decodes encodes back to the same bytes. Verifies: Q-2
 #![no_main]
 
-use fleet_core::renewal;
+use classis_core::renewal;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

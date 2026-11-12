@@ -4,8 +4,8 @@
 
 use std::sync::OnceLock;
 
-use fleet_server::ca::ClientCa;
-use fleet_server::config::ClientCaConfig;
+use classis_server::ca::ClientCa;
+use classis_server::config::ClientCaConfig;
 use libfuzzer_sys::fuzz_target;
 
 fn ca() -> &'static ClientCa {
@@ -37,10 +37,10 @@ fuzz_target!(|data: &[u8]| {
     };
     // The subject values an approval carries (ADR-0036), so the fuzzed request is signed with
     // a subject of the shape every host certificate has.
-    let subject = fleet_server::revocation::SubjectValues {
+    let subject = classis_server::revocation::SubjectValues {
         organization: "Fuzz Customer".to_string(),
         organizational_unit: "Fuzz Site".to_string(),
-        ..fleet_server::revocation::SubjectValues::default()
+        ..classis_server::revocation::SubjectValues::default()
     };
     if let Ok(issued) = ca().sign(csr, "fuzz-host", &subject) {
         let (_, pem) = x509_parser::pem::parse_x509_pem(issued.pem.as_bytes()).expect("issued PEM");

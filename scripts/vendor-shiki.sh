@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Rebuilds crates/fleet-server/static/shiki.js, the vendored Shiki bundle the bundled UI colours an
+# Rebuilds crates/classis-server/static/shiki.js, the vendored Shiki bundle the bundled UI colours an
 # Agent's effective configuration with (ADR-0038), and pins its SHA-256 in scripts/vendor-shiki.lock.
 #
 # Dev-only: run it when the version is to change, on a developer's machine. CI and the Dev
@@ -25,7 +25,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INPUTS="$ROOT/scripts/vendor-shiki"
-OUT="$ROOT/crates/fleet-server/static/shiki.js"
+OUT="$ROOT/crates/classis-server/static/shiki.js"
 PIN="$ROOT/scripts/vendor-shiki.lock"
 
 # The npm release that installs from the lock, and its integrity as the registry states it.
@@ -76,7 +76,7 @@ esbuild="$(version esbuild)"
 # bundled package is MIT-licensed, and the grammars are under the licences NOTICE names.
 header="$(cat <<EOF
 /*
- * Shiki $shiki (https://shiki.style) for the bundled UI of OpAMP Fleet (ADR-0038):
+ * Shiki $shiki (https://shiki.style) for the bundled UI of Classis (ADR-0038):
  * shiki@$shiki, @shikijs/core@$shiki, @shikijs/engine-javascript@$engine,
  * @shikijs/langs@$langs (yaml, toml, ini), the CSS-variables theme with this project's TOML and
  * INI token rules, and their dependencies.
@@ -125,7 +125,7 @@ fi
 cp "$WORK/shiki.js" "$OUT"
 sha="$(sha256sum "$OUT" | cut -d' ' -f1)"
 cat >"$PIN" <<EOF
-# The vendored crates/fleet-server/static/shiki.js (ADR-0038 clause 2), written by
+# The vendored crates/classis-server/static/shiki.js (ADR-0038 clause 2), written by
 # scripts/vendor-shiki.sh. A test fails while the file's SHA-256 differs from the one here.
 shiki $shiki
 sha256 $sha

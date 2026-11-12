@@ -64,19 +64,19 @@ intruder there would not already have.
 
 ## 1. Make the certificates
 
-The operator tool `opamp-fleetctl` makes every certificate of this page, with
-its `pki` commands; no other tool is needed. Every release publishes it for
-Linux and macOS ([Getting it](tools.md#getting-it)); download it to the machine
-where the offline keys are to stay, typically your own, not the Server host.
+The operator tool `classisctl` makes every certificate of this page, with its
+`pki` commands; no other tool is needed. Every release publishes it for Linux
+and macOS ([Getting it](tools.md#getting-it)); download it to the machine where
+the offline keys are to stay, typically your own, not the Server host.
 
 Run `pki init` there. Name every address the Clients will dial with `--name`, as
 a DNS name or an IP address; repeat it for each:
 
 ```console
-$ opamp-fleetctl pki init --server-dir fleet-server --offline-dir fleet-offline \
+$ classisctl pki init --server-dir classis-server --offline-dir fleet-offline \
                          --name fleet.example.com --name 10.0.0.5 \
-                         --server-path /etc/opamp-fleet-server/tls --host-path /etc/opamp
-fleet-server: for the Server host — merge server.toml.fragment into its server.toml
+                         --server-path /etc/classis-server/tls --host-path /etc/opamp
+classis-server: for the Server host — merge server.toml.fragment into its server.toml
 fleet-offline: keep offline — the server CA's key; give every new host server-ca.pem, and the bootstrap.p12 the Server issues (POST /api/v1/bootstrap-certificates), or its pair as bootstrap.pem and bootstrap-key.pem (pki p12-extract), as supervisor.toml.fragment names them
 ```
 
@@ -104,21 +104,20 @@ live.
 
 What it makes, so you need not:
 
-- **Three CAs with names of their own**, `OpAMP Fleet Server CA`,
-  `OpAMP Fleet Client CA` and `OpAMP Fleet Bootstrap CA`, none able to sign a
-  further CA. `--product` replaces `OpAMP Fleet` in all three, and
-  `--organization` and `--organizational-unit` add an O and an OU to every
-  certificate `init` makes, for whoever audits them. The server CA and the
-  client CA are valid for ten years; replacing either means touching every host.
-  The bootstrap CA is valid for one year; replacing it touches only the Server
+- **Three CAs with names of their own**, `Classis Server CA`,
+  `Classis Client CA` and `Classis Bootstrap CA`, none able to sign a further
+  CA. `--product` replaces `Classis` in all three, and `--organization` and
+  `--organizational-unit` add an O and an OU to every certificate `init` makes,
+  for whoever audits them. The server CA and the client CA are valid for ten
+  years; replacing either means touching every host. The bootstrap CA is valid
+  for one year; replacing it touches only the Server
   ([step 6](#6-living-with-the-certificates)).
 - **A server certificate** valid for 397 days, which keeps it within every
-  browser's limit. Its subject says what it is,
-  `OpAMP Fleet Server Certificate`; the names it is dialled by are in its
-  subject alternative names. It carries every `--name`, and always `127.0.0.1`
-  and `::1` as well, so your browser and `curl` reach the Operator plane through
-  an SSH tunnel (step 2). A wildcard or a name that is neither a DNS name nor an
-  address is refused.
+  browser's limit. Its subject says what it is, `Classis Server Certificate`;
+  the names it is dialled by are in its subject alternative names. It carries
+  every `--name`, and always `127.0.0.1` and `::1` as well, so your browser and
+  `curl` reach the Operator plane through an SSH tunnel (step 2). A wildcard or
+  a name that is neither a DNS name nor an address is refused.
 - **Keys the Server can read:** ECDSA P-256 in PKCS#8, the one form the client
   CA's key must have.
 
@@ -136,14 +135,14 @@ instead, build the Server from a checkout, on a Linux machine, then copy it to
 the Server host and give it an account of its own:
 
 ```sh
-cargo build --release -p fleet-server                 # writes target/release/server
+cargo build --release -p classis-server                 # writes target/release/server
 sudo install -m 755 server /usr/local/bin/server    # on the Server host, after copying it there
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin opamp-fleet-server
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin classis-server
 ```
 
 Copy the contents of `--server-dir` to the Server host, to the `--server-path`
-you gave (`/etc/opamp-fleet-server/tls/` above), readable only by the account
-the Server runs as. Then write `/etc/opamp-fleet-server/server.toml`:
+you gave (`/etc/classis-server/tls/` above), readable only by the account the
+Server runs as. Then write `/etc/classis-server/server.toml`:
 `server.toml.fragment` holds its `[tls]`, `[client_ca]` and `[enrolment]`
 sections, and the rest is yours. Give every path absolutely:
 
@@ -152,21 +151,21 @@ sections, and the rest is yours. Give every path absolutely:
 listen = "0.0.0.0:4320"
 
 # All of the Server's state, owner-only (see the Server's manual, "Where the Server keeps its state").
-data_dir = "/var/lib/opamp-fleet-server/data"
+data_dir = "/var/lib/classis-server/data"
 
 [tls]
-cert_file = "/etc/opamp-fleet-server/tls/server.pem"
-key_file = "/etc/opamp-fleet-server/tls/server-key.pem"
-client_ca_file = "/etc/opamp-fleet-server/tls/client-ca.pem"   # the CA a host's certificate must come from
+cert_file = "/etc/classis-server/tls/server.pem"
+key_file = "/etc/classis-server/tls/server-key.pem"
+client_ca_file = "/etc/classis-server/tls/client-ca.pem"   # the CA a host's certificate must come from
 
 [client_ca]                                                       # the Server signs host certificates
-cert_file = "/etc/opamp-fleet-server/tls/client-ca.pem"           # the same CA as client_ca_file
-key_file = "/etc/opamp-fleet-server/tls/client-ca-key.pem"
+cert_file = "/etc/classis-server/tls/client-ca.pem"           # the same CA as client_ca_file
+key_file = "/etc/classis-server/tls/client-ca-key.pem"
 validity_days = 30
 
 [enrolment]                                                       # new hosts enrol with a bootstrap certificate
-bootstrap_ca_file = "/etc/opamp-fleet-server/tls/bootstrap-ca.pem"
-bootstrap_ca_key_file = "/etc/opamp-fleet-server/tls/bootstrap-ca-key.pem"   # the Server issues them
+bootstrap_ca_file = "/etc/classis-server/tls/bootstrap-ca.pem"
+bootstrap_ca_key_file = "/etc/classis-server/tls/bootstrap-ca-key.pem"   # the Server issues them
 
 # The Operator plane: REST API, API docs and UI. On the loopback it needs no password.
 [rest]
@@ -205,24 +204,24 @@ Then add `-u fleet-admin` to every `curl` below; `curl` asks for the password.
 **Start it:**
 
 ```sh
-server --config /etc/opamp-fleet-server/server.toml
+server --config /etc/classis-server/server.toml
 ```
 
 The Server runs in the foreground, logs to stderr, and stops on `SIGTERM`. It
 does not install itself as a service, so let your service manager run it. A
-systemd unit for an account named `opamp-fleet-server` might look like this:
+systemd unit for an account named `classis-server` might look like this:
 
 ```ini
-# /etc/systemd/system/opamp-fleet-server.service
+# /etc/systemd/system/classis-server.service
 [Unit]
-Description=OpAMP Fleet Server
+Description=Classis Server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=opamp-fleet-server
-ExecStart=/usr/local/bin/server --config /etc/opamp-fleet-server/server.toml
-StateDirectory=opamp-fleet-server
+User=classis-server
+ExecStart=/usr/local/bin/server --config /etc/classis-server/server.toml
+StateDirectory=classis-server
 UMask=0077
 Restart=on-failure
 
@@ -255,12 +254,12 @@ WantedBy=multi-user.target
 ```
 
 `ProtectSystem=strict` leaves the whole file system read-only to the Server
-except its `StateDirectory`, `/var/lib/opamp-fleet-server`, which holds
-`data_dir` in the configuration above. A `data_dir` anywhere else needs a
-`ReadWritePaths=` line naming it. A `listen` or `[rest] listen` port below 1024
-needs `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` and
+except its `StateDirectory`, `/var/lib/classis-server`, which holds `data_dir`
+in the configuration above. A `data_dir` anywhere else needs a `ReadWritePaths=`
+line naming it. A `listen` or `[rest] listen` port below 1024 needs
+`CapabilityBoundingSet=CAP_NET_BIND_SERVICE` and
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` instead of the empty lines.
-`systemd-analyze security opamp-fleet-server` rates what the unit leaves open.
+`systemd-analyze security classis-server` rates what the unit leaves open.
 
 The Server refuses an unsafe or incomplete configuration at startup and names
 the key, for example
@@ -296,7 +295,7 @@ without `pki init`, or to replace the key, make one with the operator tool's
 `package keygen` ([The operator tool](tools.md#packing-and-signing)):
 
 ```console
-$ opamp-fleetctl package keygen --out fleet-signing.pk8
+$ classisctl package keygen --out fleet-signing.pk8
 3b6a27bc…
 ```
 
@@ -339,7 +338,7 @@ as `fleet.host.*` for Selectors to match
 ([Bootstrap certificates](server.md#bootstrap-certificates-issued-by-the-server)).
 Where a host or a tool needs the PEM pair, `bootstrap.pem` and
 `bootstrap-key.pem`, as `supervisor.toml.fragment` names them,
-`opamp-fleetctl pki p12-extract bootstrap.p12 --out <dir>` writes it
+`classisctl pki p12-extract bootstrap.p12 --out <dir>` writes it
 ([`pki`](tools.md#pki)).
 
 Copy `server-ca.pem` and `bootstrap.p12` — or `server-ca.pem` and the extracted
@@ -356,7 +355,7 @@ there.
 **Install the Client** from the release's `.deb`, `.rpm` or `.msi`. The package
 registers the service and leaves it stopped (see
 [Installing from a native package](client.md#installing-from-a-native-package)).
-On Linux the service runs as the system account `opamp-fleet`, which the package
+On Linux the service runs as the system account `classis`, which the package
 creates. The install hands the files under the data root to it; a file you name
 elsewhere, such as under `/etc/opamp/`, the service reads only if that account
 may — give the key to the account, not to root alone, or choose root with
@@ -368,19 +367,19 @@ host's enrolment, so first **open the enrolment window** as
 approve the request the install waits for:
 
 ```console
-$ sudo opamp-fleet service install --interactive
+$ sudo classis service install --interactive
 Server OpAMP endpoint [wss://127.0.0.1:4320/v1/opamp]: wss://fleet.example.com:4320/v1/opamp
 This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/server-ca.pem
 Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
 Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
 Package verification key (hex Ed25519 public key; empty takes no packages): 3b6a27bc…
-copied /var/lib/opamp-fleet/server-ca.pem
-wrote /var/lib/opamp-fleet/supervisor.toml
+copied /var/lib/classis/server-ca.pem
+wrote /var/lib/classis/supervisor.toml
 enrolling with wss://fleet.example.com:4320/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
 INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-enrolled: the issued certificate is in /var/lib/opamp-fleet/state
-installed opamp-fleet
+enrolled: the issued certificate is in /var/lib/classis/state
+installed classis
 ```
 
 With the files beside the program, each of the three path questions offers the
@@ -395,12 +394,12 @@ approval.
 Approve the fingerprint it logs, as step 5 describes, and the install carries
 on. The bootstrap pair is used only for this request: it is not copied, and
 `/etc/opamp/bootstrap*.pem` can be removed afterwards. Later changes go through
-`sudo opamp-fleet service config`, which asks the same questions with the
-current values as defaults
+`sudo classis service config`, which asks the same questions with the current
+values as defaults
 ([The questionnaire](client.md#the-questionnaire---interactive-and-service-config)).
 
 Or write the file yourself, which suits configuration management. This is what
-matters of a file written by hand, at `/var/lib/opamp-fleet/supervisor.toml` on
+matters of a file written by hand, at `/var/lib/classis/supervisor.toml` on
 Linux. It names the bootstrap pair, and the service enrols with it when it
 starts:
 
@@ -424,8 +423,8 @@ A few things worth knowing about these keys:
   comes from a public CA.
 - **`name` is what the fleet view shows**, not what the certificate says. The
   certificate the Server issues is named for its role,
-  `OpAMP Fleet Client Certificate`, whatever the request asks for; a host is
-  told apart by its serial and its host id.
+  `Classis Client Certificate`, whatever the request asks for; a host is told
+  apart by its serial and its host id.
 - **A bootstrap pair in the file stays there after enrolment.** Once the host
   holds an issued certificate, it stores the certificate in its state directory
   as `client-cert.pem` and `client-key.pem` and uses that pair instead. The
@@ -437,7 +436,7 @@ A few things worth knowing about these keys:
 
 A host configured by hand does not start yet: the enrolment window is still
 closed. A host the questionnaire enrolled is ready; start it with
-`sudo systemctl start opamp-fleet`.
+`sudo systemctl start classis`.
 
 ## 5. Enrol the Client
 
@@ -455,8 +454,8 @@ $ curl --cacert server-ca.pem -X POST -H 'Content-Type: application/json' \
 Client the questionnaire enrols logs the fingerprint on the terminal it runs on:
 
 ```console
-$ sudo systemctl start opamp-fleet
-$ journalctl -u opamp-fleet | grep key_fingerprint
+$ sudo systemctl start classis
+$ journalctl -u classis | grep key_fingerprint
 INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
 ```
 
@@ -510,12 +509,12 @@ out.** Its stored certificate has expired, and the Client keeps presenting it.
 To enrol it again:
 
 1. On the host, stop the service and delete `client-cert.pem` and
-   `client-key.pem` from its state directory (`/var/lib/opamp-fleet/state/` on
+   `client-key.pem` from its state directory (`/var/lib/classis/state/` on
    Linux), and `client-key.pending.pem` and `client-csr.pending.pem` if they are
    there.
 2. If the bootstrap certificate has expired too, have the Server issue a fresh
    one, as [step 4](#4-configure-and-install-a-client) shows.
-3. Open the window, run `sudo opamp-fleet service config`, which asks for the
+3. Open the window, run `sudo classis service config`, which asks for the
    bootstrap pair again now that the host holds no certificate, and approve the
    fingerprint it logs, as in step 5. Then start the service. A host whose
    `supervisor.toml` names the bootstrap pair can instead simply be started, and
@@ -529,7 +528,7 @@ of it:
 
 ```console
 $ curl --cacert server-ca.pem https://127.0.0.1:4321/api/v1/certificates
-[{"authority":"client","serial":"5c0f…","subject":"CN=OpAMP Fleet Client Certificate",…}]
+[{"authority":"client","serial":"5c0f…","subject":"CN=Classis Client Certificate",…}]
 $ curl --cacert server-ca.pem -X POST -H 'Content-Type: application/json' \
        -d '{"certificate": {"authority": "client", "serial": "5c0f…"}}' \
        https://127.0.0.1:4321/api/v1/revocations
@@ -545,7 +544,7 @@ for lifting a revocation.
 **The server certificate is yours to renew**, from the offline directory:
 
 ```sh
-opamp-fleetctl pki server-cert --offline-dir fleet-offline --name fleet.example.com --name 10.0.0.5 --out next-server
+classisctl pki server-cert --offline-dir fleet-offline --name fleet.example.com --name 10.0.0.5 --out next-server
 ```
 
 It writes `server.pem` and `server-key.pem` into a new directory. Replace the
@@ -564,8 +563,8 @@ the fleet's server CA:
 
 ```toml
 [rest.tls]
-cert_file = "/etc/opamp-fleet-server/tls/ui.pem"       # the leaf first, then any intermediates
-key_file = "/etc/opamp-fleet-server/tls/ui-key.pem"
+cert_file = "/etc/classis-server/tls/ui.pem"       # the leaf first, then any intermediates
+key_file = "/etc/classis-server/tls/ui-key.pem"
 ```
 
 The Agent plane keeps the server certificate, and the Clients notice nothing. A
@@ -574,14 +573,14 @@ files. Renew this certificate through your PKI, replace the two files, and
 restart the Server; `server pki status` lists it beside the others. A PKI
 certificate seldom names `127.0.0.1`, so through an SSH tunnel to a loopback
 Operator plane dial the name the certificate carries, for example through an
-entry in `/etc/hosts`. `opamp-fleetctl package fetch --cacert` then names your
-PKI's CA, or nothing when the system's roots hold it.
+entry in `/etc/hosts`. `classisctl package fetch --cacert` then names your PKI's
+CA, or nothing when the system's roots hold it.
 
 **The bootstrap CA is yours to replace once a year**, when the Server warns that
 it is ending:
 
 ```sh
-opamp-fleetctl pki bootstrap-ca --product "OpAMP Fleet" --organization "Example Org" --out next-bootstrap-ca
+classisctl pki bootstrap-ca --product "Classis" --organization "Example Org" --out next-bootstrap-ca
 ```
 
 Give it the `--product`, `--organization` and `--organizational-unit` you gave
@@ -598,15 +597,15 @@ than 90 days — it logs a warning naming the file and the date, and records
 `pki.expiring` in the audit; once one has ended, an error and `pki.expired`. It
 keeps serving either way. `server pki status --config <server.toml>` says the
 same on demand for the Server host's certificates, and
-`opamp-fleetctl pki status --offline-dir <dir>` for the offline directory's.
-Both exit by a code that suits a monitoring job: `0` when nothing is ending, `1`
-when something is, `2` when something has ended.
+`classisctl pki status --offline-dir <dir>` for the offline directory's. Both
+exit by a code that suits a monitoring job: `0` when nothing is ending, `1` when
+something is, `2` when something has ended.
 
 ```console
-$ server pki status --config /etc/opamp-fleet-server/server.toml
-ok        396 days  2027-11-10  serial 0d3d…  O=Example Org, CN=OpAMP Fleet Server Certificate  (/etc/opamp-fleet-server/tls/server.pem)
-ok        3649 days  2036-10-06  serial 4e1b…  O=Example Org, CN=OpAMP Fleet Client CA  (/etc/opamp-fleet-server/tls/client-ca.pem)
-ok        3649 days  2036-10-06  serial 2068…  O=Example Org, CN=OpAMP Fleet Bootstrap CA  (/etc/opamp-fleet-server/tls/bootstrap-ca.pem)
+$ server pki status --config /etc/classis-server/server.toml
+ok        396 days  2027-11-10  serial 0d3d…  O=Example Org, CN=Classis Server Certificate  (/etc/classis-server/tls/server.pem)
+ok        3649 days  2036-10-06  serial 4e1b…  O=Example Org, CN=Classis Client CA  (/etc/classis-server/tls/client-ca.pem)
+ok        3649 days  2036-10-06  serial 2068…  O=Example Org, CN=Classis Bootstrap CA  (/etc/classis-server/tls/bootstrap-ca.pem)
 ```
 
 **The server CA and the client CA outlast everything else**, so they live ten
@@ -618,20 +617,20 @@ its current client CA issued.
 
 ## When a connection is refused
 
-| What you see                                                                                                | Where  | What it means                                                                                                                                                                                            |
-| ----------------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cannot connect … invalid peer certificate: UnknownIssuer`                                                  | Client | `ca_file` does not hold the CA that signed the server certificate, or `ca_file` is unset and the certificate comes from a private CA.                                                                    |
-| `cannot connect … invalid peer certificate: certificate not valid for name …`                               | Client | The host name or address in `endpoint` is not among the server certificate's alternative names.                                                                                                          |
-| The Client refuses to start: `[tls] cert_file and key_file are required`                                    | Client | The host has no client identity yet. Name the bootstrap pair in `[tls]`.                                                                                                                                 |
-| The handshake fails, and the Server never lists the host                                                    | both   | The Client's certificate comes from none of the Server's CAs, or `[enrolment]` is not configured and the host holds only a bootstrap certificate.                                                        |
-| `cannot connect … 503 Service Unavailable`, and no request is listed                                        | Client | The enrolment window is closed. Open it; the Client retries by itself.                                                                                                                                   |
-| The request is listed, but the host never connects as a member                                              | Server | Nobody approved it yet. The host waits and sends the same request again until you do.                                                                                                                    |
-| `admission failed: the server refused this client (HTTP 401)`                                               | Client | The Server refused the certificate after the handshake: it is revoked.                                                                                                                                   |
-| `cannot connect … received fatal alert …` on a host that was connected before                               | Client | Its certificate expired while it was offline. Enrol it again, as [Living with the certificates](#6-living-with-the-certificates) describes.                                                              |
-| A `429`                                                                                                     | Client | The host's address failed admission too often, and the Server is backing it off. Fix the certificate; the back-off ends by itself.                                                                       |
-| The Server refuses to start, naming `shares a CA with [tls] client_ca_file`                                 | Server | The bootstrap CA and the client CA have the same subject name. Make a bootstrap CA with a name of its own.                                                                                               |
-| The Server refuses to start, naming `bootstrap_ca_key_file … is not the key of` or `is the client CA's key` | Server | `[enrolment]` names a key that does not belong to the bootstrap CA. Name the bootstrap CA's own key.                                                                                                     |
-| `POST /api/v1/bootstrap-certificates` answers `409`, naming `bootstrap_ca_key_file`                         | Server | The Server does not hold the bootstrap CA's key. Name it in `[enrolment]` and restart.                                                                                                                   |
-| The Server refuses to start, naming `[client_ca] … does not exist`                                          | Server | A file of `[client_ca]` is missing.                                                                                                                                                                      |
-| The Server refuses to start with `cannot read <key file>: …`                                                | Server | The account the Server runs as cannot read the client CA's key, or, when the message ends in `Could not parse key pair`, the key is not PKCS#8. A client CA made by `opamp-fleetctl pki init` always is. |
-| Hosts enrol, but their certificates are refused at once                                                     | both   | `[client_ca]` holds a key that does not belong to its certificate, or `client_ca_file` names another CA. The Server checks neither at startup.                                                           |
+| What you see                                                                                                | Where  | What it means                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cannot connect … invalid peer certificate: UnknownIssuer`                                                  | Client | `ca_file` does not hold the CA that signed the server certificate, or `ca_file` is unset and the certificate comes from a private CA.                                                                |
+| `cannot connect … invalid peer certificate: certificate not valid for name …`                               | Client | The host name or address in `endpoint` is not among the server certificate's alternative names.                                                                                                      |
+| The Client refuses to start: `[tls] cert_file and key_file are required`                                    | Client | The host has no client identity yet. Name the bootstrap pair in `[tls]`.                                                                                                                             |
+| The handshake fails, and the Server never lists the host                                                    | both   | The Client's certificate comes from none of the Server's CAs, or `[enrolment]` is not configured and the host holds only a bootstrap certificate.                                                    |
+| `cannot connect … 503 Service Unavailable`, and no request is listed                                        | Client | The enrolment window is closed. Open it; the Client retries by itself.                                                                                                                               |
+| The request is listed, but the host never connects as a member                                              | Server | Nobody approved it yet. The host waits and sends the same request again until you do.                                                                                                                |
+| `admission failed: the server refused this client (HTTP 401)`                                               | Client | The Server refused the certificate after the handshake: it is revoked.                                                                                                                               |
+| `cannot connect … received fatal alert …` on a host that was connected before                               | Client | Its certificate expired while it was offline. Enrol it again, as [Living with the certificates](#6-living-with-the-certificates) describes.                                                          |
+| A `429`                                                                                                     | Client | The host's address failed admission too often, and the Server is backing it off. Fix the certificate; the back-off ends by itself.                                                                   |
+| The Server refuses to start, naming `shares a CA with [tls] client_ca_file`                                 | Server | The bootstrap CA and the client CA have the same subject name. Make a bootstrap CA with a name of its own.                                                                                           |
+| The Server refuses to start, naming `bootstrap_ca_key_file … is not the key of` or `is the client CA's key` | Server | `[enrolment]` names a key that does not belong to the bootstrap CA. Name the bootstrap CA's own key.                                                                                                 |
+| `POST /api/v1/bootstrap-certificates` answers `409`, naming `bootstrap_ca_key_file`                         | Server | The Server does not hold the bootstrap CA's key. Name it in `[enrolment]` and restart.                                                                                                               |
+| The Server refuses to start, naming `[client_ca] … does not exist`                                          | Server | A file of `[client_ca]` is missing.                                                                                                                                                                  |
+| The Server refuses to start with `cannot read <key file>: …`                                                | Server | The account the Server runs as cannot read the client CA's key, or, when the message ends in `Could not parse key pair`, the key is not PKCS#8. A client CA made by `classisctl pki init` always is. |
+| Hosts enrol, but their certificates are refused at once                                                     | both   | `[client_ca]` holds a key that does not belong to its certificate, or `client_ca_file` names another CA. The Server checks neither at startup.                                                       |

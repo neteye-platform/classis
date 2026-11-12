@@ -4,7 +4,7 @@
 
   The package delivers one file into `Program Files` and then calls the Client's own
   `service install` (ADR-0019), which builds the layout and the state directory under
-  `%ProgramData%\opamp-fleet`. That division is ADR-0019 clause 8: `Program Files` is
+  `%ProgramData%\classis`. That division is ADR-0019 clause 8: `Program Files` is
   `TrustedInstaller`-owned and read-only once installation finishes, and the layout is rewritten at
   runtime by the daemon — the self-update stages a new version directory and swings `current`. It
   is the same line the `.deb` and `.rpm` draw between `/usr/libexec` and `/opt`. The MSI therefore
@@ -21,8 +21,8 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
-  <Package Name="OpAMP Fleet Agent"
-           Manufacturer="OpAMP Fleet"
+  <Package Name="Classis Agent"
+           Manufacturer="Classis"
            Version="$(Version)"
            Language="1033"
            Codepage="1252"
@@ -43,7 +43,7 @@
 
     <MediaTemplate EmbedCab="yes" />
 
-    <SummaryInformation Description="OpAMP Fleet Agent — places a machine under OpAMP management" />
+    <SummaryInformation Description="Classis Agent — places a machine under OpAMP management" />
 
     <!--
       Every answer the dialogs collect is a public property (all uppercase) and Secure, and that is
@@ -56,7 +56,7 @@
           how Intune, Group Policy and SCCM will deploy this:
 
               msiexec /i supervisor_1.2.3_windows_amd64.msi /qn ^
-                INSTALLFOLDER="C:\Program Files\opamp-fleet" ^
+                INSTALLFOLDER="C:\Program Files\classis" ^
                 ENDPOINT="wss://fleet.example.com/v1/opamp" ^
                 SELFUPDATE=0
 
@@ -123,7 +123,7 @@
     <!--
       One directory the operator configures (ADR-0019 clause 39), holding the payload this package
       delivers: `supervisor.exe` and nothing else. The layout and the state directory are not here
-      — `service install` puts them under `%ProgramData%\opamp-fleet`, for ADR-0019 clause 8's
+      — `service install` puts them under `%ProgramData%\classis`, for ADR-0019 clause 8's
       reason. The operator still configures one path; it simply is not the install root.
 
       Named after the **product**, not its display name (ADR-0019 clause 7): `nodejs`, `Git` and
@@ -131,7 +131,7 @@
       display name would be the one place a variant build could not tell itself apart.
     -->
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="opamp-fleet" />
+      <Directory Id="INSTALLFOLDER" Name="classis" />
     </StandardDirectory>
 
     <ComponentGroup Id="ClientFiles" Directory="INSTALLFOLDER">
@@ -143,7 +143,7 @@
       </Component>
     </ComponentGroup>
 
-    <Feature Id="Main" Title="OpAMP Fleet Agent" Level="1">
+    <Feature Id="Main" Title="Classis Agent" Level="1">
       <ComponentGroupRef Id="ClientFiles" />
     </Feature>
 
@@ -206,7 +206,7 @@
       step later. What this package's uninstaller then empties is INSTALLFOLDER, which
       holds only the payload it delivered: exactly right, and the reason ADR-0019 clause 8 moved
       the data out of `Program Files`. The configuration and the state survive under
-      `%ProgramData%\opamp-fleet`, the same remove-versus-purge shape the `.deb` has.
+      `%ProgramData%\classis`, the same remove-versus-purge shape the `.deb` has.
     -->
     <CustomAction Id="StopService"
                   FileRef="SupervisorExe"

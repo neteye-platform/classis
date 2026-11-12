@@ -5,5 +5,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = fleet_agent::gateway::revocations::parse_list(data);
+    let _ = classis_agent::gateway::revocations::parse_list(data);
 });

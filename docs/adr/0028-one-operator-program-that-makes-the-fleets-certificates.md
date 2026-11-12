@@ -1,32 +1,32 @@
-# ADR-0028: The operator tools are one program, `opamp-fleetctl`, published with every release for Linux and macOS, that makes the fleet's certificate authorities and the Server's certificate; the Server issues bootstrap certificates whose subject the operator names, under a bootstrap CA of one year; every certificate is named by its product and its role; and the Server says before any of them ends
+# ADR-0028: The operator tools are one program, `classisctl`, published with every release for Linux and macOS, that makes the fleet's certificate authorities and the Server's certificate; the Server issues bootstrap certificates whose subject the operator names, under a bootstrap CA of one year; every certificate is named by its product and its role; and the Server says before any of them ends
 
 - **Status:** 🟢 accepted · clauses 21, 24 and 25 superseded by
   [ADR-0029](0029-a-bootstrap-certificate-as-a-password-protected-pkcs12-file-the-server-keeps.md)
   · clauses 2 and 15 superseded by
-  [ADR-0031](0031-opamp-fleetctl-extracts-a-bootstrap-pkcs12-file-into-pem.md) ·
+  [ADR-0031](0031-classisctl-extracts-a-bootstrap-pkcs12-file-into-pem.md) ·
   clauses 22 and 29 superseded by
   [ADR-0036](0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md)
   · clause 20 superseded by
   [ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
-- **Applies to:** the `pki` commands of `opamp-fleetctl` in
-  `crates/fleet-tools/` and the module that carries them, the Server's
-  `pki status` command in `crates/fleet-server/src/main.rs` and the module that
-  carries it, the ending rule and the naming rule in `crates/fleet-core/`, the
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the `pki` commands of `classisctl` in
+  `crates/classis-tools/` and the module that carries them, the Server's
+  `pki status` command in `crates/classis-server/src/main.rs` and the module that
+  carries it, the ending rule and the naming rule in `crates/classis-core/`, the
   expiry warnings of the running Server, the bootstrap-certificate routes of the
-  Operator plane in `crates/fleet-server/src/api.rs` and the module that issues
+  Operator plane in `crates/classis-server/src/api.rs` and the module that issues
   and records bootstrap certificates, the signing of host and bootstrap
-  certificates in `crates/fleet-server/src/ca.rs`, the `[enrolment]` and
+  certificates in `crates/classis-server/src/ca.rs`, the `[enrolment]` and
   `[client_ca]` sections of `server.toml` and their startup checks in
-  `crates/fleet-server/src/config.rs`, the `bootstrap-certificates/` directory
+  `crates/classis-server/src/config.rs`, the `bootstrap-certificates/` directory
   under `config_dir`, the Enrolments tab of the bundled UI in
-  `crates/fleet-server/static/index.html`, `scripts/dev-pki.sh` and what reads
+  `crates/classis-server/static/index.html`, `scripts/dev-pki.sh` and what reads
   its output (`scripts/seed_test_configs.sh`, `.vscode/launch.json`,
   `.vscode/tasks.json`, the startup message of
-  `crates/fleet-server/src/config.rs` that names it), and every document that
+  `crates/classis-server/src/config.rs` that names it), and every document that
   tells an operator how to make, hand out or inspect a certificate or shows a
-  certificate's subject; `crates/fleet-tools/` (the program it builds, its
+  certificate's subject; `crates/classis-tools/` (the program it builds, its
   command tree and the names of its commands), the operator-tool build and its
   archives in `.github/workflows/release.yml`, the release notes, and every
   document or script that names an operator command
@@ -51,7 +51,7 @@ certificates.
 The certificates are one of three things this project makes before a fleet does
 anything useful; a package signing key and signed package artifacts are the
 others (G-10, Q-1). Packing and signing an artifact and fetching a release of a
-known agent are commands built from `crates/fleet-tools`. Unless a release
+known agent are commands built from `crates/classis-tools`. Unless a release
 carries them, an operator who wants to roll out a single package needs a
 checkout of this repository and a Rust toolchain on their own machine.
 
@@ -157,31 +157,31 @@ This serves **G-17** (the connection is secured and the Agent is identified),
 
 ## Decision
 
-We will build the operator tools as one program, `opamp-fleetctl`, from
-`crates/fleet-tools`, and publish it in every release as a `.tar.gz` for Linux
+We will build the operator tools as one program, `classisctl`, from
+`crates/classis-tools`, and publish it in every release as a `.tar.gz` for Linux
 and macOS on amd64 and arm64. We will give it `pki` commands that make, with
 `rcgen`, the three certificate authorities and the Server's and a Gateway's
 certificate, keep the bootstrap CA's key on the Server, have the Server issue
 bootstrap certificates through the Operator plane and its bundled UI with a
 subject the operator names, name every certificate `<product> <Role> CA` or
 `<product> <Role> Certificate` with the organization the operator gives, give
-`opamp-fleetctl` and the Server a `pki status` command that says when the
+`classisctl` and the Server a `pki status` command that says when the
 certificates each can see end, and have the running Server warn before a
 certificate it depends on ends, so that no step of setting up or running a fleet
 needs `openssl` or another external tool and no certificate ends unannounced.
 
 1. **Three commands that make, and a status where the files are.**
-   `opamp-fleetctl pki init` makes a fleet's certificates and its package
-   signing key from nothing. `opamp-fleetctl pki server-cert` makes a server
+   `classisctl pki init` makes a fleet's certificates and its package
+   signing key from nothing. `classisctl pki server-cert` makes a server
    certificate from the existing server CA, for the Server or for a Gateway.
-   `opamp-fleetctl pki bootstrap-ca` makes a new bootstrap CA to replace the
-   Server's. `opamp-fleetctl pki status` says when the certificates in the
+   `classisctl pki bootstrap-ca` makes a new bootstrap CA to replace the
+   Server's. `classisctl pki status` says when the certificates in the
    offline directory end, and `server pki status` says when those of the Server
    host end. The Server's command runs and exits like `hash-credential` and
    `audit-verify`, before the Server starts serving. The Server binary carries
    no code that makes a CA or a server certificate. It signs host certificates
    (ADR-0021 clause 9) and bootstrap certificates (clause 21). When a
-   certificate counts as ending (clause 11) is one rule in `fleet-core`, plain
+   certificate counts as ending (clause 11) is one rule in `classis-core`, plain
    date arithmetic, so both commands and the running Server judge alike, and
    each program reads the certificate itself. None of the commands makes a host
    certificate or a bootstrap certificate.
@@ -212,7 +212,7 @@ needs `openssl` or another external tool and no certificate ends unannounced.
    goes where.
 
 4. **`init` is meant to run where the offline keys are to stay.** That is the
-   operator's Linux or macOS machine, the one `opamp-fleetctl` is downloaded to.
+   operator's Linux or macOS machine, the one `classisctl` is downloaded to.
    Run on the Server host, it is followed by moving `--offline-dir` off it, and
    the command says so when both directories are on one file system.
 
@@ -234,7 +234,7 @@ needs `openssl` or another external tool and no certificate ends unannounced.
    by another unit says so.
 
 7. **`server-cert` serves the Server and a Gateway alike.**
-   `opamp-fleetctl pki server-cert --offline-dir <dir> --name … --out <dir>`
+   `classisctl pki server-cert --offline-dir <dir> --name … --out <dir>`
    signs `server.pem` and `server-key.pem` in `--out` with `server-ca-key.pem`.
    For the Server they replace the files of `[tls]`, and the Server is restarted
    on them; for a Gateway they are its `[gateway.tls]` `cert_file` and
@@ -244,7 +244,7 @@ needs `openssl` or another external tool and no certificate ends unannounced.
    fleet's trust does not change, so no host's configuration does.
 
 8. **A new bootstrap CA replaces the Server's.**
-   `opamp-fleetctl pki bootstrap-ca --out <dir>` writes `bootstrap-ca.pem` and
+   `classisctl pki bootstrap-ca --out <dir>` writes `bootstrap-ca.pem` and
    `bootstrap-ca-key.pem` to `--out`, with the subject a bootstrap CA carries
    (clause 5). The operator copies both to the Server host in place of
    `[enrolment]`'s files and restarts the Server. Bootstrap certificates from
@@ -282,13 +282,13 @@ needs `openssl` or another external tool and no certificate ends unannounced.
 
 12. **`pki status` says when each certificate ends.**
     `server pki status --config <server.toml>` lists the files of clause 11.
-    `opamp-fleetctl pki status --offline-dir <dir>` lists the server CA. Each
+    `classisctl pki status --offline-dir <dir>` lists the server CA. Each
     prints every certificate with its subject, its serial, its end and the days
     left, and exits `0` when none is ending in the sense of clause 11, `1` when
     one is, and `2` when one has ended, so a monitoring job can run it.
 
 13. **The project uses its own commands.** `scripts/dev-pki.sh` makes its
-    development set with `cargo run -p fleet-tools -- pki init`, writes a
+    development set with `cargo run -p classis-tools -- pki init`, writes a
     complete `server.toml` and `supervisor.toml` from the fragments, and needs
     no `openssl`. Its development Client holds a bootstrap pair the development
     Server issued: `scripts/seed_test_configs.sh --enrol` asks the Server for
@@ -304,17 +304,17 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     protected by where they are kept and by their mode, as every other key of
     the project is.
 
-15. **One program, two command trees.** `opamp-fleetctl package` holds `fetch`,
+15. **One program, two command trees.** `classisctl package` holds `fetch`,
     `pack`, `sha256`, `sign`, `keygen` and `public-key`, each with the options
-    and output it has today. `opamp-fleetctl pki` holds `init`, `server-cert`,
+    and output it has today. `classisctl pki` holds `init`, `server-cert`,
     `bootstrap-ca` and `status` as this ADR states them.
-    `opamp-fleetctl --version` prints the version every binary of this project
+    `classisctl --version` prints the version every binary of this project
     prints ([ADR-0012](0012-versions-resolved-in-the-internal-crate.md)). No
     other program name exists for any of these commands: no alias, no wrapper,
     no symlink.
 
-16. **The crate builds exactly this program.** `crates/fleet-tools` has no
-    library and one binary, `opamp-fleetctl`, and keeps the dependency direction
+16. **The crate builds exactly this program.** `crates/classis-tools` has no
+    library and one binary, `classisctl`, and keeps the dependency direction
     of
     [ADR-0010](0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)
     clause 22: it uses the Client's and the internal crate's items, and nothing
@@ -326,16 +326,16 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
     `aarch64-apple-darwin` and `x86_64-apple-darwin`, each in the row of the
     Client's build matrix for the same target. Each row whose target runs on its
-    runner asserts that `opamp-fleetctl --version` reports the release version,
+    runner asserts that `classisctl --version` reports the release version,
     as the Client's build does. The Windows row builds the program for its
     runner only as the packer of the Client's archive; no Windows archive of it
     is published.
 
 18. **One archive per target, named like the Client's.**
-    `opamp-fleetctl_<version>_<os>_<arch>.tar.gz`, by the grammar of ADR-0019
+    `classisctl_<version>_<os>_<arch>.tar.gz`, by the grammar of ADR-0019
     clause 32 and the platform tokens of its clause 30, packed by
-    `opamp-fleetctl package pack --format tar.gz` with the one member
-    `opamp-fleetctl` and its executable mode. No `.deb`, `.rpm` or `.msi`
+    `classisctl package pack --format tar.gz` with the one member
+    `classisctl` and its executable mode. No `.deb`, `.rpm` or `.msi`
     carries it. The four archives are assets of the release beside the Client's
     and are covered by the same `SHA256SUMS`.
 
@@ -343,9 +343,9 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     archives as the operator tool and say they are downloaded, not uploaded to
     the Server. Everything that selects the Client's archives selects them by
     their `supervisor_` stem, never by version and platform alone: the notes'
-    upload loop, which would otherwise put an `opamp-fleetctl` archive into the
+    upload loop, which would otherwise put an `classisctl` archive into the
     `supervisor` Package as the entry of its platform, and
-    `opamp-fleetctl package fetch --agent supervisor`. An upload made by hand
+    `classisctl package fetch --agent supervisor`. An upload made by hand
     anyway installs nothing: the Client's self-update refuses an artifact whose
     member is not `supervisor` (ADR-0019 clause 29).
 
@@ -407,8 +407,8 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     and end, and says so when no entry matches. The tab uses no route the REST
     API does not offer.
 
-26. **The product is a flag, with a default.** `opamp-fleetctl pki init` and
-    `pki bootstrap-ca` take `--product <name>` (default `OpAMP Fleet`): letters,
+26. **The product is a flag, with a default.** `classisctl pki init` and
+    `pki bootstrap-ca` take `--product <name>` (default `Classis`): letters,
     digits, space, `.` and `-`, 1 to 40 characters, no leading or trailing
     space. No build constant enters a certificate.
 
@@ -420,7 +420,7 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     OU, CN. No other attribute is written.
 
 28. **A leaf's common name is its CA's, with `CA` turned into `Certificate`.**
-    Whoever signs a leaf — `opamp-fleetctl` a server certificate, the Server a
+    Whoever signs a leaf — `classisctl` a server certificate, the Server a
     host or a bootstrap certificate — takes the common name of the CA that signs
     it and replaces a trailing ` CA` with ` Certificate`, or appends
     ` Certificate` when there is none. A fleet made by `init` therefore has
@@ -439,10 +439,10 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     decision may carry over from the bootstrap certificate (ADR-0021 clause 7).
 
 30. **A development certificate says so.** `scripts/dev-pki.sh` makes its set
-    with `--product "OpAMP Fleet Dev" --organization "Development"`, and
+    with `--product "Classis Dev" --organization "Development"`, and
     `scripts/seed_test_configs.sh --enrol` issues its bootstrap certificate with
     the organization `Development`. Every certificate of a development set
-    therefore reads `OpAMP Fleet Dev …` and `O=Development`, and one that turns
+    therefore reads `Classis Dev …` and `O=Development`, and one that turns
     up outside a developer's machine is recognized as such.
 
 **Out of scope:** issuing a host certificate by any route other than enrolment,
@@ -478,7 +478,7 @@ the upload `package fetch` makes.
   tool published, the one argument for it — no second binary to obtain — is
   gone; the version both share is the release's.
 - **Keep the bootstrap CA offline and make bootstrap certificates with
-  `opamp-fleetctl`, with subject options.** It gives each customer a subject of
+  `classisctl`, with subject options.** It gives each customer a subject of
   its own, but each certificate is a trip to the offline machine, and the Server
   neither lists nor knows what was issued until a host presents it. It protects
   a key whose loss is already outweighed by the client CA's key on the Server.
@@ -511,10 +511,10 @@ the upload `package fetch` makes.
   sits, which an audit of a private fleet does not ask, and `country` needs an
   encoding of its own (`PrintableString`). O and OU name who is responsible.
 - **The product name from the build (`PRODUCT_TITLE`, ADR-0019 clause 2).** It
-  needs no flag, but it names the Client product (`OpAMP Fleet Agent`), lives
-  only in `crates/fleet-agent`, and is the same for every installation of one
+  needs no flag, but it names the Client product (`Classis Agent`), lives
+  only in `crates/classis-agent`, and is the same for every installation of one
   build. An operator's certificates name their installation.
-- **A slug for the fleet (`--fleet opamp-fleet`) and the role in lower case.**
+- **A slug for the fleet (`--fleet classis`) and the role in lower case.**
   The smallest naming, but an auditor reads a slug and no organization, and no
   leaf shows its role in its subject.
 - **A configuration file for issuer and subject data,** or a setting for the
@@ -542,12 +542,12 @@ the upload `package fetch` makes.
   Clients take no package until someone sets `verification_key` by hand. The key
   belongs where `init` already puts what stays offline, and `keygen` remains for
   a second key or a replacement.
-- **The whole reading of a certificate's end in `fleet-core`.** One function
+- **The whole reading of a certificate's end in `classis-core`.** One function
   from file to verdict, but it would give the internal crate its first
   dependencies (`x509-parser`, `time`, the PEM reader), which every end then
   compiles for a rule only two programs apply; the date rule alone needs none.
-- **`fleet-tools` depending on `fleet-server` for the rule.** No new code in
-  `fleet-core`, but the operator tool would link the Server's library, its
+- **`classis-tools` depending on `classis-server` for the rule.** No new code in
+  `classis-core`, but the operator tool would link the Server's library, its
   router included, for a dozen lines.
 - **`pki status` in one program only.** The Server host does not hold the server
   CA's certificate and the operator's machine does not hold `server.toml`, so
@@ -576,7 +576,7 @@ the upload `package fetch` makes.
   a CA and a signing key.
 - **Name it `fleetctl`.** The `kubectl` analogy the crate split already draws,
   but the name belongs to FleetDM's tool (Context).
-- **Name it `opamp-operator` or `opamp-fleet`.** The first says who uses it, but
+- **Name it `opamp-operator` or `classis`.** The first says who uses it, but
   a name ending in `-ctl` says it is the command-line tool of a system, which is
   what an operator looks for. The second is the build-time product name the
   Client's service is registered under (ADR-0019), so a program of that name
@@ -726,7 +726,7 @@ Tests that will carry `Verifies: ADR-0028`:
   `… Client CA` and `… Bootstrap CA`, each with a path length of 0 and passing
   the Server's startup check, and a server certificate
   `O=Acme AG, OU=IT, CN=Acme Fleet Server Certificate` with every `--name` and
-  the loopback as SANs. Without the flags the CAs are `CN=OpAMP Fleet … CA` and
+  the loopback as SANs. Without the flags the CAs are `CN=Classis … CA` and
   carry no O or OU. `--fleet` is an unknown option, and a product or an
   organization outside its grammar, a wildcard or an empty `--name` is refused
   (clauses 5, 6, 26 and 27).
@@ -734,11 +734,11 @@ Tests that will carry `Verifies: ADR-0028`:
   `server-ca.pem` accepts the new server certificate, and the certificate copies
   O and OU from the server CA, of which `--organizational-unit` replaces OU
   alone (clauses 6 and 7).
-- End to end, in `crates/fleet-tools/tests/`: `opamp-fleetctl pki init` makes
-  the set, a Server started on `server.toml.fragment` — `fleet-server` as a
-  development dependency of `fleet-tools`, which links into no artifact — issues
+- End to end, in `crates/classis-tools/tests/`: `classisctl pki init` makes
+  the set, a Server started on `server.toml.fragment` — `classis-server` as a
+  development dependency of `classis-tools`, which links into no artifact — issues
   the Client's bootstrap pair before the Client starts, and admits a Client
-  started on `supervisor.toml.fragment` through `fleet-agent` once its enrolment
+  started on `supervisor.toml.fragment` through `classis-agent` once its enrolment
   is approved (clauses 3, 6, 13 and 21).
 - The Server binary refuses `pki init`, `pki server-cert`, `pki bootstrap-cert`
   and `pki bootstrap-ca` as unknown commands, and its usage names `pki status`
@@ -773,23 +773,23 @@ Tests that will carry `Verifies: ADR-0028`:
 - The bundled UI names the issuing, listing and revocation routes and the fields
   it reads from them, and `BootstrapView` and `IssuedBootstrap` in the OpenAPI
   document carry those fields (clause 25).
-- The command tree: `opamp-fleetctl --help` lists `package` and `pki` and
+- The command tree: `classisctl --help` lists `package` and `pki` and
   nothing else beside `help`; `package --help` lists `fetch`, `pack`, `sha256`,
   `sign`, `keygen` and `public-key`; `pki --help` lists `init`, `server-cert`,
   `bootstrap-ca` and `status`, and `bootstrap-cert` is an unknown command;
   `--version` prints the baked version (clause 15).
-- The crate: `crates/fleet-tools` declares exactly one binary target,
-  `opamp-fleetctl`, and no library (clause 16).
-- The release workflow, read as data: it builds `opamp-fleetctl` for exactly the
+- The crate: `crates/classis-tools` declares exactly one binary target,
+  `classisctl`, and no library (clause 16).
+- The release workflow, read as data: it builds `classisctl` for exactly the
   four targets of clause 17, asserts its version where the target runs, names
-  each archive `opamp-fleetctl_<version>_<os>_<arch>.tar.gz`, packs it with
-  `opamp-fleetctl package pack --format tar.gz`, and includes it in
-  `SHA256SUMS`; no `opamp-fleetctl_*_windows_*` asset and no installer names it
+  each archive `classisctl_<version>_<os>_<arch>.tar.gz`, packs it with
+  `classisctl package pack --format tar.gz`, and includes it in
+  `SHA256SUMS`; no `classisctl_*_windows_*` asset and no installer names it
   (clauses 17 and 18).
 - The release notes' upload loop, read out of the workflow, selects
-  `supervisor_<version>_*.tar.gz` and matches no `opamp-fleetctl_` archive, and
+  `supervisor_<version>_*.tar.gz` and matches no `classisctl_` archive, and
   `package fetch --agent supervisor`, given a release that also holds
-  `opamp-fleetctl_1.2.3_linux_amd64.tar.gz`, plans only the `supervisor_`
+  `classisctl_1.2.3_linux_amd64.tar.gz`, plans only the `supervisor_`
   archives (clause 19).
 
 **Not mechanically decidable:** that no document of the project tells an

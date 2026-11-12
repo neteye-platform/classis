@@ -2,11 +2,11 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the `endpoint` of the `[connection_offer]` section of
-  `server.toml` and its startup check in `crates/fleet-server/src/config.rs`,
+  `server.toml` and its startup check in `crates/classis-server/src/config.rs`,
   the Client's verification of an offered endpoint in
-  `crates/fleet-agent/src/connection.rs`, the loading of its persisted
+  `crates/classis-agent/src/connection.rs`, the loading of its persisted
   `connection-settings.pb`, and every document that tells an operator where an
   offer may move a fleet
 - **Supersedes:**
@@ -127,7 +127,7 @@ governs.
 
 ## Sources / Prior art
 
-- The code as it stands: `verify` in `crates/fleet-agent/src/connection.rs`
+- The code as it stands: `verify` in `crates/classis-agent/src/connection.rs`
   applies the `ca_file` condition only to a move over TLS, and `check_url` in
   `crates/opamp/src/endpoint.rs` admits `ws://` and `http://` on a loopback IP
   literal. `apply` in the same file lets a persisted endpoint outrank

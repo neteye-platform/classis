@@ -3,13 +3,13 @@
 - **Status:** 🟢 accepted · clause 1 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the state directory `service install` and `service config`
-  take in `crates/fleet-agent/src/main.rs` and `ClientConfig::service_state_dir`
-  in `crates/fleet-agent/src/config_file.rs`, the registration a re-registration
-  reads in `crates/fleet-agent/src/service/manager.rs`, the directories a
+  take in `crates/classis-agent/src/main.rs` and `ClientConfig::service_state_dir`
+  in `crates/classis-agent/src/config_file.rs`, the registration a re-registration
+  reads in `crates/classis-agent/src/service/manager.rs`, the directories a
   system-scope install restricts in
-  `crates/fleet-agent/src/service/windows_rights.rs`, the `state_dir` and
+  `crates/classis-agent/src/service/windows_rights.rs`, the `state_dir` and
   `supervisor_dir` comments of `config/supervisor.toml`, and every document that
   tells an operator where an installed Client keeps its state
 - **Supersedes:**

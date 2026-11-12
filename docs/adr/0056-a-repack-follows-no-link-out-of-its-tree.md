@@ -2,9 +2,9 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-24
-- **Deciders:** Markus Brigl
-- **Applies to:** the deterministic repack of `opamp-fleetctl package fetch`
-  (`pack_tree` and `collect_members` in `crates/fleet-tools/src/fetch.rs`) and
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the deterministic repack of `classisctl package fetch`
+  (`pack_tree` and `collect_members` in `crates/classis-tools/src/fetch.rs`) and
   every kind whose upstream tree it packs, and every document that tells an
   operator what a repacked package carries
 - **Supersedes:**
@@ -14,7 +14,7 @@
 ## Context
 
 Where an upstream publishes no artifact a Client can run as published,
-`opamp-fleetctl package fetch` unpacks it on the operator's host and repacks the
+`classisctl package fetch` unpacks it on the operator's host and repacks the
 tree as a `.tar.gz` before it is signed
 ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
 clause 67). A tree package carries no link (clause 59), so the repack
@@ -59,7 +59,7 @@ therefore made before it reaches an operator.
 We will resolve every link of a repacked tree inside that tree alone, and fail
 the repack, naming the link, when a link leads out of it.
 
-1. **Restates ADR-0026 clause 67. Every repack `opamp-fleetctl package fetch`
+1. **Restates ADR-0026 clause 67. Every repack `classisctl package fetch`
    makes is deterministic, and it carries nothing from outside its tree.** Where
    an upstream publishes no artifact a Client can run as published, the tool
    repacks it on the operator's host, before it is signed, into a `.tar.gz` that
@@ -164,7 +164,7 @@ downloaded settles.
 ## Enforcement
 
 Tests that will carry `Verifies: ADR-0056`, in the tests of
-`crates/fleet-tools/src/fetch.rs`:
+`crates/classis-tools/src/fetch.rs`:
 
 - A tree holding a link with an absolute target to an existing file outside it,
   and one holding `../../` past the root to an existing file, each fail

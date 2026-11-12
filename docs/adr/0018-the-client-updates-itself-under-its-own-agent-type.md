@@ -2,13 +2,13 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-11
-- **Deciders:** Markus Brigl
-- **Applies to:** crates/fleet-agent/src/update/ (mod.rs and installer.rs), the
-  Client's own Agent in crates/fleet-agent/src/supervisor/, the `self_update`
-  key of `[packages]` and its parsing in crates/fleet-agent/src/config.rs, the
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** crates/classis-agent/src/update/ (mod.rs and installer.rs), the
+  Client's own Agent in crates/classis-agent/src/supervisor/, the `self_update`
+  key of `[packages]` and its parsing in crates/classis-agent/src/config.rs, the
   refusal of a `[self_update]` section, the self-update flags of
   `service install`, the questionnaire's handling of the consent in
-  crates/fleet-agent/src/config_init.rs, the MSI `SELFUPDATE` property, and the
+  crates/classis-agent/src/config_init.rs, the MSI `SELFUPDATE` property, and the
   startup notice on a missing `[packages] verification_key`
 
 ## Context
@@ -369,12 +369,12 @@ non-atomic Windows pointer switch, which would need a different Windows layout.
 
 ## Enforcement
 
-- [`tests/self_update_e2e.rs`](../../crates/fleet-agent/tests/self_update_e2e.rs),
+- [`tests/self_update_e2e.rs`](../../crates/classis-agent/tests/self_update_e2e.rs),
   with the real Server and Client binaries:
   `the_client_installs_a_version_of_itself_and_reports_it_installed`,
   `managed_processes_stop_cleanly_on_the_self_update_restart`,
   `a_set_at_the_running_version_reaches_nobody`.
-- [`update/installer.rs`](../../crates/fleet-agent/src/update/installer.rs):
+- [`update/installer.rs`](../../crates/classis-agent/src/update/installer.rs):
   `install_refuses_a_downgrade`,
   `install_refuses_a_version_that_would_escape_the_layout`, the
   `the_probe_refuses_*` tests, `the_probe_ignores_the_commit_a_build_came_from`,
@@ -382,44 +382,44 @@ non-atomic Windows pointer switch, which would need a different Windows layout.
   `the_old_version_finding_a_marker_reports_the_update_as_failed`,
   `committing_replaces_the_marker_with_an_installed_outcome`; and
   `an_unreadable_configuration_resolves_the_update_in_flight` in
-  [`service/runtime.rs`](../../crates/fleet-agent/src/service/runtime.rs).
+  [`service/runtime.rs`](../../crates/classis-agent/src/service/runtime.rs).
 - The consent:
   `self_update_consent_stands_by_default_and_is_narrowed_to_the_agent_type` and
   `a_self_update_section_fails_the_load_naming_the_packages_key`
-  ([`config.rs`](../../crates/fleet-agent/src/config.rs)),
+  ([`config.rs`](../../crates/classis-agent/src/config.rs)),
   `the_self_agent_refuses_a_package_not_named_after_its_agent_type`
-  ([`supervisor/agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs)),
+  ([`supervisor/agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs)),
   `install_carries_the_self_update_answer_without_a_terminal`
-  ([`cli.rs`](../../crates/fleet-agent/src/cli.rs)),
+  ([`cli.rs`](../../crates/classis-agent/src/cli.rs)),
   `declined_sections_are_absent_rather_than_empty_and_the_consent_is_always_written`
-  ([`config_init.rs`](../../crates/fleet-agent/src/config_init.rs)),
+  ([`config_init.rs`](../../crates/classis-agent/src/config_init.rs)),
   `the_self_update_answer_rides_both_register_actions` and
   `the_withdrawal_condition_reads_both_spellings_of_off`
-  ([`tests/msi_exe_command.rs`](../../crates/fleet-agent/tests/msi_exe_command.rs)).
+  ([`tests/msi_exe_command.rs`](../../crates/classis-agent/tests/msi_exe_command.rs)).
 - The signature: for clause 2,
   `without_a_verification_key_no_agent_takes_packages`
-  ([`supervisor/mod.rs`](../../crates/fleet-agent/src/supervisor/mod.rs)), where
+  ([`supervisor/mod.rs`](../../crates/classis-agent/src/supervisor/mod.rs)), where
   the consent stands and the Client's own Agent declares no package capability;
   for clause 5, the self-update downloads and verifies through the path every
   package takes, `signature_policy_is_enforced`
-  ([`packages.rs`](../../crates/fleet-agent/src/packages.rs)) and
+  ([`packages.rs`](../../crates/classis-agent/src/packages.rs)) and
   `an_unsigned_offer_or_an_unkeyed_client_fetches_nothing`
-  ([`tests/packages_download.rs`](../../crates/fleet-agent/tests/packages_download.rs)),
+  ([`tests/packages_download.rs`](../../crates/classis-agent/tests/packages_download.rs)),
   and end to end
   `a_self_update_whose_signature_does_not_verify_is_refused_and_the_client_keeps_running`
-  ([`tests/self_update_e2e.rs`](../../crates/fleet-agent/tests/self_update_e2e.rs)).
+  ([`tests/self_update_e2e.rs`](../../crates/classis-agent/tests/self_update_e2e.rs)).
 - The real service manager's restart:
   `the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_stop`
   in
-  [`tests/service_smoke.rs`](../../crates/fleet-agent/tests/service_smoke.rs),
+  [`tests/service_smoke.rs`](../../crates/classis-agent/tests/service_smoke.rs),
   weekly on Windows via
   [`service-smoke.yml`](../../.github/workflows/service-smoke.yml).
 
 **Not mechanically decidable:** the non-atomic Windows pointer switch is a
 window no test can hit on purpose. That the Client names the missing
 `[packages] verification_key` at startup (clause 2) is a log line in
-[`service/runtime.rs`](../../crates/fleet-agent/src/service/runtime.rs) that no
+[`service/runtime.rs`](../../crates/classis-agent/src/service/runtime.rs) that no
 test reads. That the questionnaire asks nothing about the consent (clause 3) is
 a review question on `ask` in
-[`config_init.rs`](../../crates/fleet-agent/src/config_init.rs), which reads a
+[`config_init.rs`](../../crates/classis-agent/src/config_init.rs), which reads a
 terminal that `cargo test` does not have.

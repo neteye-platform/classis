@@ -2,15 +2,15 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
-- **Applies to:** `crates/fleet-server/src/configs.rs`,
-  `crates/fleet-server/src/deployments.rs`, the assignments, rollout acts and
-  deletions in `crates/fleet-server/src/fleet.rs`, the persisted assignment in
-  `crates/fleet-server/src/agent_store.rs` and its filesystem adapter, the
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** `crates/classis-server/src/configs.rs`,
+  `crates/classis-server/src/deployments.rs`, the assignments, rollout acts and
+  deletions in `crates/classis-server/src/fleet.rs`, the persisted assignment in
+  `crates/classis-server/src/agent_store.rs` and its filesystem adapter, the
   Configuration, Deployment, Package-deletion and rollout routes of
-  `crates/fleet-server/src/api.rs` and the OpenAPI document, the Configurations,
+  `crates/classis-server/src/api.rs` and the OpenAPI document, the Configurations,
   Deployments and Agents tabs of the bundled UI in
-  `crates/fleet-server/static/index.html`, and every document that tells an
+  `crates/classis-server/static/index.html`, and every document that tells an
   operator how to aim or roll out a Configuration
 - **Supersedes:** [ADR-0023](0023-configurations-and-the-rest-api.md) clauses 1,
   3, 4, 12 and 13; [ADR-0025](0025-rollout-and-what-reaches-an-agent.md) clauses

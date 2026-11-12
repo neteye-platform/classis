@@ -2,14 +2,14 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the `[rest.tls]` section of `server.toml` and its parsing and
-  startup checks in `crates/fleet-server/src/config.rs`, the TLS material of
-  both planes in `crates/fleet-server/src/tls.rs` and
-  `crates/fleet-server/src/main.rs`, the certificates `server pki status` lists
-  and the running Server watches in `crates/fleet-server/src/pki.rs`,
+  startup checks in `crates/classis-server/src/config.rs`, the TLS material of
+  both planes in `crates/classis-server/src/tls.rs` and
+  `crates/classis-server/src/main.rs`, the certificates `server pki status` lists
+  and the running Server watches in `crates/classis-server/src/pki.rs`,
   `config/server.toml`, and every document that tells an operator which
-  certificate the Operator plane serves or how a browser or `opamp-fleetctl`
+  certificate the Operator plane serves or how a browser or `classisctl`
   trusts it
 - **Supersedes:**
   [ADR-0013](0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)
@@ -23,11 +23,11 @@ clause 10): the Agent plane, which every host dials and which admits by client
 certificate alone
 ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)),
 and the Operator plane, which serves the REST API, the API docs and the bundled
-UI to browsers and to `opamp-fleetctl`. ADR-0013 clause 9 gives both one
+UI to browsers and to `classisctl`. ADR-0013 clause 9 gives both one
 certificate and key, `[tls] cert_file` and `key_file`, and says: "There are no
 per-listener certificates."
 
-That one certificate is made by `opamp-fleetctl pki` from the fleet's own server
+That one certificate is made by `classisctl pki` from the fleet's own server
 CA ([ADR-0028](0028-one-operator-program-that-makes-the-fleets-certificates.md)
 clauses 1 and 6). The Clients trust that CA because their `[tls] ca_file` names
 it. A browser does not: the operator's manual tells the operator to import the
@@ -47,7 +47,7 @@ unchanged. TLS 1.3 alone, plaintext on the loopback alone, and no client
 certificate on the Operator plane stay as ADR-0013 and ADR-0021 decide them.
 
 The human settled with the author: the Operator-plane certificate comes from the
-operator's own PKI, not from `opamp-fleetctl`. A new certificate takes effect
+operator's own PKI, not from `classisctl`. A new certificate takes effect
 when the Server restarts. Without the new section the Server serves as it does
 today, so an existing installation starts unchanged after the update.
 
@@ -88,7 +88,7 @@ an optional `[rest.tls]` section, which the Operator plane serves in place of
 
 - Reloading a certificate without a restart.
 - A client certificate for operators on the Operator plane.
-- A certificate from `opamp-fleetctl` for the Operator plane. Its
+- A certificate from `classisctl` for the Operator plane. Its
   `pki server-cert` still makes one from the server CA, which `[rest.tls]` may
   name like any other.
 - Selecting a certificate by SNI on one listener.
@@ -103,7 +103,7 @@ an optional `[rest.tls]` section, which the Operator plane serves in place of
   chosen: an existing installation that serves the UI beyond the loopback would
   not start after the update until the section is added. The human chose the
   optional section.
-- **The UI certificate from `opamp-fleetctl`, signed by the fleet's server CA.**
+- **The UI certificate from `classisctl`, signed by the fleet's server CA.**
   The keys would be separated, but browsers would still have to trust the
   fleet's server CA.
 - **One certificate naming both audiences, from the organization's PKI.** The
@@ -143,7 +143,7 @@ an optional `[rest.tls]` section, which the Operator plane serves in place of
   who reaches a loopback Operator plane through an SSH tunnel then dials the
   certificate's host name, for example through an `/etc/hosts` entry. The manual
   says so.
-- Negative / trade-offs: `opamp-fleetctl package fetch --cacert` names the CA
+- Negative / trade-offs: `classisctl package fetch --cacert` names the CA
   that the Operator plane's certificate chains to. With a PKI certificate, that
   is the PKI's CA, or nothing when the system's roots hold it.
 - Follow-ups:

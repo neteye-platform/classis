@@ -2,29 +2,29 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-24
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the `--process-account` flag of `service install` and the
-  second service it registers in `crates/fleet-agent/src/main.rs`,
-  `crates/fleet-agent/src/service/manager.rs`,
-  `crates/fleet-agent/src/service/run_as.rs`,
-  `crates/fleet-agent/src/service/windows_config.rs` and
-  `crates/fleet-agent/src/service/windows_rights.rs`, what a former account is
+  second service it registers in `crates/classis-agent/src/main.rs`,
+  `crates/classis-agent/src/service/manager.rs`,
+  `crates/classis-agent/src/service/run_as.rs`,
+  `crates/classis-agent/src/service/windows_config.rs` and
+  `crates/classis-agent/src/service/windows_rights.rs`, what a former account is
   withdrawn and the record of what an install left to finish in
-  `crates/fleet-agent/src/service/withdrawal.rs`, the install lock, the pipe,
+  `crates/classis-agent/src/service/withdrawal.rs`, the install lock, the pipe,
   the job objects and the handle-based walks in
-  `crates/fleet-agent/src/win32.rs` and `crates/fleet-agent/src/win32/`,
+  `crates/classis-agent/src/win32.rs` and `crates/classis-agent/src/win32/`,
   `service start`, `service stop` and `service uninstall` on Windows, the stop
   and unregister actions of `packaging/windows/supervisor.wxs`, the steps
   `packaging/linux/postinst` prints, every place a Supervisor starts a program
-  in `crates/fleet-agent/src/supervisor/process.rs`, the channel between the
+  in `crates/classis-agent/src/supervisor/process.rs`, the channel between the
   Client and the second service, the modes, ownership and ACLs of the
-  Supervisors' directories in `crates/fleet-agent/src/storage.rs`, the Client's
+  Supervisors' directories in `crates/classis-agent/src/storage.rs`, the Client's
   check of the second service's end of the channel and the second service's own
-  process attributes in `crates/fleet-agent/src/supervisor/channel.rs` and
-  `crates/fleet-agent/src/supervisor/channel/windows.rs`, the query of the
+  process attributes in `crates/classis-agent/src/supervisor/channel.rs` and
+  `crates/classis-agent/src/supervisor/channel/windows.rs`, the query of the
   second service's process from systemd, launchd and the SCM in
-  `crates/fleet-agent/src/service/manager.rs` and
-  `crates/fleet-agent/src/service/windows_config.rs`, and every document that
+  `crates/classis-agent/src/service/manager.rs` and
+  `crates/classis-agent/src/service/windows_config.rs`, and every document that
   tells an operator which account a Managed Process runs as or what the
   separation by a process account holds against a Managed Process
 - **Supersedes:**
@@ -50,7 +50,7 @@ the Client as a system service under an account of its own. "The same account
 runs every Managed Process its Supervisors start" (ADR-0042, Context). Every
 Managed Process can therefore read everything the Client can: the whole
 `state_dir` with the Client's private key `client-key.pem`
-(`crates/fleet-agent/src/tls.rs:20`), the `config/` of every other Supervisor,
+(`crates/classis-agent/src/tls.rs:20`), the `config/` of every other Supervisor,
 and the Client's own environment through `/proc`. It can also rewrite its own
 `program/` and so outlast the next package. With the Client's key a process can
 present itself to the Server for any `instance_uid` of its host
@@ -61,7 +61,7 @@ Context), and a Configuration's language can run commands as it: a Telegraf
 `inputs.exec`, an Icinga `CheckCommand`, a GLPI deploy task.
 
 A Supervisor starts programs in three places
-(`crates/fleet-agent/src/supervisor/process.rs`): the Managed Process (`:868`),
+(`crates/classis-agent/src/supervisor/process.rs`): the Managed Process (`:868`),
 the version probe (`:944`) and the preflight of a staged package (`:1043`),
 which runs a package before it is trusted. All three run as the Client today.
 
@@ -638,8 +638,8 @@ that has one.
     starts nothing. The post-install prints the two remaining steps:
 
     ```console
-    sudo opamp-fleet service install --interactive
-    sudo systemctl start opamp-fleet
+    sudo classis service install --interactive
+    sudo systemctl start classis
     ```
 
     The second `service install` is a re-install, which is idempotent and writes
@@ -1005,10 +1005,10 @@ already refuses (clause 5).
   under _Enforcement_, and every DACL set is read back (clause 6).
 - Recalled, not re-read for this record: that `SeImpersonatePrivilege` opens
   paths to `SYSTEM`.
-- `crates/fleet-agent/src/supervisor/process.rs:868`, `:944`, `:1043`: the three
+- `crates/classis-agent/src/supervisor/process.rs:868`, `:944`, `:1043`: the three
   places a program is started; `:869-873`: the token is set last.
-  `crates/fleet-agent/src/storage.rs:354`, `:368`: directories `0700` and files
-  `0600` for the Client. `crates/fleet-agent/src/service/run_as.rs`: the account
+  `crates/classis-agent/src/storage.rs:354`, `:368`: directories `0700` and files
+  `0600` for the Client. `crates/classis-agent/src/service/run_as.rs`: the account
   resolution and the hand-over that follows no link.
 
 - `unix(7)`, `SO_PEERCRED`: the peer's credentials as they were when it called
@@ -1088,18 +1088,18 @@ already refuses (clause 5).
 
 Tests that will carry `Verifies: ADR-0059`:
 
-- In `crates/fleet-agent/src/service/`: `--process-account` with `--user`, with
+- In `crates/classis-agent/src/service/`: `--process-account` with `--user`, with
   `root`, `LocalSystem` or the Client's account, and with an account that does
   not exist is refused before anything is written; a re-registration without the
   flag keeps the account the second service names; the rendered unit and plist
   of the second service carry its account and the directives of ADR-0042 clause
   7; on Windows its required privileges are `SeChangeNotifyPrivilege` alone.
-- In `crates/fleet-agent/src/supervisor/`: with a process account registered,
+- In `crates/classis-agent/src/supervisor/`: with a process account registered,
   the Managed Process, the version probe and the preflight are started through
   the second service and none by the Client; a connection whose peer is not the
   Client's account is refused; closing the Client's connection stops every
   program the second service started.
-- In `crates/fleet-agent/src/storage.rs`: the modes and owners of clause 6, and
+- In `crates/classis-agent/src/storage.rs`: the modes and owners of clause 6, and
   that the Client's key stays `0600` and owned by the Client.
 - A Linux integration test in `.github/workflows/service-smoke.yml`, run under
   `sudo`, in which a Managed Process under the process account fails to read
@@ -1114,7 +1114,7 @@ Tests that will carry `Verifies: ADR-0059`:
   process is killed; a re-registration without either flag keeps both accounts,
   and one while both run starts both again; `--no-process-account` returns the
   program to the Client's account.
-- On Windows, in `crates/fleet-agent/src/`:
+- On Windows, in `crates/classis-agent/src/`:
   - the pipe and the channel (clause 4):
     `the_pipe_admits_the_clients_account_alone`,
     `a_pipe_made_first_by_another_is_not_taken_over`,
@@ -1152,10 +1152,10 @@ Tests that will carry `Verifies: ADR-0059`:
   - the record and the lock (clause 17):
     `on_windows_the_record_round_trips_through_a_key_only_the_administrators_write`
     and `the_install_lock_excludes_across_logon_sessions`.
-- In `crates/fleet-agent/tests/msi_exe_command.rs`, which reads
+- In `crates/classis-agent/tests/msi_exe_command.rs`, which reads
   `packaging/windows/supervisor.wxs`: the stop and unregister actions run under
   the condition of clause 15 and no other.
-- On Linux and macOS, in `crates/fleet-agent/src/service/` (clause 16): an
+- On Linux and macOS, in `crates/classis-agent/src/service/` (clause 16): an
   install that changes or drops the process account, or changes `--run-as`,
   stops both services and waits for their processes before it re-owns anything,
   and starts again what ran once it has succeeded; a stop that fails, a wait

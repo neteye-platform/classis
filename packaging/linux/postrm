@@ -20,10 +20,10 @@
 # means a replacement is installed. Cleaning up there would undo the successor's work.
 #
 # The paths name the default system roots (`default_layout_root` and `default_root` in
-# crates/fleet-agent/src/service/manager.rs) — the only roots a packaged install ever uses. An install
+# crates/classis-agent/src/service/manager.rs) — the only roots a packaged install ever uses. An install
 # rooted elsewhere with `--root` is a manual one and is deliberately not touched.
 #
-# No hook removes the account `opamp-fleet` or its group, on removal or on purge (ADR-0042 clause
+# No hook removes the account `classis` or its group, on removal or on purge (ADR-0042 clause
 # 4): files it owns outside the two roots, such as a Managed Process's output, would pass to
 # whichever account is later given the same uid.
 #
@@ -32,8 +32,8 @@
 # out is how uninstalls earn distrust.
 set -e
 
-layout_root=/opt/opamp-fleet
-data_root=/var/lib/opamp-fleet
+layout_root=/opt/classis
+data_root=/var/lib/classis
 
 case "${1-}" in
 # dpkg: a real removal, keeping state and configuration.
@@ -47,7 +47,7 @@ purge)
 *) exit 0 ;;
 esac
 
-if [ -L /usr/bin/opamp-fleet ]; then
-	rm -f /usr/bin/opamp-fleet
+if [ -L /usr/bin/classis ]; then
+	rm -f /usr/bin/classis
 fi
 rm -rf "$layout_root"

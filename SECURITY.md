@@ -16,7 +16,7 @@ and will coordinate a fix and disclosure with you.
 
 ## Dev Container & agent execution
 
-OpAMP Fleet runs coding agents inside the Dev Container defined in
+Classis runs coding agents inside the Dev Container defined in
 [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json). Three
 properties shape its security posture:
 

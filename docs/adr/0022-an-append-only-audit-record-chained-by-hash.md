@@ -3,10 +3,10 @@
 - **Status:** 🟢 accepted · clause 4 superseded by
   [ADR-0037](0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)
 - **Date:** 2026-10-06
-- **Deciders:** Markus Brigl
-- **Applies to:** the audit port in `crates/fleet-server/src/audit.rs`, its
-  writer in `crates/fleet-server/src/audit_log.rs` and its filesystem adapter,
-  every place in `crates/fleet-server/src/` that admits or refuses a peer,
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the audit port in `crates/classis-server/src/audit.rs`, its
+  writer in `crates/classis-server/src/audit_log.rs` and its filesystem adapter,
+  every place in `crates/classis-server/src/` that admits or refuses a peer,
   issues or revokes a certificate, takes an operator's act or records a package
   outcome, the `[audit]` section of `server.toml`, and the `audit/` directory
   under `config_dir`
@@ -186,15 +186,15 @@ by age.
 
 ## Enforcement
 
-- `crates/fleet-server/src/audit_log.rs` tests:
+- `crates/classis-server/src/audit_log.rs` tests:
   `each_entry_carries_the_hash_of_the_one_before`,
   `the_chain_survives_a_restart_and_a_rotation`,
   `a_truncated_file_is_recorded_as_a_broken_chain`,
   `refusals_beyond_ten_a_second_are_aggregated_with_their_count` (clauses 2, 3,
   5), `a_write_that_fails_refuses_until_one_succeeds` (clause 6).
-- `crates/fleet-server/src/fs/audit.rs` test:
+- `crates/classis-server/src/fs/audit.rs` test:
   `the_record_is_owner_only_and_continues_where_it_ended` (clauses 3, 4).
-- `crates/fleet-server/tests/mutual_tls.rs` tests:
+- `crates/classis-server/tests/mutual_tls.rs` tests:
   `an_admission_and_its_refusal_each_leave_one_entry`, which refuses a revoked
   certificate, `an_issued_certificate_is_recorded_with_its_predecessor`,
   `a_revocation_records_the_sessions_it_ended`,
@@ -202,7 +202,7 @@ by age.
   `an_audit_that_cannot_write_refuses_admission` (clauses 1, 6). That no entry
   holds the operator's password is asserted by
   `an_operator_act_names_the_operator`.
-- `crates/fleet-server/tests/mutual_tls.rs`:
+- `crates/classis-server/tests/mutual_tls.rs`:
   `an_authorization_an_older_client_sends_is_never_written` — an Agent admitted
   on its certificate while sending an `Authorization` header leaves an admission
   entry that holds neither the value nor any hash of it (clause 2);
@@ -210,5 +210,5 @@ by age.
   unavailable, a CSR on a member connection gets no certificate and is answered
   `Unavailable` with `retry_info` (clause 6);
   `an_unmarked_member_asking_for_the_list_leaves_a_refusal` (clause 1).
-- `crates/fleet-server/src/fleet.rs` —
+- `crates/classis-server/src/fleet.rs` —
   `unavailable_tells_the_agent_when_to_retry` (clause 6).

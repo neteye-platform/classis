@@ -1,4 +1,4 @@
-# Architecture — OpAMP Fleet
+# Architecture — Classis
 
 > The system **as it stands today**: the parts it is built from, what each is
 > responsible for, and how they fit together. It holds no rule and no decision.
@@ -83,7 +83,7 @@ Five crates in one workspace
   hyper's upgrade and reads its frames with `tokio-tungstenite`, the library the
   client side uses too. `tls` reads PEM and installs the ring provider. It reads
   no file and knows nothing of this project.
-- **`fleet-core`** — what the Server and the Client implement identically beyond
+- **`classis-core`** — what the Server and the Client implement identically beyond
   the protocol: the version, the platform aliases, the statement a package
   signature covers, the renewal proof and the bootstrap proof a CSR carries —
   read from a CSR by the adapter `csr` — the host a certificate that names none
@@ -91,10 +91,10 @@ Five crates in one workspace
   called — and the bootstrap certificate's PKCS#12 file, whose rule is core and
   whose reading and writing with `p12-keystore` is the adapter `pkcs12::file`
   (ADR-0029).
-- **`fleet-server`** — the Server: the fleet and its Hosts, its Configurations,
+- **`classis-server`** — the Server: the fleet and its Hosts, its Configurations,
   labels, packages and Deployments, the Agent plane and the Operator plane.
-- **`fleet-agent`** — the Client in all its modes, the program `supervisor`.
-- **`fleet-tools`** — the operator tool, the one program `opamp-fleetctl`: its
+- **`classis-agent`** — the Client in all its modes, the program `supervisor`.
+- **`classis-tools`** — the operator tool, the one program `classisctl`: its
   `package` commands fetch, pack, hash and sign package artifacts — or sign a
   Package's signing file from the UI (ADR-0027) — its `pki` commands make the
   fleet's certificates (ADR-0028).
@@ -105,7 +105,7 @@ and owns its **ports**, **adapters** that bind a port to a technology, and a
 **composition root** — `lib.rs`, `main.rs`, and on the Client `supervisor`,
 `service::runtime` and `service::enrol` — that wires the two. Every module's
 role is listed in
-[`dependency_direction.rs`](../crates/fleet-core/tests/dependency_direction.rs),
+[`dependency_direction.rs`](../crates/classis-core/tests/dependency_direction.rs),
 which fails when a core module names an adapter or a technology, and when a
 module has no role.
 
@@ -183,7 +183,7 @@ module has no role.
   and `Clock`, which `clock::SystemClock` implements. The `[connection_offer]`
   and `[telemetry_offer]` sections become the fleet's offers in `config`.
 - **Server configuration** — `config` builds one TOML document from the
-  defaults, `server.toml` when one is read, and the `FLEET_SERVER__…` variables
+  defaults, `server.toml` when one is read, and the `CLASSIS_SERVER__…` variables
   over it, and deserializes it once, so the environment is checked as strictly
   as the file; `main.rs` reads the process environment and hands the variables
   in

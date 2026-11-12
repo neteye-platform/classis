@@ -98,13 +98,13 @@ in `supervisor.toml` on the host, not the Server's to push.
 ## 2. Build the artifact
 
 **For the Collector this step and the next two are one command.**
-[`opamp-fleetctl package fetch`](tools.md#package-fetch) knows where the
+[`classisctl package fetch`](tools.md#package-fetch) knows where the
 OpenTelemetry Collector (`otelcol`, `otelcol-contrib`) publishes, and asks what
 it cannot know — which agent, which of the last five versions, which platforms,
 and where to upload:
 
 ```sh
-opamp-fleetctl package fetch
+classisctl package fetch
 ```
 
 It verifies every download against the SHA-256 upstream published, leaves the
@@ -118,12 +118,12 @@ reaching a host is still [step 5](#6-roll-it-out). The full option list is in
 For anything else — your own agent, or a project that tool has never heard of —
 the rest of this step is how an artifact is built by hand.
 
-`opamp-fleetctl package pack` writes the two containers worth writing, with the
+`classisctl package pack` writes the two containers worth writing, with the
 member named the way the Supervisor will look for it, and prints the artifact's
 SHA-256:
 
 ```console
-$ opamp-fleetctl package pack --out promtail-3.0.0.tar.gz ./promtail
+$ classisctl package pack --out promtail-3.0.0.tar.gz ./promtail
 wrote promtail-3.0.0.tar.gz holding "promtail" — a Supervisor whose program is named "promtail" installs it
 sha256 (hex):
 84736f3e2d7d3dc260f172df23063bb044aaa7d576dd8f7b8021a58d6c772461
@@ -137,7 +137,7 @@ sha256 (hex):
 | `--archive-key <key>`   | AES-256-encrypts a `7z`. The value goes into `[packages] archive_key` on every Client that receives the package; the Server never learns it.                                                  |
 
 Only the hex hash goes to stdout, so it composes:
-`sha=$(opamp-fleetctl package pack …)`.
+`sha=$(classisctl package pack …)`.
 
 **A `.tar.gz` is reproducible.** Modification time, owner, and group are zeroed,
 so packing the same program twice gives the same bytes and the same hash. That
@@ -150,7 +150,7 @@ command prints.
 An encrypted artifact instead:
 
 ```console
-$ opamp-fleetctl package pack --format 7z --archive-key "$FLEET_ARCHIVE_KEY" \
+$ classisctl package pack --format 7z --archive-key "$CLASSIS_ARCHIVE_KEY" \
       --out promtail-3.0.0.7z ./promtail
 ```
 
@@ -174,7 +174,7 @@ Check what it holds and whether the member name matches your block:
 
 ```sh
 tar tzf otelcol-contrib_0.109.0_linux_amd64.tar.gz
-opamp-fleetctl package sha256 otelcol-contrib_0.109.0_linux_amd64.tar.gz
+classisctl package sha256 otelcol-contrib_0.109.0_linux_amd64.tar.gz
 ```
 
 The member is named after the **distribution** — `otelcol-contrib` in the
@@ -187,8 +187,8 @@ different name on disk.
 ## 3. Sign it
 
 ```console
-$ opamp-fleetctl package keygen --out fleet-signing.pk8     # prints the public key (hex)
-$ sig=$(opamp-fleetctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
+$ classisctl package keygen --out fleet-signing.pk8     # prints the public key (hex)
+$ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
       promtail-3.0.0.tar.gz)
 ```
 
@@ -273,7 +273,7 @@ configured program.
 
 For a Package of several platforms, sign them in one go instead: download the
 Package's **Signing info**, sign it with
-`opamp-fleetctl package sign --signing-info`, and import it on the Packages tab
+`classisctl package sign --signing-info`, and import it on the Packages tab
 — the steps, and the comparison of hashes they depend on, are in
 [Signing a whole Package at once](tools.md#signing-a-whole-package-at-once).
 
