@@ -78,7 +78,10 @@ impl Fleet {
     }
 
     /// The same, with the Server's rate limit on the Agent plane armed (ADR-0013).
-    async fn start_with(mark: bool, agent_rate: Option<classis_server::agent_rate::Limits>) -> Self {
+    async fn start_with(
+        mark: bool,
+        agent_rate: Option<classis_server::agent_rate::Limits>,
+    ) -> Self {
         opamp::tls::install_ring_provider();
         let dir = tempfile::tempdir().expect("tempdir");
         let pki = dir.path();
@@ -86,7 +89,8 @@ impl Fleet {
         ca.issue(pki, "server", "127.0.0.1");
         ca.issue(pki, "gateway-listener", "127.0.0.1");
 
-        let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
+        let clock: Arc<dyn classis_server::fleet::Clock> =
+            Arc::new(classis_server::clock::SystemClock);
         let der = opamp::tls::certificates(ca.pem.as_bytes()).expect("pem");
         let facts = classis_server::ca::facts(der[0].as_ref()).expect("facts");
         let revocations = Arc::new(
@@ -145,7 +149,9 @@ impl Fleet {
                 .with_client_ca(Some(signer))
                 .with_revocations(Some(revocations.clone()))
                 .with_agent_rate(agent_rate.map(|limits| {
-                    Arc::new(classis_server::agent_rate::AgentRate::new(limits, 100, clock))
+                    Arc::new(classis_server::agent_rate::AgentRate::new(
+                        limits, 100, clock,
+                    ))
                 })),
         );
         let tls = toml::from_str::<classis_server::config::TlsConfig>(&format!(

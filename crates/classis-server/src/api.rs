@@ -1715,9 +1715,7 @@ async fn put_entry_signature(
         Err(e) => {
             return error(
                 StatusCode::BAD_REQUEST,
-                format!(
-                    "the signature must be hex, as `classisctl package sign` prints it: {e}"
-                ),
+                format!("the signature must be hex, as `classisctl package sign` prints it: {e}"),
             );
         }
     };
@@ -2758,7 +2756,10 @@ async fn download_bootstrap_p12(
             (header::CONTENT_TYPE, "application/x-pkcs12".to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", classis_core::pkcs12::FILE_NAME),
+                format!(
+                    "attachment; filename=\"{}\"",
+                    classis_core::pkcs12::FILE_NAME
+                ),
             ),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],

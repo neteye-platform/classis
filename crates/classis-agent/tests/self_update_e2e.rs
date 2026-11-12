@@ -139,7 +139,8 @@ async fn spawn_server(store: PackageStore) -> (std::net::SocketAddr, Arc<AppStat
     );
     // The configuration directory only has to outlive the Server, which outlives the test.
     std::mem::forget(dir);
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -197,10 +198,7 @@ fn a_local_path_becomes_a_file_url_git_accepts() {
         file_url(Path::new(r"\\?\C:\a\classis")),
         "file:///C:/a/classis"
     );
-    assert_eq!(
-        file_url(Path::new(r"C:\a\classis")),
-        "file:///C:/a/classis"
-    );
+    assert_eq!(file_url(Path::new(r"C:\a\classis")), "file:///C:/a/classis");
 }
 
 /// The version the artifact under offer is built as — greater than anything this repository has
@@ -484,7 +482,7 @@ async fn the_client_installs_a_version_of_itself_and_reports_it_installed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let client = PathBuf::from(env!("CARGO_BIN_EXE_supervisor"));
     // The artifact is a Client built as a greater version — the only thing that will pass the
-    // staged binary's own self-check, which requires it to *be* an Classis Client at the
+    // staged binary's own self-check, which requires it to *be* a Classis Client at the
     // offered version, and the only thing the fleet will offer a Client at all (ADR-0025).
     //
     // Offered the way an operator uploads a release: the number on the archive, without the commit
@@ -726,7 +724,8 @@ async fn a_set_at_the_running_version_reaches_nobody() {
     let store_dir = tempfile::tempdir().expect("store dir");
     let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
     let set_of = |version: &str| {
-        let id = classis_server::packages::PackageId::new("supervisor", version).expect("package id");
+        let id =
+            classis_server::packages::PackageId::new("supervisor", version).expect("package id");
         store.create(&id).expect("create package");
         store
             .put_entry(&id, &this_host(), b"not a client".to_vec())

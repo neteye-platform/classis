@@ -113,7 +113,8 @@ impl SigningFile {
         for entry in &mut self.entries {
             // `read` let only 64 lowercase hex characters through.
             let hash = hex::decode(&entry.sha256).expect("a checked sha256 is hex");
-            let statement = classis_core::package::statement(&self.agent_type, &self.version, &hash);
+            let statement =
+                classis_core::package::statement(&self.agent_type, &self.version, &hash);
             eprintln!(
                 "  signing {}@{} {}/{}  {}",
                 self.agent_type, self.version, entry.os, entry.arch, entry.sha256
@@ -138,6 +139,13 @@ impl SigningFile {
 mod tests {
     use super::*;
     use ring::signature::KeyPair;
+
+    /// A signing file written before the rename to Classis is still read.
+    /// Verifies: ADR-0061
+    #[test]
+    fn the_format_keeps_its_spelling() {
+        assert_eq!(FORMAT, "opamp-fleet-signing-v1");
+    }
 
     const HASH_A: &str = "127f9a4866448977b174bc2718e4d53646c7ff571782756837ae9bf1412cfb9e";
     const HASH_B: &str = "ee7df45231deda067856816d7735fe7bc5c2b9d7875bdece0461af056f6cfec8";

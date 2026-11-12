@@ -1690,8 +1690,8 @@ mod tests {
         assert!(dir.path().join("installed-package.json").exists());
 
         // Offered the version it runs, this Client is in sync and downloads nothing.
-        let running =
-            classis_core::version::identity(classis_core::version::current()).expect("this version");
+        let running = classis_core::version::identity(classis_core::version::current())
+            .expect("this version");
         let handled = agent.handle(&ServerToAgent {
             packages_available: Some(package_offer("opamp-client", running, b"pkg-hash")),
             ..Default::default()

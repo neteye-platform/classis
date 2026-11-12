@@ -275,8 +275,12 @@ mod unix {
         std::fs::write(&named, "").expect("config");
         let data_root = elsewhere.path().join("data");
         std::os::unix::fs::symlink(root.path(), &data_root).expect("data root link");
-        classis_agent::service::run_as::match_owner(&named, &data_root, &[&data_root.join("state")])
-            .expect("the state directory is re-owned through the named data root");
+        classis_agent::service::run_as::match_owner(
+            &named,
+            &data_root,
+            &[&data_root.join("state")],
+        )
+        .expect("the state directory is re-owned through the named data root");
     }
 }
 

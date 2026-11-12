@@ -514,7 +514,10 @@ mod tests {
 
         let manifest =
             std::fs::read_to_string(version_dir.join(MANIFEST_FILENAME)).expect("manifest");
-        assert!(manifest.contains(&format!("version = \"{}\"", classis_core::version::current())));
+        assert!(manifest.contains(&format!(
+            "version = \"{}\"",
+            classis_core::version::current()
+        )));
         let sha = manifest
             .lines()
             .find_map(|l| l.strip_prefix("sha256 = \""))

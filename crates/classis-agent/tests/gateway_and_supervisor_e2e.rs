@@ -124,7 +124,8 @@ async fn wait_until<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
 async fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(AppState::new(dir.path().join("fleet-configs")).expect("config store"));
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -299,7 +300,8 @@ async fn a_verified_offer_restarts_the_gateway_and_leaves_the_supervisors_runnin
                 .expect("offer config"),
             ))),
     );
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");

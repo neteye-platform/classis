@@ -1341,10 +1341,7 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["fleet.example.com", "10.0.0.5", "127.0.0.1", "::1"]);
-        assert_eq!(
-            cert.subject().to_string(),
-            "CN=Classis Server Certificate"
-        );
+        assert_eq!(cert.subject().to_string(), "CN=Classis Server Certificate");
     }
 
     // Verifies: ADR-0028
@@ -1427,9 +1424,11 @@ mod tests {
             bootstrap_ca_key_file: Some(out.join("bootstrap-ca-key.pem")),
             max_pending_per_bootstrap: classis_server::enrolment::DEFAULT_MAX_PENDING_PER_BOOTSTRAP,
         };
-        assert!(classis_server::ca::BootstrapCa::from_config(&enrolment, None)
-            .expect("the Server loads it")
-            .is_some());
+        assert!(
+            classis_server::ca::BootstrapCa::from_config(&enrolment, None)
+                .expect("the Server loads it")
+                .is_some()
+        );
         assert!(
             bootstrap_ca(DEFAULT_PRODUCT, &Organization::default(), 365, &out).is_err(),
             "nothing is overwritten"

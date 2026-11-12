@@ -82,7 +82,8 @@ async fn spawn_server(
                 PackageOffering::new(dir.path(), store).expect("deployments"),
             )),
     );
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -136,7 +137,8 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
     // The Set's identity states the Agent type it is built for (ADR-0026): the
     // Supervisor below names its program `managed-agent` and sets no `service_name`, so that file
     // name is the type it reports.
-    let set = classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
+    let set =
+        classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
     store.create(&set).expect("create package");
     store
         .put_entry(&set, &this_host(), artifact.clone())
@@ -256,7 +258,8 @@ async fn a_package_that_fails_the_configured_version_check_is_refused() {
 
     let store_dir = tempfile::tempdir().expect("store dir");
     let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
-    let set = classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
+    let set =
+        classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
     store.create(&set).expect("create package");
     store
         .put_entry(&set, &this_host(), artifact)

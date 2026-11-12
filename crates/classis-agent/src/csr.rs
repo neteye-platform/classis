@@ -645,8 +645,9 @@ mod tests {
         use base64::Engine as _;
         use sha2::{Digest as _, Sha256};
         let der = classis_core::csr::der(csr).expect("one PEM block");
-        let encoded = classis_core::csr::requested_uri(&der, classis_core::bootstrap_proof::URI_PREFIX)
-            .expect("a request")?;
+        let encoded =
+            classis_core::csr::requested_uri(&der, classis_core::bootstrap_proof::URI_PREFIX)
+                .expect("a request")?;
         let content = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(encoded)
             .expect("base64url");
@@ -662,7 +663,10 @@ mod tests {
             &ring::signature::ECDSA_P256_SHA256_ASN1,
             parsed.public_key().subject_public_key.data.as_ref(),
         )
-        .verify(&classis_core::bootstrap_proof::statement(&new_key), signature)
+        .verify(
+            &classis_core::bootstrap_proof::statement(&new_key),
+            signature,
+        )
         .is_ok();
         Some((cert.to_vec(), verifies))
     }

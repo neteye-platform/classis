@@ -1120,7 +1120,8 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
     let revocations = Arc::new(
         classis_server::revocation::Revocations::open(
             Box::new(
-                classis_server::fs::FsLedgerStore::open(&pki.join("fleet-configs")).expect("ledger"),
+                classis_server::fs::FsLedgerStore::open(&pki.join("fleet-configs"))
+                    .expect("ledger"),
             ),
             clock,
             vec![classis_server::revocation::Authority {

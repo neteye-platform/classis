@@ -88,10 +88,12 @@ async fn a_fleet_made_by_pki_init_admits_an_enrolled_host() {
     // The Server issues the host's bootstrap certificate from the bootstrap CA key pki init gave
     // it, as a PKCS#12 file only (ADR-0036 clause 8), and the operator extracts its pair where
     // supervisor.toml.fragment names it (ADR-0031).
-    let bootstrap_ca =
-        classis_server::ca::BootstrapCa::from_config(&fragment.enrolment, Some(&fragment.client_ca))
-            .expect("the bootstrap CA pki init made loads")
-            .expect("pki init gives the Server the bootstrap CA's key");
+    let bootstrap_ca = classis_server::ca::BootstrapCa::from_config(
+        &fragment.enrolment,
+        Some(&fragment.client_ca),
+    )
+    .expect("the bootstrap CA pki init made loads")
+    .expect("pki init gives the Server the bootstrap CA's key");
     let bootstrap = classis_server::bootstrap::BootstrapCertificates::on_disk(
         Some(Box::new(bootstrap_ca)),
         &dir.path().join("fleet-configs"),

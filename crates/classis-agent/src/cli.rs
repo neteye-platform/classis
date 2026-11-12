@@ -116,7 +116,7 @@ pub enum Command {
         action: ServiceAction,
     },
     // ADR-0018.
-    /// Prove that this executable is an Classis Client and say which version.
+    /// Prove that this executable is a Classis Client and say which version.
     ///
     /// Run as a child process on a freshly staged binary before the `current` pointer moves to
     /// it. Two things are being asked at once: *does it run at all* on this host — the failure
@@ -525,10 +525,7 @@ mod tests {
             cli.config,
             PathBuf::from("/var/lib/classis/supervisor.toml")
         );
-        assert_eq!(
-            cli.state_dir,
-            Some(PathBuf::from("/var/lib/classis/state"))
-        );
+        assert_eq!(cli.state_dir, Some(PathBuf::from("/var/lib/classis/state")));
     }
 
     /// The second service is `run` with a flag, not a subcommand of its own (ADR-0059 clause 2),
@@ -1028,12 +1025,7 @@ mod tests {
     #[test]
     fn run_as_and_user_scope_are_refused_together() {
         let err = Cli::try_parse_from([
-            "client",
-            "service",
-            "install",
-            "--user",
-            "--run-as",
-            "classis",
+            "client", "service", "install", "--user", "--run-as", "classis",
         ])
         .expect_err("mutually exclusive");
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);

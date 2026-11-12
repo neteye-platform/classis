@@ -1889,9 +1889,9 @@ async fn with_a_verification_key_the_server_reports_valid_and_invalid_and_stores
     let dir = tempfile::tempdir().expect("tempdir");
     let store = PackageStore::open(dir.path().join("packages"))
         .expect("store")
-        .with_verifier(Some(Box::new(classis_server::config::Ed25519Verifier::new(
-            public,
-        ))));
+        .with_verifier(Some(Box::new(
+            classis_server::config::Ed25519Verifier::new(public),
+        )));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -1916,8 +1916,9 @@ async fn with_a_verification_key_the_server_reports_valid_and_invalid_and_stores
         let response = upload_entry(&server, support::AGENT_TYPE, "1.0.0", platform, bytes).await;
         assert_eq!(response.status(), 200);
     }
-    let statement =
-        |bytes: &[u8]| classis_core::package::statement(support::AGENT_TYPE, "1.0.0", &sha256(bytes));
+    let statement = |bytes: &[u8]| {
+        classis_core::package::statement(support::AGENT_TYPE, "1.0.0", &sha256(bytes))
+    };
     let good = hex::encode(keypair.sign(&statement(b"linux")));
     // Signed over the other entry's bytes: a real signature, for something else.
     let wrong = hex::encode(keypair.sign(&statement(b"linux")));

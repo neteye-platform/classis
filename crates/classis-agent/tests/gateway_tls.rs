@@ -26,8 +26,8 @@ struct Pki {
 impl Pki {
     fn new() -> Self {
         let key = KeyPair::generate().expect("ca key");
-        let mut params = CertificateParams::new(vec!["classis-gateway-test-ca".to_string()])
-            .expect("params");
+        let mut params =
+            CertificateParams::new(vec!["classis-gateway-test-ca".to_string()]).expect("params");
         params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let cert = params.self_signed(&key).expect("ca");
         Pki {
@@ -71,25 +71,26 @@ async fn spawn_watched_server() -> (SocketAddr, Arc<AppState>, Arc<Seen>, tempfi
     let state = Arc::new(AppState::new(dir.path().join("fleet-configs")).expect("state"));
     let seen = Arc::new(Seen::default());
     let recorder = seen.clone();
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open())
-        .layer(axum::middleware::from_fn(
-            move |request: axum::extract::Request, next: axum::middleware::Next| {
-                let seen = recorder.clone();
-                async move {
-                    let headers = request.headers();
-                    if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
-                        seen.authorization
-                            .lock()
-                            .expect("seen lock")
-                            .push(String::from_utf8_lossy(value.as_bytes()).into_owned());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open())
+            .layer(axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| {
+                    let seen = recorder.clone();
+                    async move {
+                        let headers = request.headers();
+                        if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
+                            seen.authorization
+                                .lock()
+                                .expect("seen lock")
+                                .push(String::from_utf8_lossy(value.as_bytes()).into_owned());
+                        }
+                        if headers.contains_key(axum::http::header::UPGRADE) {
+                            seen.upgrades.fetch_add(1, Ordering::SeqCst);
+                        }
+                        next.run(request).await
                     }
-                    if headers.contains_key(axum::http::header::UPGRADE) {
-                        seen.upgrades.fetch_add(1, Ordering::SeqCst);
-                    }
-                    next.run(request).await
-                }
-            },
-        ));
+                },
+            ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

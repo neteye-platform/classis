@@ -109,7 +109,8 @@ impl Served {
         client_ca.issue(pki, "localhost");
         bootstrap_ca.issue_bootstrap(pki, "bootstrap");
 
-        let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
+        let clock: Arc<dyn classis_server::fleet::Clock> =
+            Arc::new(classis_server::clock::SystemClock);
         let enrolment = Arc::new(classis_server::enrolment::Enrolment::new(clock.clone()));
         let revocations = Arc::new(
             Revocations::open(

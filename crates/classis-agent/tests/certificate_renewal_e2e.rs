@@ -98,7 +98,8 @@ async fn a_client_renews_each_certificate_before_it_expires() {
                 client_ca(dir.path()).with_validity(time::Duration::seconds(LIFE as i64)),
             )),
     );
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

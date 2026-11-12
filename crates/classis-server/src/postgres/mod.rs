@@ -78,6 +78,13 @@ const POOL_SIZE: usize = 8;
 /// The name the Server's connections carry in `pg_stat_activity`.
 const APPLICATION_NAME: &str = "classis-server";
 
+/// The advisory lock that keeps one Server per database schema (ADR-0050 clause 6): this prefix
+/// and the schema's name, hashed. It keeps the spelling of the releases before the rename to
+/// Classis (ADR-0061 clause 5), so a Server of either side of the rename refuses a schema the
+/// other holds.
+const LOCK_KEY: &str = "SELECT pg_try_advisory_lock(hashtextextended('opamp-fleet-server:' \
+                        || coalesce(current_schema(), ''), 0)), pg_backend_pid()";
+
 /// One database, reached through a pool, held by this Server alone while it runs.
 pub struct Database {
     pool: Pool,
@@ -179,14 +186,7 @@ impl Database {
                 };
                 bounded(bound, async move {
                     let client = connect_watched(&pg, &tls, watch).await?;
-                    let row = client
-                        .query_one(
-                            "SELECT pg_try_advisory_lock(hashtextextended('classis-server:' \
-                             || coalesce(current_schema(), ''), 0)), pg_backend_pid()",
-                            &[],
-                        )
-                        .await
-                        .map_err(sql)?;
+                    let row = client.query_one(LOCK_KEY, &[]).await.map_err(sql)?;
                     Ok::<_, String>((client, row.get::<_, bool>(0), row.get::<_, i32>(1)))
                 })
             })
@@ -577,8 +577,9 @@ pub(crate) mod testing {
             let ca_file = variable("CLASSIS_TEST_POSTGRES_CA_FILE").map(Into::into);
             let config = PostgresConfig {
                 host,
-                port: variable("CLASSIS_TEST_POSTGRES_PORT")
-                    .map_or(5432, |port| port.parse().expect("CLASSIS_TEST_POSTGRES_PORT")),
+                port: variable("CLASSIS_TEST_POSTGRES_PORT").map_or(5432, |port| {
+                    port.parse().expect("CLASSIS_TEST_POSTGRES_PORT")
+                }),
                 dbname,
                 user,
                 password_file: password_file.into(),
@@ -696,6 +697,14 @@ pub(crate) mod testing {
 mod tests {
     use super::testing::TestDatabase;
     use super::*;
+
+    /// A Server released before the rename to Classis takes the same lock, so the two exclude each
+    /// other on one schema.
+    /// Verifies: ADR-0050, ADR-0061
+    #[test]
+    fn the_lock_keeps_its_spelling() {
+        assert!(LOCK_KEY.contains("hashtextextended('opamp-fleet-server:' "));
+    }
 
     fn config(host: &str, tls: bool) -> PostgresConfig {
         PostgresConfig {

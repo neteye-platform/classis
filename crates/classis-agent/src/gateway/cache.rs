@@ -1540,6 +1540,13 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// A host certificate issued before the rename to Classis still names its host here.
+    /// Verifies: ADR-0061
+    #[test]
+    fn the_host_uri_keeps_its_spelling() {
+        assert_eq!(HOST_URI_PREFIX, "urn:opamp-fleet:host:");
+    }
+
     const DEADLINE: Duration = Duration::from_secs(20);
 
     fn held(len: u64, used: u64) -> Held {

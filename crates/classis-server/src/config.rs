@@ -2310,7 +2310,10 @@ mod tests {
             format!("data_dir = \"from-file\"\n\nstale_after_secs = \"soon\"\n{TLS}"),
         )
         .expect("write");
-        for set in [&[][..], &[("CLASSIS_SERVER__DATA_DIR", "/var/lib/fleet")][..]] {
+        for set in [
+            &[][..],
+            &[("CLASSIS_SERVER__DATA_DIR", "/var/lib/fleet")][..],
+        ] {
             let err =
                 ServerConfig::load_layered(Some(&path), variables(set)).expect_err("not a number");
             assert!(err.contains("line 3"), "{set:?}: {err}");
@@ -2343,7 +2346,10 @@ mod tests {
             variables(&[
                 ("CLASSIS_SERVER__DATABASE__POSTGRES__PORT", "5433"),
                 ("CLASSIS_SERVER__DATA_DIR", "/var/lib/fleet"),
-                ("CLASSIS_SERVER__REST__TLS__CERT_FILE", "/run/secrets/ui.pem"),
+                (
+                    "CLASSIS_SERVER__REST__TLS__CERT_FILE",
+                    "/run/secrets/ui.pem",
+                ),
                 (
                     "CLASSIS_SERVER__CONNECTION_OFFER__HEARTBEAT_INTERVAL_SECS",
                     "45",

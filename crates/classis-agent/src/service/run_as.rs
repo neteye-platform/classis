@@ -2316,14 +2316,8 @@ mod tests {
                 "{err}"
             );
         }
-        let err = check_process_account(
-            "classis-agents",
-            Some(&agents_ids()),
-            "root",
-            &root,
-            None,
-        )
-        .expect_err("a root Client");
+        let err = check_process_account("classis-agents", Some(&agents_ids()), "root", &root, None)
+            .expect_err("a root Client");
         assert!(err.contains("--run-as <account>"), "{err}");
     }
 
@@ -2506,14 +2500,9 @@ mod tests {
             kept.ends_with("Nothing has been installed or written."),
             "{kept}"
         );
-        let named = check_process_account(
-            "classis-agents",
-            Some(&agents_ids()),
-            "root",
-            &root,
-            None,
-        )
-        .expect_err("a root Client");
+        let named =
+            check_process_account("classis-agents", Some(&agents_ids()), "root", &root, None)
+                .expect_err("a root Client");
         assert!(!named.contains("--no-process-account"), "{named}");
         let lost = Registration {
             file: PathBuf::from(AGENTS_UNIT),

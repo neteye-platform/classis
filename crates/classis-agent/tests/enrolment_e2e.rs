@@ -8,8 +8,8 @@ mod enrolling;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use enrolling::Served;
 use classis_server::fleet::AppState;
+use enrolling::Served;
 use rcgen::KeyPair;
 
 /// The serial of the certificate the Client holds, if it holds one.

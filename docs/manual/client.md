@@ -2540,7 +2540,7 @@ On an accepted offer the artifact is verified like any other, staged as a new
 version _beside_ the running one in the install layout, and proved by running
 `supervisor self-check` on it before the `current` pointer moves — which asks
 two things at once: does this binary run at all on this host, and is it actually
-an Classis Agent at the version offered. The process then shuts down exactly
+a Classis Agent at the version offered. The process then shuts down exactly
 as an ordinary stop does — Managed Processes stopped gracefully, the goodbyes
 sent — and exits, asking the service manager to restart it; it does not restart
 itself. A marker in `state_dir` carries the outcome across that restart: the new

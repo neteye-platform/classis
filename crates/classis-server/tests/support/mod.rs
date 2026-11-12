@@ -84,7 +84,8 @@ async fn spawn_full(
             .with_max_message_size(limit)
             .with_stale_after(stale_after),
     );
-    let (addr, rest_addr) = serve(state.clone(), classis_server::transport::Admission::open()).await;
+    let (addr, rest_addr) =
+        serve(state.clone(), classis_server::transport::Admission::open()).await;
     TestServer {
         addr,
         rest_addr,
@@ -324,7 +325,8 @@ pub async fn spawn_with_agent_rate(
     let state = Arc::new(state_on(dir.path()).with_agent_rate(Some(Arc::new(
         classis_server::agent_rate::AgentRate::new(limits, 100, clock.clone()),
     ))));
-    let (addr, rest_addr) = serve(state.clone(), classis_server::transport::Admission::open()).await;
+    let (addr, rest_addr) =
+        serve(state.clone(), classis_server::transport::Admission::open()).await;
     (
         TestServer {
             addr,
@@ -342,7 +344,8 @@ pub async fn spawn_with_telemetry(offer: classis_server::fleet::TelemetryOffer) 
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(state_on(dir.path()).with_telemetry_offer(offer));
-    let (addr, rest_addr) = serve(state.clone(), classis_server::transport::Admission::open()).await;
+    let (addr, rest_addr) =
+        serve(state.clone(), classis_server::transport::Admission::open()).await;
     TestServer {
         addr,
         rest_addr,

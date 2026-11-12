@@ -331,8 +331,9 @@ async fn serve(pki: &Pki, setup: Setup<'_>) -> Served {
             key_file,
         }
     });
-    let planes = classis_server::tls::server_tls(&tls, rest_tls.as_ref(), enrolment_config.as_ref())
-        .expect("server material");
+    let planes =
+        classis_server::tls::server_tls(&tls, rest_tls.as_ref(), enrolment_config.as_ref())
+            .expect("server material");
     let agent_tls = planes.agent.rustls_config().expect("agent plane config");
     let operator_tls = planes
         .operator
@@ -1132,7 +1133,9 @@ async fn the_operator_plane_counts_its_failures_in_a_table_of_its_own() {
 /// The issuer and serial of a certificate in PEM.
 fn cert_id(pem: &str) -> CertId {
     let der = opamp::tls::certificates(pem.as_bytes()).expect("pem");
-    classis_server::ca::facts(der[0].as_ref()).expect("facts").id
+    classis_server::ca::facts(der[0].as_ref())
+        .expect("facts")
+        .id
 }
 
 type Socket =

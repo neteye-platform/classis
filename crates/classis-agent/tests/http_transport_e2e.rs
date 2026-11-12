@@ -125,7 +125,8 @@ fn spawn_client(config_path: &Path) -> ClientUnderTest {
 async fn a_configuration_rollout_reaches_a_polling_client() {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -204,7 +205,8 @@ async fn a_package_rollout_reaches_a_polling_client() {
 
     let store_dir = tempfile::tempdir().expect("store dir");
     let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
-    let set = classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
+    let set =
+        classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
     store.create(&set).expect("create package");
     store
         .put_entry(&set, &this_host(), artifact.clone())
@@ -218,7 +220,8 @@ async fn a_package_rollout_reaches_a_polling_client() {
                 PackageOffering::new(store_dir.path(), store).expect("deployments"),
             )),
     );
-    let app = classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app =
+        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

@@ -794,9 +794,7 @@ mod tests {
             identifying_attributes: vec![ProtoKeyValue {
                 key: "service.name".to_string(),
                 value: Some(AnyValue {
-                    value: Some(any_value::Value::StringValue(
-                        "classis-client".to_string(),
-                    )),
+                    value: Some(any_value::Value::StringValue("classis-client".to_string())),
                 }),
             }],
             non_identifying_attributes: vec![ProtoKeyValue {
@@ -1099,10 +1097,7 @@ mod tests {
                 .find(|(k, _)| k.as_str() == key)
                 .map(|(_, value)| value.to_string())
         };
-        assert_eq!(
-            attribute("service.name").as_deref(),
-            Some("classis-client")
-        );
+        assert_eq!(attribute("service.name").as_deref(), Some("classis-client"));
         assert_eq!(
             attribute("service.instance.name").as_deref(),
             Some("edge-01")

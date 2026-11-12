@@ -358,7 +358,7 @@ fn probe(binary: &Path, expected_version: &str) -> Result<(), String> {
         .find_map(|line| line.trim().strip_prefix(SELF_CHECK_TOKEN))
     else {
         return Err(
-            "the staged binary is not an Classis Client: it did not answer the self-check"
+            "the staged binary is not a Classis Client: it did not answer the self-check"
                 .to_string(),
         );
     };
@@ -836,7 +836,7 @@ mod tests {
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
         let err = probe(&binary, "2.0.0").expect_err("an impostor must be refused");
-        assert!(err.contains("not an Classis Client"), "got {err}");
+        assert!(err.contains("not a Classis Client"), "got {err}");
     }
 
     /// Verifies: ADR-0018

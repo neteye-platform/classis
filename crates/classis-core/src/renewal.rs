@@ -61,7 +61,10 @@ mod tests {
     #[test]
     fn the_certificate_uris_keep_their_spelling() {
         assert_eq!(URI_PREFIX, "urn:opamp-fleet:renewal:v1:");
-        assert_eq!(crate::bootstrap_proof::URI_PREFIX, "urn:opamp-fleet:bootstrap:v1:");
+        assert_eq!(
+            crate::bootstrap_proof::URI_PREFIX,
+            "urn:opamp-fleet:bootstrap:v1:"
+        );
         assert_eq!(
             crate::bootstrap_proof::statement(&[0xab]),
             b"opamp-fleet-bootstrap-v1\nab\n".to_vec()

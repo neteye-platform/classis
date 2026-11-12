@@ -1591,7 +1591,9 @@ mod tests {
             );
             // A signature over another type's statement does not verify for this one.
             let wrong = keypair
-                .sign(&classis_core::package::statement("promtail", "1.0.0", &hash))
+                .sign(&classis_core::package::statement(
+                    "promtail", "1.0.0", &hash,
+                ))
                 .as_ref()
                 .to_vec();
             assert_eq!(

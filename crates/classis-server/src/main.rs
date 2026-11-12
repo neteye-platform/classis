@@ -408,7 +408,11 @@ async fn main() {
         .as_ref()
         .ok_or_else(|| "[tls] is required".to_string())
         .and_then(|tls| {
-            classis_server::tls::server_tls(tls, config.rest.tls.as_ref(), config.enrolment.as_ref())
+            classis_server::tls::server_tls(
+                tls,
+                config.rest.tls.as_ref(),
+                config.enrolment.as_ref(),
+            )
         })
         .and_then(|planes| {
             let agent = planes.agent.rustls_config()?;
@@ -530,13 +534,17 @@ async fn main() {
                 // ADR-0033.
                 info!("checking package signatures against [packages] verification_key");
             }
-            classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
-                .map(|store| {
-                    store.with_verifier(key.map(|key| {
-                        Box::new(classis_server::config::Ed25519Verifier::new(key))
-                            as Box<dyn classis_server::packages::SignatureVerifier>
-                    }))
-                })
+            classis_server::packages::PackageStore::open_on(
+                &records,
+                &config.data_dir,
+                &config.blobs,
+            )
+            .map(|store| {
+                store.with_verifier(key.map(|key| {
+                    Box::new(classis_server::config::Ed25519Verifier::new(key))
+                        as Box<dyn classis_server::packages::SignatureVerifier>
+                }))
+            })
         })
         .and_then(|store| {
             if !store.is_empty() {
@@ -563,19 +571,20 @@ async fn main() {
         }
     };
     // The audit record (ADR-0022), opened before anything is decided.
-    let audit_log = match classis_server::fs::FsAuditStore::open(&config.data_dir).and_then(|store| {
-        classis_server::audit_log::AuditLog::start(
-            Box::new(store),
-            config.audit.limits(),
-            clock.clone(),
-        )
-    }) {
-        Ok(audit) => Arc::new(audit),
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let audit_log =
+        match classis_server::fs::FsAuditStore::open(&config.data_dir).and_then(|store| {
+            classis_server::audit_log::AuditLog::start(
+                Box::new(store),
+                config.audit.limits(),
+                clock.clone(),
+            )
+        }) {
+            Ok(audit) => Arc::new(audit),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        };
     let audit: Arc<dyn classis_server::audit::Audit> = audit_log.clone();
     if let Some(enrolment) = &enrolment {
         enrolment.set_audit(audit.clone());

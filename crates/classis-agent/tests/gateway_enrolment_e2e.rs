@@ -130,7 +130,8 @@ impl Fleet {
         client_ca.issue(pki, "server", "127.0.0.1");
         client_ca.issue(pki, "gateway-listener", "127.0.0.1");
 
-        let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
+        let clock: Arc<dyn classis_server::fleet::Clock> =
+            Arc::new(classis_server::clock::SystemClock);
         let revocations = Arc::new(
             Revocations::open(
                 Box::new(
@@ -526,10 +527,11 @@ async fn the_client_enrols_through_a_gateway_and_then_reports_through_it() {
         std::fs::read(state_dir.join("client-cert.pem")).ok()
     })
     .await;
-    let host = classis_server::ca::facts(opamp::tls::certificates(&issued).expect("pem")[0].as_ref())
-        .expect("facts")
-        .host
-        .expect("a host");
+    let host =
+        classis_server::ca::facts(opamp::tls::certificates(&issued).expect("pem")[0].as_ref())
+            .expect("facts")
+            .host
+            .expect("a host");
     assert_ne!(host, fleet.gateway_host, "a host of its own");
 
     let uid = std::fs::read_to_string(state_dir.join("instance-uid")).expect("uid");

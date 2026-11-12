@@ -1302,7 +1302,10 @@ mod tests {
             proof_of(&forged),
             proof_of(&altered),
             proof_of(&[presented.as_slice(), b"\0"].concat()),
-            csr_with_uri(&format!("{}AAAA", classis_core::bootstrap_proof::URI_PREFIX)),
+            csr_with_uri(&format!(
+                "{}AAAA",
+                classis_core::bootstrap_proof::URI_PREFIX
+            )),
         ] {
             match forwarding
                 .forward_enrolment(&peer, enrolment(uid, csr))

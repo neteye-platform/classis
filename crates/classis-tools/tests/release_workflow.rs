@@ -100,10 +100,7 @@ fn the_operator_tool_is_built_for_four_targets_and_its_version_asserted_where_it
         agrees.contains("if: matrix.native && matrix.operator_tool"),
         "{agrees}"
     );
-    assert!(
-        agrees.contains("release/classisctl --version"),
-        "{agrees}"
-    );
+    assert!(agrees.contains("release/classisctl --version"), "{agrees}");
     assert!(
         agrees.contains("${{ needs.version.outputs.full }}"),
         "{agrees}"

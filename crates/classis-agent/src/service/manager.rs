@@ -2277,8 +2277,7 @@ mod tests {
     /// Verifies: ADR-0042
     #[test]
     fn exec_start_survives_spaces_percent_and_dollar() {
-        let unit =
-            systemd_unit(&system_spec("/srv/my fleet/100%/$HOME"), "classis").expect("unit");
+        let unit = systemd_unit(&system_spec("/srv/my fleet/100%/$HOME"), "classis").expect("unit");
         let exec = unit
             .lines()
             .find(|l| l.starts_with("ExecStart="))
@@ -2373,11 +2372,7 @@ mod tests {
             }
         }
         assert!(
-            systemd_unit(
-                &system_spec("/opt/classis"),
-                "evil\nExecStartPre=/bin/sh"
-            )
-            .is_err(),
+            systemd_unit(&system_spec("/opt/classis"), "evil\nExecStartPre=/bin/sh").is_err(),
             "an account name cannot add a directive"
         );
     }
@@ -2930,12 +2925,7 @@ mod tests {
             Some("classis-agents")
         ));
         // Another account for the Client.
-        assert!(account_changes(
-            Some(&root),
-            Some("classis"),
-            None,
-            None
-        ));
+        assert!(account_changes(Some(&root), Some("classis"), None, None));
         assert!(account_changes(Some(&fleet), None, None, None));
     }
 
@@ -3310,11 +3300,7 @@ mod tests {
         let socket = socket_dir.join("agents.sock");
         let beside = dir.path().join("classis");
         let inside = socket_dir.join("data");
-        for root in [
-            &socket_dir,
-            &inside,
-            &dir.path().join("classis-agents/"),
-        ] {
+        for root in [&socket_dir, &inside, &dir.path().join("classis-agents/")] {
             let refused =
                 check_roots_apart(&[&beside, root], &socket).expect_err("not yet there, by name");
             assert!(refused.contains("the second service's socket"), "{refused}");
@@ -3397,15 +3383,11 @@ mod tests {
         let unit = systemd_unit(&with_agents(), "classis").expect("unit");
         let header = &unit[..unit.find("[Service]").expect("service section")];
         assert!(
-            header
-                .lines()
-                .any(|l| l == "Wants=classis-agents.service"),
+            header.lines().any(|l| l == "Wants=classis-agents.service"),
             "{unit}"
         );
         assert!(
-            header
-                .lines()
-                .any(|l| l == "After=classis-agents.service"),
+            header.lines().any(|l| l == "After=classis-agents.service"),
             "{unit}"
         );
         assert!(

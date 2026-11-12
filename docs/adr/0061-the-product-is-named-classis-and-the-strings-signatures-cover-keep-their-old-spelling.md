@@ -11,8 +11,8 @@
   in `crates/classis-core/src/renewal.rs`,
   `crates/classis-core/src/bootstrap_proof.rs`,
   `crates/classis-core/src/package.rs`, `crates/classis-tools/src/signing.rs`,
-  `crates/classis-server/src/ca.rs` and the Gateway in
-  `crates/classis-agent/src/gateway/`
+  `crates/classis-server/src/ca.rs`, `crates/classis-server/src/postgres/mod.rs`
+  and the Gateway in `crates/classis-agent/src/gateway/`
 
 ## Context
 
@@ -41,13 +41,17 @@ somebody installed against. Two kinds of name differ in what a rename costs:
   ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)),
   the signing file format `opamp-fleet-signing-v1`
   ([ADR-0027](0027-a-signing-file-carries-what-a-signature-covers-to-the-key-and-the-signatures-back.md))
-  and the header `opamp-fleet-gateway-bindings` of a Gateway's binding store
-  ([ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)).
-  A rename of one of them invalidates every signature made over it and every
-  file written with it: an enrolled Host's certificate would no longer name its
-  host, a package signed for `0.7.0` would no longer verify, a Gateway would
-  forget its bindings on upgrade. These strings are identifiers of a format, not
-  the product's name, and nothing an operator reads.
+  the header `opamp-fleet-gateway-bindings` of a Gateway's binding store
+  ([ADR-0058](0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)),
+  and the key `opamp-fleet-server:` of the advisory lock that keeps one Server
+  per PostgreSQL schema
+  ([ADR-0050](0050-the-servers-records-may-live-in-postgresql.md) clause 6). A
+  rename of one of them invalidates every signature made over it and every file
+  written with it: an enrolled Host's certificate would no longer name its host,
+  a package signed for `0.7.0` would no longer verify, a Gateway would forget
+  its bindings on upgrade, and a Server before the rename and one after it would
+  write one schema at once. These strings are identifiers of a format, not the
+  product's name, and nothing an operator reads.
 
 The subject attributes `fleet.host.*`
 ([ADR-0036](0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md))
@@ -65,26 +69,30 @@ file is bound to.
 2. **The Client's product** defaults to the name `classis` and the title
    _Classis Agent_
    ([ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)
-   clause 2). Its services are `classis` and `classis-agents`, the account of
-   its Managed Processes `classis-agents` (`_classis-agents` on macOS), and its
-   directories follow the product name: `/opt/classis`, `/var/lib/classis`,
-   `/etc/classis`, `/usr/libexec/classis`, `/run/classis-agents`. Its own
-   telemetry's instrumentation scope is `classis-client`.
+   clause 2). Its services are `classis` and `classis-agents`, its account
+   `classis` (`_classis` on macOS, `NT SERVICE\classis` on Windows), the account
+   of its Managed Processes `classis-agents` (`_classis-agents` on macOS), and
+   its directories follow the product name: `/opt/classis`, `/var/lib/classis`,
+   `/usr/libexec/classis`, `/run/classis-agents`. Its own telemetry's
+   instrumentation scope is `classis-client`.
 3. **The operator program** is `classisctl`, its release assets
    `classisctl_<version>_<os>_<arch>…`.
 4. **The Server's image** is `ghcr.io/neteye-platform/classis-server`, its
    variables `CLASSIS_SERVER__…` and `CLASSIS_SERVER_CONFIG`
    ([ADR-0051](0051-the-servers-configuration-may-come-from-its-environment.md)),
-   its paths `/etc/classis-server` and `/var/lib/classis-server`. The CA
-   subjects `classisctl` writes read _Classis Server CA_, _Classis Client CA_
-   and _Classis Bootstrap CA_.
+   its data directory in the image `/var/lib/classis`
+   ([ADR-0052](0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)),
+   and the manual's example paths `/etc/classis`, `/etc/classis-server` and
+   `/var/lib/classis-server`. Its PostgreSQL connections carry the
+   `application_name` `classis-server`. The CA subjects `classisctl` writes read
+   _Classis Server CA_, _Classis Client CA_ and _Classis Bootstrap CA_.
 5. **These strings keep their spelling:** the certificate URIs
    `urn:opamp-fleet:host:`, `urn:opamp-fleet:renewal:v1:` and
    `urn:opamp-fleet:bootstrap:v1:`, and `opamp-fleet-renewal-v1`,
    `opamp-fleet-bootstrap-v1`, `opamp-fleet-package-v1`,
-   `opamp-fleet-signing-v1` and `opamp-fleet-gateway-bindings`. A new version of
-   one of these formats may take a new prefix; that is the format's decision,
-   not this one's.
+   `opamp-fleet-signing-v1`, `opamp-fleet-gateway-bindings`, and the advisory
+   lock's key `opamp-fleet-server:`. A new version of one of these formats may
+   take a new prefix; that is the format's decision, not this one's.
 6. **The change is a clean break.** No old name is still read, no old path
    migrated by the program: the CHANGELOG lists what an operator renames or
    moves before upgrading.
@@ -138,13 +146,16 @@ product.
 
 ## Enforcement
 
-A test pins each string clause 5 keeps, and fails on a rename: the certificate
-URIs and the renewal and bootstrap statements in
-`crates/classis-core/src/renewal.rs`, the host URI in
-`crates/classis-server/src/ca.rs`, the package statement in
-`crates/classis-core/src/package.rs`, the signing format the UI carries in
-`crates/classis-server/tests/rest_api.rs`, and the binding store's header in
-`crates/classis-agent/src/gateway/store.rs`, each marked `Verifies: ADR-0061`.
+A test pins each string clause 5 keeps, and fails on a rename, each marked
+`Verifies: ADR-0061`: the certificate URIs and the renewal and bootstrap
+statements in `crates/classis-core/src/renewal.rs`, the host URI in
+`crates/classis-server/src/ca.rs` and in the Gateway's
+`crates/classis-agent/src/gateway/cache.rs`, the package statement in
+`crates/classis-core/src/package.rs`, the signing format in
+`crates/classis-tools/src/signing.rs` and as the UI carries it in
+`crates/classis-server/tests/rest_api.rs`, the binding store's header in
+`crates/classis-agent/src/gateway/store.rs`, and the advisory lock's key in
+`crates/classis-server/src/postgres/mod.rs`.
 
 **Not mechanically decidable:** that no operator-facing name still spells the
 old brand. A search for `opamp-fleet`, `OpAMP Fleet` and `FLEET_` outside the
