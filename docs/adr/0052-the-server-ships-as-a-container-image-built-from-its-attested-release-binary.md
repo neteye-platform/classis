@@ -1,6 +1,7 @@
 # ADR-0052: The Server ships as a container image built from its attested release binary
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clauses 10 and 12 superseded by
+  [ADR-0062](0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
 - **Date:** 2026-10-23
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `packaging/container/Containerfile`, the Linux rows of the

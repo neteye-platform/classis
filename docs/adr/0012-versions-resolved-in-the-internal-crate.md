@@ -1,6 +1,7 @@
 # ADR-0012: `Cargo.toml` decides the product's version, the internal crate's build stamps it with git's provenance, and the commit is compared nowhere
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clauses 6 and 8 superseded by
+  [ADR-0062](0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
 - **Date:** 2026-10-03
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `Cargo.toml` `[workspace.package] version`,
