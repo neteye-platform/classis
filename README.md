@@ -231,13 +231,19 @@ and macOS and the Server for Linux.
 **Releases**
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md),
 [ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)): the
-version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml), and the
-`Release` workflow makes the `version/*` tag from it before it builds — so
-bumping the version is an ordinary reviewed commit and nobody types a tag.
-Running it publishes one archive per platform,
-`supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows on the
-architectures each ships on, a CycloneDX SBOM `<stem>.cdx.json` beside each
-archive of the Client and of the operator tool, and a `SHA256SUMS` file. Every
+version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). A
+release starts when a person with write access pushes the `version/<version>`
+tag on the commit of `main` that carries it, and the run fails when the tag and
+the file disagree or the commit is not on `main`
+([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+Its `sign` job waits until a second person with write
+access approves it in the environment `signing`, then signs every Client
+archive with the key that environment holds. A release publishes one archive per
+platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
+on the architectures each ships on, a `.sig` beside each Client archive and
+`package-signing-key.pub`, the public half of the key they verify against, a
+CycloneDX SBOM `<stem>.cdx.json` beside each archive of the Client and of the
+operator tool, and a `SHA256SUMS` file. Every
 asset is a subject of one build-provenance attestation, which the workflow
 verifies before it creates the release
 ([ADR-0045](docs/adr/0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md));
@@ -259,7 +265,7 @@ and the last two are exactly what an Agent reports as `os.type` and `host.arch`
 (`linux_amd64`, `darwin_arm64`, …), so uploading a whole release under one
 package name needs no translation
 ([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
-Started with `dry_run` (the default) it builds and packs everything and
+Started by hand it is a dry run: it builds and packs everything, and signs and
 publishes nothing. Before it builds anything at all it checks that the version
 is still free — a `version/*` tag or a release already carrying that number
 fails the run on the spot, dry or not, so a forgotten bump costs seconds rather
@@ -580,6 +586,20 @@ repository move or transfer:
   the **Checks** and **CI** workflows run on every pull request but are not
   required by the ruleset;
 - a **ruleset on every branch** that requires signed commits;
+- a **ruleset on tags** that blocks updates, deletions and force pushes and
+  requires signatures. It leaves creating a tag to everyone with write access,
+  who may release;
+- the **environment `signing`**
+  ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
+  clauses 1 and 2). Its deployment rule admits the tags
+  `version/*` and no branch. It has one required reviewer, from a team of the
+  people with write access, with _Prevent self-review_, and administrators may
+  not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the base64 of the
+  `package-signing-key.pk8` that `classisctl package keygen` writes, made by an
+  admin on a machine of their own and then deleted; the public half `keygen`
+  prints is [`packaging/package-signing-key.pub`](packaging/package-signing-key.pub).
+  The reviewer approves a run only when the push of a `version/*` tag started
+  it and the tag names a commit of `main`;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
   otherwise carried by review alone;

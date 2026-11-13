@@ -6,12 +6,27 @@ an upgrade. The reasoning behind each change lives in the ADR it names
 ([`docs/adr/`](docs/adr/)); this file says only what to do.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A
-version is the one `[workspace.package] version` in `Cargo.toml` names, which
-the release pipeline creates the `version/*` tag from
-([ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)). A
-section carries a date once its tag exists.
+version is the one `[workspace.package] version` in `Cargo.toml` names, whose
+`version/*` tag a person pushes to release it
+([ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md),
+[ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+A section carries a date once its tag exists.
 
 ## [Unreleased]
+
+### Added
+
+- **Each release signs the Client's archives**
+  ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+  Beside every `supervisor_<version>_<os>_<arch>.tar.gz`
+  the release carries its `.sig`, and with them `package-signing-key.pub`, the
+  public half of the key they verify against. Set its content as
+  `[packages] verification_key`, or place the file beside the Client's program
+  when you install it, and upload each archive with the signature its `.sig`
+  holds; the release notes give the commands. An installation that signs with a
+  key of its own keeps doing so.
+- **A release starts from a pushed tag.** The `Release` workflow no longer
+  creates the `version/*` tag, and a run started by hand is a dry run.
 
 ### Removed
 

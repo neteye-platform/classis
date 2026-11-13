@@ -2526,6 +2526,15 @@ or with one that does not verify, is reported `InstallFailed` and nothing is
 staged. An offer older than the running version is refused too: a signature
 carries no ordering, so an old release stays validly signed forever.
 
+Every release signs its own archives. Beside each
+`supervisor_<version>_<os>_<arch>.tar.gz` it publishes the `.sig` that is that
+entry's signature, and `package-signing-key.pub`, the public half of the key
+that made them. With that key as `verification_key` a fleet updates from the
+release as published: upload each archive with the signature its `.sig` holds,
+as the release notes show. A `package-signing-key.pub` beside the program at
+install is taken as the key. A fleet that signs with a key of its own signs the
+archives itself instead.
+
 An offer under any other name is refused and reported, never applied. That is
 one of two independent guards, and it is the one on this side of the wire: the
 Server will not offer a package built for another Agent type either, and this
