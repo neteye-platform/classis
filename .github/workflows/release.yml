@@ -4,10 +4,16 @@ name: Release
 # (ADR-0019, the container and the artifact name included), and the operator tool `classisctl`
 # for Linux and macOS beside it (ADR-0028).
 #
-# The version comes from `[workspace.package] version` in Cargo.toml and this workflow creates the
-# `version/*` tag from it (ADR-0012) — *before* it builds, so ADR-0012's `build.rs` finds a tag on
-# HEAD and bakes the same number into the binary with its commit metadata. The binary learns its
-# version as any build does; this workflow decides the number and types the tag.
+# The version comes from `[workspace.package] version` in Cargo.toml. A release starts only when a
+# person pushes the `version/*` tag for it on a commit of `main` (ADR-0062 clause 3); the run checks
+# that the tag and the file agree and checks the tag out, so ADR-0012's `build.rs` finds it on HEAD
+# and bakes the same number into the binary with its commit metadata. The workflow pushes no tag.
+# A run started by hand is a dry run and nothing else (ADR-0062 clause 5).
+#
+# The `sign` job signs every entry of the Client's own Package — the `supervisor_*.tar.gz` archives —
+# with the key of the GitHub environment `signing`, which a second person with write access releases
+# by approving the job (ADR-0062 clauses 2 and 6). The signatures are published beside the archives
+# with `package-signing-key.pub`, the tracked public half of that key.
 #
 # The artifacts are packed by this project's own `classisctl package pack`, so each Client archive
 # is also a valid package artifact for a fleet self-update (ADR-0026, ADR-0018) — the file an operator
@@ -24,15 +30,9 @@ name: Release
 # with the version (ADR-0052).
 
 on:
+  # A dry run: builds and packs every target, and neither signs nor publishes (ADR-0062 clause 5).
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Build and pack only — create no tag and no release"
-        type: boolean
-        default: true
-  # A hand-made tag still releases, for the case where someone tags deliberately. The tag this
-  # workflow pushes itself does not land here: events from the workflow's own token never start
-  # another run.
+  # A release: the tag a person pushed on a commit of `main` (ADR-0062 clause 3).
   push:
     tags: ["version/*"]
 
@@ -72,14 +72,14 @@ jobs:
       - name: No known advisory in the dependency graph
         run: cargo deny check advisories
 
-  # Decides the number, makes it a tag, and proves the compiler saw it. Everything below is named
-  # from this job's answer, so the artifacts cannot disagree with each other or with the binary.
+  # Decides the number, checks it against the tag that started the run, and proves the compiler saw
+  # it. Everything below is named from this job's answer, so the artifacts cannot disagree with each
+  # other or with the binary. It pushes no tag (ADR-0062 clause 3).
   version:
     needs: advisories
     runs-on: ubuntu-latest
     permissions:
-      # Pushing the tag (ADR-0012). Read alone would be enough for everything else here.
-      contents: write
+      contents: read
     outputs:
       version: ${{ steps.read.outputs.version }}
       full: ${{ steps.baked.outputs.full }}
@@ -90,15 +90,13 @@ jobs:
           # The baked version is resolved from the repository's tags; a shallow clone would bake
           # `0.0.0-dev` and publish it.
           fetch-depth: 0
-          # This job's token can push, and the build below runs every build script of the
-          # dependency graph. The token stays out of .git/config and is handed to the two steps
-          # that talk to the remote, in their own environment. No cache either: a release is built
-          # from the sources and the lockfile, not from what other runs wrote.
+          # The build below runs every build script of the dependency graph. The token stays out of
+          # .git/config and is handed to the step that asks the remote, in its own environment. No
+          # cache either: a release is built from the sources and the lockfile, not from what other
+          # runs wrote.
           persist-credentials: false
       - name: Read the version out of Cargo.toml
         id: read
-        env:
-          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 \
@@ -108,8 +106,9 @@ jobs:
             "" | *[!0-9.]* ) echo "::error::$version is not a release version (MAJOR.MINOR.PATCH)"; exit 1 ;;
           esac
 
-          # A hand-pushed tag still releases, but only if the two agree — this is the drift
-          # ADR-0012 accepts and refuses to resolve silently.
+          # A pushed tag releases only if it and the file agree — the drift ADR-0012 clause 7
+          # refuses to resolve silently. A run started by hand is a dry run (ADR-0062 clause 5),
+          # even on a tag ref.
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             tagged="${GITHUB_REF_NAME#version/}"
             if [ "$tagged" != "$version" ]; then
@@ -117,10 +116,8 @@ jobs:
               exit 1
             fi
             publish=true
-          elif [ "$DRY_RUN" = "true" ]; then
-            publish=false
           else
-            publish=true
+            publish=false
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -163,21 +160,42 @@ jobs:
             exit 1
           fi
           echo "$tag is free"
-      - name: Tag this commit
-        if: steps.read.outputs.publish == 'true' && github.event_name != 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # ADR-0062 clause 4: a release tag names a commit of `main`. This guards against a mistake
+      # only — the workflow that runs is the tagged commit's, and a changed one can drop the check —
+      # which is why the reviewer of the environment `signing` checks it too (clause 2).
+      - name: The tag is on main
+        if: steps.read.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          tag="version/${{ steps.read.outputs.version }}"
-          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader"
-          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          export GIT_CONFIG_VALUE_0
-          # The guard above proved the tag is free; the push is what proves it still is, since it
-          # is refused rather than forced if a concurrent run got there first.
-          git tag "$tag" "$GITHUB_SHA"
-          git push origin "$tag"
-          echo "created $tag"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$GITHUB_REF_NAME names ${GITHUB_SHA:0:7}, which is not on main — tag a commit of main (ADR-0062)"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME names ${GITHUB_SHA:0:7}, on main"
+      # ADR-0062 clause 1: the public half the release publishes is the tracked, reviewed file, never
+      # one derived from the secret. This job has the checkout; `publish` has none.
+      - name: The tracked public key
+        run: |
+          set -euo pipefail
+          key=$(tr -d '[:space:]' < packaging/package-signing-key.pub)
+          case "$key" in
+            *[!0-9a-f]* ) echo "::error::packaging/package-signing-key.pub is not lowercase hex"; exit 1 ;;
+          esac
+          if [ "${#key}" -ne 64 ]; then
+            echo "::error::packaging/package-signing-key.pub holds ${#key} hex digits, not 64"
+            exit 1
+          fi
+          mkdir -p signing-key
+          cp packaging/package-signing-key.pub signing-key/
+          (cd signing-key && sha256sum package-signing-key.pub > package-signing-key.pub.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signing-key
+          path: |
+            signing-key/package-signing-key.pub
+            signing-key/package-signing-key.pub.sha256
+          if-no-files-found: error
       # Debug: the version is baked identically and this build is only asked, never shipped.
       - name: The binary agrees
         id: baked
@@ -500,6 +518,13 @@ jobs:
           # Every row produces the archive; only some produce installers. The archive is what
           # `error` is guarding here.
           if-no-files-found: error
+      # ADR-0062 clause 6: the archive's checksum alone, as an artifact of its own, so the job that
+      # holds the signing key downloads a hash and nothing it could run.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sha256_${{ steps.pack.outputs.name }}
+          path: ${{ env.STEM }}.tar.gz.sha256
+          if-no-files-found: error
 
   # ADR-0052 clause 9: the Server's image, built from the two binaries the Linux rows built and
   # checked, by the Containerfile, which runs nothing — so neither platform needs emulation. The
@@ -633,10 +658,96 @@ jobs:
           echo "pushed $IMAGE@$digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+  # ADR-0062 clauses 2, 6 and 7: signs every entry of the Client's own Package. The only job that
+  # names the environment `signing`, whose secret it receives once a second person with write access
+  # approves it. It checks out no code and builds nothing: it downloads the archives' checksums, writes
+  # the statement each entry's signature covers, and signs it with the runner's OpenSSL.
+  sign:
+    # Only a release: the push of a `version/*` tag. A run started by hand never reaches the
+    # environment, on a tag ref neither (ADR-0062 clause 5).
+    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment: signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: sha256_${{ env.ARTIFACT }}_*
+          path: entries
+          merge-multiple: true
+      - name: Decode the signing key
+        env:
+          PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PACKAGE_SIGNING_KEY" ]; then
+            echo "::error::the environment signing holds no PACKAGE_SIGNING_KEY (ADR-0062 clause 1)"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$PACKAGE_SIGNING_KEY" | base64 -d > "$RUNNER_TEMP/package-signing-key.pk8"
+      # The script reads its inputs from the environment alone, so the test runs it unchanged
+      # (crates/classis-tools/tests/release_workflow.rs). The statement is
+      # `classis_core::package::statement`, the prefix ADR-0061 names; OpenSSL signs Ed25519
+      # only with `-rawin` and from a file, and the signature is byte-identical to
+      # `classisctl package sign`'s (ADR-0062 clause 6).
+      - name: Sign every entry
+        env:
+          AGENT_TYPE: ${{ env.ARTIFACT }}
+          VERSION: ${{ needs.version.outputs.version }}
+          KEY: ${{ runner.temp }}/package-signing-key.pk8
+          ENTRIES: entries
+        run: |
+          set -euo pipefail
+          cd "$ENTRIES"
+          signed=0
+          for f in "${AGENT_TYPE}"_*.tar.gz.sha256; do
+            [ -e "$f" ] || break
+            read -r sha name < "$f"
+            if [ "$name.sha256" != "$f" ]; then
+              echo "::error::$f names $name"
+              exit 1
+            fi
+            case "$sha" in
+              *[!0-9a-f]* | "" ) echo "::error::$f holds no lowercase SHA-256"; exit 1 ;;
+            esac
+            if [ "${#sha}" -ne 64 ]; then
+              echo "::error::$f holds no lowercase SHA-256"
+              exit 1
+            fi
+            printf 'classis-package-v1\n%s\n%s\n%s\n' "$AGENT_TYPE" "$VERSION" "$sha" > "$name.statement"
+            openssl pkeyutl -sign -rawin -keyform DER -inkey "$KEY" -in "$name.statement" -out "$name.sig.bin"
+            if [ "$(wc -c < "$name.sig.bin" | tr -d ' ')" -ne 64 ]; then
+              echo "::error::OpenSSL wrote no 64-byte Ed25519 signature for $name"
+              exit 1
+            fi
+            printf '%s\n' "$(od -An -v -tx1 "$name.sig.bin" | tr -d ' \n')" > "$name.sig"
+            rm -f -- "$name.statement" "$name.sig.bin"
+            sha256sum "$name.sig" > "$name.sig.sha256"
+            echo "signed $name"
+            signed=$((signed + 1))
+          done
+          if [ "$signed" -eq 0 ]; then
+            echo "::error::no ${AGENT_TYPE}_*.tar.gz.sha256 to sign"
+            exit 1
+          fi
+      - name: Remove the signing key
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/package-signing-key.pk8"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signatures
+          path: |
+            entries/*.tar.gz.sig
+            entries/*.tar.gz.sig.sha256
+          if-no-files-found: error
+
   publish:
     # A dry run builds and packs everything and stops here, so it attests nothing (ADR-0045).
     if: needs.version.outputs.publish == 'true'
-    needs: [version, build, sbom, image]
+    needs: [version, build, sbom, image, sign]
     runs-on: ubuntu-latest
     # The only job that may attest (ADR-0045 clause 5, ADR-0052 clause 11). It checks out no code
     # and builds nothing; its only actions are download-artifact and attest, and every other step,
@@ -652,10 +763,11 @@ jobs:
       attestations: write
     steps:
       # What it publishes and attests, and nothing else: the Server's binaries reach the release
-      # inside the image alone.
+      # inside the image alone, and the archives' lone checksums (`sha256_*`) were the signing job's.
+      # The signatures and the tracked public key are ADR-0062's (clauses 1, 6 and 9).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: '{sbom,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'
+          pattern: '{sbom,signatures,signing-key,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'
           path: artifacts
           merge-multiple: true
       - name: Collect the checksums
@@ -664,13 +776,16 @@ jobs:
           cat -- *.sha256 | sort -k2 > SHA256SUMS
           rm -f -- *.sha256
           ls -l
-      # ADR-0045: one SLSA build-provenance attestation over every published asset, SHA256SUMS
-      # included, its digests computed from the files themselves.
+      # ADR-0045, ADR-0062 clause 8: one SLSA build-provenance attestation over every published
+      # asset, the signatures, the public key and SHA256SUMS included, its digests computed from the
+      # files themselves.
       - name: Attest the assets
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             artifacts/*.tar.gz
+            artifacts/*.tar.gz.sig
+            artifacts/package-signing-key.pub
             artifacts/*.deb
             artifacts/*.rpm
             artifacts/*.msi
@@ -698,7 +813,7 @@ jobs:
         run: |
           set -euo pipefail
           cd artifacts
-          for f in *.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS; do
+          for f in *.tar.gz *.tar.gz.sig package-signing-key.pub *.deb *.rpm *.msi *.cdx.json SHA256SUMS; do
             gh attestation verify "$f" --repo "${{ github.repository }}" \
               --signer-workflow "${{ github.repository }}/.github/workflows/release.yml" \
               --deny-self-hosted-runners > /dev/null
@@ -740,13 +855,14 @@ jobs:
           \`${{ env.IMAGE }}@${{ needs.image.outputs.digest }}\`, tagged
           \`${{ needs.version.outputs.version }}\`, for \`linux/amd64\` and \`linux/arm64\`.
 
-          The assets come in five kinds, and picking the wrong one is the only way to get this wrong
-          (ADR-0019, ADR-0028, ADR-0045, ADR-0052):
+          The assets come in six kinds, and picking the wrong one is the only way to get this wrong
+          (ADR-0019, ADR-0028, ADR-0045, ADR-0052, ADR-0062):
 
           | you want to | take |
           |---|---|
           | install this on a host | the \`.deb\`, \`.rpm\` or \`.msi\` |
-          | update a fleet from its Server | the \`${{ env.ARTIFACT }}_*.tar.gz\` |
+          | update a fleet from its Server | the \`${{ env.ARTIFACT }}_*.tar.gz\` and the \`.sig\` beside each |
+          | trust this project's signatures | \`package-signing-key.pub\` |
           | make the fleet's certificates, a signing key and signed packages | the \`${{ env.OPERATOR_TOOL }}_*.tar.gz\` for your machine |
           | check what a binary is built from | the \`<stem>.cdx.json\` |
           | run the Server | the image, by its digest |
@@ -844,7 +960,9 @@ jobs:
           \`\`\`
 
           \`--interactive\` asks for the endpoint, the private CA, the client certificate and its key,
-          and the package verification key. The Server admits a host by its client certificate alone,
+          and the package verification key. The release's \`package-signing-key.pub\`, placed beside
+          the program, is offered as that key, and an install with \`--endpoint\` takes it without a
+          question (ADR-0029, ADR-0062). The Server admits a host by its client certificate alone,
           so a new host is given a bootstrap certificate and enrols on an operator's approval;
           \`docs/manual/setup.md\` walks through the certificates and the enrolment. In a provisioning
           run, \`service install --endpoint wss://<server>:4320/v1/opamp\` writes the endpoint alone,
@@ -879,25 +997,29 @@ jobs:
           built for the machine it reported (ADR-0026), so a mixed fleet updates from one Package.
           Each file is named \`<name>_<version>_<os>_<arch>.tar.gz\` (ADR-0019), and the last two
           fields are exactly the pair an Agent reports as \`os.type\` and \`host.arch\`, so the upload
-          reads them out of the name. Then put the Package in a Deployment, sign every entry with your
-          package signing key, and roll it out; nothing reaches the fleet before that last call
-          (ADR-0026). The Deployment below reaches the hosts whose \`channel\` is \`stable\`: set it in a
-          host's \`[attributes]\`, or as a Server label with \`PUT /api/v1/agents/<uid>/labels\`. The
-          signatures come from the operator tool above:
+          reads them out of the name. Each entry takes the signature in the \`.sig\` of the same name:
+          this release signed every entry with the key whose public half is
+          \`package-signing-key.pub\` (ADR-0062). A Client verifies it against its
+          \`[packages] verification_key\`, and the Server checks it too when its own
+          \`[packages] verification_key\` is that key (ADR-0033). Then put the Package in a Deployment
+          and roll it out; nothing reaches the fleet before that last call (ADR-0026). The Deployment
+          below reaches the hosts whose \`channel\` is \`stable\`: set it in a host's \`[attributes]\`,
+          or as a Server label with \`PUT /api/v1/agents/<uid>/labels\`. An operator who signs with a
+          key of their own instead makes each signature with
+          \`${{ env.OPERATOR_TOOL }} package sign --key <key>.pk8 --agent-type supervisor --version <version> <file>\`.
 
           \`\`\`console
           api="https://<server>:4321/api/v1"   # the Operator plane: add --cacert, and -u <user> or a .netrc
           v=${{ needs.version.outputs.version }}
           curl -X PUT -H 'Content-Type: application/json' -d '{}' "\$api/packages/supervisor/\$v"
-          curl -X PUT -H 'Content-Type: application/json' -d '{"selector": {"channel": "stable"}}' "\$api/deployments/stable"
-          curl -X PUT "\$api/deployments/stable/packages/supervisor/\$v?replace=true"
           for f in ${{ env.ARTIFACT }}_\${v}_*.tar.gz; do
             p=\${f%.tar.gz}; arch=\${p##*_}; os=\${p%_*}; os=\${os##*_}
             curl -X PUT --data-binary @"\$f" "\$api/packages/supervisor/\$v/entries/\$os/\$arch"
-            sig=\$(${{ env.OPERATOR_TOOL }} package sign --key fleet-signing.pk8 --agent-type supervisor --version "\$v" "\$f")
-            curl -X PUT -H 'Content-Type: application/json' -d "{\\"signature\\": \\"\$sig\\"}" \\
-                 "\$api/deployments/stable/signatures/supervisor/\$v/\$os/\$arch"
+            curl -X PUT -H 'Content-Type: application/json' -d "{\\"signature\\": \\"\$(cat "\$f.sig")\\"}" \\
+                 "\$api/packages/supervisor/\$v/entries/\$os/\$arch/signature"
           done
+          curl -X PUT -H 'Content-Type: application/json' -d '{"selector": {"channel": "stable"}}' "\$api/deployments/stable"
+          curl -X PUT "\$api/deployments/stable/packages/supervisor/\$v?replace=true"
           curl -X POST "\$api/deployments/stable/rollout"
           \`\`\`
 
@@ -922,4 +1044,4 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.version }}" \
             --notes-file notes.md \
-            -- *.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS
+            -- *.tar.gz *.tar.gz.sig package-signing-key.pub *.deb *.rpm *.msi *.cdx.json SHA256SUMS

@@ -145,7 +145,9 @@ fn each_archive_is_named_like_the_clients_packed_by_the_tool_and_checksummed() {
         "{upload}"
     );
     assert!(workflow.contains("cat -- *.sha256 | sort -k2 > SHA256SUMS"));
-    assert!(workflow.contains("*.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS"));
+    assert!(workflow.contains(
+        "*.tar.gz *.tar.gz.sig package-signing-key.pub *.deb *.rpm *.msi *.cdx.json SHA256SUMS"
+    ));
 
     // No installer carries it.
     for installer in [
@@ -253,9 +255,12 @@ fn action(uses: &str) -> &str {
     uses.split_once('@').map_or(uses, |(action, _)| action)
 }
 
-/// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8).
-const PUBLISHED: [&str; 6] = [
+/// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8, with
+/// the signatures and the public key ADR-0062 clause 9 adds).
+const PUBLISHED: [&str; 8] = [
     "*.tar.gz",
+    "*.tar.gz.sig",
+    "package-signing-key.pub",
     "*.deb",
     "*.rpm",
     "*.msi",
@@ -317,12 +322,13 @@ fn only_the_publish_job_may_attest() {
         ]
     );
 
-    // It downloads the SBOMs and the two programs' archives, and not the Server's binaries, which
-    // ship inside the image alone. Every artifact the workflow uploads under another name is one
-    // of those, and the pattern names each.
+    // It downloads the SBOMs, the two programs' archives, the signatures and the tracked public
+    // key (ADR-0062 clause 9), and not the Server's binaries, which ship inside the image alone,
+    // nor the archives' lone checksums, which were the signing job's. Every artifact the workflow
+    // uploads under another name is one of those, and the pattern names each.
     assert!(
         publish.contains(
-            "          pattern: '{sbom,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'\n"
+            "          pattern: '{sbom,signatures,signing-key,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'\n"
         ),
         "{publish}"
     );
@@ -335,10 +341,13 @@ fn only_the_publish_job_may_attest() {
     assert_eq!(
         uploaded,
         [
+            "signing-key",
             "sbom",
             "server-linux-${{ matrix.arch }}",
             "${{ steps.pack_tool.outputs.name }}",
-            "${{ steps.pack.outputs.name }}"
+            "${{ steps.pack.outputs.name }}",
+            "sha256_${{ steps.pack.outputs.name }}",
+            "signatures"
         ]
     );
 
@@ -355,7 +364,7 @@ fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
     let workflow = workflow();
     let publish = job(&workflow, "publish");
     assert!(
-        publish.contains("    needs: [version, build, sbom, image]\n"),
+        publish.contains("    needs: [version, build, sbom, image, sign]\n"),
         "{publish}"
     );
 
@@ -969,4 +978,299 @@ fn the_notes_name_the_image_by_its_digest_and_say_how_to_verify_it() {
     ] {
         assert!(notes.contains(line), "{line} in the notes");
     }
+}
+
+/// The shell of a step's `run: |` block, dedented: what the runner executes.
+fn run_script(step: &str) -> String {
+    let body = step
+        .split_once("        run: |\n")
+        .unwrap_or_else(|| panic!("no run block in {step}"))
+        .1;
+    body.lines()
+        .take_while(|line| line.is_empty() || line.starts_with("          "))
+        .map(|line| line.get(10..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// The actions a job runs, without their pins.
+fn actions(job: &str) -> Vec<&str> {
+    job.lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            line.strip_prefix("- uses: ")
+                .or_else(|| line.strip_prefix("uses: "))
+        })
+        .map(action)
+        .collect()
+}
+
+// Verifies: ADR-0062
+#[test]
+fn a_release_starts_only_from_a_tag_a_person_pushed() {
+    let workflow = workflow();
+    // Two triggers: the pushed tag, and a dry run by hand that takes no input.
+    let on = workflow
+        .split_once("\non:\n")
+        .and_then(|(_, rest)| rest.split_once("\n\n"))
+        .map(|(block, _)| block)
+        .expect("an on: block");
+    let triggers: Vec<&str> = on
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect();
+    assert_eq!(
+        triggers,
+        [
+            "  workflow_dispatch:",
+            "  push:",
+            "    tags: [\"version/*\"]"
+        ],
+        "{on}"
+    );
+    assert!(!workflow.contains("inputs."), "a run reads no input");
+
+    // The workflow pushes no tag, so no job needs write access to the contents for one.
+    assert!(!workflow.contains("git push"), "the workflow pushes");
+    assert!(!workflow.contains("git tag "), "the workflow tags");
+    let version = job(&workflow, "version");
+    assert_eq!(grants(permissions(version)), ["contents: read"]);
+
+    // A run started by hand publishes nothing, on a tag ref neither.
+    let read = run_script(step(version, "Read the version out of Cargo.toml"));
+    assert!(
+        read.contains("if [ \"$GITHUB_EVENT_NAME\" = \"push\" ]; then"),
+        "{read}"
+    );
+    assert!(read.contains("else\n  publish=false\nfi"), "{read}");
+
+    // The tagged commit must be on main (clause 4).
+    let on_main = step(version, "The tag is on main");
+    assert!(
+        on_main.contains("if: steps.read.outputs.publish == 'true'"),
+        "{on_main}"
+    );
+    assert!(
+        on_main.contains("git merge-base --is-ancestor \"$GITHUB_SHA\" refs/remotes/origin/main"),
+        "{on_main}"
+    );
+}
+
+// Verifies: ADR-0062
+#[test]
+fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_repository() {
+    let workflow = workflow();
+    let sign = job(&workflow, "sign");
+    assert_eq!(
+        workflow.matches("environment:").count(),
+        1,
+        "one environment"
+    );
+    assert!(sign.contains("    environment: signing\n"), "{sign}");
+    assert_eq!(workflow.matches("secrets.").count(), 1, "one secret");
+    assert!(
+        sign.contains("${{ secrets.PACKAGE_SIGNING_KEY }}"),
+        "{sign}"
+    );
+
+    // A release alone, after the build, on a GitHub-hosted runner, reading and nothing more.
+    assert!(
+        sign.contains(
+            "    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'\n"
+        ),
+        "{sign}"
+    );
+    assert!(sign.contains("    needs: [version, build]\n"), "{sign}");
+    assert!(sign.contains("    runs-on: ubuntu-latest\n"), "{sign}");
+    assert_eq!(grants(permissions(sign)), ["contents: read"]);
+
+    // No checkout, no build, two actions: it fetches the archives' checksums and hands back the
+    // signatures.
+    assert!(!sign.contains("actions/checkout"), "{sign}");
+    assert!(!sign.contains("cargo "), "{sign}");
+    assert_eq!(
+        actions(sign),
+        ["actions/download-artifact", "actions/upload-artifact"]
+    );
+    assert!(
+        sign.contains("          pattern: sha256_${{ env.ARTIFACT }}_*\n"),
+        "{sign}"
+    );
+    let build = job(&workflow, "build");
+    let lone = build
+        .split("- uses: actions/upload-artifact@")
+        .find(|block| block.contains("name: sha256_"))
+        .expect("the archive's lone checksum is uploaded");
+    assert!(
+        lone.contains("          path: ${{ env.STEM }}.tar.gz.sha256\n"),
+        "{lone}"
+    );
+
+    // The key is on the runner only between its decoding and a removal that always runs.
+    let remove = step(sign, "Remove the signing key");
+    assert!(remove.contains("        if: always()\n"), "{remove}");
+    assert!(
+        remove.contains("rm -f -- \"$RUNNER_TEMP/package-signing-key.pk8\""),
+        "{remove}"
+    );
+    let decode = run_script(step(sign, "Decode the signing key"));
+    assert!(decode.contains("umask 077"), "{decode}");
+}
+
+/// The `openssl` on the path, required to be OpenSSL 3: LibreSSL, macOS's `openssl`, signs no raw
+/// Ed25519 input the way the runner's does.
+fn openssl_3() {
+    let out = std::process::Command::new("openssl")
+        .arg("version")
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("this test runs the signing step with `openssl`, and there is none: {e}")
+        });
+    let version = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        version.starts_with("OpenSSL 3."),
+        "this test needs OpenSSL 3, the runner's, and found {version:?}"
+    );
+}
+
+// Verifies: ADR-0062
+#[test]
+fn the_signing_step_signs_the_statement_the_client_verifies() {
+    use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
+
+    openssl_3();
+    let workflow = workflow();
+    let script = run_script(step(job(&workflow, "sign"), "Sign every entry"));
+
+    // A key as `classisctl package keygen` makes it, and two entries' checksums as the build
+    // writes them.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("pkcs8");
+    let key = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("key");
+    let key_file = dir.path().join("package-signing-key.pk8");
+    std::fs::write(&key_file, pkcs8.as_ref()).expect("key file");
+    let entries = dir.path().join("entries");
+    std::fs::create_dir(&entries).expect("entries");
+    let archives = [
+        ("supervisor_1.2.3_linux_amd64.tar.gz", [0x0a_u8; 32]),
+        ("supervisor_1.2.3_windows_amd64.tar.gz", [0xf0_u8; 32]),
+    ];
+    for (name, hash) in &archives {
+        std::fs::write(
+            entries.join(format!("{name}.sha256")),
+            format!("{}  {name}\n", hex::encode(hash)),
+        )
+        .expect("checksum");
+    }
+    let script_file = dir.path().join("sign.sh");
+    std::fs::write(&script_file, &script).expect("script");
+
+    let status = std::process::Command::new("bash")
+        .arg(&script_file)
+        .env("AGENT_TYPE", "supervisor")
+        .env("VERSION", "1.2.3")
+        .env("KEY", &key_file)
+        .env("ENTRIES", &entries)
+        .status()
+        .expect("bash");
+    assert!(status.success(), "the signing step failed: {status}");
+
+    // Each `.sig` is 128 lowercase hex digits and a newline, and verifies under the Client's own
+    // check: Ed25519 over `classis_core::package::statement`.
+    let public = UnparsedPublicKey::new(&ED25519, key.public_key().as_ref().to_vec());
+    for (name, hash) in &archives {
+        let sig = std::fs::read_to_string(entries.join(format!("{name}.sig"))).expect("sig");
+        assert_eq!(sig.len(), 129, "{sig:?}");
+        assert!(sig.ends_with('\n'), "{sig:?}");
+        let hexdigits = sig.trim_end();
+        assert!(
+            hexdigits
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{sig:?}"
+        );
+        let bytes = hex::decode(hexdigits).expect("hex");
+        let statement = classis_core::package::statement("supervisor", "1.2.3", hash);
+        public
+            .verify(&statement, &bytes)
+            .unwrap_or_else(|_| panic!("the signature of {name} does not verify"));
+        assert!(entries.join(format!("{name}.sig.sha256")).exists());
+        assert!(!entries.join(format!("{name}.statement")).exists());
+        assert!(!entries.join(format!("{name}.sig.bin")).exists());
+    }
+
+    // A checksum that names another file is refused, and nothing is signed for it.
+    std::fs::write(
+        entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"),
+        format!("{}  other.tar.gz\n", hex::encode([1_u8; 32])),
+    )
+    .expect("checksum");
+    let status = std::process::Command::new("bash")
+        .arg(&script_file)
+        .env("AGENT_TYPE", "supervisor")
+        .env("VERSION", "1.2.3")
+        .env("KEY", &key_file)
+        .env("ENTRIES", &entries)
+        .status()
+        .expect("bash");
+    assert!(
+        !status.success(),
+        "a checksum naming another file was signed"
+    );
+}
+
+// Verifies: ADR-0062
+#[test]
+fn the_signatures_and_the_tracked_key_are_published_and_attested() {
+    let workflow = workflow();
+    // The public half comes from the tracked file, out of the job that has the checkout.
+    let version = job(&workflow, "version");
+    let tracked = run_script(step(version, "The tracked public key"));
+    assert!(
+        tracked.contains("cp packaging/package-signing-key.pub signing-key/"),
+        "{tracked}"
+    );
+    assert!(
+        version.contains("          name: signing-key\n"),
+        "{version}"
+    );
+    assert!(
+        !job(&workflow, "sign").contains("signing-key/"),
+        "the secret's job publishes no key"
+    );
+
+    // The signatures are the signing job's, handed back with their checksums.
+    let sign = job(&workflow, "sign");
+    assert!(sign.contains("          name: signatures\n"), "{sign}");
+    assert!(
+        sign.contains("            entries/*.tar.gz.sig\n"),
+        "{sign}"
+    );
+
+    // The notes tell an operator what both are for.
+    let notes = step(job(&workflow, "publish"), "Publish the release");
+    for line in [
+        "| trust this project's signatures | \\`package-signing-key.pub\\` |",
+        "\\$(cat \"\\$f.sig\")",
+        "\"\\$api/packages/supervisor/\\$v/entries/\\$os/\\$arch/signature\"",
+    ] {
+        assert!(notes.contains(line), "{line} in the notes");
+    }
+}
+
+// Verifies: ADR-0062
+#[test]
+fn the_tracked_public_key_has_the_form_an_install_takes() {
+    let file =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signing-key.pub");
+    let key = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let key = key.trim();
+    assert_eq!(key.len(), 64, "{key:?}");
+    assert!(
+        key.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "{key:?}"
+    );
 }
