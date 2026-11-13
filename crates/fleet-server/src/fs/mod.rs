@@ -105,10 +105,17 @@ pub fn check_layout(root: &Path) -> Result<(), String> {
 /// otherwise be silently left behind. `blobs/` is accepted beside a bucket too, as the place the
 /// artifacts are copied from into it (ADR-0049 clause 7).
 ///
+/// With the records in PostgreSQL and the artifacts in a bucket (`filesystem_blobs` is false), the
+/// Server keeps nothing on the filesystem: a missing `root` is not created, so it runs on a
+/// read-only root filesystem. An existing one is still checked.
+///
 /// # Errors
 /// Returns an error naming the path when a directory cannot be created, or when the data
 /// directory holds a record of the filesystem store or anything else.
 pub fn open_data_dir_beside_database(root: &Path, filesystem_blobs: bool) -> Result<(), String> {
+    if !filesystem_blobs && !root.exists() {
+        return Ok(());
+    }
     create_private_dir(root)?;
     for (name, path) in entries(root)? {
         if name == BLOBS && path.is_dir() {
@@ -397,6 +404,12 @@ mod tests {
         let bucket = dir.path().join("with-a-bucket");
         open_data_dir_beside_database(&bucket, false).expect("open");
         assert!(!bucket.join(BLOBS).exists(), "no blobs/ beside a bucket");
+        let absent = dir.path().join("absent");
+        open_data_dir_beside_database(&absent, false).expect("open");
+        assert!(
+            !absent.exists(),
+            "no data directory with a database and a bucket"
+        );
 
         for record in [AGENTS, CONFIGURATIONS, CERTIFICATES, REVOCATIONS, ENROLMENT] {
             let path = root.join(record);
