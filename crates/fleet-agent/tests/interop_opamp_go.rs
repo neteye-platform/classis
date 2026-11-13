@@ -750,7 +750,7 @@ impl Party {
 
 /// Our Server's TLS and admission as the binary sets them up (`main.rs`): TLS 1.3 alone and
 /// admission by a client certificate its client CA issued, required in the handshake. What does
-/// not act at the handshake — revocation, the audit record, rate limits — is left out.
+/// not act at the handshake — revocation, rate limits — is left out.
 async fn our_tls_server(pki: &TestPki) -> (SocketAddr, Arc<AppState>, tempfile::TempDir) {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");

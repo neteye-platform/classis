@@ -416,8 +416,6 @@ pub enum DeleteError {
     NotFound,
     /// The certificate is not revoked — `409`.
     NotRevoked,
-    /// The audit record cannot be written — `503`.
-    Unrecorded,
     /// The store failed — `500`.
     Failed(String),
 }
@@ -575,9 +573,11 @@ impl BootstrapCertificates {
     }
 
     /// Deletes a revoked certificate's entry and any PKCS#12 file of it (ADR-0029 clause 15).
-    /// `revoked` tells whether the entry is revoked, and `recorded` puts the deletion on the audit
-    /// record; both run under the record's lock with the removal, so a second request, or a
-    /// revocation lifted meanwhile, cannot slip between the check and the deletion.
+    /// `revoked` tells whether the entry is revoked; it runs under the record's lock with the
+    /// removal, so a second deletion cannot slip between the check and the removal. A lift can:
+    /// the revocation list has a lock of its own. The entry then goes although its revocation no
+    /// longer stands, which costs nothing — the certificate is admitted or refused by the list and
+    /// its CA alone, a lift never brings a PKCS#12 file back, and the serial can be revoked again.
     ///
     /// # Errors
     /// See [`DeleteError`]; on every error the entry is kept.
@@ -585,7 +585,6 @@ impl BootstrapCertificates {
         &self,
         serial: &str,
         revoked: impl FnOnce(&Entry) -> bool,
-        recorded: impl FnOnce(&Entry) -> bool,
     ) -> Result<Entry, DeleteError> {
         let mut entries = self.entries.lock().expect("bootstrap record lock");
         self.prune(&mut entries).map_err(DeleteError::Failed)?;
@@ -595,9 +594,6 @@ impl BootstrapCertificates {
             .ok_or(DeleteError::NotFound)?;
         if !revoked(&entry) {
             return Err(DeleteError::NotRevoked);
-        }
-        if !recorded(&entry) {
-            return Err(DeleteError::Unrecorded);
         }
         self.store.remove(&entry.id).map_err(DeleteError::Failed)?;
         entries.remove(&entry.id);
@@ -1085,8 +1081,8 @@ mod tests {
         );
     }
 
-    /// Only a revoked entry is deleted, and only with its deletion on the record; it goes from the
-    /// list and the store with its PKCS#12 file, and a second deletion finds nothing.
+    /// Only a revoked entry is deleted; it goes from the list and the store with its PKCS#12 file,
+    /// and a second deletion finds nothing.
     /// Verifies: ADR-0029
     #[test]
     fn a_revoked_entry_is_deleted_with_its_pkcs12_file_once() {
@@ -1096,21 +1092,14 @@ mod tests {
             .expect("issued");
         let serial = sealed.serial.as_str();
         assert_eq!(
-            record.delete(serial, |_| false, |_| true),
+            record.delete(serial, |_| false),
             Err(DeleteError::NotRevoked)
         );
-        assert_eq!(
-            record.delete(serial, |_| true, |_| false),
-            Err(DeleteError::Unrecorded)
-        );
-        assert_eq!(record.list().len(), 1, "kept on either refusal");
-        let deleted = record.delete(serial, |_| true, |_| true).expect("deleted");
+        assert_eq!(record.list().len(), 1, "kept on the refusal");
+        let deleted = record.delete(serial, |_| true).expect("deleted");
         assert_eq!(deleted.serial, sealed.serial);
         assert!(record.list().is_empty());
         assert!(store.0.lock().unwrap().is_empty() && store.1.lock().unwrap().is_empty());
-        assert_eq!(
-            record.delete(serial, |_| true, |_| true),
-            Err(DeleteError::NotFound)
-        );
+        assert_eq!(record.delete(serial, |_| true), Err(DeleteError::NotFound));
     }
 }

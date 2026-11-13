@@ -7,7 +7,6 @@
 //! directory it does not name fails startup naming the path.
 
 mod agents;
-mod audit;
 mod blobs;
 mod bootstrap;
 mod configs;
@@ -17,7 +16,6 @@ mod packages;
 mod revocation;
 
 pub use agents::FsAgentStore;
-pub use audit::{files_in as audit_files, FsAuditStore};
 pub use blobs::FsBlobStore;
 pub use bootstrap::FsBootstrapStore;
 pub use configs::FsConfigBackend;
@@ -45,15 +43,13 @@ pub const HOSTS: &str = "hosts";
 pub const CERTIFICATES: &str = "certificates";
 /// The bootstrap certificates the Server issued, with their PKCS#12 files.
 pub const BOOTSTRAP: &str = "bootstrap";
-/// The audit record's files.
-pub const AUDIT: &str = "audit";
 /// The revocation list.
 pub const REVOCATIONS: &str = "revocations.json";
 /// The enrolment window and its pending requests.
 pub const ENROLMENT: &str = "enrolment.json";
 
 /// Every directory the layout names, in the order the table of ADR-0037 clause 2 lists them.
-pub const DIRECTORIES: [&str; 9] = [
+pub const DIRECTORIES: [&str; 8] = [
     CONFIGURATIONS,
     DEPLOYMENTS,
     PACKAGES,
@@ -62,7 +58,6 @@ pub const DIRECTORIES: [&str; 9] = [
     HOSTS,
     CERTIFICATES,
     BOOTSTRAP,
-    AUDIT,
 ];
 
 /// Opens the data directory (ADR-0037): creates it and every directory of the layout owner-only —
@@ -105,18 +100,25 @@ pub fn check_layout(root: &Path) -> Result<(), String> {
 }
 
 /// Opens the data directory of a Server whose records live in PostgreSQL (ADR-0050 clause 2): it
-/// holds `audit/` and, with the filesystem blob store, `blobs/`, and nothing else. A path of the
-/// filesystem layout fails naming it and `server migrate-to-postgres` — those records would
+/// holds `blobs/` with the filesystem blob store, and nothing else. A path of the filesystem
+/// layout fails naming it and `server migrate-to-postgres` — those records would
 /// otherwise be silently left behind. `blobs/` is accepted beside a bucket too, as the place the
 /// artifacts are copied from into it (ADR-0049 clause 7).
+///
+/// With the records in PostgreSQL and the artifacts in a bucket (`filesystem_blobs` is false), the
+/// Server keeps nothing on the filesystem: a missing `root` is not created, so it runs on a
+/// read-only root filesystem. An existing one is still checked.
 ///
 /// # Errors
 /// Returns an error naming the path when a directory cannot be created, or when the data
 /// directory holds a record of the filesystem store or anything else.
 pub fn open_data_dir_beside_database(root: &Path, filesystem_blobs: bool) -> Result<(), String> {
+    if !filesystem_blobs && !root.exists() {
+        return Ok(());
+    }
     create_private_dir(root)?;
     for (name, path) in entries(root)? {
-        if (name == AUDIT || name == BLOBS) && path.is_dir() {
+        if name == BLOBS && path.is_dir() {
             continue;
         }
         if DIRECTORIES.contains(&name.as_str()) || name == REVOCATIONS || name == ENROLMENT {
@@ -129,7 +131,6 @@ pub fn open_data_dir_beside_database(root: &Path, filesystem_blobs: bool) -> Res
         }
         return Err(unknown(&path));
     }
-    create_private_dir(&root.join(AUDIT))?;
     if filesystem_blobs {
         create_private_dir(&root.join(BLOBS))?;
     }
@@ -322,8 +323,9 @@ mod tests {
 
     /// A Server on an empty `data_dir` lays out every directory of ADR-0037 clause 2, each
     /// owner-only; a file or directory the layout does not name fails the open naming its path,
-    /// and a temporary file a crash left beside a document is removed instead.
-    /// Verifies: ADR-0037
+    /// and a temporary file a crash left beside a document is removed instead. It holds no
+    /// `audit/`.
+    /// Verifies: ADR-0037, ADR-0022
     #[test]
     fn the_data_directory_has_one_layout_and_no_other() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -341,6 +343,7 @@ mod tests {
                 assert_eq!(mode & 0o777, 0o700, "{name} is not owner-only");
             }
         }
+        assert!(!root.join("audit").exists(), "no audit/ is laid out");
         let bucket = dir.path().join("beside-a-bucket");
         open_data_dir(&bucket, false).expect("open");
         assert!(!bucket.join(BLOBS).exists(), "no blobs/ beside a bucket");
@@ -377,12 +380,12 @@ mod tests {
         assert!(open_data_dir(&root, true).is_err());
     }
 
-    /// With the records in PostgreSQL, `data_dir` holds `audit/` and, with the filesystem blob
-    /// store, `blobs/`, and nothing else; a record of the filesystem store found there fails the
+    /// With the records in PostgreSQL, `data_dir` holds `blobs/` with the filesystem blob store,
+    /// and nothing else; a record of the filesystem store found there fails the
     /// open naming it and `server migrate-to-postgres`, and anything else fails as a stray entry.
     /// Verifies: ADR-0050
     #[test]
-    fn a_data_dir_beside_the_database_holds_the_audit_and_the_blobs_alone() {
+    fn a_data_dir_beside_the_database_holds_the_blobs_alone() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("fleet-data");
         open_data_dir_beside_database(&root, true).expect("an empty data directory");
@@ -397,10 +400,16 @@ mod tests {
             })
             .collect();
         made.sort();
-        assert_eq!(made, [AUDIT, BLOBS]);
+        assert_eq!(made, [BLOBS]);
         let bucket = dir.path().join("with-a-bucket");
         open_data_dir_beside_database(&bucket, false).expect("open");
         assert!(!bucket.join(BLOBS).exists(), "no blobs/ beside a bucket");
+        let absent = dir.path().join("absent");
+        open_data_dir_beside_database(&absent, false).expect("open");
+        assert!(
+            !absent.exists(),
+            "no data directory with a database and a bucket"
+        );
 
         for record in [AGENTS, CONFIGURATIONS, CERTIFICATES, REVOCATIONS, ENROLMENT] {
             let path = root.join(record);

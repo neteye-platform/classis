@@ -131,7 +131,6 @@ fn sigterm_shuts_the_server_down_gracefully() {
         found,
         [
             "agents",
-            "audit",
             "blobs",
             "bootstrap",
             "certificates",

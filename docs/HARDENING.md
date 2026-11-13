@@ -216,12 +216,14 @@ the project already has:
   26): an operator's Basic password is kept as an Argon2id hash of at least the
   OWASP minimum, and a value in clear is refused at startup without being
   echoed. The Server offers no credential (ADR-0014).
-- **An audit record of every security decision** (ADR-0022): admissions and
+- **A log event for every security decision** (ADR-0022): admissions and
   refusals, enrolment, issuance, revocation, operator acts and package outcomes,
-  one hash-chained line each; no admission without its record, refusals
-  aggregated per peer before they are queued and kept to half the queue so they
-  cannot crowd out any other record, and no `Authorization` value in any line,
-  not even as a hash.
+  one structured event each on the Server's log, and no `Authorization` value in
+  any event, not even as a hash. What a peer can repeat at will — refusals
+  before admission, throttles, polls — is logged at `debug`, so a flood stays
+  out of the default log. The Server keeps no audit record: retention and
+  integrity are whatever collects the log, and an edited or removed line is not
+  detectable.
 - **Certificates live 30 days by default** (ADR-0021 clause 9) and are renewed
   at two thirds of that; a test with lives of seconds watches three generations
   each replace the one before it expires (`certificate_renewal_e2e.rs`). A soak

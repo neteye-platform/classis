@@ -18,7 +18,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use opamp::uid::InstanceUid;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
@@ -60,24 +60,13 @@ struct ApiDoc;
 /// and it guards the whole plane — the API, its document, the docs page, and the UI — because a
 /// browser answers a Basic challenge by itself, which is what spares the rudimentary UI a login
 /// page and a session.
-pub struct OperatorAuth(
-    Arc<Credentials>,
-    Option<Arc<crate::throttle::Throttle>>,
-    Option<Arc<dyn crate::audit::Audit>>,
-);
+pub struct OperatorAuth(Arc<Credentials>, Option<Arc<crate::throttle::Throttle>>);
 
 impl OperatorAuth {
     /// # Errors
     /// Returns an error naming an entry of `[rest.auth]` that is not a hash this Server keeps.
     pub fn from_config(auth: &RestAuthConfig) -> Result<Self, String> {
-        Ok(OperatorAuth(Arc::new(auth.credentials()?), None, None))
-    }
-
-    /// Records refused sign-ins in `audit` (ADR-0022 clause 1).
-    #[must_use]
-    pub fn with_audit(mut self, audit: Option<Arc<dyn crate::audit::Audit>>) -> Self {
-        self.2 = audit;
-        self
+        Ok(OperatorAuth(Arc::new(auth.credentials()?), None))
     }
 
     /// Counts this plane's failures in a table of its own (ADR-0021 clause 24).
@@ -88,37 +77,29 @@ impl OperatorAuth {
     }
 }
 
-/// Records every mutating act on the Operator plane, before it runs and once it has run; an act
-/// that cannot be recorded is not run (ADR-0022 clauses 1, 6).
-async fn record_act(
-    State(audit): State<Arc<dyn crate::audit::Audit>>,
-    request: Request,
-    next: Next,
-) -> Response {
-    use crate::audit::Entry;
+/// Logs every mutating act on the Operator plane once it has run: the operator who made it, its
+/// method, path and status. The act sits inside the guard, so the name is of a user the guard
+/// admitted. A read is not logged — the plane serves a page by many of them.
+async fn log_act(request: Request, next: Next) -> Response {
+    use axum::http::Method;
     let method = request.method().clone();
-    if matches!(
+    if !matches!(
         method,
-        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     ) {
         return next.run(request).await;
     }
-    let peer = crate::transport::peer_ip(&request);
-    let operator = basic_user(request.headers());
     let path = request.uri().path().to_string();
-    let entry = |event: &str, outcome: &str| {
-        Entry::new(event, outcome)
-            .peer(peer)
-            .with("plane", "operator")
-            .with("operator", operator.clone())
-            .with("method", method.to_string())
-            .with("path", path.clone())
-    };
-    if audit.record(entry("operator.act", "requested")).is_err() {
-        return crate::transport::busy();
-    }
+    let operator = basic_user(request.headers());
     let response = next.run(request).await;
-    audit.refusal(entry("operator.act", "completed").with("status", response.status().as_u16()));
+    info!(
+        event = "operator.act",
+        operator = operator.as_deref().map(crate::fleet::bounded),
+        method = %method,
+        path = crate::fleet::bounded(&path),
+        status = response.status().as_u16(),
+        "an operator act"
+    );
     response
 }
 
@@ -145,20 +126,20 @@ async fn authenticate(
     next: Next,
 ) -> Response {
     let peer = crate::transport::peer_ip(&request);
+    // A refusal is logged at `debug`, its user name cut short: a peer that was not admitted
+    // repeats it at will, under any name.
     let operator = basic_user(request.headers());
-    let refusal = |event: &str, outcome: &str| {
-        if let Some(audit) = &auth.2 {
-            audit.refusal(
-                crate::audit::Entry::new(event, outcome)
-                    .peer(peer)
-                    .with("plane", "operator")
-                    .with("operator", operator.clone()),
-            );
-        }
+    let refusal = |event: &str| {
+        debug!(
+            event,
+            peer = peer.map(tracing::field::display),
+            operator = operator.as_deref().map(crate::fleet::bounded),
+            "refused a request on the Operator plane"
+        );
     };
     if let (Some(throttle), Some(peer)) = (&auth.1, peer) {
         if let Some(wait) = throttle.retry_after(peer) {
-            refusal("operator.throttled", "throttled");
+            refusal("operator.throttled");
             return crate::transport::throttled(wait);
         }
     }
@@ -168,7 +149,7 @@ async fn authenticate(
         (Some(throttle), Some(peer)) => match throttle.begin(peer) {
             Some(attempt) => Some(attempt),
             None => {
-                refusal("operator.throttled", "throttled");
+                refusal("operator.throttled");
                 return crate::transport::throttled(throttle.retry_after(peer).unwrap_or(1));
             }
         },
@@ -182,7 +163,7 @@ async fn authenticate(
         if let (Some(throttle), Some(peer)) = (&auth.1, peer) {
             throttle.failed(peer);
         }
-        refusal("operator.refused", "refused");
+        refusal("operator.refused");
         // The challenge is what turns this into a browser prompt rather than a dead end.
         return (
             StatusCode::UNAUTHORIZED,
@@ -270,13 +251,9 @@ pub fn router(state: Arc<AppState>, auth: Option<OperatorAuth>) -> Router {
         .route("/ui-carbon.css", get(ui_carbon_css))
         .route("/ui-quiet.css", get(ui_quiet_css))
         .route("/shiki.js", get(shiki_js))
-        .with_state(state.clone());
-    // Inside the guard, so an act is recorded only once it is authenticated, and named by the
-    // operator who made it (ADR-0022 clause 1).
-    let router = match state.audit().cloned() {
-        Some(audit) => router.layer(middleware::from_fn_with_state(audit, record_act)),
-        None => router,
-    };
+        .with_state(state.clone())
+        // Inside the guard, so only an authenticated act is logged.
+        .layer(middleware::from_fn(log_act));
     let router = match auth {
         // Outside every route, so the guard covers every route on this listener — including the
         // UI and the API docs, which are as much of the plane as `/api/v1` is (ADR-0021).
@@ -1807,19 +1784,17 @@ async fn download_package(
     if let Some(proofs) = request.extensions().get::<crate::transport::Proofs>() {
         let host = proofs.host.as_deref();
         if !host.is_some_and(|host| state.offers_artifact(host, &id, &platform)) {
-            state.audit_refusal(
-                crate::audit::Entry::new("download.refused", "refused")
-                    .peer(crate::transport::peer_ip(&request))
-                    .with("plane", "agent")
-                    .with("check", "not offered")
-                    .with("host", host.map(str::to_string))
-                    .with(
-                        "serial",
-                        proofs.certificate.as_ref().map(|(id, _)| id.serial.clone()),
-                    )
-                    .with("agent_type", id.agent_type.clone())
-                    .with("version", id.version.clone())
-                    .with("platform", platform.tag()),
+            // At `debug`: an admitted member probes for artifacts at will.
+            debug!(
+                event = "download.refused",
+                check = "not offered",
+                peer = crate::transport::peer_ip(&request).map(tracing::field::display),
+                host,
+                serial = proofs.serial(),
+                authority = proofs.authority(state.revocations()),
+                package = %id,
+                platform = %platform.tag(),
+                "refused a download: the artifact is not offered to this host"
             );
             return not_found();
         }
@@ -2605,8 +2580,7 @@ async fn list_bootstrap_certificates(State(state): State<Arc<AppState>>) -> Resp
         (status = 400, description = "No organization, organizational_unit or password, a subject attribute this route does not know, a country that is not two upper-case letters, another value out of bounds, validity_days outside 1 to 90, or a password outside 8 to 128 characters", body = ErrorBody),
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
         (status = 404, description = "Enrolment is not configured", body = ErrorBody),
-        (status = 409, description = "No bootstrap_ca_key_file is configured, the bootstrap CA has ended, or the record is full", body = ErrorBody),
-        (status = 503, description = "The audit record cannot be written; nothing was handed out", body = ErrorBody)
+        (status = 409, description = "No bootstrap_ca_key_file is configured, the bootstrap CA has ended, or the record is full", body = ErrorBody)
     )
 )]
 async fn issue_bootstrap_certificate(
@@ -2645,26 +2619,13 @@ async fn issue_bootstrap_certificate(
     };
     match issued {
         Ok(pair) => {
-            // The key leaves only once the issuance is on the record (ADR-0022): a refused record
-            // leaves a listed, revocable entry and no key in anyone's hands.
-            if let Some(audit) = state.audit() {
-                let recorded = audit.record(
-                    crate::audit::Entry::new("enrolment.bootstrap_issued", "issued")
-                        .with("serial", pair.serial.clone())
-                        .with("subject", pair.subject.clone())
-                        .with("not_after_ms", pair.not_after_ms)
-                        .with("p12", "true"),
-                );
-                if recorded.is_err() {
-                    // Nor later: an issuance that is not on the record keeps no file to download.
-                    let _ = bootstrap.forget_p12(&pair.serial);
-                    return error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "the audit record cannot be written now; nothing was handed out",
-                    );
-                }
-            }
-            info!(serial = %pair.serial, subject = %pair.subject, "bootstrap certificate issued");
+            info!(
+                event = "enrolment.bootstrap_issued",
+                serial = %pair.serial,
+                subject = %pair.subject,
+                not_after_ms = pair.not_after_ms,
+                "bootstrap certificate issued"
+            );
             (
                 StatusCode::CREATED,
                 [(header::CACHE_CONTROL, "no-store")],
@@ -2700,7 +2661,7 @@ async fn issue_bootstrap_certificate(
 }
 
 /// The PKCS#12 file of a bootstrap certificate, as often as it is asked,
-/// until the certificate ends or is revoked (ADR-0029 clause 4). Each download is on the record.
+/// until the certificate ends or is revoked (ADR-0029 clause 4). Each download is logged.
 #[utoipa::path(
     get,
     path = "/api/v1/bootstrap-certificates/{serial}/p12",
@@ -2708,8 +2669,7 @@ async fn issue_bootstrap_certificate(
     params(("serial" = String, Path, description = "the serial, as the list names it")),
     responses(
         (status = 200, description = "The PKCS#12 file, `bootstrap.p12`", content_type = "application/x-pkcs12", body = Vec<u8>),
-        (status = 404, description = "No such certificate, no file kept for it, revoked or ended — or enrolment is not configured", body = ErrorBody),
-        (status = 503, description = "The audit record cannot be written; nothing was handed out", body = ErrorBody)
+        (status = 404, description = "No such certificate, no file kept for it, revoked or ended — or enrolment is not configured", body = ErrorBody)
     )
 )]
 async fn download_bootstrap_p12(
@@ -2739,19 +2699,7 @@ async fn download_bootstrap_p12(
         let _ = bootstrap.forget_p12(&entry.serial);
         return none();
     }
-    if let Some(audit) = state.audit() {
-        let recorded = audit.record(
-            crate::audit::Entry::new("enrolment.bootstrap_p12_downloaded", "downloaded")
-                .with("serial", entry.serial.clone()),
-        );
-        if recorded.is_err() {
-            return error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the audit record cannot be written now; nothing was handed out",
-            );
-        }
-    }
-    info!(serial = %entry.serial, "bootstrap PKCS#12 file downloaded");
+    info!(event = "enrolment.bootstrap_p12_downloaded", serial = %entry.serial, "bootstrap PKCS#12 file downloaded");
     (
         StatusCode::OK,
         [
@@ -2778,8 +2726,7 @@ async fn download_bootstrap_p12(
         (status = 204, description = "Deleted from the record; the revocation stays"),
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
         (status = 404, description = "No such certificate on record, or enrolment is not configured", body = ErrorBody),
-        (status = 409, description = "The certificate is not revoked — revoke it first", body = ErrorBody),
-        (status = 503, description = "The audit record cannot be written; nothing was deleted", body = ErrorBody)
+        (status = 409, description = "The certificate is not revoked — revoke it first", body = ErrorBody)
     )
 )]
 async fn delete_bootstrap_certificate(
@@ -2796,20 +2743,9 @@ async fn delete_bootstrap_certificate(
             .revocations()
             .is_some_and(|revocations| revocations.is_certificate_revoked(&entry.id))
     };
-    let recorded = |entry: &crate::bootstrap::Entry| {
-        state.audit().is_none_or(|audit| {
-            audit
-                .record(
-                    crate::audit::Entry::new("enrolment.bootstrap_deleted", "deleted")
-                        .with("serial", entry.serial.clone())
-                        .with("subject", entry.subject.clone()),
-                )
-                .is_ok()
-        })
-    };
-    match bootstrap.delete(&serial, revoked, recorded) {
+    match bootstrap.delete(&serial, revoked) {
         Ok(entry) => {
-            info!(serial = %entry.serial, "revoked bootstrap certificate deleted from the record");
+            info!(event = "enrolment.bootstrap_deleted", serial = %entry.serial, subject = %entry.subject, "revoked bootstrap certificate deleted from the record");
             StatusCode::NO_CONTENT.into_response()
         }
         Err(DeleteError::NotFound) => error(
@@ -2819,10 +2755,6 @@ async fn delete_bootstrap_certificate(
         Err(DeleteError::NotRevoked) => error(
             StatusCode::CONFLICT,
             format!("the bootstrap certificate {serial:?} is not revoked — revoke it first"),
-        ),
-        Err(DeleteError::Unrecorded) => error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the audit record cannot be written now; nothing was deleted",
         ),
         Err(DeleteError::Failed(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -2883,10 +2815,12 @@ async fn open_enrolment_window(
     };
     match enrolment.open(spec.open_for_secs) {
         Ok(until) => {
-            info!(secs = spec.open_for_secs, "enrolment window opened");
-            note(
-                &state,
-                crate::audit::Entry::new("enrolment.window", "opened").with("until_ms", until),
+            info!(
+                event = "enrolment.window",
+                outcome = "opened",
+                secs = spec.open_for_secs,
+                until_ms = until,
+                "enrolment window opened"
             );
             window_view(Some(until))
         }
@@ -2905,7 +2839,7 @@ async fn open_enrolment_window(
     path = "/api/v1/enrolment/window",
     tag = "enrolment",
     responses(
-        (status = 204, description = "Closed"),
+        (status = 204, description = "Closed, or no window was open"),
         (status = 404, description = "Enrolment is not configured", body = ErrorBody),
         (status = 500, description = "Closed, but not persisted: a restart may find the window open until its end", body = ErrorBody)
     )
@@ -2914,14 +2848,18 @@ async fn close_enrolment_window(State(state): State<Arc<AppState>>) -> Response 
     let Some(enrolment) = state.enrolment() else {
         return enrolment_off();
     };
-    let expired = enrolment.pending().len();
-    let saved = enrolment.close();
-    info!("enrolment window closed");
-    note(
-        &state,
-        crate::audit::Entry::new("enrolment.window", "closed").with("expired_requests", expired),
-    );
-    match saved {
+    // Written every time, so a close whose write failed is written by the next; only the close of
+    // a window that was open is an event.
+    let closed = enrolment.close();
+    if let Some(expired) = closed.expired_requests {
+        info!(
+            event = "enrolment.window",
+            outcome = "closed",
+            expired_requests = expired,
+            "enrolment window closed"
+        );
+    }
+    match closed.saved {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2965,8 +2903,8 @@ async fn list_enrolments(State(state): State<Arc<AppState>>) -> Response {
     Json(pending).into_response()
 }
 
-/// The host of the Gateway a pending request came through, which every audit entry of it names
-/// (ADR-0039 clause 12).
+/// The host of the Gateway a pending request came through, which every log line of a decision on
+/// it names (ADR-0039 clause 12).
 fn through_gateway(state: &AppState, id: &str) -> Option<String> {
     state
         .enrolment()?
@@ -2988,7 +2926,7 @@ fn through_gateway(state: &AppState, id: &str) -> Option<String> {
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
         (status = 404, description = "No such pending request, or enrolment is not configured", body = ErrorBody),
         (status = 409, description = "The CA could not sign the request, its bootstrap certificate is revoked, or that certificate's subject breaks the rules of ADR-0036 clause 1 — the message names the attribute, and nothing is signed", body = ErrorBody),
-        (status = 500, description = "The approval could not be persisted; the request still waits", body = ErrorBody)
+        (status = 500, description = "Approved and its certificate recorded, but the approval could not be persisted: its host collects the certificate, and a restart may list the request again", body = ErrorBody)
     )
 )]
 async fn approve_enrolment(
@@ -2999,13 +2937,7 @@ async fn approve_enrolment(
     let gateway = through_gateway(&state, &id);
     match state.approve_enrolment(&id) {
         Ok(()) => {
-            info!(request = %id, "enrolment request approved");
-            note(
-                &state,
-                crate::audit::Entry::new("enrolment.approved", "approved")
-                    .with("id", id.clone())
-                    .with("gateway", gateway),
-            );
+            info!(event = "enrolment.approved", request = %id, gateway, "enrolment request approved");
             StatusCode::NO_CONTENT.into_response()
         }
         Err(crate::enrolment::DecisionError::NotFound) => error(
@@ -3022,10 +2954,25 @@ async fn approve_enrolment(
         Err(
             crate::enrolment::DecisionError::Subject(e) | crate::enrolment::DecisionError::Sign(e),
         ) => error(StatusCode::CONFLICT, e),
-        Err(crate::enrolment::DecisionError::Store(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("the approval could not be persisted, and the request still waits: {e}"),
-        ),
+        Err(crate::enrolment::DecisionError::Store(e)) => {
+            // Approved all the same: the certificate is signed and recorded.
+            info!(
+                event = "enrolment.approved",
+                request = %id,
+                gateway,
+                persisted = false,
+                error = %e,
+                "enrolment request approved, but the approval could not be persisted"
+            );
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "approved, and its certificate recorded, but the approval could not be \
+                     persisted — its host collects the certificate; a restart may list the \
+                     request again: {e}"
+                ),
+            )
+        }
     }
 }
 
@@ -3053,13 +3000,7 @@ async fn reject_enrolment(
     let gateway = through_gateway(&state, &id);
     match enrolment.reject(&id) {
         Ok(()) => {
-            info!(request = %id, "enrolment request rejected");
-            note(
-                &state,
-                crate::audit::Entry::new("enrolment.rejected", "rejected")
-                    .with("id", id.clone())
-                    .with("gateway", gateway),
-            );
+            info!(event = "enrolment.rejected", request = %id, gateway, "enrolment request rejected");
             StatusCode::NO_CONTENT.into_response()
         }
         Err(crate::enrolment::DecisionError::Store(e)) => error(
@@ -3225,29 +3166,6 @@ impl RevocationView {
     }
 }
 
-/// Records what an operator act did, beside the act itself (ADR-0022 clause 1). The act was
-/// already recorded before it ran, so a detail that cannot be recorded changes nothing.
-fn note(state: &AppState, entry: crate::audit::Entry) {
-    if let Some(audit) = state.audit() {
-        audit.refusal(entry);
-    }
-}
-
-fn revocation_entry(
-    event: &str,
-    outcome: &str,
-    entry: &crate::revocation::Revocation,
-) -> crate::audit::Entry {
-    let crate::revocation::Revoked::Certificate {
-        authority, serial, ..
-    } = &entry.revoked;
-    crate::audit::Entry::new(event, outcome)
-        .with("id", entry.id.clone())
-        .with("kind", "certificate")
-        .with("authority", authority.clone())
-        .with("serial", serial.clone())
-}
-
 fn revocation_off() -> Response {
     error(StatusCode::NOT_FOUND, "revocation is not configured")
 }
@@ -3366,15 +3284,7 @@ async fn set_gateway(
     }
     match state.set_gateway(&host, request.gateway) {
         Ok(true) => {
-            info!(%host, gateway = request.gateway, "gateway mark set");
-            note(
-                &state,
-                crate::audit::Entry::new(
-                    "host.gateway",
-                    if request.gateway { "set" } else { "cleared" },
-                )
-                .with("host", host),
-            );
+            info!(event = "host.gateway", %host, gateway = request.gateway, "gateway mark set");
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => error(StatusCode::NOT_FOUND, format!("no host {host:?}")),
@@ -3446,23 +3356,35 @@ async fn revoke(
         revocations.revoke_certificate(&request.certificate.authority, &request.certificate.serial);
     match outcome {
         Ok(entry) => {
-            info!(revocation = %entry.id, "revoked");
             // A revoked bootstrap certificate's PKCS#12 file goes before the answer (ADR-0029
             // clause 4); the download refuses it either way.
             let crate::revocation::Revoked::Certificate {
                 authority, serial, ..
             } = &entry.revoked;
-            let mut withdrawn = 0;
-            if authority == "bootstrap" {
-                // The requests it carried wait no longer (ADR-0021 clause 35); approving one is
-                // refused either way.
-                withdrawn = state.enrolment().map_or(0, |enrolment| {
+            // The requests it carried wait no longer (ADR-0021 clause 35); approving one is refused
+            // either way.
+            let withdrawn = if authority == "bootstrap" {
+                state.enrolment().map_or(0, |enrolment| {
                     enrolment.withdraw(&|bootstrap| revocations.is_certificate_revoked(bootstrap))
-                });
+                })
+            } else {
+                0
+            };
+            // Logged before the file goes, so a file that cannot be removed hides no revocation.
+            info!(
+                event = "revocation.revoked",
+                revocation = %entry.id,
+                kind = "certificate",
+                authority = %authority,
+                serial = %serial,
+                withdrawn_requests = withdrawn,
+                "revoked"
+            );
+            if authority == "bootstrap" {
                 if let Some(Err(e)) = state.bootstrap().map(|b| b.forget_p12(serial)) {
                     // Said, not swallowed: lifting this revocation would make the file
                     // downloadable again.
-                    warn!(serial = %serial, "cannot remove the revoked PKCS#12 file: {e}");
+                    warn!(revocation = %entry.id, serial = %serial, "cannot remove the revoked PKCS#12 file: {e}");
                     return error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!(
@@ -3472,11 +3394,6 @@ async fn revoke(
                     );
                 }
             }
-            note(
-                &state,
-                revocation_entry("revocation.revoked", "revoked", &entry)
-                    .with("withdrawn_requests", withdrawn),
-            );
             (StatusCode::CREATED, Json(RevocationView::of(entry))).into_response()
         }
         Err(RevokeError::Invalid(e)) => error(StatusCode::BAD_REQUEST, e),
@@ -3491,7 +3408,9 @@ async fn revoke(
     }
 }
 
-/// Lifts one revocation. It takes effect at the next connection.
+/// Lifts one revocation. It takes effect at the next connection. A lifted bootstrap certificate
+/// gets no PKCS#12 file back (ADR-0029 clause 4): one its revocation could not forget is forgotten
+/// first, and the revocation stays while that fails.
 #[utoipa::path(
     delete,
     path = "/api/v1/revocations/{id}",
@@ -3500,7 +3419,8 @@ async fn revoke(
     responses(
         (status = 204, description = "Lifted"),
         (status = 403, description = "Refused as a cross-site request (Sec-Fetch-Site)", body = ErrorBody),
-        (status = 404, description = "No such revocation, or revocation is not configured", body = ErrorBody)
+        (status = 404, description = "No such revocation, or revocation is not configured", body = ErrorBody),
+        (status = 500, description = "Not lifted: the list could not be written, or the revoked bootstrap certificate's PKCS#12 file could not be removed — on a Server without [enrolment] it cannot be", body = ErrorBody)
     )
 )]
 async fn lift_revocation(
@@ -3511,13 +3431,45 @@ async fn lift_revocation(
     let Some(revocations) = state.revocations() else {
         return revocation_off();
     };
+    // The file goes before the revocation does. Its entry on disk and in memory change together,
+    // so a file still marked as kept is one the revocation still stands over, also after a
+    // restart.
+    let bootstrap_serial = revocations
+        .list()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .and_then(|entry| match entry.revoked {
+            crate::revocation::Revoked::Certificate {
+                authority, serial, ..
+            } => (authority == "bootstrap").then_some(serial),
+        });
+    if let Some(serial) = bootstrap_serial {
+        // Without `[enrolment]` there is no record to forget the file in, and a Server with it
+        // again would hand the file out once the revocation is gone.
+        let Some(bootstrap) = state.bootstrap() else {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "not lifted: {id:?} revokes the bootstrap certificate {serial}, and without \
+                     [enrolment] this Server cannot remove its PKCS#12 file — lift it on a Server \
+                     with [enrolment]"
+                ),
+            );
+        };
+        if let Err(e) = bootstrap.forget_p12(&serial) {
+            warn!(revocation = %id, serial = %serial, "cannot remove the revoked PKCS#12 file: {e}");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "not lifted: the PKCS#12 file of the bootstrap certificate {serial} could not \
+                     be removed, and lifting the revocation would hand it out again: {e}"
+                ),
+            );
+        }
+    }
     match revocations.lift(&id) {
         Ok(true) => {
-            info!(revocation = %id, "revocation lifted");
-            note(
-                &state,
-                crate::audit::Entry::new("revocation.lifted", "lifted").with("id", id.clone()),
-            );
+            info!(event = "revocation.lifted", revocation = %id, "revocation lifted");
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => error(StatusCode::NOT_FOUND, format!("no revocation {id:?}")),

@@ -7,11 +7,11 @@
   clauses 1, 2, 6, 7, 8, 9, 11 and 13 superseded by
   [ADR-0050](0050-the-servers-records-may-live-in-postgresql.md)
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the storage ports in `crates/fleet-server/src/`
   (`agent_store.rs`, `configs.rs`, `deployments.rs`, `packages.rs`,
-  `bootstrap.rs`, `enrolment.rs`, `revocation.rs`, `audit.rs`) and every adapter
-  under `crates/fleet-server/src/fs/`, the wiring in
+  `bootstrap.rs`, `enrolment.rs`, `revocation.rs`) and every adapter under
+  `crates/fleet-server/src/fs/`, the wiring in
   `crates/fleet-server/src/lib.rs` and `crates/fleet-server/src/main.rs`,
   `data_dir`, `config_dir` and `packages_dir` in `server.toml` and
   `crates/fleet-server/src/config.rs`, the `server migrate` command,
@@ -20,7 +20,6 @@
 - **Supersedes:**
   [ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
   clauses 20, 33 and 37;
-  [ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md) clause 4;
   [ADR-0023](0023-configurations-and-the-rest-api.md) clause 10;
   [ADR-0024](0024-the-fleet-record.md) clause 3;
   [ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
@@ -105,9 +104,8 @@ the Server names instead of reading an old layout.
      its parent directory hands down. Restricting it to the Server's account is
      then the operator's, as no installer exists for the Server there.
    - Every record is written through a temporary file and a rename. Where a
-     record answers a security decision (the register, the revocation list, the
-     audit), the rename is synced to disk before the decision is answered, as
-     today.
+     record answers a security decision (the register, the revocation list),
+     the rename is synced to disk before the decision is answered, as today.
 
 2. **The layout is fixed, and no other is read.** Under `data_dir`:
 
@@ -123,7 +121,6 @@ the Server names instead of reading an old layout.
    | `revocations.json`                         | the revocation list                          | Revocations                                                                                              |
    | `bootstrap/<issuer>-<serial>.json`, `.p12` | bootstrap certificate the Server issued      | Bootstrap                                                                                                |
    | `enrolment.json`                           | the window and its pending requests          | Enrolment (clause 9)                                                                                     |
-   | `audit/audit-<first seq>.jsonl`            | audit file                                   | Audit                                                                                                    |
 
    `<issuer>` is the first 16 hex characters of the SHA-256 of the issuer's DER
    name, and `<serial>` is the serial in the register's lowercase hex form. A
@@ -247,17 +244,9 @@ the Server names instead of reading an old layout.
     is valid. An entry for a certificate the register never held stays until an
     operator removes it.
 
-12. **Restates ADR-0022 clause 4. The file.**
-    - The audit is written to `data_dir/audit/audit-<first seq>.jsonl`. The
-      directory is `0700` and each file `0600` on Unix, under the data root's
-      restricted ACL on Windows.
-    - Each entry is one line. It is written with a single append and synced to
-      disk by one writer thread of its own, in the order the decisions were
-      taken. A write that fails partway is cut back to the last whole line.
-    - A file reaching `[audit] max_file_bytes` (default 64 MiB) is closed and a
-      new one opened. The Server keeps `[audit] keep_files` files (default 16)
-      and deletes the oldest. Before it does, it records `audit.rotated` with
-      the deleted file's last hash.
+12. **No audit file.** `data_dir` holds no `audit/`, since the Server keeps no
+    audit record
+    ([ADR-0022](0022-security-decisions-are-structured-log-events.md) clause 5).
 
 13. **Restates ADR-0029 clause 4. The Server records what it issued, keyed by
     issuer and serial, and keeps a PKCS#12 file until its certificate ends, is
@@ -284,13 +273,11 @@ the Server names instead of reading an old layout.
       answered `409`.
     - A bootstrap certificate is revoked as ADR-0021 clause 34 states, with the
       authority `bootstrap`.
-    - The audit records each issuance as `enrolment.bootstrap_issued`, with
-      serial, subject, `not_after` and `p12`. It records each download of a
-      PKCS#12 file as `enrolment.bootstrap_p12_downloaded` with the serial. It
-      records each deletion as `enrolment.bootstrap_deleted` with the serial and
-      subject ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)).
-    - When the audit cannot be written, nothing is handed out or deleted, and
-      the request is answered `503`.
+    - Each issuance is logged as `enrolment.bootstrap_issued`, with serial,
+      subject and `not_after_ms`. Each download of a PKCS#12 file is logged
+      as `enrolment.bootstrap_p12_downloaded` with the serial. Each deletion is
+      logged as `enrolment.bootstrap_deleted` with the serial and subject
+      ([ADR-0022](0022-security-decisions-are-structured-log-events.md)).
 
 14. **An old layout is moved by `server migrate`, offline, and the Server never
     reads it.**
@@ -300,9 +287,11 @@ the Server names instead of reading an old layout.
       backup.
     - What it does with each kind of data:
       - **Trust data:** the certificate register, the revocation list, the host
-        register, bootstrap entries with their PKCS#12 files, and the audit
-        files are carried over whole. The audit chain is kept: its lines are
-        copied, not rewritten.
+        register, and bootstrap entries with their PKCS#12 files are carried
+        over whole.
+      - **Audit files** are not carried: the Server keeps no audit record
+        (ADR-0022). The migration names them and leaves them in the old
+        directory.
       - **Packages:** artifacts go to `blobs/`. Each entry takes the signature a
         Deployment held for it. The statement names no Deployment, so these are
         the same bytes wherever the entry was held; when two Deployments held
@@ -356,9 +345,9 @@ first such change decides.
 
 - `crates/fleet-server/src/lib.rs`, `main.rs`, `fs/*.rs`: today's roots,
   subdirectories and loaders. Read in the source.
-- ADR-0006 (ports and adapters), ADR-0021 clauses 20, 33 and 37, ADR-0022 clause
-  4, ADR-0023 clause 10, ADR-0024 clauses 3 and 20, ADR-0026 clauses 1 and 19
-  with the rejected reader for old shapes, ADR-0029 clause 4.
+- ADR-0006 (ports and adapters), ADR-0021 clauses 20, 33 and 37, ADR-0023
+  clause 10, ADR-0024 clauses 3 and 20, ADR-0026 clauses 1 and 19 with the
+  rejected reader for old shapes, ADR-0029 clause 4.
 - The target architecture's working note "server split" (PostgreSQL, S3
   content-addressed, active-active), recorded outside the ADRs.
 - The working note of 2026-10-17 on the Server's data model, in which the human
@@ -401,7 +390,7 @@ Tests that will carry `Verifies: ADR-0037`:
 - A crash between the revision write and the assignment writes of a rollout
   leaves a state the next load accepts, with the orphaned revision collected.
 - `server migrate` over a fixture of the old layout carries the register, the
-  revocation list, the hosts, the bootstrap entries, the audit files, the Agents
-  with their labels, and the artifacts with their signatures. It drops a
-  referenced entry and lists every Configuration's old Selector. It refuses a
-  `data_dir` that is not empty.
+  revocation list, the hosts, the bootstrap entries, the Agents with their
+  labels, and the artifacts with their signatures. It drops a referenced entry,
+  names the audit files it leaves behind, and lists every Configuration's old
+  Selector. It refuses a `data_dir` that is not empty.

@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the password rule of `crates/fleet-core/src/pkcs12.rs` and its
   callers, the password field of the Enrolments tab of the bundled UI in
   `crates/fleet-server/static/index.html`, the `400` text of
@@ -42,9 +42,8 @@ control characters in place of ADR-0030's 4 to 128.
    without control characters.** Anything else is answered `400`. The rule
    applies where a password is chosen, when a bootstrap certificate is issued; a
    file issued before opens with the password it was issued under. The password
-   is not stored, logged or audited anywhere, on the Server or on the host. It
-   reaches the Server on the Operator plane, which beyond the loopback serves
-   TLS only
+   is not stored or logged anywhere, on the Server or on the host. It reaches
+   the Server on the Operator plane, which beyond the loopback serves TLS only
    ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
    clause 17).
 

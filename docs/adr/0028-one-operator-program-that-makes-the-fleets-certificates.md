@@ -9,7 +9,7 @@
   · clause 20 superseded by
   [ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the `pki` commands of `opamp-fleetctl` in
   `crates/fleet-tools/` and the module that carries them, the Server's
   `pki status` command in `crates/fleet-server/src/main.rs` and the module that
@@ -177,14 +177,14 @@ needs `openssl` or another external tool and no certificate ends unannounced.
    `opamp-fleetctl pki bootstrap-ca` makes a new bootstrap CA to replace the
    Server's. `opamp-fleetctl pki status` says when the certificates in the
    offline directory end, and `server pki status` says when those of the Server
-   host end. The Server's command runs and exits like `hash-credential` and
-   `audit-verify`, before the Server starts serving. The Server binary carries
-   no code that makes a CA or a server certificate. It signs host certificates
-   (ADR-0021 clause 9) and bootstrap certificates (clause 21). When a
-   certificate counts as ending (clause 11) is one rule in `fleet-core`, plain
-   date arithmetic, so both commands and the running Server judge alike, and
-   each program reads the certificate itself. None of the commands makes a host
-   certificate or a bootstrap certificate.
+   host end. The Server's command runs and exits like `hash-credential`, before
+   the Server starts serving. The Server binary carries no code that makes a CA
+   or a server certificate. It signs host certificates (ADR-0021 clause 9) and
+   bootstrap certificates (clause 21). When a certificate counts as ending
+   (clause 11) is one rule in `fleet-core`, plain date arithmetic, so both
+   commands and the running Server judge alike, and each program reads the
+   certificate itself. None of the commands makes a host certificate or a
+   bootstrap certificate.
 
 2. **No dependency beyond ADR-0021 clause 12.** The commands use `rcgen` with
    the features that clause states, and `time`. Every key is ECDSA P-256 and
@@ -274,9 +274,9 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     (`[enrolment] bootstrap_ca_file`). One that ends within 30 days — or, for a
     certificate whose whole life is shorter than 90 days, within the last third
     of it — is _ending_: it is logged as a warning naming the file, its subject
-    and the date, and recorded in the audit as `pki.expiring`; one that has
-    ended is logged as an error and recorded as `pki.expired`
-    ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)). Neither
+    and the date, as event `pki.expiring`; one that has ended is logged as an
+    error, as event `pki.expired`
+    ([ADR-0022](0022-security-decisions-are-structured-log-events.md)). Neither
     stops the Server: the hosts it serves decide for themselves, and a Server
     that refuses to start cannot be told to renew.
 
@@ -363,8 +363,8 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     `private_key_pem`, under `Cache-Control: no-store`. The certificate is
     `CA:FALSE`, `digitalSignature`, `clientAuth`, with a 16-byte random serial
     (ADR-0021 clause 32) and no subject alternative name. The private key exists
-    only in that response: it is not stored, not logged and not audited, and a
-    lost key is replaced by issuing again.
+    only in that response: it is neither stored nor logged, and a lost key is
+    replaced by issuing again.
 
 22. **The operator names the organization, and the Server the rest.** `subject`
     takes `organization` (O) and `organizational_unit` (OU), each optional and
@@ -387,8 +387,8 @@ needs `openssl` or another external tool and no certificate ends unannounced.
     certificate has ended. At most 10 000 valid entries are kept, and a request
     beyond that is answered `409`. A bootstrap certificate is revoked as
     ADR-0021 clause 34 states, with the authority `bootstrap`. Each issuance is
-    recorded in the audit as `enrolment.bootstrap_issued` with serial, subject
-    and `not_after` (ADR-0022).
+    logged as `enrolment.bootstrap_issued` with serial, subject and
+    `not_after_ms` (ADR-0022).
 
 25. **The Enrolments tab issues, lists and revokes bootstrap certificates.** The
     tab issues one with the organization, the organizational unit and the
@@ -467,12 +467,11 @@ the upload `package fetch` makes.
 - **Keep `openssl` and document it better.** Rejected: the rules stay in prose
   an operator has to get right by hand, and a system tool whose behaviour
   differs between versions stays a prerequisite of every fleet.
-- **All the commands on the Server binary,** beside `pki status`,
-  `hash-credential` and `audit-verify`. The Server binary is certain to be at
-  hand, but it is the binary of the host the package signing key and the server
-  CA's key are kept away from, and the archive writers and the release fetcher
-  would be linked into the binary that faces the fleet — attack surface with no
-  use in serving
+- **All the commands on the Server binary,** beside `pki status` and
+  `hash-credential`. The Server binary is certain to be at hand, but it is the
+  binary of the host the package signing key and the server CA's key are kept
+  away from, and the archive writers and the release fetcher would be linked
+  into the binary that faces the fleet — attack surface with no use in serving
   ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
   clause 6 has the Server never create or open an artifact). With the operator
   tool published, the one argument for it — no second binary to obtain — is
@@ -531,7 +530,7 @@ the upload `package fetch` makes.
   need if the bootstrap certificate's subject is ever carried over.
 - **Match an enrolment request to its bootstrap certificate by the certificate's
   fingerprint.** The record would keep the SHA-256 of the whole certificate as
-  well, but the operator revokes and reads the audit by serial, so the
+  well, but the operator revokes and reads the log by serial, so the
   fingerprint would be a second name for the same entry (ADR-0021 clause 22).
 - **Shorter lifetimes for the server CA and the client CA too.** The online
   client CA's key would be replaced more often, but replacing it means every
@@ -653,7 +652,7 @@ the upload `package fetch` makes.
   else (G-17, Q-1); the requirements a hand-made certificate can miss are
   written once, in code that is tested; the offline keys have a place of their
   own from the first command on; an ending CA or server certificate is announced
-  30 days ahead in the log, the audit and a command a monitor can run.
+  30 days ahead in the log and by a command a monitor can run.
 - Positive: an operator downloads one program and can make the fleet's
   certificates, a signing key and signed packages without a toolchain (G-10,
   G-17, Q-1); the two keys that stay on the operator's machine, the server CA's
@@ -754,13 +753,15 @@ Tests that will carry `Verifies: ADR-0028`:
 - `POST /api/v1/bootstrap-certificates` answers `201` with a certificate the
   bootstrap CA signed, `CA:FALSE`, `clientAuth`, the requested subject, and a
   key that matches it, under `Cache-Control: no-store`. Nothing under
-  `config_dir` and no audit entry contains the private key (clause 21).
+  `config_dir` and no log line contains the private key (clause 21); that no
+  log line does is decided by `no_secret_reaches_the_log` in
+  `crates/fleet-server/tests/no_secret_in_the_log.rs`.
 - An unknown subject key such as `common_name` or `country`, a value over 64
   characters or with a control character, and `validity_days` of 0 or 91 are
   each answered `400`. An empty `subject` is accepted, and a certificate asked
   to outlive the bootstrap CA ends with it (clauses 22 and 23).
 - An issued certificate appears in `GET /api/v1/bootstrap-certificates`, is
-  recorded as `enrolment.bootstrap_issued`, enrols a host whose request lists
+  logged as `enrolment.bootstrap_issued`, enrols a host whose request lists
   its subject, and, once revoked by its serial, fails admission (clause 24).
 - `pki bootstrap-ca` writes a CA the Server starts on (clause 8).
 - A host certificate the Server signs from a CSR with `CN=evil, O=Other` has the

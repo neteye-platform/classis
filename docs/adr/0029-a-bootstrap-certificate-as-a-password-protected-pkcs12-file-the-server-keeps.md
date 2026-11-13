@@ -9,7 +9,7 @@
   · clause 13 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-14
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the bootstrap-certificate routes of the Operator plane in
   `crates/fleet-server/src/api.rs` and the module that issues and records
   bootstrap certificates, the `bootstrap-certificates/` directory under
@@ -111,10 +111,9 @@ revocation on the revocation list.
    and the Client reads it with `p12-keystore` (clause 14).
 
 2. **A password is 12 to 128 characters of UTF-8 without control characters.**
-   Anything else is answered `400`. The password is not stored, logged or
-   audited anywhere, on the Server or on the host. It reaches the Server on the
-   Operator plane, which beyond the loopback serves TLS only (ADR-0021 clause
-   17).
+   Anything else is answered `400`. The password is not stored or logged
+   anywhere, on the Server or on the host. It reaches the Server on the Operator
+   plane, which beyond the loopback serves TLS only (ADR-0021 clause 17).
 
 3. **Restates ADR-0028 clause 21. The Server issues a bootstrap certificate on
    request.** `POST /api/v1/bootstrap-certificates` with a JSON body
@@ -127,8 +126,7 @@ revocation on the revocation list.
    - **Without `password`** it answers `201` with `serial`, `subject`,
      `not_before`, `not_after`, `certificate_pem` and `private_key_pem`, under
      `Cache-Control: no-store`. The private key exists only in that response: it
-     is not stored, not logged and not audited, and a lost key is replaced by
-     issuing again.
+     is neither stored nor logged, and a lost key is replaced by issuing again.
    - **With `password`** it makes the PKCS#12 file of clause 1, writes it as
      clause 4 says, and answers `201` with `serial`, `subject`, `not_before`,
      `not_after` and `certificate_pem`, and no `private_key_pem`. The key exists
@@ -155,14 +153,11 @@ revocation on the revocation list.
    revocation (ADR-0021 clause 38) does not bring it back. At most 10 000 valid
    entries are kept, and a request beyond that is answered `409`. A bootstrap
    certificate is revoked as ADR-0021 clause 34 states, with the authority
-   `bootstrap`. Each issuance is recorded in the audit as
-   `enrolment.bootstrap_issued` with serial, subject, `not_after` and `p12`,
-   each download of a PKCS#12 file as `enrolment.bootstrap_p12_downloaded` with
-   the serial, and each deletion as `enrolment.bootstrap_deleted` with the
-   serial and subject
-   ([ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md)). When the
-   audit cannot be written, nothing is handed out or deleted and the request is
-   answered `503`.
+   `bootstrap`. Each issuance is logged as `enrolment.bootstrap_issued` with
+   serial, subject and `not_after_ms`, each download of a PKCS#12 file as
+   `enrolment.bootstrap_p12_downloaded` with the serial, and each deletion as
+   `enrolment.bootstrap_deleted` with the serial and subject
+   ([ADR-0022](0022-security-decisions-are-structured-log-events.md)).
 
 5. **Restates ADR-0028 clause 25. The Enrolments tab issues, lists, revokes and
    deletes bootstrap certificates.** The tab issues one with the organization,
@@ -477,7 +472,7 @@ revocation on the revocation list.
   clauses 10, 12, 16, 17, 21, 22, 32, 34, 37, 38 and 39;
   [ADR-0028](0028-one-operator-program-that-makes-the-fleets-certificates.md)
   clauses 3, 21, 24, 25 and 29;
-  [ADR-0022](0022-an-append-only-audit-record-chained-by-hash.md).
+  [ADR-0022](0022-security-decisions-are-structured-log-events.md).
 - RFC 7292, PKCS #12 v1.1: <https://www.rfc-editor.org/rfc/rfc7292>. RFC 8018,
   PKCS #5 v2.1 (PBES2, PBKDF2): <https://www.rfc-editor.org/rfc/rfc8018>.
 - RFC 9579, PBMAC1 in PKCS #12, obsoleted by RFC 9879 — the MAC this ADR does
@@ -535,7 +530,7 @@ revocation on the revocation list.
   host until someone removes it, as the pair does today.
 - Positive: a revoked certificate leaves the list in two presses instead of
   staying up to 90 days, no longer counts toward the 10 000 entries, and every
-  deletion is on the audit record.
+  deletion is logged.
 - Negative / trade-offs: a deleted entry's revocation lives on in the revocation
   list, where only `GET /api/v1/revocations` shows it; a pending request that
   still carries the certificate reads _not issued here_, which hides that this
@@ -556,8 +551,9 @@ Tests that will carry `Verifies: ADR-0029`:
   to 128 characters is answered `400` (clauses 2–4).
 - The download route answers `404` after the certificate is revoked or has
   ended, and the file is gone from `config_dir` (clause 4).
-- Issuance and download write their audit entries, and neither entry nor any log
-  line holds the password (clauses 2 and 4).
+- Issuance and download log their events, and no log line holds the password
+  or the key: `no_secret_reaches_the_log` in
+  `crates/fleet-server/tests/no_secret_in_the_log.rs` (clauses 2 and 4).
 - `bootstrap.p12` is found beside the program; lying beside a file of the pair,
   neither is taken (clause 6).
 - With `--fleet-files <dir>` the files are found in `<dir>` and not beside the
@@ -572,11 +568,11 @@ Tests that will carry `Verifies: ADR-0029`:
   enrols; without the flag, or with the flag and no file, it fails before
   writing anything (clause 10).
 - Deleting a revoked entry answers `204`, removes the entry and its PKCS#12 file
-  from `config_dir`, writes `enrolment.bootstrap_deleted`, and leaves the
+  from `config_dir`, logs `enrolment.bootstrap_deleted`, and leaves the
   revocation on the list: the certificate is still refused at the handshake
   (clauses 4 and 15).
-- Deleting a valid entry answers `409`, an unknown serial `404`, and a refused
-  audit `503` with the entry kept (clauses 4 and 15).
+- Deleting a valid entry answers `409` and an unknown serial `404` (clauses 4
+  and 15).
 - A fuzz target for the Client's PKCS#12 reader runs in CI (Q-2).
 - `cargo deny` keeps `rc2` and `des` out of the graph: a `[bans]` entry names
   them (clause 14).

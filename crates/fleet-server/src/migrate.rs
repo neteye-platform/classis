@@ -5,9 +5,10 @@
 //! the 0.5 releases wrote and no other. It copies and never moves, so the old directories stay as
 //! the backup, and it refuses a `data_dir` that is not empty. What it does with each kind of data:
 //!
-//! - **Trust data** — the certificate register, the revocation list, the hosts, the bootstrap
-//!   entries with their PKCS#12 files, and the audit files — is carried whole; the audit lines are
-//!   copied, not rewritten, so the chain holds. Trust data it cannot carry makes it exit non-zero.
+//! - **Trust data** — the certificate register, the revocation list, the hosts, and the bootstrap
+//!   entries with their PKCS#12 files — is carried whole. Trust data it cannot carry makes it exit
+//!   non-zero. The audit files a 0.5 Server wrote are not carried: this Server keeps no audit
+//!   record, so they are named and stay in the old directory.
 //! - **Packages:** each uploaded artifact becomes a blob; each entry takes the signature the
 //!   Deployments held for it — the same bytes wherever it was held, so differing ones leave the
 //!   entry unsigned, named — and a referenced entry is dropped, named. An artifact whose bytes do
@@ -84,7 +85,6 @@ pub fn run(config_dir: &Path, packages_dir: &Path, data_dir: &Path) -> Result<Re
     let mut report = Report::default();
     carry_register(config_dir, data_dir, &mut report)?;
     carry_bootstrap(config_dir, data_dir, &mut report)?;
-    carry_audit(config_dir, data_dir, &mut report)?;
     // The signatures come from the Deployments, and the Packages a Deployment keeps are the ones
     // carried: read the Deployments, carry the Packages, then write the Deployments.
     let (read, signatures) = read_deployments(packages_dir, &mut report)?;
@@ -220,51 +220,6 @@ fn carry_bootstrap(config_dir: &Path, data_dir: &Path, report: &mut Report) -> R
         "carried: {} bootstrap certificate(s), {files} with its PKCS#12 file",
         entries.len()
     ));
-    Ok(())
-}
-
-/// The audit files, byte for byte, so the chain holds.
-fn carry_audit(config_dir: &Path, data_dir: &Path, report: &mut Report) -> Result<(), String> {
-    let old = config_dir.join("audit");
-    let new = data_dir.join(fs::AUDIT);
-    let mut copied = Vec::new();
-    for (name, path) in listing(&old)? {
-        let is_audit = name
-            .strip_prefix("audit-")
-            .and_then(|rest| rest.strip_suffix(".jsonl"))
-            .is_some_and(|seq| seq.parse::<u64>().is_ok());
-        if !is_audit {
-            report.line(format!("skipped: {} — not an audit file", path.display()));
-            continue;
-        }
-        match copy_owner_only(&path, &new.join(&name)) {
-            Ok(()) => copied.push(new.join(&name)),
-            Err(e) => report.failed(format!("the audit file {}: {e}", path.display())),
-        }
-    }
-    let mut texts = Vec::new();
-    for file in fs::audit_files(&new)? {
-        let text = std::fs::read_to_string(&file)
-            .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
-        texts.push((file.display().to_string(), text));
-    }
-    let lines = texts.iter().flat_map(|(name, text)| {
-        text.lines()
-            .enumerate()
-            .filter(|(_, line)| !line.trim().is_empty())
-            .map(move |(index, line)| (format!("{name}:{}", index + 1), line))
-    });
-    match crate::audit_log::verify(lines) {
-        Ok(count) => report.line(format!(
-            "carried: {} audit file(s), {count} entries, the chain holds",
-            copied.len()
-        )),
-        // Copied as they were: a break the old files hold is reported, not repaired.
-        Err(e) => report.line(format!(
-            "carried: {} audit file(s) as they were — the chain breaks at {e}",
-            copied.len()
-        )),
-    }
     Ok(())
 }
 
@@ -558,9 +513,14 @@ fn carry_configurations(
     let backend = fs::FsConfigBackend::open(data_dir)?;
     for (name, path) in listing(config_dir)? {
         if path.is_dir() {
-            if !matches!(
+            if name == "audit" {
+                report.line(format!(
+                    "skipped: {} — the audit record is not carried; this Server keeps none",
+                    path.display()
+                ));
+            } else if !matches!(
                 name.as_str(),
-                "agents" | "labels" | "audit" | "revocation" | "bootstrap-certificates"
+                "agents" | "labels" | "revocation" | "bootstrap-certificates"
             ) {
                 report.line(format!(
                     "skipped: {} — not part of a 0.5 layout",
@@ -775,8 +735,7 @@ fn check_opens(data_dir: &Path, report: &mut Report) {
         .and_then(|()| crate::packages::PackageStore::open(data_dir.to_path_buf()).map(|_| ()))
         .and_then(|()| fs::FsDeploymentBackend::open(data_dir)?.load().map(|_| ()))
         .and_then(|()| fs::FsLedgerStore::open(data_dir)?.load().map(|_| ()))
-        .and_then(|()| fs::FsBootstrapStore::open(data_dir)?.load().map(|_| ()))
-        .and_then(|()| fs::FsAuditStore::open(data_dir).map(|_| ()));
+        .and_then(|()| fs::FsBootstrapStore::open(data_dir)?.load().map(|_| ()));
     match opened {
         Ok(()) => report.line(format!("opened: {} as the Server will", data_dir.display())),
         Err(e) => report.failed(format!("the new data directory does not open: {e}")),
@@ -821,8 +780,8 @@ mod tests {
 
     /// The layout a 0.5 Server wrote, file by file, in the shapes it wrote them: the register, a
     /// revocation list still holding a credential entry, the hosts, a bootstrap entry with its
-    /// PKCS#12 file, a chained audit file, Configurations with Selectors (one of them without an
-    /// Agent type), a Deployment with its
+    /// PKCS#12 file, an audit file, Configurations with Selectors (one of them without an Agent
+    /// type), a Deployment with its
     /// signatures, a Package with an uploaded and a referenced entry, Agents in envelope version
     /// 2 and their labels beside them.
     struct Old {
@@ -834,7 +793,6 @@ mod tests {
         bootstrap: BootstrapEntry,
         released: String,
         unreleased: String,
-        audit: String,
     }
 
     fn old_layout(root: &Path) -> Old {
@@ -896,16 +854,10 @@ mod tests {
         write(&config_dir.join("bootstrap-certificates/b5.p12"), b"sealed");
         write(&config_dir.join("bootstrap-certificates/c6.p12"), b"orphan");
 
-        let first = format!(
-            r#"{{"seq":1,"prev":"{}","event":"server.started"}}"#,
-            crate::audit_log::GENESIS
+        write(
+            &config_dir.join("audit/audit-1.jsonl"),
+            "{\"seq\":1,\"event\":\"server.started\"}\n",
         );
-        let second = format!(
-            r#"{{"seq":2,"prev":"{}","event":"enrolment.window"}}"#,
-            crate::audit_log::line_hash(&first)
-        );
-        let audit = format!("{first}\n{second}\n");
-        write(&config_dir.join("audit/audit-1.jsonl"), &audit);
 
         let (v1, v2) = (
             revision("receivers: {}\n"),
@@ -1013,15 +965,15 @@ mod tests {
             bootstrap,
             released,
             unreleased,
-            audit,
         }
     }
 
     /// `server migrate` over the layout a 0.5 Server wrote carries the register, the revocation
-    /// list, the hosts, the bootstrap entries, the audit files, the Agents with their labels, and
-    /// the artifacts with their signatures; it drops a referenced entry and lists every
-    /// Configuration's old Selector, and a Configuration without an Agent type it lists and does
-    /// not carry, leaving its file — and the new data directory opens as the Server opens it.
+    /// list, the hosts, the bootstrap entries, the Agents with their labels, and the artifacts with
+    /// their signatures, and names the audit files it leaves behind; it drops a referenced entry
+    /// and lists every Configuration's old Selector, and a Configuration without an Agent type it
+    /// lists and does not carry, leaving its file — and the new data directory opens as the Server
+    /// opens it.
     /// Verifies: ADR-0037
     #[test]
     fn migrate_carries_an_old_layout_into_a_data_directory() {
@@ -1053,12 +1005,14 @@ mod tests {
             Some(b"sealed".to_vec())
         );
         assert!(text.contains("c6.p12"), "the stray file is named: {text}");
-        assert_eq!(
-            std::fs::read_to_string(data_dir.join("audit/audit-1.jsonl")).expect("audit"),
-            old.audit,
-            "copied, not rewritten"
+        assert!(
+            !data_dir.join("audit").exists(),
+            "no audit record is carried"
         );
-        assert!(text.contains("the chain holds"), "{text}");
+        assert!(
+            text.contains("the audit record is not carried"),
+            "the audit files left behind are named: {text}"
+        );
 
         // Packages: the artifact is a blob, signed as its Deployments held it; the referenced
         // entry is dropped with a line.
