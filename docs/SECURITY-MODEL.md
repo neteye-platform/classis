@@ -73,6 +73,19 @@ too: gitleaks and `detect-private-key` in the pre-commit run, and the secret
 rules of Trivy and Semgrep on every pull request. They match known patterns; a
 secret in no pattern's shape passes them.
 
+One secret is the release's own: `PACKAGE_SIGNING_KEY`, the Ed25519 key every
+release signs the Client's archives with
+([ADR-0062](adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+It is a secret of the GitHub environment `signing`, not
+of the repository. Only the `sign` job names that environment, and it receives
+the key only on the push of a `version/*` tag and after a second person with
+write access approves the run. The job checks out no code and builds nothing,
+and it removes the key from the runner whatever the outcome. What this does not
+close: a repository admin can change the environment or replace the secret, a
+changed workflow on a tagged commit runs with the key once someone approves it,
+and a key that leaks signs Packages that every installation trusting it accepts
+until each changes its `verification_key`.
+
 ## Actions in the workflows
 
 Every action the workflows run, GitHub's own `actions/*` included, is pinned to
