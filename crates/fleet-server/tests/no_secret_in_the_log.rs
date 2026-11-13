@@ -129,6 +129,7 @@ async fn no_secret_reaches_the_log() {
             .arg("--config")
             .arg(&config)
             .env("RUST_LOG", "trace")
+            .env("NO_COLOR", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -222,9 +223,16 @@ async fn no_secret_reaches_the_log() {
         "operator.refused",
         "enrolment.bootstrap_issued",
         "enrolment.bootstrap_p12_downloaded",
+        "operator.act",
     ] {
         assert!(log.contains(event), "no {event} in the log: {log}");
     }
+    // An act names the operator who made it.
+    assert!(
+        log.lines()
+            .any(|line| line.contains("operator.act") && line.contains("\"ops\"")),
+        "no act names its operator: {log}"
+    );
 
     let basic = |password: &str| {
         base64::engine::general_purpose::STANDARD.encode(format!("ops:{password}"))

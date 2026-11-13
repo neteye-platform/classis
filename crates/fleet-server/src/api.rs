@@ -77,8 +77,9 @@ impl OperatorAuth {
     }
 }
 
-/// Logs every mutating act on the Operator plane once it has run: its method, path and status. A
-/// read is not logged — the plane serves a page by many of them.
+/// Logs every mutating act on the Operator plane once it has run: the operator who made it, its
+/// method, path and status. The act sits inside the guard, so the name is of a user the guard
+/// admitted. A read is not logged — the plane serves a page by many of them.
 async fn log_act(request: Request, next: Next) -> Response {
     use axum::http::Method;
     let method = request.method().clone();
@@ -89,9 +90,11 @@ async fn log_act(request: Request, next: Next) -> Response {
         return next.run(request).await;
     }
     let path = request.uri().path().to_string();
+    let operator = basic_user(request.headers());
     let response = next.run(request).await;
     info!(
         event = "operator.act",
+        operator = operator.as_deref().map(crate::fleet::bounded),
         method = %method,
         path = crate::fleet::bounded(&path),
         status = response.status().as_u16(),
