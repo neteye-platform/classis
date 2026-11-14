@@ -1,6 +1,8 @@
 # ADR-0062: The release run signs every entry of the Client's own package, with a key only a reviewed `version/*` tag reaches
 
 - **Status:** 🟡 proposed
+  · clauses 1, 6, 8 and 9 superseded by
+  [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-11-13
 - **Deciders:** Davide Zeni
 - **Applies to:** the triggers and the `version`, `sign` and `publish` jobs of
