@@ -158,6 +158,8 @@ post_trans_script = "../../packaging/linux/posttrans"
 "/usr/sbin/useradd" = "*"
 
 [dev-dependencies]
+# A test Package Root and Package Signers (ADR-0063).
+classis-core = { workspace = true, features = ["test-support"] }
 # Virtual time, so a bound measured in minutes is tested in milliseconds.
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"

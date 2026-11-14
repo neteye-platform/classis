@@ -95,11 +95,6 @@ fn small_cap_config(max_artifact_size_bytes: u64, addr: SocketAddr) -> ClientCon
     ClientConfig {
         endpoint: format!("ws://{addr}/v1/opamp"),
         max_artifact_size_bytes,
-        packages: Some(classis_agent::config::PackagesConfig {
-            verification_key: Some(hex::encode([7u8; 32])),
-            ..Default::default()
-        }),
-        package_key: Some(vec![7u8; 32]),
         ..ClientConfig::default()
     }
 }
@@ -435,11 +430,11 @@ async fn an_absolute_url_on_another_origin_is_refused_without_a_request() {
     );
 }
 
-/// There is no unsigned posture: an offer carrying no signature, and any offer to a Client holding
-/// no verification key, is refused before a request reaches the source, naming what is missing.
+/// There is no unsigned posture: an offer carrying no signature is refused before a request
+/// reaches the source, naming what is missing (ADR-0026, ADR-0063).
 /// Verifies: ADR-0026, ADR-0018
 #[tokio::test]
-async fn an_unsigned_offer_or_an_unkeyed_client_fetches_nothing() {
+async fn an_unsigned_offer_fetches_nothing() {
     let (source, hits) = counted_source().await;
     let staging = tempfile::tempdir().expect("tempdir");
     let url = format!("http://{source}/artifact");
@@ -457,21 +452,6 @@ async fn an_unsigned_offer_or_an_unkeyed_client_fetches_nothing() {
     .await
     .expect_err("an unsigned offer is refused");
     assert!(err.contains("no signature"), "got {err}");
-
-    let mut unkeyed = small_cap_config(8192, source);
-    unkeyed.package_key = None;
-    if let Some(packages) = unkeyed.packages.as_mut() {
-        packages.verification_key = None;
-    }
-    let err = download_and_verify(
-        &download(url),
-        &unkeyed,
-        staging.path(),
-        &Progress::default(),
-    )
-    .await
-    .expect_err("a Client without a key takes no package");
-    assert!(err.contains("verification_key"), "got {err}");
 
     assert_eq!(
         hits.load(std::sync::atomic::Ordering::SeqCst),
@@ -585,11 +565,6 @@ async fn the_client_certificate_goes_to_the_servers_origin_alone() {
             cert_file: Some(dir.path().join("client.pem")),
             key_file: Some(dir.path().join("client-key.pem")),
         }),
-        packages: Some(classis_agent::config::PackagesConfig {
-            verification_key: Some(hex::encode([7u8; 32])),
-            ..Default::default()
-        }),
-        package_key: Some(vec![7u8; 32]),
         state_dir: dir.path().join("state"),
         ..ClientConfig::default()
     };

@@ -145,9 +145,7 @@ fn each_archive_is_named_like_the_clients_packed_by_the_tool_and_checksummed() {
         "{upload}"
     );
     assert!(workflow.contains("cat -- *.sha256 | sort -k2 > SHA256SUMS"));
-    assert!(workflow.contains(
-        "*.tar.gz *.tar.gz.sig package-signing-key.pub *.deb *.rpm *.msi *.cdx.json SHA256SUMS"
-    ));
+    assert!(workflow.contains("*.tar.gz *.tar.gz.sig *.deb *.rpm *.msi *.cdx.json SHA256SUMS"));
 
     // No installer carries it.
     for installer in [
@@ -256,11 +254,10 @@ fn action(uses: &str) -> &str {
 }
 
 /// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8, with
-/// the signatures and the public key ADR-0062 clause 9 adds).
-const PUBLISHED: [&str; 8] = [
+/// the signatures ADR-0063 clause 15 keeps).
+const PUBLISHED: [&str; 7] = [
     "*.tar.gz",
     "*.tar.gz.sig",
-    "package-signing-key.pub",
     "*.deb",
     "*.rpm",
     "*.msi",
@@ -322,13 +319,13 @@ fn only_the_publish_job_may_attest() {
         ]
     );
 
-    // It downloads the SBOMs, the two programs' archives, the signatures and the tracked public
-    // key (ADR-0062 clause 9), and not the Server's binaries, which ship inside the image alone,
+    // It downloads the SBOMs, the two programs' archives and the signatures (ADR-0063 clause 15),
+    // and not the tracked certificate, which travels inside each signature, nor the Server's binaries, which ship inside the image alone,
     // nor the archives' lone checksums, which were the signing job's. Every artifact the workflow
     // uploads under another name is one of those, and the pattern names each.
     assert!(
         publish.contains(
-            "          pattern: '{sbom,signatures,signing-key,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'\n"
+            "          pattern: '{sbom,signatures,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'\n"
         ),
         "{publish}"
     );
@@ -341,7 +338,7 @@ fn only_the_publish_job_may_attest() {
     assert_eq!(
         uploaded,
         [
-            "signing-key",
+            "package-signer",
             "sbom",
             "server-linux-${{ matrix.arch }}",
             "${{ steps.pack_tool.outputs.name }}",
@@ -1085,13 +1082,17 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
     assert!(sign.contains("    runs-on: ubuntu-latest\n"), "{sign}");
     assert_eq!(grants(permissions(sign)), ["contents: read"]);
 
-    // No checkout, no build, two actions: it fetches the archives' checksums and hands back the
-    // signatures.
+    // No checkout, no build, two kinds of action: it fetches the archives' checksums and the
+    // tracked certificate, and hands back the signatures (ADR-0063 clause 13).
     assert!(!sign.contains("actions/checkout"), "{sign}");
     assert!(!sign.contains("cargo "), "{sign}");
     assert_eq!(
         actions(sign),
-        ["actions/download-artifact", "actions/upload-artifact"]
+        [
+            "actions/download-artifact",
+            "actions/download-artifact",
+            "actions/upload-artifact"
+        ]
     );
     assert!(
         sign.contains("          pattern: sha256_${{ env.ARTIFACT }}_*\n"),
@@ -1134,23 +1135,24 @@ fn openssl_3() {
     );
 }
 
-// Verifies: ADR-0062
+// Verifies: ADR-0062, ADR-0063
 #[test]
 fn the_signing_step_signs_the_statement_the_client_verifies() {
-    use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
+    use classis_core::package::testing::TestRoot;
 
     openssl_3();
     let workflow = workflow();
     let script = run_script(step(job(&workflow, "sign"), "Sign every entry"));
 
-    // A key as `classisctl package keygen` makes it, and two entries' checksums as the build
-    // writes them.
+    // A Package Signer of a test Root — its PKCS#8 key, as the secret holds it, and its certificate,
+    // as `packaging/package-signer.der` does — and two entries' checksums as the build writes them.
+    let root = TestRoot::new();
+    let signer = root.signer();
     let dir = tempfile::tempdir().expect("tempdir");
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("pkcs8");
-    let key = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("key");
     let key_file = dir.path().join("package-signing-key.pk8");
-    std::fs::write(&key_file, pkcs8.as_ref()).expect("key file");
+    std::fs::write(&key_file, &signer.pkcs8).expect("key file");
+    let cert_file = dir.path().join("package-signer.der");
+    std::fs::write(&cert_file, &signer.der).expect("certificate file");
     let entries = dir.path().join("entries");
     std::fs::create_dir(&entries).expect("entries");
     let archives = [
@@ -1166,23 +1168,24 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
     }
     let script_file = dir.path().join("sign.sh");
     std::fs::write(&script_file, &script).expect("script");
-
-    let status = std::process::Command::new("bash")
-        .arg(&script_file)
-        .env("AGENT_TYPE", "supervisor")
-        .env("VERSION", "1.2.3")
-        .env("KEY", &key_file)
-        .env("ENTRIES", &entries)
-        .status()
-        .expect("bash");
+    let run = || {
+        std::process::Command::new("bash")
+            .arg(&script_file)
+            .env("AGENT_TYPE", "supervisor")
+            .env("VERSION", "1.2.3")
+            .env("KEY", &key_file)
+            .env("CERT", &cert_file)
+            .env("ENTRIES", &entries)
+            .status()
+            .expect("bash")
+    };
+    let status = run();
     assert!(status.success(), "the signing step failed: {status}");
 
-    // Each `.sig` is 128 lowercase hex digits and a newline, and verifies under the Client's own
-    // check: Ed25519 over `classis_core::package::statement`.
-    let public = UnparsedPublicKey::new(&ED25519, key.public_key().as_ref().to_vec());
+    // Each `.sig` is a PackageSignature in lowercase hex and a newline, and verifies under the
+    // Client's own check: up to the Root, over `classis_core::package::statement`.
     for (name, hash) in &archives {
         let sig = std::fs::read_to_string(entries.join(format!("{name}.sig"))).expect("sig");
-        assert_eq!(sig.len(), 129, "{sig:?}");
         assert!(sig.ends_with('\n'), "{sig:?}");
         let hexdigits = sig.trim_end();
         assert!(
@@ -1192,10 +1195,23 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
             "{sig:?}"
         );
         let bytes = hex::decode(hexdigits).expect("hex");
+        let parsed = classis_core::package::parse_signature(&bytes).expect("a PackageSignature");
+        assert_eq!(
+            parsed.signer,
+            signer.der.as_slice(),
+            "it carries the tracked certificate"
+        );
         let statement = classis_core::package::statement("supervisor", "1.2.3", hash);
-        public
-            .verify(&statement, &bytes)
-            .unwrap_or_else(|_| panic!("the signature of {name} does not verify"));
+        assert_eq!(
+            classis_core::package::verify_now(&statement, &bytes, &root.roots()),
+            Ok(()),
+            "the signature of {name} verifies"
+        );
+        assert_eq!(
+            bytes,
+            signer.sign(&statement),
+            "byte-identical to what `classis_core` writes: Ed25519 is deterministic"
+        );
         assert!(entries.join(format!("{name}.sig.sha256")).exists());
         assert!(!entries.join(format!("{name}.statement")).exists());
         assert!(!entries.join(format!("{name}.sig.bin")).exists());
@@ -1207,70 +1223,71 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
         format!("{}  other.tar.gz\n", hex::encode([1_u8; 32])),
     )
     .expect("checksum");
-    let status = std::process::Command::new("bash")
-        .arg(&script_file)
-        .env("AGENT_TYPE", "supervisor")
-        .env("VERSION", "1.2.3")
-        .env("KEY", &key_file)
-        .env("ENTRIES", &entries)
-        .status()
-        .expect("bash");
     assert!(
-        !status.success(),
+        !run().success(),
         "a checksum naming another file was signed"
     );
+    std::fs::remove_file(entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"))
+        .expect("remove");
+
+    // A certificate file that is no DER certificate is refused before anything is signed.
+    std::fs::write(&cert_file, b"not a certificate").expect("certificate file");
+    assert!(!run().success(), "a non-certificate was carried");
 }
 
-// Verifies: ADR-0062
+// Verifies: ADR-0063
 #[test]
-fn the_signatures_and_the_tracked_key_are_published_and_attested() {
+fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
     let workflow = workflow();
-    // The public half comes from the tracked file, out of the job that has the checkout.
+    // The certificate comes from the tracked file, out of the job that has the checkout.
     let version = job(&workflow, "version");
-    let tracked = run_script(step(version, "The tracked public key"));
+    let tracked = run_script(step(version, "The tracked Package Signer certificate"));
     assert!(
-        tracked.contains("cp packaging/package-signing-key.pub signing-key/"),
+        tracked.contains("cp packaging/package-signer.der package-signer/"),
         "{tracked}"
     );
     assert!(
-        version.contains("          name: signing-key\n"),
+        version.contains("          name: package-signer\n"),
         "{version}"
     );
+    let sign = job(&workflow, "sign");
+    assert!(sign.contains("          name: package-signer\n"), "{sign}");
     assert!(
-        !job(&workflow, "sign").contains("signing-key/"),
-        "the secret's job publishes no key"
+        !job(&workflow, "publish").contains("package-signer"),
+        "the certificate travels inside each .sig, and is not published on its own"
     );
 
     // The signatures are the signing job's, handed back with their checksums.
-    let sign = job(&workflow, "sign");
     assert!(sign.contains("          name: signatures\n"), "{sign}");
     assert!(
         sign.contains("            entries/*.tar.gz.sig\n"),
         "{sign}"
     );
 
-    // The notes tell an operator what both are for.
+    // The notes tell an operator how to upload them.
     let notes = step(job(&workflow, "publish"), "Publish the release");
     for line in [
-        "| trust this project's signatures | \\`package-signing-key.pub\\` |",
         "\\$(cat \"\\$f.sig\")",
         "\"\\$api/packages/supervisor/\\$v/entries/\\$os/\\$arch/signature\"",
     ] {
         assert!(notes.contains(line), "{line} in the notes");
     }
+    assert!(!notes.contains("package-signing-key.pub"), "{notes}");
 }
 
-// Verifies: ADR-0062
+// Verifies: ADR-0063
 #[test]
-fn the_tracked_public_key_has_the_form_an_install_takes() {
-    let file =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signing-key.pub");
-    let key = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let key = key.trim();
-    assert_eq!(key.len(), 64, "{key:?}");
+fn the_tracked_certificate_is_a_package_signer() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signer.der");
+    let der = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let (_, cert) = x509_parser::parse_x509_certificate(&der).expect("a DER certificate");
+    assert!(!cert.is_ca(), "a Package Signer is no CA");
     assert!(
-        key.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-        "{key:?}"
+        cert.extended_key_usage().ok().flatten().is_none(),
+        "a Package Signer carries no extendedKeyUsage"
+    );
+    assert!(
+        classis_core::package::encode_signature(&der, &[0; 64]).len()
+            <= classis_core::package::MAX_SIGNATURE_LEN
     );
 }

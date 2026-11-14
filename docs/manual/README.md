@@ -177,8 +177,8 @@ configuration under its own name, and leaves it out of what the process is
 configured with.
 
 **Package.** What an Agent type runs at a version — its identity is those two
-things and nothing else, and it holds one artifact per platform, each with the
-operator's signature. It reaches no Agent of another type, and it aims at nobody
+things and nothing else, and it holds one artifact per platform, each with its
+signature. It reaches no Agent of another type, and it aims at nobody
 by itself.
 
 **Selector and Deployment.** A _Selector_ is a set of `key=value` pairs that an
@@ -191,12 +191,16 @@ Packages and Configurations together — and an Agent belongs to **at most one**
 two claiming the same Agent is a conflict the Server reports rather than
 resolves. A Selector is equality and cannot say "not", so channels are a
 partition over an attribute every Agent carries; there is no fleet-wide default.
-The Server decides which artifact an Agent is offered; the Client decides
-whether it accepts packages at all. Every artifact is verified by its content
-hash and by its Ed25519 signature, which the operator puts on each entry of the
-Package. A Client without a verification key takes no package, and the Server
-offers no entry that carries no signature. Every artifact is uploaded to the
-Server, and a Client downloads from its own Server alone.
+The Server decides which artifact an Agent is offered, and every Client takes
+packages. Every artifact is verified by its content hash and by its signature,
+which the operator uploads on each entry of the Package. A signature carries the
+certificate of the Package Signer that made it, and it verifies only when the
+Package Root compiled into the Client and the Server issued that certificate.
+Today the project's release run holds the only Package Signer, for the Client's
+own archives, so no other program can be delivered yet. The Server refuses a
+signature that does not verify, and offers no entry that carries no signature.
+Every artifact is uploaded to the Server, and a Client downloads from its own
+Server alone.
 
 **Transports.** The URL scheme in the Client's `endpoint` selects the transport:
 `wss://` for WebSocket, where the Server pushes changes within seconds, and
@@ -211,8 +215,8 @@ loopback alone — the IP literals `127.0.0.1` and `::1`, never the name
 `localhost`. An Agent proves fleet membership with one thing: a client
 certificate in the TLS handshake. It holds no credential. A new host gets its
 certificate only through an enrolment an operator opens and approves. Software
-is installed only when it is signed with the operator's key and fetched from a
-source the operator allowed.
+is installed only when a Package Signer of the compiled-in Package Root signed
+it and it was fetched from the Client's own Server.
 
 **Configuration files.** Both ends read a hand-edited TOML file. The Client's is
 the one `--config` names, `supervisor.toml` by default. The Server's is the one

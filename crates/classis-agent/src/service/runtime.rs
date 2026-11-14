@@ -351,14 +351,21 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
             probation,
         ));
     }
-    // There is no unsigned posture (ADR-0026, ADR-0018): without `[packages] verification_key` no
-    // Agent of this Client takes packages, its own self-update included. Said once at startup, since
-    // the Server only sees an Agent that declares no package capability.
-    if config.package_key().is_none() {
+    // ADR-0063 clause 11: a key an old file still holds is named once, as ignored.
+    if let Some(warning) = config.ignored_key_warning() {
+        tracing::warn!("{warning}");
+    }
+    if let Some(path) = classis_core::package::Roots::debug_root() {
+        // ADR-0063 clause 1: a debug build only.
         tracing::warn!(
-            "taking no packages and no self-update: [packages] verification_key is not set, and \
-             nothing is installed without a signature. Set it to the hex Ed25519 key \
-             your packages are signed with."
+            "a debug build: also trusting the Package Root in {} ({})",
+            path.display(),
+            classis_core::package::DEBUG_ROOT_ENV
+        );
+    }
+    if config.package_roots().is_empty() {
+        tracing::warn!(
+            "this build carries no Package Root: every package will be refused (ADR-0063)"
         );
     }
     if let Some(outcome) = &owed_outcome {

@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# `package::testing`: a test Package Root and Package Signers. For tests only; it makes nothing
+# trusted by itself (ADR-0063).
+test-support = ["dep:ring", "dep:time"]
+
 [build-dependencies]
 # Resolving the baked version from the repository's tags (ADR-0012). A build dependency only: it is
 # linked into no artifact, and it sits here rather than in each binary so that both ends report a
@@ -27,6 +32,17 @@ x509-parser.workspace = true
 # (ADR-0039): the SHA-256 of its issuer and serial.
 sha2.workspace = true
 hex.workspace = true
+# A Package signature is a Package Signer's certificate and its Ed25519 signature, verified up to a
+# compiled-in Package Root (ADR-0063).
+rustls-webpki.workspace = true
+rustls-pki-types.workspace = true
+# A test Package Root and Package Signers for the tests of every crate (`package::testing`).
+ring = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
 # The key a `bootstrap.p12` opens to is held in a buffer wiped on drop (ADR-0057). No TLS or
 # crypto backend comes with it (ADR-0013).
 zeroize.workspace = true
+
+[dev-dependencies]
+ring.workspace = true
+time.workspace = true

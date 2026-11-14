@@ -61,7 +61,7 @@ to run it, where it puts things, and every configuration key.
   `opampextension` reports about itself.
 - **Installs Server-offered packages** over a Managed Process's binary — signed,
   verified, health-gated, and rolled back if the new version will not stay up.
-  It takes packages only while `[packages] verification_key` is set.
+  Every Supervisor takes packages, and there is nothing to configure for it.
 - **Updates its own binary** from a signed package while it consents, which it
   does by default, staging the new version beside the running one and asking the
   service manager for a restart.
@@ -285,8 +285,8 @@ Knowing the edges is half of knowing the design.
   believed about who it is; the trust boundary is the endpoint, not the row.
 - **It does not run programs it did not install.** See above — this is a
   deliberate narrowing.
-- **It does not install an unsigned package**, and it takes none at all without
-  a verification key.
+- **It does not install an unsigned package**: the signature must come from a
+  Package Signer that a Package Root compiled into the Client issued.
 - **It does not speak plaintext off the host.** `ws://` and `http://` are
   accepted only to `127.0.0.1` and `::1`; anything else is refused at startup,
   never warned about.
@@ -849,7 +849,7 @@ fleet's files, under the names the operator tools give them — or, with
 | `server-ca.pem`                         | offers it as the CA certificate of the Server; without `--interactive`, copies it beside `supervisor.toml` and names it in `[tls] ca_file`                                                                                                                                                                                                                                        |
 | `bootstrap.pem` and `bootstrap-key.pem` | offers them as the bootstrap pair; without `--interactive`, enrols with them and waits for an operator's approval. Both or neither: one alone is named in a warning and ignored                                                                                                                                                                                                   |
 | `bootstrap.p12`                         | the bootstrap certificate and its key in one file under a password, as the Server hands it out; offered as the bootstrap certificate, and the password is asked with input hidden. Without `--interactive`, it enrols with it under the password `--bootstrap-password-file` reads. Lying beside `bootstrap.pem` or `bootstrap-key.pem`, neither identity is used, with a warning |
-| `package-signing-key.pub`               | offers its content as the package verification key; without `--interactive`, writes it as `[packages] verification_key`. A file that holds no 64-digit hex key is named in a warning and ignored                                                                                                                                                                                  |
+| `package-signing-key.pub`               | offers its content as the package verification key; without `--interactive`, writes it as `[packages] verification_key`, which the Client no longer reads ([`[packages]`](#packages)). A file that holds no 64-digit hex key is named in a warning and ignored                                                                                                                    |
 
 So a host is set up by copying the program and these four files into one
 directory and running, from there:
@@ -967,12 +967,13 @@ host:
   `client-key.pending.pem` and `client-csr.pending.pem` from the state
   directory, and run the questionnaire again for a fresh request. A path that
   names no readable file, here or for the CA, is asked for again;
-- **the package verification key** ([`[packages]`](#packages)). It also decides
-  whether the Server may update this Client: a new file is written with
-  `self_update = true`, which takes effect once a key is set. An empty answer is
-  accepted, and the questionnaire then says that this Client installs no
-  package, its own update included, until a key is set. Where the file holds a
-  key, `-` removes it.
+- **the package verification key** ([`[packages]`](#packages)). The question
+  is older than the Package Roots compiled into the Client: the answer is
+  written as `verification_key`, which the Client no longer reads, and what the
+  question and its messages say about taking no packages no longer holds. The
+  Client takes packages, its own update included, whatever the answer. A new
+  file is written with `self_update = true`. Where the file holds a key, `-`
+  removes it.
 
 A new file gets everything else as commented defaults. An existing file is
 edited in place: only the keys asked about change, and every other key, every
@@ -1039,9 +1040,9 @@ sudo systemctl start classis
 ```
 
 The first asks for the endpoint, the client certificate and its key, and the
-verification key. `--endpoint` alone writes a file the Client refuses until you
-add the certificate and its key. An upgrade of a host whose service was running
-restarts it on the delivered binary.
+verification key, which is written but ignored. `--endpoint` alone writes a
+file the Client refuses until you add the certificate and its key. An upgrade of
+a host whose service was running restarts it on the delivered binary.
 
 **The `.deb` and the `.rpm` run the service under the system account
 `classis`.** The post-install creates it where it is missing — no password,
@@ -1639,15 +1640,14 @@ answers this Client `401`, because it sends none. See
 ```toml
 [packages]
 self_update = true
-verification_key = "<hex-encoded Ed25519 public key>"
 archive_key = "the key an encrypted .7z was packed with"
 ```
 
-| Key                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `self_update`      | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. It takes effect only while `verification_key` is set. See [Updating the Client itself](#updating-the-client-itself).                                                                                                                                                                                                                                                                                  |
-| `verification_key` | **Required to take any package.** Every Server-offered package must carry a valid Ed25519 signature over its artifact, and the signature must verify against this key. Without it, no Agent of this Client declares `AcceptsPackages` — neither a Supervisor nor the Client's own Agent — and the Client says so once at startup. A package offered regardless is refused before anything is downloaded and reported `InstallFailed`, naming the key. A malformed key fails startup. Generate the key with `classisctl package keygen` (see [the Server](server.md#packages-and-deployments-distributing-software)). |
-| `archive_key`      | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Key                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `self_update`      | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. See [Updating the Client itself](#updating-the-client-itself).                                                                                                                                                                                      |
+| `verification_key` | **No longer read.** Every Server-offered package must carry a signature made by a Package Signer, whose certificate the signature carries and a Package Root compiled into the Client issued; there is nothing to configure for it. A file that still holds the key loads, whatever the key holds, and the Client says once at startup that it is ignored: remove it. A signature made with a key of your own, as `classisctl package sign` makes one, is refused. |
+| `archive_key`      | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                                                                                                                                                                                                               |
 
 Note what is _not_ here: which artifact a Supervisor receives is the Server's
 decision, expressed as the Deployment that holds the package, never a key in
@@ -2310,7 +2310,7 @@ is what the entry file is called.
 path. It names a file in `<supervisor_dir>/<name>/program/`, a directory this
 Client creates and owns, which is what lets the Server replace what is in it.
 Every Agent therefore consents to package updates, and declares
-`AcceptsPackages` while [`[packages] verification_key`](#packages) is set.
+`AcceptsPackages`.
 
 Anything with a path separator in it — `/usr/local/bin/otelcol`, `./x`, `bin/x`
 — is a startup error naming the rule, rather than a guess. A program the
@@ -2354,20 +2354,24 @@ Three rules go with them:
 
 ## Package updates
 
-Every Supervisor accepts packages while `[packages] verification_key` is set,
-and the Server offers it one built for the Agent type it reports, released
-through the Deployment that claims it, with the signature of the entry for its
-platform — so a Supervisor reporting `promtail` is never handed the Collector's
-binary, whatever anyone forgot to aim. What then happens on the host:
+Every Supervisor accepts packages, and no setting turns that off. The Server
+offers it one built for the Agent type it reports, released through the
+Deployment that claims it, with the signature of the entry for its platform — so
+a Supervisor reporting `promtail` is never handed the Collector's binary,
+whatever anyone forgot to aim. What then happens on the host:
 
 1. The artifact is **streamed to disk** in that Supervisor's `packages/`
    directory — never held in memory — over TLS 1.3, from this Client's own
    Server origin and nowhere else (see
    [Where a download may come from](#where-a-download-may-come-from)).
 2. It is **verified** before anything is unpacked: the content hash, and the
-   Ed25519 signature against `[packages] verification_key`, always. An offer
-   without a signature is refused before anything is downloaded, and an invalid
-   signature refuses the artifact.
+   signature, always. The signature carries the certificate of the Package
+   Signer that made it, and it verifies only when a Package Root compiled into
+   the Client issued that certificate, the certificate has not expired by this
+   host's clock, and the Package Signer's Ed25519 signature covers this Agent
+   type, version and hash. An offer without a signature is refused before
+   anything is downloaded, and a signature that does not verify refuses the
+   artifact.
 3. It is **unpacked** when it is a `.tar.gz`, a `.7z`, or a `.zip` — the member
    whose file name matches the configured program, so an upstream release can be
    uploaded exactly as published. An encrypted `.7z` opens with
@@ -2381,6 +2385,14 @@ binary, whatever anyone forgot to aim. What then happens on the host:
    second, repeated every 5 s, so a transfer of hundreds of megabytes stays
    distinguishable from a stuck install), then `Installing`, then `Installed` or
    `InstallFailed`.
+
+**What can be signed today.** The project's release run holds the only Package
+Signer, and it signs the Client's own archives alone. A signature made with a
+key of your own, as `classisctl package sign` makes one, is refused by the
+Server and by every Client. So a package for a Managed Process — the Collector,
+`promtail`, any program of your own — cannot be delivered until Package Signers
+exist for it; the Client's own update can
+([Updating the Client itself](#updating-the-client-itself)).
 
 [The rollout walkthrough](rollout.md) runs this end to end, from packing the
 artifact to watching it land.
@@ -2517,23 +2529,28 @@ default, and it takes one package, named after this Client's own Agent type,
 ```toml
 [packages]
 self_update = true                 # the default
-verification_key = "<hex-encoded Ed25519 public key>"
 ```
 
-The consent takes effect only while `verification_key` is set, and the artifact
-must carry a signature that verifies against it. An offer without a signature,
-or with one that does not verify, is reported `InstallFailed` and nothing is
-staged. An offer older than the running version is refused too: a signature
-carries no ordering, so an old release stays validly signed forever.
+The artifact must carry a signature that verifies up to the Package Roots
+compiled into the Client, as every package does
+([Package updates](#package-updates)). An offer without a signature, or with one
+that does not verify, is reported `InstallFailed` and nothing is staged. An
+offer older than the running version is refused too: a signature carries no
+ordering, so an old release stays validly signed — until its Package Signer's
+certificate expires, after which no host installs it.
 
 Every release signs its own archives. Beside each
 `supervisor_<version>_<os>_<arch>.tar.gz` it publishes the `.sig` that is that
-entry's signature, and `package-signing-key.pub`, the public half of the key
-that made them. With that key as `verification_key` a fleet updates from the
-release as published: upload each archive with the signature its `.sig` holds,
-as the release notes show. A `package-signing-key.pub` beside the program at
-install is taken as the key. A fleet that signs with a key of its own signs the
-archives itself instead.
+entry's signature: the certificate of the release's Package Signer and its
+signature, in lowercase hex. A fleet updates from the release as published:
+upload each archive with the signature its `.sig` holds, as the release notes
+show. Nothing is configured on the Server or on any Client for it. The release
+publishes no key, and a signature made with a key of your own is refused.
+
+**A Client from before the Package Roots cannot update itself to a release
+that has them**: it expects a signature of another form, checked against its
+`verification_key`. Upgrade each such host once by hand, from the release's
+`.deb`, `.rpm`, `.msi` or archive; from then on it updates from the Server.
 
 An offer under any other name is refused and reported, never applied. That is
 one of two independent guards, and it is the one on this side of the wire: the
@@ -2599,10 +2616,9 @@ reaches a Client only through a Deployment that holds it.
 **In the UI:** on the **Packages** tab, press **＋ Create** and choose the first
 release archive: a file named `supervisor_<version>_<os>_<arch>.tar.gz` fills
 the agent type, the version and the platform by itself. Press **OK**, add each
-further platform's archive with **＋ Add entry**, then press **Signing info**
-and sign the downloaded file with `classisctl package sign --signing-info`
-([Signing a whole Package at once](tools.md#signing-a-whole-package-at-once)),
-then **Import signing file** on the same tab. On the **Deployments** tab, add
+further platform's archive with **＋ Add entry**, then give each entry, in its
+signature field, the content of the `.sig` of the same name. On the
+**Deployments** tab, add
 the Package to the channel, press **OK**, and press the row's **Roll out**.
 
 **Over the API**, the same steps:
@@ -2612,6 +2628,7 @@ $ curl --cacert ca.pem -X PUT -H 'Content-Type: application/json' -d '{}' \
        https://<server>:4321/api/v1/packages/supervisor/1.2.3
 $ curl --cacert ca.pem -X PUT --data-binary @supervisor_1.2.3_linux_amd64.tar.gz \
        https://<server>:4321/api/v1/packages/supervisor/1.2.3/entries/linux/amd64
+$ sig=$(cat supervisor_1.2.3_linux_amd64.tar.gz.sig)
 $ curl --cacert ca.pem -X PUT -H 'Content-Type: application/json' -d "{\"signature\": \"$sig\"}" \
        https://<server>:4321/api/v1/packages/supervisor/1.2.3/entries/linux/amd64/signature
 $ curl --cacert ca.pem -X PUT https://<server>:4321/api/v1/deployments/stable/packages/supervisor/1.2.3
@@ -2733,11 +2750,12 @@ the _Configuration's_ name on the Server.
 and `remote_config_error` on its row in `GET /api/v1/agents` — the Client
 reports why it rejected a configuration.
 
-**An Agent is offered no package.** Look at three things. The Client's startup
-log says when `[packages] verification_key` is missing, and without it no Agent
-declares `AcceptsPackages`. Two Deployments may claim the Agent, which
-`package_conflict` on its fleet row names. Or the entry for its platform carries
-no signature, and the Server offers no unsigned entry.
+**An Agent is offered no package.** Look at three things. The Client's own
+Agent declares `AcceptsPackages` only while `[packages] self_update` consents.
+Two Deployments may claim the Agent, which `package_conflict` on its fleet row
+names. Or the entry for its platform carries no signature, and the Server offers
+no unsigned entry; the Server's log names an entry whose stored signature it
+removed at startup because it no longer verifies.
 
 **A download fails naming an origin.** The offered URL, or a redirect hop, leads
 off this Client's own Server origin (see

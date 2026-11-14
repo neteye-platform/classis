@@ -3952,7 +3952,8 @@ mod tests {
     /// A fleet on `dir` whose Deployments are armed: an empty package store under `packages`, and
     /// the `stable` channel claiming every `otelcol` holding the Configuration `fleet`.
     fn configuring_fleet(dir: &std::path::Path) -> AppState {
-        let store = PackageStore::open(dir.join("packages")).expect("store");
+        let store =
+            crate::packages::test_signing::open_store(&dir.join("packages")).expect("store");
         let state = AppState::new(dir.join("configs"))
             .expect("state")
             .with_packages(Some(
@@ -4483,7 +4484,8 @@ mod tests {
     /// A fleet delivering `otelcol@1.0.0`, uploaded and signed for linux/amd64 and held by the
     /// `stable` channel that claims every `otelcol`, with a host register.
     fn delivering_fleet(dir: &std::path::Path) -> (AppState, Arc<Revocations>, PackageId) {
-        let store = PackageStore::open(dir.join("packages")).expect("store");
+        let store =
+            crate::packages::test_signing::open_store(&dir.join("packages")).expect("store");
         let id = PackageId::new("otelcol", "1.0.0").expect("id");
         store.create(&id).expect("create");
         store
@@ -4519,10 +4521,28 @@ mod tests {
         Platform::new("linux", "amd64").expect("platform")
     }
 
+    /// The test Package Signer's signature over `id`'s linux/amd64 entry as stored (ADR-0063).
+    fn signed_for(state: &AppState, id: &PackageId) -> Vec<u8> {
+        let summary = state
+            .package_store()
+            .expect("store")
+            .summary(id)
+            .expect("summary");
+        let entry = summary
+            .entries
+            .iter()
+            .find(|e| e.os == "linux" && e.arch == "amd64")
+            .expect("linux entry");
+        crate::packages::test_signing::signed_hash(
+            id,
+            &hex::decode(&entry.content_hash).expect("hex"),
+        )
+    }
+
     /// Signs `id` for linux/amd64 and puts it into the `stable` channel — saved, released to nobody.
     fn put_signed(state: &AppState, id: &PackageId) {
         state
-            .put_package_entry_signature(id, &linux(), vec![1; 64])
+            .put_package_entry_signature(id, &linux(), signed_for(state, id))
             .expect("signature");
         state
             .put_deployment_package("stable", id, true)
