@@ -83,7 +83,11 @@ and that signer's Ed25519 signature over the Package's statement verifies;
      list. A second Root is added the same way, by a reviewed change to the
      list.
    - Tests pass a test Root of their own to the verifier (clause 4). The
-     compiled-in list is never extended at run time.
+     compiled-in list is never extended at run time, with one exception for
+     tests: a debug build also trusts the Root in the DER file that
+     `CLASSIS_DEBUG_PACKAGE_ROOT` names, and says so at startup. The
+     integration tests run the real binaries that way. A release build
+     compiles no such read.
 
 2. **A Package Signer certificate has one profile.**
    - It is issued directly by a Package Root. There is no intermediate.
@@ -534,5 +538,9 @@ Tests carrying `Verifies: ADR-0063`:
   with a test Root's Package Signer and `openssl`, writes `.sig` files the
   verifier accepts.
 
-**Not mechanically decidable:** that the custodian issues Package Signers only,
-with the profile of clause 2, and keeps the Root's key outside GitHub.
+**Not mechanically decidable:**
+
+- that every shipped binary is a release build, which reads no
+  `CLASSIS_DEBUG_PACKAGE_ROOT`; the release workflow builds with `--release`;
+- that the custodian issues Package Signers only, with the profile of clause 2,
+  and keeps the Root's key outside GitHub.
