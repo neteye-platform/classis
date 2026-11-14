@@ -118,7 +118,7 @@ pub async fn download_and_verify_patiently(
     ensure_safe_package_name(&package.name)?;
     // Refused before a byte is fetched: an offer with no signature (ADR-0026, ADR-0063).
     signature_policy(&package.signature)?;
-    let roots = config.package_roots();
+    let roots = package_roots(config);
     let url = resolve_url(&package.download_url, &config.endpoint)?;
     let origin = ServerOrigin::new(config)?;
     // Every request goes to this Client's own Server origin (ADR-0033), which is where its
@@ -177,7 +177,7 @@ pub async fn download_and_verify_patiently(
     // on and "it failed to install" must be able to say which of the two.
     drop(download);
     let verify = tracing::info_span!("verify", bytes = staged.len).entered();
-    if let Err(e) = verify_staged(&path, &staged, package, roots) {
+    if let Err(e) = verify_staged(&path, &staged, package, &roots) {
         let _ = std::fs::remove_file(&path);
         return Err(e);
     }
@@ -549,8 +549,17 @@ fn verify_staged(
     }
     let statement =
         classis_core::package::statement(&package.name, &package.version, &package.content_hash);
-    classis_core::package::verify_now(&statement, &package.signature, roots)
+    classis_core::package::chain::verify_now(&statement, &package.signature, roots)
         .map_err(|e| e.to_string())
+}
+
+/// The Package Roots this Client verifies up to (ADR-0063 clause 1): the compiled-in ones, unless a
+/// test put its own in the configuration.
+pub fn package_roots(config: &ClientConfig) -> classis_core::package::Roots {
+    config
+        .package_roots
+        .clone()
+        .unwrap_or_else(classis_core::package::chain::compiled)
 }
 
 /// The signature policy (ADR-0026, ADR-0063): there is no unsigned posture. An offer that carries
