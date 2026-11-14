@@ -376,7 +376,7 @@ pub fn test_root() -> &'static (
 pub fn open_store(dir: &std::path::Path) -> classis_server::packages::PackageStore {
     classis_server::packages::PackageStore::open(dir.to_path_buf())
         .expect("package store")
-        .with_verifier(Box::new(classis_server::packages::RootsVerifier::new(
+        .with_verifier(Box::new(classis_server::config::RootsVerifier::new(
             test_root().0.roots(),
         )))
 }
