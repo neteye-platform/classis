@@ -991,7 +991,7 @@ async fn a_client_behind_a_gateway_installs_from_an_upstream_slower_than_its_rea
         write("edge-key.pem", &key),
     ))
     .expect("edge config");
-    config.package_roots = root.roots();
+    config.package_roots = Some(root.roots());
     let package = classis_agent::supervisor::agent::PackageDownload {
         name: "otelcol".to_string(),
         version: "1.0.0".to_string(),
@@ -1169,7 +1169,7 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
     let root = classis_core::package::testing::TestRoot::new();
     let store = classis_server::packages::PackageStore::open(pki.join("packages"))
         .expect("store")
-        .with_verifier(Box::new(classis_server::packages::RootsVerifier::new(
+        .with_verifier(Box::new(classis_server::config::RootsVerifier::new(
             root.roots(),
         )));
     let state = Arc::new(
@@ -1324,7 +1324,7 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
         path("edge-key.pem"),
     ))
     .expect("edge config");
-    edge_config.package_roots = root.roots();
+    edge_config.package_roots = Some(root.roots());
     let package = classis_agent::supervisor::agent::PackageDownload {
         name: "otelcol".to_string(),
         version: "1.0.0".to_string(),

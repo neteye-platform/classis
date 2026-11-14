@@ -282,35 +282,22 @@ pub(crate) fn signature_fits(signature: &[u8]) -> bool {
 }
 
 /// The signature check's port (ADR-0006, ADR-0063): whether `signature` verifies over
-/// `statement`, and if not, why. [`RootsVerifier`] over the compiled-in Package Roots is what the
-/// composition root wires; tests pass a test Root.
+/// `statement`, and if not, why. [`RootsVerifier`](crate::config::RootsVerifier) over the
+/// compiled-in Package Roots is what the composition root wires; tests pass a test Root.
 pub trait SignatureVerifier: Send + Sync {
     /// # Errors
     /// Why the signature is refused, naming the step that failed.
     fn verify(&self, statement: &[u8], signature: &[u8]) -> Result<(), String>;
 }
 
-/// The adapter behind [`SignatureVerifier`]: `classis_core::package::verify` up to a set of
-/// Package Roots, at the current time — the check the Client makes (ADR-0063 clause 4).
-pub struct RootsVerifier(classis_core::package::Roots);
+/// What a store checks with until one is armed: nothing verifies. The composition root arms the
+/// compiled-in Package Roots ([`RootsVerifier`](crate::config::RootsVerifier)); a store that was
+/// never armed holds no signature (ADR-0063 clause 10).
+struct Unarmed;
 
-impl RootsVerifier {
-    /// Up to `roots`.
-    #[must_use]
-    pub fn new(roots: classis_core::package::Roots) -> Self {
-        RootsVerifier(roots)
-    }
-
-    /// Up to the Package Roots compiled into this binary (ADR-0063 clause 1).
-    #[must_use]
-    pub fn compiled() -> Self {
-        RootsVerifier(classis_core::package::Roots::compiled())
-    }
-}
-
-impl SignatureVerifier for RootsVerifier {
-    fn verify(&self, statement: &[u8], signature: &[u8]) -> Result<(), String> {
-        classis_core::package::verify_now(statement, signature, &self.0).map_err(|e| e.to_string())
+impl SignatureVerifier for Unarmed {
+    fn verify(&self, _statement: &[u8], _signature: &[u8]) -> Result<(), String> {
+        Err("no Package Root is armed on this Server".to_string())
     }
 }
 
@@ -461,8 +448,8 @@ pub struct PackageStore {
     /// The blobs an upload or a deletion is working on while no lock on `sets` is held, so that
     /// no round trip to the blob store runs under it and the two never cross ([`Life`]).
     life: Mutex<Life>,
-    /// The check every signature passes before it is held (ADR-0063 clause 10): the compiled-in
-    /// Package Roots unless [`PackageStore::with_verifier`] replaced them.
+    /// The check every signature passes before it is held (ADR-0063 clause 10): nothing verifies
+    /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
 }
 
@@ -520,7 +507,7 @@ impl PackageStore {
             blobs,
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
-            verifier: Box::new(RootsVerifier::compiled()),
+            verifier: Box::new(Unarmed),
         };
         // A blob no entry names is deleted at startup (ADR-0037 clause 4): an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -1293,7 +1280,8 @@ fn aggregate_hash(set: &Package, entry: &Entry) -> Vec<u8> {
 /// Signer's signature over an entry.
 #[cfg(test)]
 pub(crate) mod test_signing {
-    use super::{PackageId, PackageStore, RootsVerifier};
+    use super::{PackageId, PackageStore};
+    use crate::config::RootsVerifier;
     use classis_core::package::testing::{TestRoot, TestSigner};
     use sha2::{Digest, Sha256};
 

@@ -355,7 +355,7 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
     if let Some(warning) = config.ignored_key_warning() {
         tracing::warn!("{warning}");
     }
-    if let Some(path) = classis_core::package::Roots::debug_root() {
+    if let Some(path) = classis_core::package::chain::debug_root() {
         // ADR-0063 clause 1: a debug build only.
         tracing::warn!(
             "a debug build: also trusting the Package Root in {} ({})",
@@ -363,7 +363,7 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
             classis_core::package::DEBUG_ROOT_ENV
         );
     }
-    if config.package_roots().is_empty() {
+    if crate::packages::package_roots(&config).is_empty() {
         tracing::warn!(
             "this build carries no Package Root: every package will be refused (ADR-0063)"
         );

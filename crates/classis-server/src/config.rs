@@ -550,6 +550,31 @@ pub fn read_secret_file(key: &str, file: &Path) -> Result<zeroize::Zeroizing<Str
     Ok(zeroize::Zeroizing::new(secret.to_string()))
 }
 
+/// The adapter behind [`SignatureVerifier`](crate::packages::SignatureVerifier): `classis_core::package::verify` up to a set of
+/// Package Roots, at the current time — the check the Client makes (ADR-0063 clause 4).
+pub struct RootsVerifier(classis_core::package::Roots);
+
+impl RootsVerifier {
+    /// Up to `roots`.
+    #[must_use]
+    pub fn new(roots: classis_core::package::Roots) -> Self {
+        RootsVerifier(roots)
+    }
+
+    /// Up to the Package Roots compiled into this binary (ADR-0063 clause 1).
+    #[must_use]
+    pub fn compiled() -> Self {
+        RootsVerifier(classis_core::package::chain::compiled())
+    }
+}
+
+impl crate::packages::SignatureVerifier for RootsVerifier {
+    fn verify(&self, statement: &[u8], signature: &[u8]) -> Result<(), String> {
+        classis_core::package::chain::verify_now(statement, signature, &self.0)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// The `[enrolment]` section (ADR-0021 clause 19).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

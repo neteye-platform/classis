@@ -488,8 +488,8 @@ async fn main() {
     if let Some(warning) = config.packages.ignored_key_warning() {
         warn!("{warning}");
     }
-    let roots = classis_core::package::Roots::compiled();
-    if let Some(path) = classis_core::package::Roots::debug_root() {
+    let roots = classis_core::package::chain::compiled();
+    if let Some(path) = classis_core::package::chain::debug_root() {
         // ADR-0063 clause 1: a debug build only.
         warn!(
             "a debug build: also trusting the Package Root in {} ({})",
@@ -505,9 +505,7 @@ async fn main() {
     let packages =
         classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
             .map(|store| {
-                store.with_verifier(Box::new(classis_server::packages::RootsVerifier::new(
-                    roots,
-                )))
+                store.with_verifier(Box::new(classis_server::config::RootsVerifier::new(roots)))
             })
             .and_then(|store| {
                 if !store.is_empty() {

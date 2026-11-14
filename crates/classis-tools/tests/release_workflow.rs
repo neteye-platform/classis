@@ -1203,7 +1203,7 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
         );
         let statement = classis_core::package::statement("supervisor", "1.2.3", hash);
         assert_eq!(
-            classis_core::package::verify_now(&statement, &bytes, &root.roots()),
+            classis_core::package::chain::verify_now(&statement, &bytes, &root.roots()),
             Ok(()),
             "the signature of {name} verifies"
         );

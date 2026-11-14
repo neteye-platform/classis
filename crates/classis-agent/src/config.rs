@@ -82,10 +82,11 @@ pub struct ClientConfig {
     /// superseded version. Absent takes the defaults: one day.
     #[serde(default)]
     pub updates: UpdatesConfig,
-    /// The Package Roots a package signature is verified up to (ADR-0063 clause 1): the ones
-    /// compiled into this binary. Not a file key; tests put a test Root here.
-    #[serde(skip, default = "classis_core::package::Roots::compiled")]
-    pub package_roots: classis_core::package::Roots,
+    /// The Package Roots a package signature is verified up to (ADR-0063 clause 1). `None`, as
+    /// every load leaves it, is the ones compiled into this binary; tests put a test Root here.
+    /// Not a file key.
+    #[serde(skip)]
+    pub package_roots: Option<classis_core::package::Roots>,
     /// The file's own text with secret values masked (see
     /// [`redact_secrets`](crate::config_file::redact_secrets)), kept from load so the Client's own
     /// Agent can report it as its effective configuration — the file *is* what this Client runs (a
@@ -953,7 +954,7 @@ impl Default for ClientConfig {
             leftover_auth: None,
             packages: None,
             leftover_self_update: None,
-            package_roots: classis_core::package::Roots::compiled(),
+            package_roots: None,
             source: None,
             path: None,
             state_dir_as_written: default_state_dir(),
@@ -1060,11 +1061,6 @@ impl ClientConfig {
             ));
         }
         Ok(config)
-    }
-
-    /// The Package Roots package signatures are verified up to (ADR-0063).
-    pub fn package_roots(&self) -> &classis_core::package::Roots {
-        &self.package_roots
     }
 
     /// The startup warning for a `[packages] verification_key` that is no longer read (ADR-0063

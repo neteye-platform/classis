@@ -57,6 +57,11 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("host", Core),
             ("naming", Core),
             ("package", Core),
+            // Verifying a PackageSignature up to the Package Roots (ADR-0063): `rustls-webpki`,
+            // the clock, and the debug build's Root from the environment.
+            ("package::chain", Adapter),
+            // A test Package Root and Package Signers, with `rcgen` and `ring` (ADR-0063).
+            ("package::testing", Adapter),
             // The bootstrap PKCS#12 file (ADR-0029): its rule, and its binding to `p12-keystore`.
             ("pkcs12", Core),
             ("pkcs12::file", Adapter),

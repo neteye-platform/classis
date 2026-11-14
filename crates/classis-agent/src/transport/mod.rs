@@ -827,7 +827,7 @@ mod tests {
         let config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),
-            package_roots: root.roots(),
+            package_roots: Some(root.roots()),
             ..ClientConfig::default()
         };
 
