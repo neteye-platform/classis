@@ -7,7 +7,6 @@ use base64::Engine as _;
 use classis_server::api::OperatorAuth;
 use classis_server::config::RestAuthConfig;
 use classis_server::fleet::{AppState, PackageOffering};
-use classis_server::packages::PackageStore;
 use opamp::uid::InstanceUid;
 use prost::Message as _;
 use std::sync::Arc;
@@ -20,7 +19,7 @@ const PROTOBUF: &str = "application/x-protobuf";
 async fn spawn_guarded() -> TestServer {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")

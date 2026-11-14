@@ -971,9 +971,12 @@ mod tests {
             .check_admission()
             .expect("the Client would start with it");
         assert_eq!(
-            loaded.package_key(),
-            Some(&[7u8; 32][..]),
-            "the key as answered"
+            loaded
+                .packages
+                .as_ref()
+                .and_then(|p| p.verification_key.clone()),
+            Some("07".repeat(32)),
+            "the key as answered, written and ignored until the install stops asking (ADR-0063)"
         );
     }
 
@@ -1052,7 +1055,13 @@ mod tests {
         let loaded = ClientConfig::load(&path).expect("the written file loads");
         assert_eq!(loaded.endpoint, given.endpoint);
         assert_eq!(loaded.name, given.name);
-        assert_eq!(loaded.package_key(), Some(&[7u8; 32][..]));
+        assert_eq!(
+            loaded
+                .packages
+                .as_ref()
+                .and_then(|p| p.verification_key.clone()),
+            Some("07".repeat(32))
+        );
         assert_eq!(loaded.self_update_package(), Some("supervisor"));
         assert_eq!(
             loaded.tls.expect("tls").ca_file,
@@ -1811,7 +1820,13 @@ mod tests {
         let loaded = ClientConfig::load(&path).expect("the edited file loads");
         assert_eq!(loaded.endpoint, given.endpoint);
         assert_eq!(loaded.name, given.name);
-        assert_eq!(loaded.package_key(), Some(&[7u8; 32][..]));
+        assert_eq!(
+            loaded
+                .packages
+                .as_ref()
+                .and_then(|p| p.verification_key.clone()),
+            Some("07".repeat(32))
+        );
         assert_eq!(
             loaded.tls.expect("tls").ca_file,
             Some(PathBuf::from("/data/server-ca.pem"))

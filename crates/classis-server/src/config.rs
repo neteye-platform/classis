@@ -207,38 +207,24 @@ const AGENTS_PER_HOST: u64 = 256;
 /// The heartbeat the Baseline uses when none is offered.
 const BASELINE_HEARTBEAT_SECS: u64 = 30;
 
-/// The `[packages]` section (ADR-0033): the operator's public key, against which the Server checks
-/// every entry's signature — as feedback only. The Agent's own check decides what is installed.
+/// The `[packages]` section. Its one key, `verification_key`, is no longer read (ADR-0063
+/// clause 11): signatures are checked up to the compiled-in Package Roots. A file that still holds
+/// it loads, and the Server says at startup that it is ignored.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackagesConfig {
-    /// The hex-encoded Ed25519 public key, in the format the Client's `[packages]
-    /// verification_key` uses. Absent, every signature is reported `unchecked`.
+    /// Ignored, kept so an old `server.toml` loads (ADR-0063 clause 11).
     pub verification_key: Option<String>,
 }
 
 impl PackagesConfig {
-    /// The decoded key, or `None` when none is set.
-    ///
-    /// # Errors
-    /// Returns an error naming the key when it is not hex or not the 32 bytes of an Ed25519
-    /// public key.
-    pub fn verification_key(&self) -> Result<Option<Vec<u8>>, String> {
-        let Some(text) = &self.verification_key else {
-            return Ok(None);
-        };
-        let key = hex::decode(text.trim())
-            .map_err(|e| format!("[packages] verification_key is not valid hex: {e}"))?;
-        if key.len() != ring::signature::ED25519_PUBLIC_KEY_LEN {
-            return Err(format!(
-                "[packages] verification_key must be the {} bytes of an Ed25519 public key \
-                 ({} hex characters), not {} bytes",
-                ring::signature::ED25519_PUBLIC_KEY_LEN,
-                ring::signature::ED25519_PUBLIC_KEY_LEN * 2,
-                key.len()
-            ));
-        }
-        Ok(Some(key))
+    /// The startup warning for a `verification_key` that is no longer read, if the file holds one.
+    #[must_use]
+    pub fn ignored_key_warning(&self) -> Option<&'static str> {
+        self.verification_key.as_ref().map(|_| {
+            "[packages] verification_key is ignored: package signatures are checked up to the \
+             Package Roots compiled into this Server (ADR-0063) — remove the key"
+        })
     }
 }
 
@@ -586,27 +572,6 @@ pub fn read_secret_file(key: &str, file: &Path) -> Result<zeroize::Zeroizing<Str
         return Err(format!("{key} {} is empty", file.display()));
     }
     Ok(zeroize::Zeroizing::new(secret.to_string()))
-}
-
-/// The Ed25519 adapter behind [`SignatureVerifier`](crate::packages::SignatureVerifier): the
-/// operator's public key from `[packages] verification_key`, checked with `ring`, the provider the
-/// Client verifies with (ADR-0033).
-pub struct Ed25519Verifier(Vec<u8>);
-
-impl Ed25519Verifier {
-    /// `key` is the raw public key, as [`PackagesConfig::verification_key`] decodes it.
-    #[must_use]
-    pub fn new(key: Vec<u8>) -> Self {
-        Ed25519Verifier(key)
-    }
-}
-
-impl crate::packages::SignatureVerifier for Ed25519Verifier {
-    fn verifies(&self, statement: &[u8], signature: &[u8]) -> bool {
-        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &self.0)
-            .verify(statement, signature)
-            .is_ok()
-    }
 }
 
 /// The `[enrolment]` section (ADR-0021 clause 19).
@@ -1195,8 +1160,6 @@ impl ServerConfig {
         if let Some(auth) = &self.rest.auth {
             auth.check()?;
         }
-        // A malformed key fails startup, not the first signature it would have checked (ADR-0033).
-        self.packages.verification_key()?;
         self.blobs.check()?;
         self.database.check()?;
         // The two planes are two listeners (ADR-0013). Addresses that collide would surface as the
@@ -1727,29 +1690,19 @@ mod tests {
         assert!(err.contains("not UTF-8 text"), "{err}");
     }
 
-    /// `[packages] verification_key` is the operator's public key, hex, as the Client's key of the
-    /// same name: absent by default, decoded when given, and a malformed one fails startup naming
-    /// it (ADR-0033 clause 7).
-    /// Verifies: ADR-0033
+    /// `[packages] verification_key` is no longer read: a file that holds it loads, whatever it
+    /// holds, and the Server says it is ignored (ADR-0063 clause 11).
+    /// Verifies: ADR-0063
     #[test]
-    fn a_malformed_verification_key_fails_startup() {
+    fn an_old_verification_key_is_ignored_with_a_warning() {
         let cfg: ServerConfig = toml::from_str("").expect("parse");
-        assert_eq!(cfg.packages.verification_key(), Ok(None));
-        let key = "ab".repeat(32);
-        let cfg: ServerConfig =
-            toml::from_str(&format!("[packages]\nverification_key = \"{key}\"\n")).expect("parse");
-        assert_eq!(cfg.packages.verification_key(), Ok(Some(vec![0xab; 32])));
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("server.toml");
-        for malformed in ["not-hex", "abcd"] {
-            std::fs::write(
-                &path,
-                format!("[packages]\nverification_key = \"{malformed}\"\n"),
-            )
-            .expect("write");
-            let err = ServerConfig::load(&path).expect_err("a malformed key fails startup");
-            assert!(err.contains("[packages] verification_key"), "{err}");
+        assert_eq!(cfg.packages.ignored_key_warning(), None);
+        for old in ["ab".repeat(32), "not-hex".to_string()] {
+            let cfg: ServerConfig =
+                toml::from_str(&format!("[packages]\nverification_key = \"{old}\"\n"))
+                    .expect("an old key still loads");
+            let warning = cfg.packages.ignored_key_warning().expect("a warning");
+            assert!(warning.contains("ignored"), "{warning}");
         }
         let refused = toml::from_str::<ServerConfig>("[packages]\nallowed_sources = []\n")
             .expect_err("the section takes nothing else");

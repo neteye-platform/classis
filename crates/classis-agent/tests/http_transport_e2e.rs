@@ -21,14 +21,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use classis_server::fleet::{AgentView, AppState, PackageOffering};
-use classis_server::packages::{PackageStore, Platform};
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use classis_server::packages::Platform;
 
 /// Puts a Package into a ring aimed at the Agent type it is built for, and hands back the ring's
 /// name. Aim belongs to the Deployment now (ADR-0026): a Package reaches nobody by itself, so a
 /// test that wants one delivered has to say which ring the host is in — which is the model.
 /// The same, recording the artifact's signature on the ring — where a signature lives since
-/// ADR-0026. A Client with `[packages] verification_key` set refuses an unsigned artifact, so the
+/// ADR-0026. A Client refuses an artifact not signed up to its Package Roots (ADR-0063), so the
 /// ring is what has to carry it.
 fn ring_holding_signed(
     state: &classis_server::fleet::AppState,
@@ -108,6 +107,10 @@ fn stage_owned_program(state_dir: &Path, supervisor: &str, program: &str) {
 fn spawn_client(config_path: &Path) -> ClientUnderTest {
     ClientUnderTest(
         Command::new(env!("CARGO_BIN_EXE_supervisor"))
+            .env(
+                classis_core::package::DEBUG_ROOT_ENV,
+                &common::package_roots().ours_file,
+            )
             .arg("--config")
             .arg(config_path)
             .stdout(Stdio::null())
@@ -190,21 +193,16 @@ async fn a_configuration_rollout_reaches_a_polling_client() {
 #[tokio::test]
 async fn a_package_rollout_reaches_a_polling_client() {
     let artifact = std::fs::read(env!("CARGO_BIN_EXE_stub_agent")).expect("read stub");
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-    let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-    let public_key_hex = hex::encode(keypair.public_key().as_ref());
-    let signature = keypair
+    let signature = common::package_roots()
+        .signer
         .sign(&classis_core::package::statement(
             "managed-agent",
             "2.0.0",
             &<sha2::Sha256 as sha2::Digest>::digest(&artifact),
-        ))
-        .as_ref()
-        .to_vec();
+        ));
 
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     let set =
         classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
     store.create(&set).expect("create package");
@@ -246,7 +244,6 @@ async fn a_package_rollout_reaches_a_polling_client() {
             "poll_interval_secs = 1\n",
             "heartbeat_interval_secs = 1\n\n",
             "[packages]\n",
-            "verification_key = \"{key}\"\n\n",
             "[[supervisor]]\n",
             "type = \"command\"\n",
             "name = \"myagent\"\n",
@@ -256,7 +253,6 @@ async fn a_package_rollout_reaches_a_polling_client() {
         ),
         addr = addr,
         state = state_dir.to_string_lossy(),
-        key = public_key_hex,
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");

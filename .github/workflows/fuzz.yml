@@ -36,6 +36,7 @@ jobs:
           - supervisor_set
           - archive_member
           - renewal_proof
+          - package_signature
     env:
       SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '900' || '60' }}
     steps:

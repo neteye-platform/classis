@@ -116,8 +116,9 @@ pub async fn download_and_verify_patiently(
     // First, before any URL is resolved or a byte is written: the staged path is built from this
     // name, and a name that could escape the staging directory is refused outright.
     ensure_safe_package_name(&package.name)?;
-    // Refused before a byte is fetched: no key, or no signature to check with it (ADR-0026).
-    let key = signature_policy(&package.signature, config.package_key())?;
+    // Refused before a byte is fetched: an offer with no signature (ADR-0026, ADR-0063).
+    signature_policy(&package.signature)?;
+    let roots = config.package_roots();
     let url = resolve_url(&package.download_url, &config.endpoint)?;
     let origin = ServerOrigin::new(config)?;
     // Every request goes to this Client's own Server origin (ADR-0033), which is where its
@@ -176,7 +177,7 @@ pub async fn download_and_verify_patiently(
     // on and "it failed to install" must be able to say which of the two.
     drop(download);
     let verify = tracing::info_span!("verify", bytes = staged.len).entered();
-    if let Err(e) = verify_staged(&path, &staged, package, key) {
+    if let Err(e) = verify_staged(&path, &staged, package, roots) {
         let _ = std::fs::remove_file(&path);
         return Err(e);
     }
@@ -535,53 +536,35 @@ async fn write_stream(
 
 /// Verifies the streamed artifact: the content hash from the stream, then the signature over what
 /// the offer says the artifact is — its Agent type (the package's name), its version and that
-/// hash (ADR-0026). A signed artifact offered as another type's program, or under another version,
-/// does not verify.
+/// hash (ADR-0026) — up to the compiled-in Package Roots (ADR-0063 clause 5). A signed artifact
+/// offered as another type's program, or under another version, does not verify.
 fn verify_staged(
     _path: &Path,
     staged: &Staged,
     package: &PackageDownload,
-    key: &[u8],
+    roots: &classis_core::package::Roots,
 ) -> Result<(), String> {
     if staged.content_hash != package.content_hash {
         return Err("the downloaded artifact does not match its content hash".to_string());
     }
     let statement =
         classis_core::package::statement(&package.name, &package.version, &package.content_hash);
-    check_signature(&statement, &package.signature, key)
+    classis_core::package::verify_now(&statement, &package.signature, roots)
+        .map_err(|e| e.to_string())
 }
 
-/// The signature policy (ADR-0026): there is no unsigned posture. An offer is refused before
-/// anything is downloaded when this Client holds no verification key, or when the offer carries no
-/// signature to check with it. `Ok` is the key the signature is then checked against.
-fn signature_policy<'a>(signature: &[u8], key: Option<&'a [u8]>) -> Result<&'a [u8], String> {
-    let Some(key) = key else {
-        return Err(
-            "refusing the package: [packages] verification_key is not set, and nothing is \
-             installed without a signature"
-                .to_string(),
-        );
-    };
+/// The signature policy (ADR-0026, ADR-0063): there is no unsigned posture. An offer that carries
+/// no signature is refused before anything is downloaded.
+fn signature_policy(signature: &[u8]) -> Result<(), String> {
     if signature.is_empty() {
         return Err("refusing the package: the offer carries no signature".to_string());
     }
-    Ok(key)
-}
-
-fn check_signature(bytes: &[u8], signature: &[u8], key: &[u8]) -> Result<(), String> {
-    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
-        .verify(bytes, signature)
-        .map_err(|_| {
-            "the artifact's signature is invalid — it must cover the Agent type, the version and \
-             the SHA-256 (classisctl package sign --agent-type … --version …)"
-                .to_string()
-        })
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ring::signature::KeyPair;
 
     /// A loopback server answering each request with the next of `answers` — a status and an
     /// optional `Retry-After` — and `200 the-bytes` once they run out; returns its address and the
@@ -1021,72 +1004,62 @@ mod tests {
         assert!(err.contains("max_artifact_size_bytes"), "got {err}");
     }
 
-    fn keypair() -> (ring::signature::Ed25519KeyPair, Vec<u8>) {
-        let rng = ring::rand::SystemRandom::new();
-        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-        let keypair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-        let public = keypair.public_key().as_ref().to_vec();
-        (keypair, public)
+    /// A test Package Root and one Package Signer it issued (ADR-0063).
+    fn signer() -> (
+        classis_core::package::testing::TestSigner,
+        classis_core::package::Roots,
+    ) {
+        let root = classis_core::package::testing::TestRoot::new();
+        (root.signer(), root.roots())
     }
 
     /// Verifies: ADR-0026
     #[test]
     fn content_hash_mismatch_is_refused() {
-        let (keypair, public) = keypair();
+        let (signer, roots) = signer();
         let dir = tempfile::tempdir().expect("tempdir");
         let (path, staged) = stage(&dir, b"artifact");
-        let signature = keypair
-            .sign(&classis_core::package::statement(
-                "otelcol",
-                "1.0.0",
-                &staged.content_hash,
-            ))
-            .as_ref()
-            .to_vec();
+        let signature = signer.sign_artifact("otelcol", "1.0.0", &staged.content_hash);
 
         let wrong = offer(Sha256::digest(b"other").to_vec(), signature.clone());
-        assert!(verify_staged(&path, &staged, &wrong, &public).is_err());
+        assert!(verify_staged(&path, &staged, &wrong, &roots).is_err());
 
         let right = offer(staged.content_hash.clone(), signature);
-        assert!(verify_staged(&path, &staged, &right, &public).is_ok());
+        assert!(verify_staged(&path, &staged, &right, &roots).is_ok());
     }
 
-    /// There is no unsigned posture: no key, or no signature, is refused before anything is
-    /// downloaded, and a signature that does not verify refuses the artifact. The Client's own
+    /// There is no unsigned posture: an offer without a signature is refused before anything is
+    /// downloaded, and a signature that does not verify up to the Package Roots refuses the
+    /// artifact — one of another Root, and a bare Ed25519 signature, included. The Client's own
     /// update takes the same path.
-    /// Verifies: ADR-0026, ADR-0018
+    /// Verifies: ADR-0026, ADR-0018, ADR-0063
     #[test]
     fn signature_policy_is_enforced() {
-        let (keypair, public) = keypair();
+        let (signer, roots) = signer();
         let dir = tempfile::tempdir().expect("tempdir");
-        let bytes = b"the-binary";
-        let (path, staged) = stage(&dir, bytes);
+        let (path, staged) = stage(&dir, b"the-binary");
         let hash = staged.content_hash.clone();
-        let signature = keypair
-            .sign(&classis_core::package::statement("otelcol", "1.0.0", &hash))
-            .as_ref()
-            .to_vec();
+        let signature = signer.sign_artifact("otelcol", "1.0.0", &hash);
 
-        // Before the download: a key and a signature, or nothing at all.
-        assert!(signature_policy(&signature, None).is_err(), "no key");
-        assert!(
-            signature_policy(&[], Some(&public)).is_err(),
-            "no signature"
-        );
-        assert!(signature_policy(&[], None).is_err(), "neither");
-        assert_eq!(
-            signature_policy(&signature, Some(&public)),
-            Ok(public.as_slice())
-        );
+        // Before the download: a signature, or nothing at all.
+        assert!(signature_policy(&[]).is_err(), "no signature");
+        assert_eq!(signature_policy(&signature), Ok(()));
 
-        // After it: the signature must verify against the key.
+        // After it: the signature must verify up to the Roots.
         let check = |signature: Vec<u8>| {
-            verify_staged(&path, &staged, &offer(hash.clone(), signature), &public)
+            verify_staged(&path, &staged, &offer(hash.clone(), signature), &roots)
         };
         assert!(check(signature.clone()).is_ok());
         let mut bad = signature;
-        bad[0] ^= 0xff;
+        let last = bad.len() - 1;
+        bad[last] ^= 0xff;
         assert!(check(bad).is_err());
+        let theirs = classis_core::package::testing::TestRoot::new()
+            .signer()
+            .sign_artifact("otelcol", "1.0.0", &hash);
+        let refused = check(theirs).expect_err("another Root's Package Signer");
+        assert!(refused.contains("Package Root"), "{refused}");
+        assert!(check(vec![1u8; 64]).is_err(), "a bare signature");
     }
 
     /// The signature covers which Agent type the artifact is for and at which version: the same
@@ -1094,23 +1067,20 @@ mod tests {
     /// Verifies: ADR-0026
     #[test]
     fn a_signature_does_not_carry_over_to_another_type_or_version() {
-        let (keypair, public) = keypair();
+        let (signer, roots) = signer();
         let dir = tempfile::tempdir().expect("tempdir");
         let (path, staged) = stage(&dir, b"the-binary");
         let hash = staged.content_hash.clone();
-        let signature = keypair
-            .sign(&classis_core::package::statement("otelcol", "1.0.0", &hash))
-            .as_ref()
-            .to_vec();
+        let signature = signer.sign_artifact("otelcol", "1.0.0", &hash);
         let mut other_type = offer(hash.clone(), signature.clone());
         other_type.name = "telegraf".to_string();
-        assert!(verify_staged(&path, &staged, &other_type, &public).is_err());
+        assert!(verify_staged(&path, &staged, &other_type, &roots).is_err());
         let mut other_version = offer(hash.clone(), signature.clone());
         other_version.version = "0.9.0".to_string();
-        assert!(verify_staged(&path, &staged, &other_version, &public).is_err());
-        let bare = keypair.sign(b"the-binary").as_ref().to_vec();
+        assert!(verify_staged(&path, &staged, &other_version, &roots).is_err());
+        let bare = signer.sign(b"the-binary");
         assert!(
-            verify_staged(&path, &staged, &offer(hash, bare), &public).is_err(),
+            verify_staged(&path, &staged, &offer(hash, bare), &roots).is_err(),
             "a signature over the bytes alone no longer verifies"
         );
     }

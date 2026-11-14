@@ -92,8 +92,9 @@ ways:
 - **Interactively**, once you have
   [opened the enrolment window](#3-enrol-the-host):
   `sudo classis service install --interactive` asks for the Server's address,
-  the host's name, the three files and the package verification key, writes the
-  configuration, and enrols the host on the spot. It waits for your approval and
+  the host's name, the three files and a package verification key, which it
+  writes but the Client ignores (leave it empty), writes the configuration, and
+  enrols the host on the spot. It waits for your approval and
   shows the key fingerprint to approve. On Windows, run it in an elevated shell.
 - **From a script**, which suits configuration management: after the package,
   run
@@ -194,17 +195,21 @@ Package            Deployment                    Client, on each host
 ```
 
 - A **Package** is what an agent type runs at a version, with one binary per
-  platform and your signature on each. On its own, it reaches nobody.
+  platform and a signature on each. On its own, it reaches nobody.
 - A **Deployment** is a channel: a Selector that names the hosts it aims at,
   such as `channel = stable`, the Packages it offers, and the Configurations
   that go with them. A host belongs to at most one Deployment.
 - The **rollout act** releases the Deployment — its Packages and its
   Configurations together — to the hosts it claims. Nothing changes on any host
   before it.
-- The **Client** takes a package only when its `[packages] verification_key` is
-  set, and only when the binary's hash and signature verify. It installs the
-  binary, restarts the program, and checks that it stays up. A version that does
-  not stay up is rolled back to the one before.
+- The **Client** takes a package only when the binary's hash and signature
+  verify. The signature must come from a Package Signer that the project's
+  Package Root, compiled into the Client and the Server, issued. Today only the
+  release's `.sig` files, for the Client's own archives, are such signatures: a
+  signature made with a key of your own is refused, so no other program can be
+  delivered yet. The Client installs the binary, restarts the program, and
+  checks that it stays up. A version that does not stay up is rolled back to
+  the one before.
 
 A Package reaches a host only as an **upgrade**: never the version it runs,
 never an older one. To take a bad version back, publish the old content as a
@@ -216,18 +221,12 @@ new, greater version and roll that out.
    and give the first platform's binary as a file. A file named
    `<agent type>_<version>_<os>_<arch>.tar.gz` fills the fields by itself. Press
    **OK**, then add each further platform with **＋ Add entry**.
-2. Still there, select the Package and press **Signing info**. Compare every
-   SHA-256 in the file with an independent source, then sign the file on the
-   machine that holds the signing key:
-
-   ```sh
-   classisctl package sign --key fleet-signing.pk8 --signing-info promtail_3.1.0_signing.json
-   ```
-
-   Back on the **Packages** tab, choose the signed file and press **Import
-   signing file**. Each binary can also be signed on its own in its field. With
-   the Server's `[packages] verification_key` set, each entry shows whether its
-   signature is valid.
+2. Still there, give each entry its signature in its field: for the Client's
+   own Package, the content of the release's `.sig` of the same name. The
+   Server refuses a signature that does not verify, naming why, and stores
+   nothing. **Signing info** and **Import signing file** still exist, but a
+   signing file signed with `classisctl package sign` carries signatures of a
+   key of your own, and each of them is refused.
 
 3. **Deployments** tab: select the channel, add the Package (it replaces the
    older version of that agent type), and press **OK**.
@@ -253,8 +252,10 @@ Details: [Rollout walkthrough](rollout.md),
 
 The Client is always an Agent of its own, of the agent type `supervisor`. A
 Package of that type, made from the release archives
-`supervisor_<version>_<os>_<arch>.tar.gz` as they are published, updates the
-Client itself.
+`supervisor_<version>_<os>_<arch>.tar.gz` as they are published, each entry
+signed with the `.sig` beside its archive, updates the Client itself. A Client
+released before the Package Roots cannot take such a Package: upgrade it once by
+hand, and it updates itself from then on.
 
 On the host, the new version is staged beside the running one and checked before
 anything switches: it must start on this host and report the version offered.

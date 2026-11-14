@@ -533,7 +533,11 @@ dependencies = [
  "pkcs12",
  "pkcs5",
  "rcgen",
+ "ring",
+ "rustls-pki-types",
+ "rustls-webpki",
  "sha2",
+ "time",
  "x509-parser",
  "zeroize",
 ]

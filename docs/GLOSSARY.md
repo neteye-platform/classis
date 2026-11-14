@@ -29,6 +29,13 @@ terms below are the ones it uses without defining.
 - **High-water mark** — the highest Package version a Client has installed for
   one Agent type; a Supervisor of that type refuses any offer below it. _Avoid:_
   floor, minimum version.
+- **Package Root** — the self-signed certificate compiled into the Client and
+  the Server that every package signature is verified up to; its key is kept
+  offline by its custodian and issues Package Signers only. _Avoid:_ root key,
+  signing CA.
+- **Package Signer** — a certificate a Package Root issued to an Ed25519 key
+  that signs Entries; a signature carries it, so replacing it changes no
+  installation. _Avoid:_ signing key, release key.
 - **Blob** — the bytes of an Entry's artifact as the Server stores them, named
   by their SHA-256; identical bytes are one blob, whichever Entries name it.
   _Avoid:_ artifact file, binary.

@@ -240,9 +240,11 @@ Its `sign` job waits until a second person with write
 access approves it in the environment `signing`, then signs every Client
 archive with the key that environment holds. A release publishes one archive per
 platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
-on the architectures each ships on, a `.sig` beside each Client archive and
-`package-signing-key.pub`, the public half of the key they verify against, a
-CycloneDX SBOM `<stem>.cdx.json` beside each archive of the Client and of the
+on the architectures each ships on, a `.sig` beside each Client archive, which
+carries the certificate of the release's Package Signer and which the Server and
+every Client verify up to the Package Roots compiled into them
+([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)),
+a CycloneDX SBOM `<stem>.cdx.json` beside each archive of the Client and of the
 operator tool, and a `SHA256SUMS` file. Every
 asset is a subject of one build-provenance attestation, which the workflow
 verifies before it creates the release
@@ -419,15 +421,13 @@ supervisor service uninstall                                   # never deletes l
   ([ADR-0018](docs/adr/0018-the-client-updates-itself-under-its-own-agent-type.md)):
   the Client is always its own Agent, so the Server can see which version each
   host runs. Letting the Server _replace_ that version is a consent that stands
-  by default, takes effect once a verification key is set, and takes only the
-  package named after the Client's own Agent type, `supervisor` — anything else
-  is refused, because a package aimed at the whole fleet would otherwise be
-  written over the Client itself:
+  by default and takes only the package named after the Client's own Agent
+  type, `supervisor` — anything else is refused, because a package aimed at the
+  whole fleet would otherwise be written over the Client itself:
 
   ```toml
   [packages]
   self_update = true               # the default; false keeps this Client's update manual
-  verification_key = "<hex-encoded Ed25519 public key>"
   ```
 
   A new version is staged beside the running one under `versions/`, run once to
@@ -594,10 +594,13 @@ repository move or transfer:
   clauses 1 and 2). Its deployment rule admits the tags
   `version/*` and no branch. It has one required reviewer, from a team of the
   people with write access, with _Prevent self-review_, and administrators may
-  not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the base64 of the
-  `package-signing-key.pk8` that `classisctl package keygen` writes, made by an
-  admin on a machine of their own and then deleted; the public half `keygen`
-  prints is [`packaging/package-signing-key.pub`](packaging/package-signing-key.pub).
+  not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the base64 of a Package
+  Signer's Ed25519 key in PKCS#8 DER, made by an admin on a machine of their
+  own and then deleted; the certificate the Package Root's custodian issues for
+  it is `packaging/package-signer.der`
+  ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+  clause 12). Replacing it is a new key, a new certificate from the same Root,
+  a new secret and a reviewed change to that file; no installation changes.
   The reviewer approves a run only when the push of a `version/*` tag started
   it and the tag names a commit of `main`;
 - enable **secret scanning with push protection**, the only mechanical backstop

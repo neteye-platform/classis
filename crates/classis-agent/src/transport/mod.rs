@@ -719,7 +719,6 @@ mod tests {
         let config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),
-            package_key: Some(vec![0; 32]),
             ..ClientConfig::default()
         };
         engine.handle(&ServerToAgent {
@@ -781,24 +780,13 @@ mod tests {
         opamp::tls::install_ring_provider();
         let artifact = vec![7u8; 3072];
         let content_hash = Sha256::digest(&artifact).to_vec();
-        // Signed with a key of the test's own: a Client takes nothing unsigned (ADR-0026).
-        let keypair = {
-            let rng = ring::rand::SystemRandom::new();
-            let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-            ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair")
-        };
-        let signature = keypair
-            .sign(&classis_core::package::statement(
-                "otelcol",
-                "2.0.0",
-                &<sha2::Sha256 as sha2::Digest>::digest(&artifact),
-            ))
-            .as_ref()
-            .to_vec();
-        let public = {
-            use ring::signature::KeyPair as _;
-            keypair.public_key().as_ref().to_vec()
-        };
+        // Signed by a Package Signer of a test Root: a Client takes nothing unsigned (ADR-0063).
+        let root = classis_core::package::testing::TestRoot::new();
+        let signature = root.signer().sign_artifact(
+            "otelcol",
+            "2.0.0",
+            &<sha2::Sha256 as sha2::Digest>::digest(&artifact),
+        );
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -834,12 +822,12 @@ mod tests {
         state.accept_packages();
         let mut engine = Engine::new(vec![state]);
         let uid = engine.poll_reports()[0].instance_uid.clone();
-        // A Client that takes packages holds a key, and fetches from its own Server's origin
-        // (ADR-0026, ADR-0033).
+        // A Client verifies up to its Package Roots, and fetches from its own Server's origin
+        // (ADR-0063, ADR-0033).
         let config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),
-            package_key: Some(public),
+            package_roots: root.roots(),
             ..ClientConfig::default()
         };
 

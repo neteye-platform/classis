@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+mod support;
+
 use classis_server::ca::ClientCa;
 use classis_server::fleet::AppState;
 use classis_server::revocation::{CertId, Revocations};
@@ -320,8 +322,7 @@ async fn serve(pki: &Pki, setup: Setup<'_>) -> Served {
             .with_packages(setup.packages.then(|| {
                 classis_server::fleet::PackageOffering::new(
                     &dir.path().join("packages"),
-                    classis_server::packages::PackageStore::open(dir.path().join("packages"))
-                        .expect("package store"),
+                    support::open_store(&dir.path().join("packages")),
                 )
                 .expect("deployments")
             }))
@@ -2894,7 +2895,15 @@ fn save(served: &Served, version: &str, artifact: &[u8]) {
         )
         .expect("deployment");
     store
-        .put_signature(&id, &linux(), vec![1; 64])
+        .put_signature(
+            &id,
+            &linux(),
+            support::test_root().1.sign_artifact(
+                OTELCOL,
+                version,
+                &<sha2::Sha256 as sha2::Digest>::digest(artifact),
+            ),
+        )
         .expect("signature");
     served
         .state

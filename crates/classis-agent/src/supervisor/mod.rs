@@ -163,9 +163,9 @@ pub fn build_engine(
     // Consenting to be updated takes one package, the one named after this Client's Agent type —
     // anything else is refused rather than written over this binary (ADR-0018). The consent stands
     // unless `[packages] self_update = false` withdraws it, so this is the ordinary path rather
-    // than the opted-into one. And only from a signed package: without a verification key the
-    // consent is kept, but nothing is declared — the startup notice names the key.
-    if let (Some(package), Some(_)) = (config.self_update_package(), config.package_key()) {
+    // than the opted-into one. A package verifies up to the compiled-in Package Roots, with
+    // nothing to configure (ADR-0063 clause 7).
+    if let Some(package) = config.self_update_package() {
         self_state.accept_packages_named(package.to_string());
     }
     // The self-Agent's effective configuration is its own file — `supervisor.toml` is what this
@@ -402,17 +402,14 @@ pub fn start_supervisor(
     // What the target itself needs — for a tree that is its root and nothing below it, since the
     // live tree arrives by renaming a directory over that name (ADR-0026).
     install.prepare(config.process_account_group)?;
-    // Only a Client holding the operator's verification key takes packages: there is no unsigned
-    // posture (ADR-0026). Without it the program stays as installed, and the startup notice says
-    // why.
-    if config.package_key().is_some() {
-        state.accept_packages();
-        info!(
-            supervisor = %block.name,
-            program = %program.path.display(),
-            "packages accepted: the program is this supervisor's own"
-        );
-    }
+    // Every Supervisor takes packages, each verified up to the compiled-in Package Roots: there is
+    // no unsigned posture and no setting that turns packages off (ADR-0063 clause 6).
+    state.accept_packages();
+    info!(
+        supervisor = %block.name,
+        program = %program.path.display(),
+        "packages accepted: the program is this supervisor's own"
+    );
 
     // Each Supervisor stops on its own channel (ADR-0017): the Client-wide shutdown is forwarded
     // into it, and retiring the Supervisor fires it alone — its Endpoint releases the port and
@@ -589,10 +586,9 @@ mod tests {
         )
     }
 
-    /// A configuration as `ClientConfig::load` leaves it when `[packages] verification_key` is set:
-    /// the decoded key is what decides whether anything takes packages (ADR-0026).
-    fn keyed(mut config: ClientConfig) -> ClientConfig {
-        config.package_key = Some(vec![7u8; 32]);
+    /// A configuration as `ClientConfig::load` leaves it. Nothing about the key decides any more
+    /// whether anything takes packages (ADR-0063); kept as the name the tests below read.
+    fn keyed(config: ClientConfig) -> ClientConfig {
         config
     }
 
@@ -1000,26 +996,26 @@ mod tests {
         assert!(err.contains("only programs it installs"), "{err}");
     }
 
-    /// Without the operator's verification key, no Agent of this Client takes packages — neither a
-    /// Supervisor nor the Client's own Agent, whose self-update consent stands — so nothing can be
-    /// installed unsigned (ADR-0026, ADR-0018).
-    /// Verifies: ADR-0026, ADR-0018, Q-1
+    /// Every Agent of a Client takes packages without any key — each Supervisor, and the Client's
+    /// own Agent while its consent stands — because every package is verified up to the
+    /// compiled-in Package Roots and there is no setting that turns packages off (ADR-0063 clauses
+    /// 6 and 7).
+    /// Verifies: ADR-0063, Q-1
     #[tokio::test]
-    async fn without_a_verification_key_no_agent_takes_packages() {
+    async fn without_any_key_every_agent_takes_packages() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (_tx, shutdown) = shutdown_channel();
         let unkeyed: ClientConfig =
             toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
         let mut engine = build_engine(&unkeyed, &shutdown, Spawner::Local).expect("build");
-        assert!(
-            !engine.installs_packages(),
-            "something takes packages without a key"
-        );
-        for report in engine.poll_reports() {
-            assert_eq!(
+        assert!(engine.installs_packages(), "something refuses packages");
+        let reports = engine.poll_reports();
+        assert!(!reports.is_empty());
+        for report in reports {
+            assert_ne!(
                 report.capabilities & AgentCapabilities::AcceptsPackages as u64,
                 0,
-                "an Agent declares AcceptsPackages without a key"
+                "an Agent declares no AcceptsPackages"
             );
         }
     }
@@ -1041,8 +1037,7 @@ mod tests {
 
         // Every Supervisor is package-updatable (ADR-0017), so the only way for an Engine to answer
         // *no* is to have no Supervisor and a withdrawn self-update consent. That is worth keeping
-        // green: the startup check this feeds warns about an unconfigured verification key, and a
-        // Client that installs nothing has nothing for that key to protect.
+        // green: a Client that installs nothing has nothing for the Package Roots to protect.
         let alone: ClientConfig = toml::from_str(
             "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\n[packages]\nself_update = false\n",
         )

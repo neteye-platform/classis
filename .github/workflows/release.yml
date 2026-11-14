@@ -12,8 +12,10 @@ name: Release
 #
 # The `sign` job signs every entry of the Client's own Package — the `supervisor_*.tar.gz` archives —
 # with the key of the GitHub environment `signing`, which a second person with write access releases
-# by approving the job (ADR-0062 clauses 2 and 6). The signatures are published beside the archives
-# with `package-signing-key.pub`, the tracked public half of that key.
+# by approving the job (ADR-0062 clauses 2 and 6). That key is a Package Signer's, whose certificate
+# a Package Root issued and is tracked as packaging/package-signer.der; each `.sig` is a
+# PackageSignature, the certificate and the signature together, which the Client and the Server
+# verify up to the Package Roots compiled into them (ADR-0063 clauses 12 and 13).
 #
 # The artifacts are packed by this project's own `classisctl package pack`, so each Client archive
 # is also a valid package artifact for a fleet self-update (ADR-0026, ADR-0018) — the file an operator
@@ -173,28 +175,21 @@ jobs:
             exit 1
           fi
           echo "$GITHUB_REF_NAME names ${GITHUB_SHA:0:7}, on main"
-      # ADR-0062 clause 1: the public half the release publishes is the tracked, reviewed file, never
-      # one derived from the secret. This job has the checkout; `publish` has none.
-      - name: The tracked public key
+      # ADR-0063 clause 12: the certificate every signature carries is the tracked, reviewed file,
+      # never one taken from anywhere else. This job has the checkout; `sign` has none.
+      - name: The tracked Package Signer certificate
         run: |
           set -euo pipefail
-          key=$(tr -d '[:space:]' < packaging/package-signing-key.pub)
-          case "$key" in
-            *[!0-9a-f]* ) echo "::error::packaging/package-signing-key.pub is not lowercase hex"; exit 1 ;;
-          esac
-          if [ "${#key}" -ne 64 ]; then
-            echo "::error::packaging/package-signing-key.pub holds ${#key} hex digits, not 64"
+          if ! openssl x509 -inform DER -in packaging/package-signer.der -noout 2>/dev/null; then
+            echo "::error::packaging/package-signer.der is not a DER certificate (ADR-0063 clause 12)"
             exit 1
           fi
-          mkdir -p signing-key
-          cp packaging/package-signing-key.pub signing-key/
-          (cd signing-key && sha256sum package-signing-key.pub > package-signing-key.pub.sha256)
+          mkdir -p package-signer
+          cp packaging/package-signer.der package-signer/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: signing-key
-          path: |
-            signing-key/package-signing-key.pub
-            signing-key/package-signing-key.pub.sha256
+          name: package-signer
+          path: package-signer/package-signer.der
           if-no-files-found: error
       # Debug: the version is baked identically and this build is only asked, never shipped.
       - name: The binary agrees
@@ -658,10 +653,11 @@ jobs:
           echo "pushed $IMAGE@$digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-  # ADR-0062 clauses 2, 6 and 7: signs every entry of the Client's own Package. The only job that
-  # names the environment `signing`, whose secret it receives once a second person with write access
-  # approves it. It checks out no code and builds nothing: it downloads the archives' checksums, writes
-  # the statement each entry's signature covers, and signs it with the runner's OpenSSL.
+  # ADR-0062 clauses 2 and 7, ADR-0063 clause 13: signs every entry of the Client's own Package. The
+  # only job that names the environment `signing`, whose secret it receives once a second person with
+  # write access approves it. It checks out no code and builds nothing: it downloads the archives'
+  # checksums and the tracked certificate, writes the statement each entry's signature covers, signs
+  # it with the runner's OpenSSL, and writes the PackageSignature that carries both.
   sign:
     # Only a release: the push of a `version/*` tag. A run started by hand never reaches the
     # environment, on a tag ref neither (ADR-0062 clause 5).
@@ -677,6 +673,10 @@ jobs:
           pattern: sha256_${{ env.ARTIFACT }}_*
           path: entries
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-signer
+          path: package-signer
       - name: Decode the signing key
         env:
           PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
@@ -691,16 +691,34 @@ jobs:
       # The script reads its inputs from the environment alone, so the test runs it unchanged
       # (crates/classis-tools/tests/release_workflow.rs). The statement is
       # `classis_core::package::statement`, the prefix ADR-0061 names; OpenSSL signs Ed25519
-      # only with `-rawin` and from a file, and the signature is byte-identical to
-      # `classisctl package sign`'s (ADR-0062 clause 6).
+      # only with `-rawin` and from a file. Each `.sig` is the hex of the DER
+      # `PackageSignature ::= SEQUENCE { INTEGER 1, Certificate, OCTET STRING (64) }`
+      # (ADR-0063 clause 3), as `classis_core::package::encode_signature` writes it.
       - name: Sign every entry
         env:
           AGENT_TYPE: ${{ env.ARTIFACT }}
           VERSION: ${{ needs.version.outputs.version }}
           KEY: ${{ runner.temp }}/package-signing-key.pk8
+          CERT: package-signer/package-signer.der
           ENTRIES: entries
         run: |
           set -euo pipefail
+          # A DER length, in hex: short form below 128, else one or two length octets.
+          der_len() {
+            if [ "$1" -lt 128 ]; then printf '%02x' "$1"
+            elif [ "$1" -lt 256 ]; then printf '81%02x' "$1"
+            else printf '82%04x' "$1"; fi
+          }
+          cert=$(od -An -v -tx1 "$CERT" | tr -d ' \n')
+          case "$cert" in
+            30*) ;;
+            *) echo "::error::$CERT is not a DER certificate"; exit 1 ;;
+          esac
+          body=$(( 3 + ${#cert} / 2 + 66 ))
+          if [ "$body" -gt 2040 ]; then
+            echo "::error::$CERT is too long for a PackageSignature (ADR-0063 clause 3)"
+            exit 1
+          fi
           cd "$ENTRIES"
           signed=0
           for f in "${AGENT_TYPE}"_*.tar.gz.sha256; do
@@ -723,7 +741,8 @@ jobs:
               echo "::error::OpenSSL wrote no 64-byte Ed25519 signature for $name"
               exit 1
             fi
-            printf '%s\n' "$(od -An -v -tx1 "$name.sig.bin" | tr -d ' \n')" > "$name.sig"
+            sig=$(od -An -v -tx1 "$name.sig.bin" | tr -d ' \n')
+            printf '30%s020101%s0440%s\n' "$(der_len "$body")" "$cert" "$sig" > "$name.sig"
             rm -f -- "$name.statement" "$name.sig.bin"
             sha256sum "$name.sig" > "$name.sig.sha256"
             echo "signed $name"
@@ -764,10 +783,10 @@ jobs:
     steps:
       # What it publishes and attests, and nothing else: the Server's binaries reach the release
       # inside the image alone, and the archives' lone checksums (`sha256_*`) were the signing job's.
-      # The signatures and the tracked public key are ADR-0062's (clauses 1, 6 and 9).
+      # The signatures are ADR-0063's (clauses 13 and 15).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: '{sbom,signatures,signing-key,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'
+          pattern: '{sbom,signatures,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'
           path: artifacts
           merge-multiple: true
       - name: Collect the checksums
@@ -776,8 +795,8 @@ jobs:
           cat -- *.sha256 | sort -k2 > SHA256SUMS
           rm -f -- *.sha256
           ls -l
-      # ADR-0045, ADR-0062 clause 8: one SLSA build-provenance attestation over every published
-      # asset, the signatures, the public key and SHA256SUMS included, its digests computed from the
+      # ADR-0045, ADR-0063 clause 14: one SLSA build-provenance attestation over every published
+      # asset, the signatures and SHA256SUMS included, its digests computed from the
       # files themselves.
       - name: Attest the assets
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -785,7 +804,6 @@ jobs:
           subject-path: |
             artifacts/*.tar.gz
             artifacts/*.tar.gz.sig
-            artifacts/package-signing-key.pub
             artifacts/*.deb
             artifacts/*.rpm
             artifacts/*.msi
@@ -813,7 +831,7 @@ jobs:
         run: |
           set -euo pipefail
           cd artifacts
-          for f in *.tar.gz *.tar.gz.sig package-signing-key.pub *.deb *.rpm *.msi *.cdx.json SHA256SUMS; do
+          for f in *.tar.gz *.tar.gz.sig *.deb *.rpm *.msi *.cdx.json SHA256SUMS; do
             gh attestation verify "$f" --repo "${{ github.repository }}" \
               --signer-workflow "${{ github.repository }}/.github/workflows/release.yml" \
               --deny-self-hosted-runners > /dev/null
@@ -855,15 +873,14 @@ jobs:
           \`${{ env.IMAGE }}@${{ needs.image.outputs.digest }}\`, tagged
           \`${{ needs.version.outputs.version }}\`, for \`linux/amd64\` and \`linux/arm64\`.
 
-          The assets come in six kinds, and picking the wrong one is the only way to get this wrong
-          (ADR-0019, ADR-0028, ADR-0045, ADR-0052, ADR-0062):
+          The assets come in five kinds, and picking the wrong one is the only way to get this wrong
+          (ADR-0019, ADR-0028, ADR-0045, ADR-0052, ADR-0063):
 
           | you want to | take |
           |---|---|
           | install this on a host | the \`.deb\`, \`.rpm\` or \`.msi\` |
           | update a fleet from its Server | the \`${{ env.ARTIFACT }}_*.tar.gz\` and the \`.sig\` beside each |
-          | trust this project's signatures | \`package-signing-key.pub\` |
-          | make the fleet's certificates, a signing key and signed packages | the \`${{ env.OPERATOR_TOOL }}_*.tar.gz\` for your machine |
+          | make the fleet's certificates | the \`${{ env.OPERATOR_TOOL }}_*.tar.gz\` for your machine |
           | check what a binary is built from | the \`<stem>.cdx.json\` |
           | run the Server | the image, by its digest |
 
@@ -959,10 +976,9 @@ jobs:
           sudo systemctl start classis
           \`\`\`
 
-          \`--interactive\` asks for the endpoint, the private CA, the client certificate and its key,
-          and the package verification key. The release's \`package-signing-key.pub\`, placed beside
-          the program, is offered as that key, and an install with \`--endpoint\` takes it without a
-          question (ADR-0029, ADR-0062). The Server admits a host by its client certificate alone,
+          \`--interactive\` asks for the endpoint, the private CA, the client certificate and its key.
+          Package signatures need nothing configured: the Client verifies them up to the Package
+          Roots compiled into it (ADR-0063). The Server admits a host by its client certificate alone,
           so a new host is given a bootstrap certificate and enrols on an operator's approval;
           \`docs/manual/setup.md\` walks through the certificates and the enrolment. In a provisioning
           run, \`service install --endpoint wss://<server>:4320/v1/opamp\` writes the endpoint alone,
@@ -998,15 +1014,12 @@ jobs:
           Each file is named \`<name>_<version>_<os>_<arch>.tar.gz\` (ADR-0019), and the last two
           fields are exactly the pair an Agent reports as \`os.type\` and \`host.arch\`, so the upload
           reads them out of the name. Each entry takes the signature in the \`.sig\` of the same name:
-          this release signed every entry with the key whose public half is
-          \`package-signing-key.pub\` (ADR-0062). A Client verifies it against its
-          \`[packages] verification_key\`, and the Server checks it too when its own
-          \`[packages] verification_key\` is that key (ADR-0033). Then put the Package in a Deployment
+          the certificate of this release's Package Signer and its signature, which the Server and
+          every Client verify up to the Package Roots compiled into them; the Server refuses one that
+          does not verify (ADR-0063). Then put the Package in a Deployment
           and roll it out; nothing reaches the fleet before that last call (ADR-0026). The Deployment
           below reaches the hosts whose \`channel\` is \`stable\`: set it in a host's \`[attributes]\`,
-          or as a Server label with \`PUT /api/v1/agents/<uid>/labels\`. An operator who signs with a
-          key of their own instead makes each signature with
-          \`${{ env.OPERATOR_TOOL }} package sign --key <key>.pk8 --agent-type supervisor --version <version> <file>\`.
+          or as a Server label with \`PUT /api/v1/agents/<uid>/labels\`.
 
           \`\`\`console
           api="https://<server>:4321/api/v1"   # the Operator plane: add --cacert, and -u <user> or a .netrc
@@ -1044,4 +1057,4 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.version }}" \
             --notes-file notes.md \
-            -- *.tar.gz *.tar.gz.sig package-signing-key.pub *.deb *.rpm *.msi *.cdx.json SHA256SUMS
+            -- *.tar.gz *.tar.gz.sig *.deb *.rpm *.msi *.cdx.json SHA256SUMS
