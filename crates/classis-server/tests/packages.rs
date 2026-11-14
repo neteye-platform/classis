@@ -21,7 +21,7 @@ async fn spawn_with_packages() -> (TestServer, tempfile::TempDir) {
     // What main() does at startup: without a process provider, reqwest refuses to build a client.
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -132,7 +132,7 @@ async fn spawn_with_packages_for_a_host() -> (TestServer, Member) {
         )
         .expect("revocations"),
     );
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -296,9 +296,8 @@ async fn ring_holding(
 }
 
 /// Signs every entry of the Package that carries no signature yet, as an operator does before a
-/// rollout: the Server offers nothing unsigned (ADR-0033). Without `[packages] verification_key`
-/// the Server checks nothing — the Agent does — so a placeholder serves every test here that is
-/// not about it.
+/// rollout: the Server offers nothing unsigned (ADR-0033) — with the test Package Signer, whose
+/// Root the test Server trusts (ADR-0063).
 async fn sign_every_entry(server: &TestServer, agent_type: &str, version: &str) {
     let set: serde_json::Value = reqwest::Client::new()
         .get(set_url(server, agent_type, version))
@@ -317,7 +316,9 @@ async fn sign_every_entry(server: &TestServer, agent_type: &str, version: &str) 
             entry["os"].as_str().unwrap_or(""),
             entry["arch"].as_str().unwrap_or(""),
         );
-        let response = sign_entry(server, agent_type, version, os, arch, &"01".repeat(64)).await;
+        let hash = hex::decode(entry["content_hash"].as_str().unwrap_or("")).expect("hash");
+        let signature = support::signature_hex(agent_type, version, &hash);
+        let response = sign_entry(server, agent_type, version, os, arch, &signature).await;
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         assert_eq!(status, 200, "the entry takes the signature: {body}");
@@ -746,7 +747,7 @@ async fn a_download_waiting_for_its_store_holds_no_worker() {
 #[tokio::test]
 async fn an_artifact_past_the_configured_limit_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -1531,7 +1532,7 @@ async fn a_set_waits_until_rolled_out_and_is_immutable_while_assigned() {
 #[tokio::test]
 async fn the_package_store_has_a_total_size_ceiling() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     // A ceiling of 10 KiB: the first 8 KiB artifact fits, a second does not.
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
@@ -1751,22 +1752,20 @@ async fn an_entry_carries_its_signature_and_says_its_state() {
     assert_eq!(set["entries"][0]["signature_state"], "missing");
     assert!(set["entries"][0].get("signature").is_none());
 
+    let v1_signature = support::signature_hex(support::AGENT_TYPE, "1.0.0", &sha256(b"v1"));
     let signed = sign_entry(
         &server,
         support::AGENT_TYPE,
         "1.0.0",
         "linux",
         "amd64",
-        &hex::encode([7u8; 64]),
+        &v1_signature,
     )
     .await;
     assert_eq!(signed.status(), 200);
     let set: serde_json::Value = signed.json().await.expect("json");
-    assert_eq!(set["entries"][0]["signature"], hex::encode([7u8; 64]));
-    assert_eq!(
-        set["entries"][0]["signature_state"], "unchecked",
-        "without [packages] verification_key the Server checks nothing"
-    );
+    assert_eq!(set["entries"][0]["signature"], v1_signature);
+    assert_eq!(set["entries"][0]["signature_state"], "valid");
 
     // A signature needs an entry to attach to.
     for (version, os) in [("9.9.9", "linux"), ("1.0.0", "windows")] {
@@ -1776,13 +1775,21 @@ async fn an_entry_carries_its_signature_and_says_its_state() {
             version,
             os,
             "amd64",
-            &hex::encode([7u8; 64]),
+            &v1_signature,
         )
         .await;
         assert_eq!(orphan.status(), 404, "{version} {os}");
     }
-    // And it has to be one.
-    for malformed in ["", "not-hex", &hex::encode([7u8; 63])] {
+    // And it has to verify (ADR-0063): a bare Ed25519 signature, or one over other bytes, is
+    // refused like a malformed one.
+    let other_bytes = support::signature_hex(support::AGENT_TYPE, "1.0.0", &sha256(b"v2"));
+    for malformed in [
+        "",
+        "not-hex",
+        &hex::encode([7u8; 63]),
+        &hex::encode([7u8; 64]),
+        &other_bytes,
+    ] {
         let refused = sign_entry(
             &server,
             support::AGENT_TYPE,
@@ -1873,88 +1880,27 @@ async fn the_source_route_and_the_deployment_signature_routes_are_gone() {
     assert_eq!(response.status(), 404, "DELETE {signatures}");
 }
 
-/// With `[packages] verification_key` armed, the Server reports a signature over the entry's
-/// statement `valid` and a wrong one `invalid` — and stores both, because it only reports
-/// (ADR-0033 clause 7). The wrong one is offered all the same: the Agent's check decides.
-/// Verifies: ADR-0033
-#[tokio::test]
-async fn with_a_verification_key_the_server_reports_valid_and_invalid_and_stores_both() {
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-    let keypair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-    let public = ring::signature::KeyPair::public_key(&keypair)
-        .as_ref()
-        .to_vec();
-    opamp::tls::install_ring_provider();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages"))
-        .expect("store")
-        .with_verifier(Some(Box::new(
-            classis_server::config::Ed25519Verifier::new(public),
-        )));
-    let state = Arc::new(
-        AppState::new(dir.path().join("fleet-configs"))
-            .expect("configs")
-            .with_packages(Some(
-                PackageOffering::new(&dir.path().join("packages"), store).expect("deployments"),
-            )),
-    );
-    let (addr, rest_addr) =
-        support::serve(state.clone(), classis_server::transport::Admission::open()).await;
-    let server = TestServer {
-        addr,
-        rest_addr,
-        state,
-        _dir: dir,
-    };
-
-    create_set(&server, support::AGENT_TYPE, "1.0.0").await;
-    for (platform, bytes) in [
-        ("linux/amd64", b"linux".as_slice()),
-        ("windows/amd64", b"windows"),
-    ] {
-        let response = upload_entry(&server, support::AGENT_TYPE, "1.0.0", platform, bytes).await;
-        assert_eq!(response.status(), 200);
-    }
-    let statement = |bytes: &[u8]| {
-        classis_core::package::statement(support::AGENT_TYPE, "1.0.0", &sha256(bytes))
-    };
-    let good = hex::encode(keypair.sign(&statement(b"linux")));
-    // Signed over the other entry's bytes: a real signature, for something else.
-    let wrong = hex::encode(keypair.sign(&statement(b"linux")));
-    for (os, signature) in [("linux", good), ("windows", wrong)] {
-        let response = sign_entry(
-            &server,
-            support::AGENT_TYPE,
-            "1.0.0",
-            os,
-            "amd64",
-            &signature,
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            200,
-            "{os}: an invalid one is not refused"
-        );
-    }
-    let listed: serde_json::Value = reqwest::Client::new()
-        .get(format!("http://{}/api/v1/packages", server.rest_addr))
+/// The test Package Signer's signature over `version`'s linux/amd64 entry as the Server holds it.
+async fn signature_of(server: &TestServer, version: &str) -> String {
+    let set: serde_json::Value = reqwest::Client::new()
+        .get(set_url(server, support::AGENT_TYPE, version))
         .send()
         .await
-        .expect("list")
+        .expect("get package")
         .json()
         .await
         .expect("json");
-    let entries = &listed[0]["entries"];
-    assert_eq!(entries[0]["os"], "linux");
-    assert_eq!(entries[0]["signature_state"], "valid");
-    assert_eq!(entries[1]["os"], "windows");
-    assert_eq!(entries[1]["signature_state"], "invalid");
-    assert!(entries[1]["signature"].is_string(), "and stored");
+    let entry = set["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["os"] == "linux" && e["arch"] == "amd64")
+        .expect("linux entry");
+    let hash = hex::decode(entry["content_hash"].as_str().unwrap_or("")).expect("hash");
+    support::signature_hex(support::AGENT_TYPE, version, &hash)
 }
 
-/// Has `stable` hold `version` and signs its entry with a fixed signature.
+/// Has `stable` hold `version` and signs its entry with the test Package Signer.
 async fn hold_and_sign(server: &TestServer, version: &str) {
     let held = reqwest::Client::new()
         .put(format!(
@@ -1971,7 +1917,7 @@ async fn hold_and_sign(server: &TestServer, version: &str) {
             "{}/entries/linux/amd64/signature",
             set_url(server, support::AGENT_TYPE, version)
         ))
-        .json(&serde_json::json!({ "signature": hex::encode([7u8; 64]) }))
+        .json(&serde_json::json!({ "signature": signature_of(server, version).await }))
         .send()
         .await
         .expect("sign");
@@ -2103,7 +2049,7 @@ async fn a_deployment_that_released_a_package_refuses_to_be_deleted() {
         "1.0.0",
         "linux",
         "amd64",
-        &hex::encode([7u8; 64]),
+        &support::signature_hex(support::AGENT_TYPE, "1.0.0", &sha256(b"the-binary")),
     )
     .await;
     assert_eq!(signed.status(), 200);
@@ -2132,7 +2078,12 @@ async fn a_deployment_that_released_a_package_refuses_to_be_deleted() {
             .as_ref()
             .expect("a file")
             .signature,
-        vec![7u8; 64]
+        hex::decode(support::signature_hex(
+            support::AGENT_TYPE,
+            "1.0.0",
+            &sha256(b"the-binary")
+        ))
+        .expect("hex")
     );
 
     // The Package it pinned is not deleted either.
@@ -2194,7 +2145,7 @@ async fn one_package_in_two_deployments_is_offered_with_the_same_signature() {
         "1.0.0",
         "linux",
         "amd64",
-        &hex::encode([3u8; 64]),
+        &support::signature_hex(support::AGENT_TYPE, "1.0.0", &sha256(b"the-binary")),
     )
     .await;
     assert_eq!(signed.status(), 200);
@@ -2231,7 +2182,12 @@ async fn one_package_in_two_deployments_is_offered_with_the_same_signature() {
                 .as_ref()
                 .expect("a file")
                 .signature,
-            vec![3u8; 64],
+            hex::decode(support::signature_hex(
+                support::AGENT_TYPE,
+                "1.0.0",
+                &sha256(b"the-binary")
+            ))
+            .expect("hex"),
             "{name} is offered the entry's one signature"
         );
     }
@@ -2371,7 +2327,7 @@ async fn a_released_package_freezes_its_entries_and_not_the_ring() {
         "1.0.0",
         "linux",
         "amd64",
-        &hex::encode([7u8; 64]),
+        &support::signature_hex(support::AGENT_TYPE, "1.0.0", &sha256(b"the-binary")),
     )
     .await;
     assert_eq!(
@@ -2458,7 +2414,12 @@ async fn a_released_package_freezes_its_entries_and_not_the_ring() {
             .as_ref()
             .expect("a file")
             .signature,
-        vec![7u8; 64]
+        hex::decode(support::signature_hex(
+            support::AGENT_TYPE,
+            "1.0.0",
+            &sha256(b"the-binary")
+        ))
+        .expect("hex")
     );
 }
 
@@ -2710,7 +2671,7 @@ async fn an_upload_that_stops_is_answered_408_and_leaves_nothing_staged() {
     opamp::tls::install_ring_provider();
     let window = std::time::Duration::from_millis(300);
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -2774,7 +2735,7 @@ async fn two_uploads_of_one_entry_at_once_do_not_share_a_staging_file() {
 
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -2864,7 +2825,7 @@ async fn an_upload_in_progress_counts_against_the_ceiling_and_a_cancelled_one_le
 
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
             .expect("configs")
@@ -2954,7 +2915,7 @@ async fn a_download_past_the_limit_is_answered_429_after_thirty_seconds() {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = support::ManualClock::new();
-    let store = PackageStore::open(dir.path().join("packages")).expect("store");
+    let store = support::open_store(&dir.path().join("packages"));
     let limits = classis_server::agent_rate::Limits {
         messages_per_sec: 1,
         burst: 1,

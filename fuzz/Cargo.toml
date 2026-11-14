@@ -107,3 +107,10 @@ path = "fuzz_targets/renewal_proof.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "package_signature"
+path = "fuzz_targets/package_signature.rs"
+test = false
+doc = false
+bench = false

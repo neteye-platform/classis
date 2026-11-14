@@ -942,15 +942,11 @@ async fn a_client_behind_a_gateway_installs_from_an_upstream_slower_than_its_rea
     });
     let bytes = b"the-binary-over-a-slow-link".to_vec();
     upstream.serve(PATH_1, &bytes);
-    let rng = ring::rand::SystemRandom::new();
-    let signing = ring::signature::Ed25519KeyPair::from_pkcs8(
-        ring::signature::Ed25519KeyPair::generate_pkcs8(&rng)
-            .expect("pkcs8")
-            .as_ref(),
-    )
-    .expect("key pair");
-    let statement = classis_core::package::statement("otelcol", "1.0.0", &sha256(&bytes));
-    let signature = signing.sign(&statement).as_ref().to_vec();
+    // A Package Signer of a test Root (ADR-0063).
+    let root = classis_core::package::testing::TestRoot::new();
+    let signature = root
+        .signer()
+        .sign_artifact("otelcol", "1.0.0", &sha256(&bytes));
     let uid = InstanceUid::default();
     let mut offered = offer(&[("otelcol", PATH_1, sha256(&bytes))]);
     if let Some(file) = offered
@@ -995,11 +991,7 @@ async fn a_client_behind_a_gateway_installs_from_an_upstream_slower_than_its_rea
         write("edge-key.pem", &key),
     ))
     .expect("edge config");
-    config.package_key = Some(
-        ring::signature::KeyPair::public_key(&signing)
-            .as_ref()
-            .to_vec(),
-    );
+    config.package_roots = root.roots();
     let package = classis_agent::supervisor::agent::PackageDownload {
         name: "otelcol".to_string(),
         version: "1.0.0".to_string(),
@@ -1172,7 +1164,14 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
     std::fs::write(pki.join("edge.pem"), &edge_cert.pem).expect("write");
     std::fs::write(pki.join("edge-key.pem"), &edge_key).expect("write");
 
-    let store = classis_server::packages::PackageStore::open(pki.join("packages")).expect("store");
+    // The Server checks signatures up to a test Root, as the binary does up to the compiled-in
+    // ones (ADR-0063).
+    let root = classis_core::package::testing::TestRoot::new();
+    let store = classis_server::packages::PackageStore::open(pki.join("packages"))
+        .expect("store")
+        .with_verifier(Box::new(classis_server::packages::RootsVerifier::new(
+            root.roots(),
+        )));
     let state = Arc::new(
         classis_server::fleet::AppState::new(pki.join("fleet-configs"))
             .expect("state")
@@ -1292,16 +1291,13 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
     state
         .put_deployment_package("stable", &id, true)
         .expect("package");
-    let rng = ring::rand::SystemRandom::new();
-    let signing = ring::signature::Ed25519KeyPair::from_pkcs8(
-        ring::signature::Ed25519KeyPair::generate_pkcs8(&rng)
-            .expect("pkcs8")
-            .as_ref(),
-    )
-    .expect("key pair");
-    let statement = classis_core::package::statement("otelcol", "1.0.0", &sha256(&bytes));
     state
-        .put_package_entry_signature(&id, &linux, signing.sign(&statement).as_ref().to_vec())
+        .put_package_entry_signature(
+            &id,
+            &linux,
+            root.signer()
+                .sign_artifact("otelcol", "1.0.0", &sha256(&bytes)),
+        )
         .expect("signature");
     assert_eq!(state.rollout_deployment("stable").expect("the press"), 1);
 
@@ -1328,11 +1324,7 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
         path("edge-key.pem"),
     ))
     .expect("edge config");
-    edge_config.package_key = Some(
-        ring::signature::KeyPair::public_key(&signing)
-            .as_ref()
-            .to_vec(),
-    );
+    edge_config.package_roots = root.roots();
     let package = classis_agent::supervisor::agent::PackageDownload {
         name: "otelcol".to_string(),
         version: "1.0.0".to_string(),

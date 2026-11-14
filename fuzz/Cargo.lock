@@ -478,6 +478,109 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "classis-agent"
+version = "0.7.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "clap",
+ "classis-core",
+ "dialoguer",
+ "flate2",
+ "futures-util",
+ "hex",
+ "libc",
+ "opamp",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "prost",
+ "rcgen",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "service-manager",
+ "sevenz-rust2",
+ "sha2",
+ "sysinfo",
+ "tar",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "toml",
+ "toml_edit",
+ "tracing",
+ "tracing-appender",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "windows-service",
+ "x509-parser",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
+name = "classis-core"
+version = "0.7.0"
+dependencies = [
+ "der 0.8.2",
+ "git2",
+ "hex",
+ "p12-keystore",
+ "pkcs12",
+ "pkcs5",
+ "rcgen",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "sha2",
+ "x509-parser",
+ "zeroize",
+]
+
+[[package]]
+name = "classis-server"
+version = "0.7.0"
+dependencies = [
+ "argon2",
+ "axum",
+ "base64 0.23.1",
+ "classis-core",
+ "constant_time_eq",
+ "deadpool-postgres",
+ "flate2",
+ "futures-util",
+ "hex",
+ "libc",
+ "object_store",
+ "opamp",
+ "prost",
+ "rcgen",
+ "reqwest",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "utoipa",
+ "utoipa-axum",
+ "webpki-roots 1.0.10",
+ "x509-parser",
+ "zeroize",
+]
+
+[[package]]
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -952,69 +1055,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "classis-agent"
-version = "0.7.0"
-dependencies = [
- "async-trait",
- "axum",
- "base64 0.23.1",
- "clap",
- "dialoguer",
- "flate2",
- "classis-core",
- "futures-util",
- "hex",
- "libc",
- "opamp",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "prost",
- "rcgen",
- "reqwest",
- "ring",
- "serde",
- "serde_json",
- "service-manager",
- "sevenz-rust2",
- "sha2",
- "sysinfo",
- "tar",
- "time",
- "tokio",
- "tokio-tungstenite",
- "toml",
- "toml_edit",
- "tracing",
- "tracing-appender",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "windows-service",
- "x509-parser",
- "zeroize",
- "zip",
-]
-
-[[package]]
-name = "classis-core"
-version = "0.7.0"
-dependencies = [
- "der 0.8.2",
- "git2",
- "hex",
- "p12-keystore",
- "pkcs12",
- "pkcs5",
- "rcgen",
- "sha2",
- "x509-parser",
- "zeroize",
-]
-
-[[package]]
 name = "fleet-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -1028,44 +1068,6 @@ dependencies = [
  "tempfile",
  "toml",
  "x509-parser",
-]
-
-[[package]]
-name = "classis-server"
-version = "0.7.0"
-dependencies = [
- "argon2",
- "axum",
- "base64 0.23.1",
- "constant_time_eq",
- "deadpool-postgres",
- "flate2",
- "classis-core",
- "futures-util",
- "hex",
- "libc",
- "object_store",
- "opamp",
- "prost",
- "rcgen",
- "reqwest",
- "ring",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "toml",
- "tracing",
- "tracing-subscriber",
- "utoipa",
- "utoipa-axum",
- "webpki-roots 1.0.10",
- "x509-parser",
- "zeroize",
 ]
 
 [[package]]

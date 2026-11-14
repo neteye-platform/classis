@@ -39,23 +39,8 @@ fn this_host() -> Platform {
 use classis_agent::service::layout::BINARY_FILENAME as CLIENT_BINARY;
 use classis_agent::update::EXIT_RESTART_FOR_UPDATE;
 
-/// The operator's signing key for these tests, and its public half in hex as `[packages]
-/// verification_key` takes it. A Client updates itself only from a signed package (ADR-0018).
-fn signing_key() -> &'static (ring::signature::Ed25519KeyPair, String) {
-    static KEY: std::sync::OnceLock<(ring::signature::Ed25519KeyPair, String)> =
-        std::sync::OnceLock::new();
-    KEY.get_or_init(|| {
-        use ring::signature::KeyPair as _;
-        let rng = ring::rand::SystemRandom::new();
-        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-        let keypair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-        let public = hex::encode(keypair.public_key().as_ref());
-        (keypair, public)
-    })
-}
-
-/// Puts a Package into a ring aimed at the Agent type it is built for, signed with
-/// [`signing_key`], and hands back the ring's name. A Package reaches nobody by itself, so a test
+/// Puts a Package into a ring aimed at the Agent type it is built for, signed by the test Package
+/// Signer the Client trusts (ADR-0063), and hands back the ring's name. A Package reaches nobody by itself, so a test
 /// that wants one delivered has to say which ring the host is in — which is the model.
 fn ring_holding(
     state: &classis_server::fleet::AppState,
@@ -66,15 +51,10 @@ fn ring_holding(
         .expect("packages are armed")
         .artifact(id, &this_host())
         .expect("the artifact is stored");
-    let signature = signing_key()
-        .0
-        .sign(&classis_core::package::statement(
-            &id.agent_type,
-            &id.version,
-            &sha256,
-        ))
-        .as_ref()
-        .to_vec();
+    let signature =
+        common::package_roots()
+            .signer
+            .sign_artifact(&id.agent_type, &id.version, &sha256);
     ring_holding_signed(state, id, Some((&this_host(), signature)))
 }
 
@@ -418,6 +398,10 @@ impl Supervised {
             .open(config.with_extension("log"))
             .expect("open the client log");
         Command::new(program)
+            .env(
+                classis_core::package::DEBUG_ROOT_ENV,
+                &common::package_roots().ours_file,
+            )
             .arg("--config")
             .arg(config)
             .stdout(Stdio::from(log))
@@ -464,11 +448,9 @@ fn config_toml(addr: std::net::SocketAddr, state_dir: &Path) -> String {
             "state_dir = {state:?}\n",
             "heartbeat_interval_secs = 1\n\n",
             "[packages]\n",
-            "verification_key = \"{key}\"\n",
         ),
         addr = addr,
         state = state_dir.to_string_lossy(),
-        key = signing_key().1,
     )
 }
 
@@ -491,7 +473,7 @@ async fn the_client_installs_a_version_of_itself_and_reports_it_installed() {
     let (newer, version) = newer_client();
     let artifact = std::fs::read(newer).expect("read the newer client binary");
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     // The Client's own Agent reports the constant type `supervisor` (ADR-0016, ADR-0019), and a Set
     // reaches only Agents of its type — the type is part of its identity (ADR-0026). Its name is
     // the same string, which is what the consent below is narrowed to.
@@ -596,7 +578,7 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
     let (newer, version) = newer_client();
     let artifact = std::fs::read(newer).expect("read the newer client binary");
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     let set = classis_server::packages::PackageId::new("supervisor", version).expect("package id");
     store.create(&set).expect("create package");
     store
@@ -633,7 +615,6 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
                 "state_dir = {state:?}\n",
                 "heartbeat_interval_secs = 1\n\n",
                 "[packages]\n",
-                "verification_key = \"{key}\"\n\n",
                 "[[supervisor]]\n",
                 "type = \"command\"\n",
                 "name = \"managed\"\n",
@@ -642,7 +623,6 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
             ),
             addr = addr,
             state = state_dir.to_string_lossy(),
-            key = signing_key().1,
             stub = stub,
             marker = marker.to_string_lossy(),
         ) + &common::client_identity(dir.path()),
@@ -722,7 +702,7 @@ async fn a_set_at_the_running_version_reaches_nobody() {
     // is expected to reach the Client at all, and the one that may is asserted at the rollout act
     // rather than on the host.
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     let set_of = |version: &str| {
         let id =
             classis_server::packages::PackageId::new("supervisor", version).expect("package id");
@@ -801,11 +781,11 @@ async fn a_set_at_the_running_version_reaches_nobody() {
     );
 }
 
-/// A self-update whose signature does not verify against `[packages] verification_key` fails with
+/// A self-update whose signature does not verify up to the Client's Package Roots fails with
 /// `InstallFailed` naming the signature, nothing is staged, and the Client keeps running the
-/// version it runs. The Server never offers an unsigned Package (ADR-0026), so a signature over
-/// other bytes is the case that reaches the Client.
-/// Verifies: ADR-0018
+/// version it runs. The Server holds only a signature it verified (ADR-0063 clause 10), so the
+/// case that reaches the Client is a Package Signer the Server trusts and the Client does not.
+/// Verifies: ADR-0018, ADR-0063
 #[tokio::test]
 async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client_keeps_running() {
     let _serial = one_at_a_time().await;
@@ -814,12 +794,12 @@ async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client
 
     let artifact = std::fs::read(&client).expect("read the client binary");
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     let set =
         classis_server::packages::PackageId::new("supervisor", NEWER_VERSION).expect("package id");
     store.create(&set).expect("create package");
     store
-        .put_entry(&set, &this_host(), artifact)
+        .put_entry(&set, &this_host(), artifact.clone())
         .expect("put entry");
 
     let (addr, state) = spawn_server(store).await;
@@ -836,16 +816,12 @@ async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client
 
     let mut service = Supervised::start(&program, &config);
 
-    // Signed with the operator's key, over bytes that are not the artifact.
-    let signature = signing_key()
-        .0
-        .sign(&classis_core::package::statement(
-            &set.agent_type,
-            &set.version,
-            &<sha2::Sha256 as sha2::Digest>::digest(b"another artifact"),
-        ))
-        .as_ref()
-        .to_vec();
+    // Signed by a Package Signer of a Root only the Server trusts.
+    let signature = common::package_roots().their_signer.sign_artifact(
+        &set.agent_type,
+        &set.version,
+        &<sha2::Sha256 as sha2::Digest>::digest(&artifact),
+    );
     let ring = ring_holding_signed(&state, &set, Some((&this_host(), signature)));
     wait_until("the rollout act to reach the agent", || {
         service.tend();

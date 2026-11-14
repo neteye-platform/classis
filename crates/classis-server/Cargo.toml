@@ -59,5 +59,7 @@ tokio-postgres-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+# A test Package Root and Package Signers (ADR-0063).
+classis-core = { workspace = true, features = ["test-support"] }
 tokio-tungstenite.workspace = true
 tempfile = "3"

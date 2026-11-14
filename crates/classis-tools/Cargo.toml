@@ -62,6 +62,8 @@ serde.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+# A test Package Root and Package Signers (ADR-0063).
+classis-core = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 # ADR-0028: the end-to-end test runs the real Server and the real Client in-process on what
 # `pki init` wrote, reading the fragments as their configuration files are read.

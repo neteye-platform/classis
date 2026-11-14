@@ -60,8 +60,7 @@ pub async fn spawn_with(offer: Option<classis_server::fleet::ConnectionOffer>) -
 /// release Configurations and Packages alike (ADR-0034).
 #[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
 pub fn state_on(dir: &std::path::Path) -> AppState {
-    let packages =
-        classis_server::packages::PackageStore::open(dir.join("packages")).expect("package store");
+    let packages = open_store(&dir.join("packages"));
     AppState::new(dir.join("fleet-configs"))
         .expect("open the configuration store")
         .with_packages(Some(
@@ -352,4 +351,39 @@ pub async fn spawn_with_telemetry(offer: classis_server::fleet::TelemetryOffer) 
         state,
         _dir: dir,
     }
+}
+
+/// The test Package Root and its one Package Signer, shared by every test of a binary (ADR-0063).
+#[allow(dead_code)]
+pub fn test_root() -> &'static (
+    classis_core::package::testing::TestRoot,
+    classis_core::package::testing::TestSigner,
+) {
+    static ROOT: std::sync::OnceLock<(
+        classis_core::package::testing::TestRoot,
+        classis_core::package::testing::TestSigner,
+    )> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = classis_core::package::testing::TestRoot::new();
+        let signer = root.signer();
+        (root, signer)
+    })
+}
+
+/// The package store on `dir`, checking signatures up to the test Root, as the binary does up to
+/// the compiled-in ones (ADR-0063).
+#[allow(dead_code)]
+pub fn open_store(dir: &std::path::Path) -> classis_server::packages::PackageStore {
+    classis_server::packages::PackageStore::open(dir.to_path_buf())
+        .expect("package store")
+        .with_verifier(Box::new(classis_server::packages::RootsVerifier::new(
+            test_root().0.roots(),
+        )))
+}
+
+/// The test Package Signer's signature, hex as the REST API takes it, over an entry whose SHA-256
+/// is `hash`.
+#[allow(dead_code)]
+pub fn signature_hex(agent_type: &str, version: &str, hash: &[u8]) -> String {
+    hex::encode(test_root().1.sign_artifact(agent_type, version, hash))
 }

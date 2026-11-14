@@ -12,7 +12,7 @@ makes are the ones to keep off that host.
 | Command                                                                              | Use it to                                                                                                                                                                                 |
 | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **[`package fetch`](#package-fetch)**                                                | fetch a release of a known agent — the OpenTelemetry Collector or this fleet's own Client — verify it, and hand it to the Server with its default configuration                           |
-| **[`package pack`, `sha256`, `keygen`, `sign`, `public-key`](#packing-and-signing)** | build, hash, and sign a package artifact out of _any_ program you have, and make the package signing key                                                                                  |
+| **[`package pack`, `sha256`, `keygen`, `sign`, `public-key`](#packing-and-signing)** | build, hash, and sign a package artifact out of _any_ program you have, and make the package signing key; the Server and every Client refuse what `sign` signs                            |
 | **[`pki init`, `server-cert`, `bootstrap-ca`, `status`, `p12-extract`](#pki)**       | make the fleet's certificate authorities and the Server's or a Gateway's certificate, replace the bootstrap CA, say when the server CA ends, and turn a `bootstrap.p12` into its PEM pair |
 
 Reach for `package fetch` first: for the agents it knows, it replaces every step
@@ -247,11 +247,12 @@ only the request that failed.
 
 ### What it does not do
 
-- **It does not sign.** Signing needs a key, and where that key lives is a
-  decision a tool should not make silently — use
-  [`package sign`](#packing-and-signing) and record the signature on each entry
-  it uploaded ([step 4](rollout.md#4-give-it-to-the-server)). Until then the
-  entries are offered to nobody.
+- **It does not sign.** Each entry it uploaded needs its signature recorded
+  ([step 4](rollout.md#4-give-it-to-the-server)), and until then it is offered
+  to nobody. For `supervisor`, that is the `.sig` the release publishes beside
+  each archive. For the Collector there is none yet: a signature must come from
+  a Package Signer of the Package Root compiled into the Client and the Server,
+  and one [`package sign`](#packing-and-signing) makes is refused.
 - **It does not aim, and it does not roll out.** A Package reaches a host only
   once a Deployment holds it, and which channel that is is not a decision a
   fetch tool should make. What it stores sits in the store, visible as
@@ -278,7 +279,10 @@ only the request that failed.
 ## Packing and signing
 
 For a program `package fetch` does not know: these commands build the container,
-and they own signing.
+and they own signing. **What `sign` makes is refused today**, by the Server
+(`400`) and by every Client: a signature must come from a Package Signer that
+the project's Package Root issued, and a key of your own is none. `keygen`,
+`sign` and `public-key` remain for now.
 
 ```console
 $ classisctl package keygen --out fleet-signing.pk8   # prints the public key (hex)
@@ -289,7 +293,7 @@ $ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --
 
 | `package` command                                                      | What it prints                            | Use it for                                                                                                                                                                                                                    |
 | ---------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `keygen --out <file>`                                                  | the **public** key (hex)                  | the value for every Client's `[packages] verification_key`, and optionally the Server's; the private key goes in the file, ideally not on the Server host                                                                     |
+| `keygen --out <file>`                                                  | the **public** key (hex)                  | a key whose signatures no Client or Server accepts; `[packages] verification_key` is no longer read                                                                                                                           |
 | `pack <program> --out <file>`                                          | the artifact's SHA-256 (hex)              | building a one-file artifact; `--format tar.gz\|7z`, `--program-name <name>`, `--archive-key <key>`                                                                                                                           |
 | `sign --key <file> --agent-type <type> --version <version> <artifact>` | the signature (hex)                       | the body of the entry's signature route, `PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature`. It covers the type, the version and the artifact's SHA-256 together, so it holds for that Package alone |
 | `public-key --key <file>`                                              | the public key (hex)                      | recovering it from an existing private key                                                                                                                                                                                    |
@@ -305,21 +309,19 @@ The options of `pack`, and why a `.tar.gz` packed twice gives the same bytes,
 are in [step 2 of the rollout walkthrough](rollout.md#2-build-the-artifact),
 which runs the whole path from packing to a running agent.
 
-**Signing is required, fleet-wide.** A Client takes a package only while
-`[packages] verification_key` is set, and only when the artifact's signature
-verifies against it. The Server offers no entry that carries no signature, and
-refuses to roll out a Deployment holding a Package with an unsigned entry. Give
-every Client the same public key, and sign every entry of every Package you
-release. Give the Server the same public key too (`[packages] verification_key`
-in `server.toml`) and it reports each signature `valid` or `invalid` before any
-Client sees it — as feedback only: an `invalid` one is stored and offered, and
-each Client decides.
+**Signing is required, fleet-wide.** A Client takes a package only when the
+artifact's signature verifies up to the Package Roots compiled into it. The
+Server checks the same, refuses a signature that does not verify, offers no
+entry that carries no signature, and refuses to roll out a Deployment holding a
+Package with an unsigned entry. Nothing is configured for it on either side.
 
 ### Signing a whole Package at once
 
 A Package of five platforms is five signatures. The Packages tab lists every
 entry of the Package with its own signature field; instead of signing each
-artifact and typing each signature there, carry them in one file:
+artifact and typing each signature there, carry them in one file. The signatures
+this makes come from your own key, so today the Server refuses each one on
+import:
 
 1. In the **Packages** tab, select the Package and press **Signing info**. It
    downloads `<agent type>_<version>_signing.json`:
@@ -341,7 +343,8 @@ artifact and typing each signature there, carry them in one file:
    the upstream release; for any artifact, it is `classisctl package sha256`
    over the file you hold. The tool signs the hashes as the file states them and
    checks them against nothing — a hash you did not compare is one you are
-   taking the Server's word for, and a Client accepts whatever your key signed.
+   taking the Server's word for, and a Client accepts whatever a valid signature
+   covers.
 
 3. On the machine that holds the key:
 
@@ -360,9 +363,9 @@ artifact and typing each signature there, carry them in one file:
 4. In the **Packages** tab, select any Package, choose the signed file and press
    **Import signing file**. Each signature goes to the entry of the Package the
    file names with its platform and SHA-256, one request each; one whose hash is
-   not that entry's is skipped. Each platform's answer is listed with its
-   `signature_state`: `valid` or `invalid` when the Server holds
-   `[packages] verification_key`, `unchecked` when it does not.
+   not that entry's is skipped. Each platform's answer is listed: its
+   `signature_state` (`valid`), or the `400` that names why the Server refused
+   the signature.
 
 One import serves every Deployment that holds the Package: the signature is the
 entry's, and it covers the type, the version and the hash, not a Deployment.
@@ -372,13 +375,13 @@ entry's, and it covers the type, the version and the hash, not a Deployment.
 The fleet's certificates, made without `openssl` or any other tool.
 [Setting up a fleet](setup.md) walks through them in order; in short:
 
-| `pki` command                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init --server-dir <dir> --offline-dir <dir> --name <dns\|ip>…`    | makes the three CAs, the Server's certificate and the package signing key, the certificates named for `--product` (default `Classis`) and, with `--organization` and `--organizational-unit`, for your organization, split into what the Server host needs — the bootstrap CA's key among it — and what stays offline — the server CA's key and the package signing key — with a configuration fragment for each side |
-| `server-cert --offline-dir <dir> --name <dns\|ip>… --out <dir>`    | makes another server certificate from the offline server CA, for the Server or a Gateway; it carries the CA's organization unless `--organization` or `--organizational-unit` replaces it                                                                                                                                                                                                                             |
-| `bootstrap-ca --product <name> --out <dir>`                        | makes a new bootstrap CA, valid for a year, to replace the Server's `[enrolment]` files                                                                                                                                                                                                                                                                                                                               |
-| `status --offline-dir <dir>`                                       | says when the server CA in the offline directory ends; exits `0`, `1` when it is ending, `2` when it has ended                                                                                                                                                                                                                                                                                                        |
-| `p12-extract <bootstrap.p12> --out <dir> [--password-file <file>]` | writes the file's certificate as `bootstrap.pem` and its key, unencrypted and owner-only, as `bootstrap-key.pem`, the pair a Client's install takes; asks for the password with input hidden, or reads it from the first line of `--password-file`; overwrites neither file                                                                                                                                           |
+| `pki` command                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init --server-dir <dir> --offline-dir <dir> --name <dns\|ip>…`    | makes the three CAs, the Server's certificate and the package signing key (whose signatures no Client or Server accepts any more), the certificates named for `--product` (default `Classis`) and, with `--organization` and `--organizational-unit`, for your organization, split into what the Server host needs — the bootstrap CA's key among it — and what stays offline — the server CA's key and the package signing key — with a configuration fragment for each side |
+| `server-cert --offline-dir <dir> --name <dns\|ip>… --out <dir>`    | makes another server certificate from the offline server CA, for the Server or a Gateway; it carries the CA's organization unless `--organization` or `--organizational-unit` replaces it                                                                                                                                                                                                                                                                                     |
+| `bootstrap-ca --product <name> --out <dir>`                        | makes a new bootstrap CA, valid for a year, to replace the Server's `[enrolment]` files                                                                                                                                                                                                                                                                                                                                                                                       |
+| `status --offline-dir <dir>`                                       | says when the server CA in the offline directory ends; exits `0`, `1` when it is ending, `2` when it has ended                                                                                                                                                                                                                                                                                                                                                                |
+| `p12-extract <bootstrap.p12> --out <dir> [--password-file <file>]` | writes the file's certificate as `bootstrap.pem` and its key, unencrypted and owner-only, as `bootstrap-key.pem`, the pair a Client's install takes; asks for the password with input hidden, or reads it from the first line of `--password-file`; overwrites neither file                                                                                                                                                                                                   |
 
 None of them makes a bootstrap certificate: the Server issues those, on
 `POST /api/v1/bootstrap-certificates`

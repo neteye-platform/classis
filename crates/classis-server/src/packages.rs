@@ -236,7 +236,7 @@ pub struct Package {
 }
 
 /// One platform's artifact of a Package: an uploaded file, the hash that identifies what an Agent
-/// installs, and the operator's signature over it (ADR-0033). The signature lives here because what
+/// installs, and the signature over it (ADR-0033, ADR-0063). The signature lives here because what
 /// it covers — `classis_core::package::statement` — names the Agent type, the version and this hash,
 /// and no Deployment: one signature serves every Deployment that holds the Package.
 #[derive(Clone)]
@@ -246,25 +246,23 @@ pub struct Entry {
     pub content_hash: Vec<u8>,
     /// The artifact's size in bytes.
     pub size: u64,
-    /// The operator's Ed25519 signature over the statement for this entry, as `classisctl
-    /// package sign` makes it. `None` until one is written; new bytes remove it, because a
-    /// signature covers the hash (ADR-0033). An entry without one is offered to nobody.
+    /// The entry's `PackageSignature`, DER: a Package Signer's certificate and its Ed25519
+    /// signature over the statement for this entry (ADR-0063 clause 3), as a release's `.sig`
+    /// holds it in hex. Only one that verifies up to the Package Roots is ever held here.
+    /// `None` until one is written; new bytes remove it, because a signature covers the hash
+    /// (ADR-0033). An entry without one is offered to nobody.
     pub signature: Option<Vec<u8>>,
 }
 
-/// What the Server found when it checked an entry's signature (ADR-0033) — feedback for the
-/// operator, never a gate: the Agent's own verification is the one that decides.
+/// Whether an entry carries a signature (ADR-0063 clause 10). The Server holds only signatures
+/// that verified up to the Package Roots when written or loaded, so there is no third state; the
+/// Agent's own verification still decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignatureState {
     /// The entry carries no signature, and is offered to nobody.
     Missing,
-    /// The signature verifies against the Server's `[packages] verification_key`.
+    /// The signature verified up to the Package Roots.
     Valid,
-    /// The signature does not verify against that key. Stored and offered all the same: the
-    /// Server's key may lag behind the operator's, and the Client's check decides.
-    Invalid,
-    /// The entry carries a signature, and the Server holds no key to check it with.
-    Unchecked,
 }
 
 impl SignatureState {
@@ -273,42 +271,68 @@ impl SignatureState {
         match self {
             SignatureState::Missing => "missing",
             SignatureState::Valid => "valid",
-            SignatureState::Invalid => "invalid",
-            SignatureState::Unchecked => "unchecked",
         }
     }
 }
 
-/// The length of an Ed25519 signature (RFC 8032).
-pub(crate) const ED25519_SIGNATURE_LEN: usize = 64;
+/// Whether a stored signature has a length a `PackageSignature` can have (ADR-0063 clause 3).
+/// The stores refuse anything else as corrupt; whether it verifies is the store's check at load.
+pub(crate) fn signature_fits(signature: &[u8]) -> bool {
+    !signature.is_empty() && signature.len() <= classis_core::package::MAX_SIGNATURE_LEN
+}
 
-/// The signature check's port (ADR-0006, ADR-0033): whether `signature` is the operator's over
-/// `statement`. The Ed25519 adapter over `[packages] verification_key`
-/// ([`Ed25519Verifier`](crate::config::Ed25519Verifier)) is what the composition root wires.
+/// The signature check's port (ADR-0006, ADR-0063): whether `signature` verifies over
+/// `statement`, and if not, why. [`RootsVerifier`] over the compiled-in Package Roots is what the
+/// composition root wires; tests pass a test Root.
 pub trait SignatureVerifier: Send + Sync {
-    fn verifies(&self, statement: &[u8], signature: &[u8]) -> bool;
+    /// # Errors
+    /// Why the signature is refused, naming the step that failed.
+    fn verify(&self, statement: &[u8], signature: &[u8]) -> Result<(), String>;
+}
+
+/// The adapter behind [`SignatureVerifier`]: `classis_core::package::verify` up to a set of
+/// Package Roots, at the current time — the check the Client makes (ADR-0063 clause 4).
+pub struct RootsVerifier(classis_core::package::Roots);
+
+impl RootsVerifier {
+    /// Up to `roots`.
+    #[must_use]
+    pub fn new(roots: classis_core::package::Roots) -> Self {
+        RootsVerifier(roots)
+    }
+
+    /// Up to the Package Roots compiled into this binary (ADR-0063 clause 1).
+    #[must_use]
+    pub fn compiled() -> Self {
+        RootsVerifier(classis_core::package::Roots::compiled())
+    }
+}
+
+impl SignatureVerifier for RootsVerifier {
+    fn verify(&self, statement: &[u8], signature: &[u8]) -> Result<(), String> {
+        classis_core::package::verify_now(statement, signature, &self.0).map_err(|e| e.to_string())
+    }
 }
 
 /// Checks one entry's signature over the statement a Client verifies
-/// (`classis_core::package::statement`, ADR-0026 clause 54) with `verifier`, the operator's public
-/// key when the Server holds it (ADR-0033).
-pub fn signature_state(
-    verifier: Option<&dyn SignatureVerifier>,
+/// (`classis_core::package::statement`, ADR-0026 clause 54) with `verifier` (ADR-0063).
+fn verify_entry(
+    verifier: &dyn SignatureVerifier,
     id: &PackageId,
     entry: &Entry,
-) -> SignatureState {
-    let Some(signature) = entry.signature.as_deref() else {
-        return SignatureState::Missing;
-    };
-    let Some(verifier) = verifier else {
-        return SignatureState::Unchecked;
-    };
+    signature: &[u8],
+) -> Result<(), String> {
     let statement =
         classis_core::package::statement(&id.agent_type, &id.version, &entry.content_hash);
-    if verifier.verifies(&statement, signature) {
+    verifier.verify(&statement, signature)
+}
+
+/// Whether an entry carries a signature (ADR-0063 clause 10).
+pub fn signature_state(entry: &Entry) -> SignatureState {
+    if entry.signature.is_some() {
         SignatureState::Valid
     } else {
-        SignatureState::Invalid
+        SignatureState::Missing
     }
 }
 
@@ -377,7 +401,7 @@ pub struct EntrySummary {
 }
 
 impl PackageSummary {
-    fn of(set: &Package, key: Option<&dyn SignatureVerifier>) -> Self {
+    fn of(set: &Package) -> Self {
         PackageSummary {
             id: set.id.clone(),
             entries: set
@@ -390,7 +414,7 @@ impl PackageSummary {
                     content_hash: hex::encode(&entry.content_hash),
                     package_hash: hex::encode(set.package_hash(entry)),
                     signature: entry.signature.as_ref().map(hex::encode),
-                    signature_state: signature_state(key, &set.id, entry),
+                    signature_state: signature_state(entry),
                 })
                 .collect(),
         }
@@ -437,9 +461,9 @@ pub struct PackageStore {
     /// The blobs an upload or a deletion is working on while no lock on `sets` is held, so that
     /// no round trip to the blob store runs under it and the two never cross ([`Life`]).
     life: Mutex<Life>,
-    /// The check against the operator's public key, `[packages] verification_key` (ADR-0033).
-    /// Each entry's signature is reported by it; `None` reports every signature `unchecked`.
-    key: Option<Box<dyn SignatureVerifier>>,
+    /// The check every signature passes before it is held (ADR-0063 clause 10): the compiled-in
+    /// Package Roots unless [`PackageStore::with_verifier`] replaced them.
+    verifier: Box<dyn SignatureVerifier>,
 }
 
 impl PackageStore {
@@ -496,7 +520,7 @@ impl PackageStore {
             blobs,
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
-            key: None,
+            verifier: Box::new(RootsVerifier::compiled()),
         };
         // A blob no entry names is deleted at startup (ADR-0037 clause 4): an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -509,25 +533,43 @@ impl PackageStore {
         Ok(store)
     }
 
-    /// Arms the signature check with the operator's public key (ADR-0033), and checks every
-    /// stored signature against it now, as the store is loaded: an `invalid` one is logged and
-    /// kept, because the Server only reports — the Agent's own verification decides.
+    /// Replaces the Package Roots the signatures are checked against — tests pass a test Root —
+    /// and checks every stored signature now, as at load.
     #[must_use]
-    pub fn with_verifier(mut self, key: Option<Box<dyn SignatureVerifier>>) -> Self {
-        self.key = key;
-        for set in self.sets.read().expect("sets lock").values() {
-            for entry in set.entries.values() {
-                if signature_state(self.key.as_deref(), &set.id, entry) == SignatureState::Invalid {
+    pub fn with_verifier(mut self, verifier: Box<dyn SignatureVerifier>) -> Self {
+        self.verifier = verifier;
+        self.drop_unverified();
+        self
+    }
+
+    /// Removes every stored signature that does not verify (ADR-0063 clause 10) — one stored
+    /// before ADR-0063, 64 raw bytes, or one whose Package Signer has expired — naming each, so
+    /// the store holds only what an Agent would accept. Run when the store is loaded.
+    fn drop_unverified(&self) {
+        let mut sets = self.sets.write().expect("sets lock");
+        for set in sets.values_mut() {
+            let mut dropped = false;
+            for entry in set.entries.values_mut() {
+                let Some(signature) = entry.signature.clone() else {
+                    continue;
+                };
+                if let Err(why) = verify_entry(self.verifier.as_ref(), &set.id, entry, &signature) {
                     tracing::warn!(
                         package = %set.id,
                         platform = %entry.platform.tag(),
-                        "the stored signature does not verify against [packages] verification_key \
-                         — kept and offered; the Agent's own check decides"
+                        "the stored signature is removed, the entry is unsigned — {why}; upload \
+                         the release's .sig again"
                     );
+                    entry.signature = None;
+                    dropped = true;
+                }
+            }
+            if dropped {
+                if let Err(e) = self.backend.put(set) {
+                    tracing::warn!(package = %set.id, "the unsigned entries could not be persisted: {e}");
                 }
             }
         }
-        self
     }
 
     /// Every Package, in identity order — the REST list view; never the artifact bytes.
@@ -536,7 +578,7 @@ impl PackageStore {
             .read()
             .expect("sets lock")
             .values()
-            .map(|set| PackageSummary::of(set, self.key.as_deref()))
+            .map(PackageSummary::of)
             .collect()
     }
 
@@ -546,7 +588,7 @@ impl PackageStore {
             .read()
             .expect("sets lock")
             .get(id)
-            .map(|set| PackageSummary::of(set, self.key.as_deref()))
+            .map(PackageSummary::of)
     }
 
     /// The artifact of one entry, for the download to stream: its SHA-256 and its size. `None`
@@ -680,12 +722,12 @@ impl PackageStore {
         self.put_entry_from(id, platform, &mut artifact.as_slice())
     }
 
-    /// Writes the operator's signature onto one entry (ADR-0033), and answers what the Server found
-    /// when it checked it. An `invalid` signature is stored all the same: the Server only reports.
+    /// Writes a signature onto one entry (ADR-0033), once it verifies up to the Package Roots
+    /// (ADR-0063 clause 10). One that does not is refused and nothing is stored.
     ///
     /// # Errors
     /// `no package set …` or `no entry …` when there is nothing to sign (a `404`), and `the
-    /// signature …` when it is empty or not the 64 bytes of an Ed25519 signature (a `400`).
+    /// signature …` when it is empty or does not verify, naming the step that failed (a `400`).
     pub fn put_signature(
         &self,
         id: &PackageId,
@@ -697,13 +739,6 @@ impl PackageStore {
                 "the signature is empty — it says nothing; delete the one held instead".to_string(),
             );
         }
-        if signature.len() != ED25519_SIGNATURE_LEN {
-            return Err(format!(
-                "the signature must be the 64 bytes of an Ed25519 signature (128 hex characters, \
-                 as `classisctl package sign` prints it), not {} bytes",
-                signature.len()
-            ));
-        }
         let mut sets = self.sets.write().expect("sets lock");
         let set = sets
             .get_mut(id)
@@ -712,8 +747,10 @@ impl PackageStore {
             .entries
             .get_mut(platform)
             .ok_or_else(|| no_entry(id, platform))?;
+        verify_entry(self.verifier.as_ref(), id, entry, &signature)
+            .map_err(|why| format!("the signature is refused, nothing is stored — {why}"))?;
         let previous = entry.signature.replace(signature);
-        let state = signature_state(self.key.as_deref(), id, entry);
+        let state = signature_state(entry);
         if let Err(e) = self.backend.put(set) {
             // What did not reach the disk did not happen.
             if let Some(entry) = set.entries.get_mut(platform) {
@@ -1252,9 +1289,50 @@ fn aggregate_hash(set: &Package, entry: &Entry) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+/// A test Package Root for the tests of this crate (ADR-0063): the store on it, and its Package
+/// Signer's signature over an entry.
+#[cfg(test)]
+pub(crate) mod test_signing {
+    use super::{PackageId, PackageStore, RootsVerifier};
+    use classis_core::package::testing::{TestRoot, TestSigner};
+    use sha2::{Digest, Sha256};
+
+    /// The test Package Root and its one Package Signer, shared by every test.
+    pub(crate) fn test_root() -> &'static (TestRoot, TestSigner) {
+        static ROOT: std::sync::OnceLock<(TestRoot, TestSigner)> = std::sync::OnceLock::new();
+        ROOT.get_or_init(|| {
+            let root = TestRoot::new();
+            let signer = root.signer();
+            (root, signer)
+        })
+    }
+
+    /// The store on `dir`, checking signatures up to the test Root, as the binary does up to the
+    /// compiled-in ones.
+    pub(crate) fn open_store(dir: &std::path::Path) -> Result<PackageStore, String> {
+        PackageStore::open(dir.to_path_buf())
+            .map(|store| store.with_verifier(Box::new(RootsVerifier::new(test_root().0.roots()))))
+    }
+
+    /// The test Package Signer's `PackageSignature` over an entry of `id` holding `bytes`.
+    pub(crate) fn signed(id: &PackageId, bytes: &[u8]) -> Vec<u8> {
+        signed_hash(id, &Sha256::digest(bytes))
+    }
+
+    /// The same, over an entry whose SHA-256 is `hash`.
+    pub(crate) fn signed_hash(id: &PackageId, hash: &[u8]) -> Vec<u8> {
+        test_root()
+            .1
+            .sign_artifact(&id.agent_type, &id.version, hash)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use classis_core::package::testing::TestRoot;
+    use test_signing::{open_store, signed, test_root};
 
     fn linux() -> Platform {
         Platform::new("linux", "amd64").expect("platform")
@@ -1324,18 +1402,26 @@ mod tests {
     }
 
     /// Signs every entry the Package holds — what an operator does before anything of it is offered
-    /// (ADR-0033). The bytes are a stand-in: the store offers a signature it has not checked.
+    /// (ADR-0033) — with the test Package Signer (ADR-0063).
     fn sign_all(store: &PackageStore, id: &PackageId) {
-        let platforms: Vec<Platform> = store
+        let entries: Vec<(Platform, Vec<u8>)> = store
             .sets
             .read()
             .expect("sets lock")
             .get(id)
-            .map(|set| set.entries.keys().cloned().collect())
+            .map(|set| {
+                set.entries
+                    .values()
+                    .map(|e| (e.platform.clone(), e.content_hash.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
-        for platform in platforms {
+        for (platform, hash) in entries {
+            let signature = test_root()
+                .1
+                .sign_artifact(&id.agent_type, &id.version, &hash);
             store
-                .put_signature(id, &platform, vec![1u8; 64])
+                .put_signature(id, &platform, signature)
                 .expect("signature");
         }
     }
@@ -1398,7 +1484,7 @@ mod tests {
     fn a_set_survives_a_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         {
-            let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+            let store = open_store(dir.path()).expect("open");
             let set = id("otelcol", "1.2.3");
             store.create(&set).expect("create");
             store
@@ -1408,10 +1494,10 @@ mod tests {
                 .put_entry(&set, &windows(), b"windows-bytes".to_vec())
                 .expect("windows entry");
             store
-                .put_signature(&set, &windows(), vec![7u8; 64])
+                .put_signature(&set, &windows(), signed(&set, b"windows-bytes"))
                 .expect("signature");
         }
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("reopen");
+        let store = open_store(dir.path()).expect("reopen");
         let summary = store.summary(&id("otelcol", "1.2.3")).expect("summary");
         assert_eq!(summary.entries.len(), 2);
         assert_eq!(summary.entries[0].os, "linux");
@@ -1419,13 +1505,13 @@ mod tests {
         assert_eq!(summary.entries[0].signature_state, SignatureState::Missing);
         assert_eq!(summary.entries[1].size, 13);
         assert_eq!(
-            summary.entries[1].signature.as_deref(),
-            Some(hex::encode([7u8; 64]).as_str())
+            summary.entries[1].signature,
+            Some(hex::encode(signed(
+                &id("otelcol", "1.2.3"),
+                b"windows-bytes"
+            )))
         );
-        assert_eq!(
-            summary.entries[1].signature_state,
-            SignatureState::Unchecked
-        );
+        assert_eq!(summary.entries[1].signature_state, SignatureState::Valid);
     }
 
     /// ADR-0025: a saved Set reaches nobody by itself. It is a visible candidate, and only an
@@ -1433,7 +1519,7 @@ mod tests {
     #[test]
     fn a_saved_set_reaches_nobody_without_an_assignment() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.0.0", b"bytes");
         assert_eq!(
             candidates(&store, &agent("linux", "amd64", &[])),
@@ -1456,7 +1542,7 @@ mod tests {
     #[test]
     fn an_entry_without_a_signature_is_offered_to_nobody() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.0.0", b"bytes");
         let stable = channel(&set);
         let linux = agent("linux", "amd64", &[]);
@@ -1479,12 +1565,12 @@ mod tests {
     #[test]
     fn a_signature_lives_on_its_entry_and_new_bytes_remove_it() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.0.0", b"first");
         let linux_agent = agent("linux", "amd64", &[]);
         assert_eq!(
-            store.put_signature(&set, &linux(), vec![5u8; 64]),
-            Ok(SignatureState::Unchecked)
+            store.put_signature(&set, &linux(), signed(&set, b"first")),
+            Ok(SignatureState::Valid)
         );
         let offer = store
             .offer_for_assigned(Some(&set), Some(&linux_agent))
@@ -1495,7 +1581,7 @@ mod tests {
                 .as_ref()
                 .expect("file")
                 .signature,
-            vec![5u8; 64]
+            signed(&set, b"first")
         );
 
         store
@@ -1511,7 +1597,7 @@ mod tests {
         );
 
         store
-            .put_signature(&set, &linux(), vec![6u8; 64])
+            .put_signature(&set, &linux(), signed(&set, b"second"))
             .expect("signed again");
         assert_eq!(store.remove_signature(&set, &linux()), Ok(true));
         assert_eq!(store.remove_signature(&set, &linux()), Ok(false));
@@ -1520,16 +1606,17 @@ mod tests {
             .is_none());
     }
 
-    /// A signature has to name an entry the Package holds (`no entry`, a `404`), and has to be
-    /// one: empty or not 64 bytes is refused (a `400`) and nothing is stored (ADR-0033 clause 6).
-    /// Verifies: ADR-0033
+    /// A signature has to name an entry the Package holds (`no entry`, a `404`), and has to verify:
+    /// empty, a bare 64-byte signature, or one over another entry is refused (a `400`) and nothing
+    /// is stored (ADR-0033 clause 6, ADR-0063 clause 9).
+    /// Verifies: ADR-0033, ADR-0063
     #[test]
     fn a_signature_needs_an_entry_and_the_shape_of_one() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.0.0", b"bytes");
         assert!(store
-            .put_signature(&set, &windows(), vec![1u8; 64])
+            .put_signature(&set, &windows(), signed(&set, b"bytes"))
             .expect_err("no windows entry")
             .starts_with("no entry"));
         assert!(store
@@ -1537,10 +1624,15 @@ mod tests {
             .expect_err("no windows entry")
             .starts_with("no entry"));
         assert!(store
-            .put_signature(&id("otelcol", "9.9.9"), &linux(), vec![1u8; 64])
+            .put_signature(&id("otelcol", "9.9.9"), &linux(), signed(&set, b"bytes"))
             .expect_err("no such package")
             .starts_with("no package set"));
-        for refused in [Vec::new(), vec![1u8; 63], vec![1u8; 65]] {
+        for refused in [
+            Vec::new(),
+            vec![1u8; 64],
+            signed(&set, b"other bytes"),
+            signed(&id("promtail", "1.0.0"), b"bytes"),
+        ] {
             assert!(store
                 .put_signature(&set, &linux(), refused)
                 .expect_err("refused")
@@ -1552,27 +1644,17 @@ mod tests {
         );
     }
 
-    /// With the operator's public key the Server reports a signature over the statement `valid` and
-    /// any other `invalid` — and stores both; without the key every signature is `unchecked`
-    /// (ADR-0033 clause 7). The state is checked again when the store is reopened.
-    /// Verifies: ADR-0033
+    /// The Server holds only a signature that verifies up to its Package Roots (ADR-0063 clause
+    /// 10): a Package Signer of another Root is refused on write, and a stored signature that no
+    /// longer verifies — 64 raw bytes from before ADR-0063 — is removed when the store is loaded,
+    /// for good.
+    /// Verifies: ADR-0063
     #[test]
-    fn the_server_checks_a_signature_against_its_key_and_only_reports() {
-        let rng = ring::rand::SystemRandom::new();
-        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-        let keypair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-        let public = ring::signature::KeyPair::public_key(&keypair)
-            .as_ref()
-            .to_vec();
-
+    fn the_server_refuses_what_does_not_verify_and_drops_it_on_load() {
         let dir = tempfile::tempdir().expect("tempdir");
         let set = id("otelcol", "1.0.0");
         {
-            let store = PackageStore::open(dir.path().to_path_buf())
-                .expect("open")
-                .with_verifier(Some(Box::new(crate::config::Ed25519Verifier::new(
-                    public.clone(),
-                ))));
+            let store = open_store(dir.path()).expect("open");
             store.create(&set).expect("create");
             store
                 .put_entry(&set, &linux(), b"linux".to_vec())
@@ -1580,33 +1662,24 @@ mod tests {
             store
                 .put_entry(&set, &windows(), b"windows".to_vec())
                 .expect("entry");
-            let hash = Sha256::digest(b"linux").to_vec();
-            let good = keypair
-                .sign(&classis_core::package::statement("otelcol", "1.0.0", &hash))
-                .as_ref()
-                .to_vec();
             assert_eq!(
-                store.put_signature(&set, &linux(), good),
+                store.put_signature(&set, &linux(), signed(&set, b"linux")),
                 Ok(SignatureState::Valid)
             );
-            // A signature over another type's statement does not verify for this one.
-            let wrong = keypair
-                .sign(&classis_core::package::statement(
-                    "promtail", "1.0.0", &hash,
-                ))
-                .as_ref()
-                .to_vec();
-            assert_eq!(
-                store.put_signature(&set, &windows(), wrong),
-                Ok(SignatureState::Invalid),
-                "an invalid signature is stored and reported, never refused"
+            let theirs = TestRoot::new().signer().sign_artifact(
+                "otelcol",
+                "1.0.0",
+                &Sha256::digest(b"windows"),
             );
-            assert!(
-                store
-                    .offer_for_assigned(Some(&set), Some(&agent("windows", "amd64", &[])))
-                    .is_some(),
-                "and offered: the Client's check decides"
-            );
+            let refused = store
+                .put_signature(&set, &windows(), theirs)
+                .expect_err("another Root's Package Signer");
+            assert!(refused.starts_with("the signature is refused"), "{refused}");
+            assert!(refused.contains("Package Root"), "{refused}");
+            // What a Server before ADR-0063 kept: a bare signature, written past the check.
+            let mut old = store.sets.read().expect("sets lock")[&set].clone();
+            old.entries.get_mut(&windows()).expect("entry").signature = Some(vec![1u8; 64]);
+            store.backend.put(&old).expect("write the old form");
         }
         let states = |store: &PackageStore| -> Vec<SignatureState> {
             store
@@ -1617,17 +1690,21 @@ mod tests {
                 .map(|entry| entry.signature_state)
                 .collect()
         };
-        let reopened = PackageStore::open(dir.path().to_path_buf())
-            .expect("reopen")
-            .with_verifier(Some(Box::new(crate::config::Ed25519Verifier::new(public))));
+        let reopened = open_store(dir.path()).expect("reopen");
         assert_eq!(
             states(&reopened),
-            [SignatureState::Valid, SignatureState::Invalid]
+            [SignatureState::Valid, SignatureState::Missing],
+            "the old signature is dropped, the verified one kept"
         );
-        let keyless = PackageStore::open(dir.path().to_path_buf()).expect("reopen");
+        assert!(reopened
+            .offer_for_assigned(Some(&set), Some(&agent("windows", "amd64", &[])))
+            .is_none());
+        drop(reopened);
+        let raw = PackageStore::open(dir.path().to_path_buf()).expect("reopen without a check");
         assert_eq!(
-            states(&keyless),
-            [SignatureState::Unchecked, SignatureState::Unchecked]
+            states(&raw),
+            [SignatureState::Valid, SignatureState::Missing],
+            "and the removal was persisted"
         );
     }
 
@@ -1638,7 +1715,7 @@ mod tests {
     #[test]
     fn fits_agent_checks_fit_but_neither_aim_nor_the_ranking() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let empty = id("otelcol", "0.9.0");
         store.create(&empty).expect("create");
         assert!(store
@@ -1707,7 +1784,7 @@ mod tests {
     #[test]
     fn fits_agent_refuses_what_is_not_an_upgrade() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let old = stored_set(&store, "otelcol", "1.0.0", b"v1");
         let new = stored_set(&store, "otelcol", "2.0.0", b"v2");
         let host = agent("linux", "amd64", &[]);
@@ -1752,7 +1829,7 @@ mod tests {
     #[test]
     fn a_set_that_is_no_upgrade_is_no_candidate() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "1.0.0", b"v1");
         stored_set(&store, "otelcol", "2.0.0", b"v2");
         let host = agent("linux", "amd64", &[]);
@@ -1777,7 +1854,7 @@ mod tests {
     #[test]
     fn a_set_is_held_against_the_version_an_agent_reports_running() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "2.0.0", b"v2");
         let nothing = InstalledVersions::new();
 
@@ -1819,7 +1896,7 @@ mod tests {
     #[test]
     fn the_version_an_agent_runs_wins_over_the_version_it_claims() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "2.0.0", b"v2");
 
         // A program above the Set holds it back, whatever the claim admits.
@@ -1836,7 +1913,7 @@ mod tests {
         // A Collector numbering itself far below the Package that carries it: every version above
         // that number clears the test, the claim notwithstanding. Which of them an Agent gets is
         // not decided here — a channel holds one, and there is nothing to rank.
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("reopen");
+        let store = open_store(dir.path()).expect("reopen");
         stored_set(&store, "otelcol", "1.5.0", b"v15");
         assert_eq!(
             candidates_for(
@@ -1870,7 +1947,7 @@ mod tests {
     #[test]
     fn a_claim_the_running_program_denies_no_longer_holds_the_set_back() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "0.4.1", b"v041");
         let claims_041 = installed(&[("otelcol", "0.4.1")]);
 
@@ -1922,7 +1999,7 @@ mod tests {
     #[test]
     fn a_claim_above_the_set_no_longer_holds_it_back_either() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "0.4.1", b"v041");
         let claims_042 = installed(&[("otelcol", "0.4.2")]);
 
@@ -1957,7 +2034,7 @@ mod tests {
     #[test]
     fn a_program_version_nothing_can_order_leaves_the_set_reaching() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "2.0.0", b"v2");
         let nothing = InstalledVersions::new();
 
@@ -1983,7 +2060,7 @@ mod tests {
     #[test]
     fn only_the_package_its_ring_holds_is_a_candidate() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let a = stored_set(&store, "otelcol", "2.0.0", b"a");
         let b = stored_set(&store, "otelcol", "3.0.0", b"b");
         let host = agent("linux", "amd64", &[]);
@@ -2017,7 +2094,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let legacy = PackageId::load("otelcol", "1.19").expect("a token");
         {
-            let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+            let store = open_store(dir.path()).expect("open");
             store.create(&legacy).expect("create");
             store
                 .put_entry(&legacy, &linux(), b"old".to_vec())
@@ -2034,10 +2111,8 @@ mod tests {
             .with_writer(writer)
             .with_ansi(false)
             .finish();
-        let store = tracing::subscriber::with_default(subscriber, || {
-            PackageStore::open(dir.path().to_path_buf())
-        })
-        .expect("a store holding a non-SemVer Package opens");
+        let store = tracing::subscriber::with_default(subscriber, || open_store(dir.path()))
+            .expect("a store holding a non-SemVer Package opens");
         let logs = String::from_utf8(logs.lock().expect("logs").clone()).expect("utf-8");
         assert!(
             logs.contains("WARN") && logs.contains("otelcol@1.19") && logs.contains("SemVer"),
@@ -2086,7 +2161,7 @@ mod tests {
     #[test]
     fn fit_is_mandatory_platform_and_type() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         stored_set(&store, "otelcol", "1.0.0", b"linux-only");
         let foreign = PackageId::new("promtail", "1.0.0").expect("id");
         store.create(&foreign).expect("create");
@@ -2117,7 +2192,7 @@ mod tests {
     #[test]
     fn both_sides_of_the_comparison_are_canonicalised() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = id("otelcol", "1.0.0");
         store.create(&set).expect("create");
         let mac = Platform::new("macos", "x86_64").expect("canonicalised");
@@ -2139,7 +2214,7 @@ mod tests {
     #[test]
     fn the_offer_carries_a_download_url_naming_the_identity() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.2.3", b"bytes");
         sign_all(&store, &set);
         let offer = store
@@ -2161,7 +2236,7 @@ mod tests {
     #[test]
     fn the_aggregate_hash_is_per_agent_and_follows_the_assignment() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let v1 = stored_set(&store, "otelcol", "1.0.0", b"v1");
         let hash = |assigned: Option<&PackageId>, os: &str| {
             store.assigned_hash_for(assigned, Some(&agent(os, "amd64", &[])))
@@ -2187,7 +2262,7 @@ mod tests {
     #[test]
     fn deletion_frees_entries_and_sets() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = id("otelcol", "1.0.0");
         store.create(&set).expect("create");
         store
@@ -2223,7 +2298,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let (one, two) = (id("otelcol", "1.0.0"), id("otelcol", "1.0.1"));
         for set in [&one, &two] {
             store.create(set).expect("create");
@@ -2256,7 +2331,7 @@ mod tests {
         assert!(blobs().is_empty(), "the last entry took its blob with it");
 
         std::fs::write(dir.path().join("blobs").join(&sha256), b"same bytes").expect("orphan");
-        PackageStore::open(dir.path().to_path_buf()).expect("reopen");
+        open_store(dir.path()).expect("reopen");
         assert!(
             blobs().is_empty(),
             "a blob no entry names is deleted at startup"
@@ -2271,7 +2346,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let set = id("otelcol", "1.0.0");
         {
-            let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+            let store = open_store(dir.path()).expect("open");
             store.create(&set).expect("create");
             store
                 .put_entry(&set, &linux(), b"good bytes".to_vec())
@@ -2279,16 +2354,14 @@ mod tests {
         }
         let sha256 = hex::encode(Sha256::digest(b"good bytes"));
         std::fs::write(dir.path().join("blobs").join(&sha256), b"tampered").expect("tamper");
-        let err = PackageStore::open(dir.path().to_path_buf())
-            .map(|_| ())
-            .expect_err("must refuse");
+        let err = open_store(dir.path()).map(|_| ()).expect_err("must refuse");
         assert!(
             err.contains("does not match") && err.contains(&sha256),
             "{err}"
         );
 
         std::fs::remove_file(dir.path().join("blobs").join(&sha256)).expect("lose it");
-        let err = PackageStore::open(dir.path().to_path_buf())
+        let err = open_store(dir.path())
             .map(|_| ())
             .expect_err("an entry whose blob is gone is refused");
         assert!(err.contains("not stored"), "{err}");
@@ -2302,7 +2375,7 @@ mod tests {
     fn the_store_and_its_metadata_are_owner_only() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = id("otelcol", "1.0.0");
         store.create(&set).expect("create");
         store
@@ -2340,7 +2413,7 @@ mod tests {
             let path = dir.path().join("packages").join(relative);
             std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
             std::fs::write(&path, contents).expect("write");
-            let error = PackageStore::open(dir.path().to_path_buf())
+            let error = open_store(dir.path())
                 .map(|_| ())
                 .expect_err("an older layout is refused, never read as an empty store");
             let named = relative.split('/').next().expect("first segment");
@@ -2380,7 +2453,7 @@ mod tests {
             .to_string(),
         )
         .expect("metadata");
-        let error = PackageStore::open(dir.path().to_path_buf())
+        let error = open_store(dir.path())
             .map(|_| ())
             .expect_err("a referenced entry is refused");
         assert!(
@@ -2393,7 +2466,7 @@ mod tests {
     /// the open naming the file, rather than being offered for every Client to refuse.
     /// Verifies: ADR-0033
     #[test]
-    fn a_stored_signature_of_the_wrong_length_fails_the_open_naming_it() {
+    fn a_stored_signature_of_an_impossible_length_fails_the_open_naming_it() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("packages")).expect("dir");
         std::fs::write(
@@ -2406,15 +2479,15 @@ mod tests {
                     "arch": "amd64",
                     "sha256": "00".repeat(32),
                     "size": 1,
-                    "signature_hex": "ab".repeat(63)
+                    "signature_hex": "ab".repeat(classis_core::package::MAX_SIGNATURE_LEN + 1)
                 }]
             })
             .to_string(),
         )
         .expect("metadata");
-        let error = PackageStore::open(dir.path().to_path_buf())
+        let error = open_store(dir.path())
             .map(|_| ())
-            .expect_err("a short signature is refused");
+            .expect_err("an oversized signature is refused");
         assert!(
             error.contains("otelcol@1.0.0.json") && error.contains("signature"),
             "the error names the file and the signature: {error}"
@@ -2494,7 +2567,7 @@ mod tests {
     #[test]
     fn the_download_and_the_offer_test_one_predicate() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let v1 = stored_set(&store, "otelcol", "1.0.0", b"v1-linux");
         store
             .put_entry(&v1, &windows(), b"v1-windows".to_vec())
@@ -2521,8 +2594,11 @@ mod tests {
         ];
         for signed in signing {
             for (id, platform) in signed {
+                let hash = store.sets.read().expect("sets lock")[*id].entries[platform]
+                    .content_hash
+                    .clone();
                 store
-                    .put_signature(id, platform, vec![1u8; 64])
+                    .put_signature(id, platform, test_signing::signed_hash(id, &hash))
                     .expect("signature");
             }
             for assigned in [None, Some(&v1), Some(&v2), Some(&other)] {
@@ -2557,7 +2633,7 @@ mod tests {
     #[test]
     fn an_agent_reporting_another_type_is_offered_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.0.0", b"bytes");
         sign_all(&store, &set);
         let renamed = typed_agent("otelcol-contrib", "linux");
@@ -2582,13 +2658,13 @@ mod tests {
     #[test]
     fn an_unsigned_entry_is_not_offered_though_another_is_signed() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = PackageStore::open(dir.path().to_path_buf()).expect("open");
+        let store = open_store(dir.path()).expect("open");
         let set = stored_set(&store, "otelcol", "1.0.0", b"linux");
         store
             .put_entry(&set, &windows(), b"windows".to_vec())
             .expect("entry");
         store
-            .put_signature(&set, &windows(), vec![1u8; 64])
+            .put_signature(&set, &windows(), signed(&set, b"windows"))
             .expect("signature");
         let linux_agent = agent("linux", "amd64", &[]);
         assert!(store

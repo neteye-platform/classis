@@ -82,10 +82,10 @@ pub struct ClientConfig {
     /// superseded version. Absent takes the defaults: one day.
     #[serde(default)]
     pub updates: UpdatesConfig,
-    /// The `[packages].verification_key` decoded once at load — the Ed25519 public key a package
-    /// signature is checked against. Set from the file at load; not itself a file key.
-    #[serde(skip)]
-    pub package_key: Option<Vec<u8>>,
+    /// The Package Roots a package signature is verified up to (ADR-0063 clause 1): the ones
+    /// compiled into this binary. Not a file key; tests put a test Root here.
+    #[serde(skip, default = "classis_core::package::Roots::compiled")]
+    pub package_roots: classis_core::package::Roots,
     /// The file's own text with secret values masked (see
     /// [`redact_secrets`](crate::config_file::redact_secrets)), kept from load so the Client's own
     /// Agent can report it as its effective configuration — the file *is* what this Client runs (a
@@ -559,12 +559,11 @@ pub struct PackagesConfig {
     /// The consent is narrowed to one package, the Client's own Agent type, and that name is not
     /// configurable: a package with an empty Selector reaches every Agent that accepts packages
     /// (ADR-0026), so without the name the first fleet-wide Collector artifact would be installed
-    /// over the Client. Whether the consent takes effect is decided by `verification_key`.
+    /// over the Client.
     #[serde(default = "default_self_update")]
     pub self_update: bool,
-    /// Hex-encoded Ed25519 public key. Every offered package MUST carry a valid signature against
-    /// it; without it this Client takes no packages at all, its own self-update included
-    /// (ADR-0026, ADR-0018).
+    /// No longer read (ADR-0063 clause 11): signatures are verified up to the compiled-in
+    /// Package Roots. Kept so an old file loads; the Client says at startup that it is ignored.
     pub verification_key: Option<String>,
     /// `allowed_sources`, which ADR-0033 removed: a package is downloaded only from this Client's
     /// own Server origin. Read only so that [`ClientConfig::checked`] can refuse it by name — a
@@ -954,7 +953,7 @@ impl Default for ClientConfig {
             leftover_auth: None,
             packages: None,
             leftover_self_update: None,
-            package_key: None,
+            package_roots: classis_core::package::Roots::compiled(),
             source: None,
             path: None,
             state_dir_as_written: default_state_dir(),
@@ -986,7 +985,7 @@ impl ClientConfig {
     /// # Errors
     /// Returns the first rule the configuration breaks, naming the file.
     pub fn checked(self, path: &Path) -> Result<Self, String> {
-        let mut config = self;
+        let config = self;
         config.check_supervisor_names()?;
         // A name no block can ever carry would switch nothing off, silently (ADR-0017 clause 49).
         for name in &config.supervisor_defaults.remote_config_disabled {
@@ -1033,21 +1032,6 @@ impl ClientConfig {
                 .check(&config.endpoint)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        // Decode the package verification key once — a malformed key must fail startup, not the
-        // first package offer.
-        if let Some(key_hex) = config
-            .packages
-            .as_ref()
-            .and_then(|p| p.verification_key.as_ref())
-        {
-            let key = hex::decode(key_hex).map_err(|e| {
-                format!(
-                    "{}: [packages].verification_key is not valid hex: {e}",
-                    path.display()
-                )
-            })?;
-            config.package_key = Some(key);
-        }
         // A limit of zero would refuse every message, and the Baseline knows no "unlimited": the
         // limit is mandatory, so a value that cannot carry a message fails startup.
         if config.max_message_size_bytes == 0 {
@@ -1078,9 +1062,21 @@ impl ClientConfig {
         Ok(config)
     }
 
-    /// The Ed25519 public key package signatures are verified against (ADR-0026), or `None`.
-    pub fn package_key(&self) -> Option<&[u8]> {
-        self.package_key.as_deref()
+    /// The Package Roots package signatures are verified up to (ADR-0063).
+    pub fn package_roots(&self) -> &classis_core::package::Roots {
+        &self.package_roots
+    }
+
+    /// The startup warning for a `[packages] verification_key` that is no longer read (ADR-0063
+    /// clause 11), if the file holds one.
+    pub fn ignored_key_warning(&self) -> Option<&'static str> {
+        self.packages
+            .as_ref()
+            .and_then(|p| p.verification_key.as_ref())
+            .map(|_| {
+                "[packages] verification_key is ignored: package signatures are checked up to the \
+                 Package Roots compiled into this Client (ADR-0063) — remove the key"
+            })
     }
 
     /// The CA bundle that replaces the built-in roots, when one is configured (ADR-0013).

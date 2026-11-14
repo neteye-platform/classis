@@ -485,33 +485,37 @@ async fn main() {
         // ADR-0016.
         info!("offering the fleet somewhere to send its own telemetry");
     }
-    let packages = config
-        .packages
-        .verification_key()
-        .and_then(|key| {
-            if key.is_some() {
-                // ADR-0033.
-                info!("checking package signatures against [packages] verification_key");
-            }
-            classis_server::packages::PackageStore::open_on(
-                &records,
-                &config.data_dir,
-                &config.blobs,
-            )
+    if let Some(warning) = config.packages.ignored_key_warning() {
+        warn!("{warning}");
+    }
+    let roots = classis_core::package::Roots::compiled();
+    if let Some(path) = classis_core::package::Roots::debug_root() {
+        // ADR-0063 clause 1: a debug build only.
+        warn!(
+            "a debug build: also trusting the Package Root in {} ({})",
+            path.display(),
+            classis_core::package::DEBUG_ROOT_ENV
+        );
+    }
+    // ADR-0063 clause 1.
+    info!(
+        roots = roots.len(),
+        "checking package signatures up to the compiled-in Package Roots"
+    );
+    let packages =
+        classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
             .map(|store| {
-                store.with_verifier(key.map(|key| {
-                    Box::new(classis_server::config::Ed25519Verifier::new(key))
-                        as Box<dyn classis_server::packages::SignatureVerifier>
-                }))
+                store.with_verifier(Box::new(classis_server::packages::RootsVerifier::new(
+                    roots,
+                )))
             })
-        })
-        .and_then(|store| {
-            if !store.is_empty() {
-                // ADR-0026.
-                info!("offering software packages to the fleet");
-            }
-            classis_server::fleet::PackageOffering::on(&records, store)
-        });
+            .and_then(|store| {
+                if !store.is_empty() {
+                    // ADR-0026.
+                    info!("offering software packages to the fleet");
+                }
+                classis_server::fleet::PackageOffering::on(&records, store)
+            });
     let packages = match packages {
         Ok(offering) => Some(offering),
         Err(e) => {

@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use classis_server::fleet::{AgentView, AppState, PackageOffering};
 use classis_server::packages::{PackageStore, Platform};
-use ring::signature::{Ed25519KeyPair, KeyPair};
 
 /// Puts a Package into a ring aimed at the Agent type it is built for, with the artifact's signature
 /// on the ring — where a signature lives (ADR-0026) — and hands back the ring's name. A Package
@@ -97,6 +96,10 @@ async fn spawn_server(
 fn spawn_client(config_path: &Path) -> ClientUnderTest {
     ClientUnderTest(
         Command::new(env!("CARGO_BIN_EXE_supervisor"))
+            .env(
+                classis_core::package::DEBUG_ROOT_ENV,
+                &common::package_roots().ours_file,
+            )
             .arg("--config")
             .arg(config_path)
             .stdout(Stdio::null())
@@ -119,21 +122,16 @@ fn view<'a>(agents: &'a [AgentView], name: &str) -> Option<&'a AgentView> {
 async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed() {
     // The artifact is the stub binary itself — a real executable that stays up when swapped in.
     let artifact = std::fs::read(env!("CARGO_BIN_EXE_stub_agent")).expect("read stub");
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-    let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-    let public_key_hex = hex::encode(keypair.public_key().as_ref());
-    let signature = keypair
+    let signature = common::package_roots()
+        .signer
         .sign(&classis_core::package::statement(
             "managed-agent",
             "2.0.0",
             &<sha2::Sha256 as sha2::Digest>::digest(&artifact),
-        ))
-        .as_ref()
-        .to_vec();
+        ));
 
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     // The Set's identity states the Agent type it is built for (ADR-0026): the
     // Supervisor below names its program `managed-agent` and sets no `service_name`, so that file
     // name is the type it reports.
@@ -166,7 +164,6 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
             "state_dir = {state:?}\n",
             "heartbeat_interval_secs = 1\n\n",
             "[packages]\n",
-            "verification_key = \"{key}\"\n\n",
             "[[supervisor]]\n",
             "type = \"command\"\n",
             "name = \"myagent\"\n",
@@ -176,7 +173,6 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         ),
         addr = addr,
         state = state_dir.to_string_lossy(),
-        key = public_key_hex,
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
@@ -243,21 +239,16 @@ async fn a_package_that_fails_the_configured_version_check_is_refused() {
     let artifact = std::fs::read(env!("CARGO_BIN_EXE_stub_agent")).expect("read stub");
     // Signed, as everything a Client installs is (ADR-0026): the refusal under test is the version
     // check's, not the signature policy's.
-    let rng = ring::rand::SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("keygen");
-    let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("keypair");
-    let public_key_hex = hex::encode(keypair.public_key().as_ref());
-    let signature = keypair
+    let signature = common::package_roots()
+        .signer
         .sign(&classis_core::package::statement(
             "managed-agent",
             "2.0.0",
             &<sha2::Sha256 as sha2::Digest>::digest(&artifact),
-        ))
-        .as_ref()
-        .to_vec();
+        ));
 
     let store_dir = tempfile::tempdir().expect("store dir");
-    let store = PackageStore::open(store_dir.path().to_path_buf()).expect("store");
+    let store = common::server_store(store_dir.path());
     let set =
         classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
     store.create(&set).expect("create package");
@@ -287,7 +278,6 @@ async fn a_package_that_fails_the_configured_version_check_is_refused() {
             "state_dir = {state:?}\n",
             "heartbeat_interval_secs = 1\n\n",
             "[packages]\n",
-            "verification_key = \"{key}\"\n\n",
             "[[supervisor]]\n",
             "type = \"command\"\n",
             "name = \"myagent\"\n",
@@ -298,7 +288,6 @@ async fn a_package_that_fails_the_configured_version_check_is_refused() {
         ),
         addr = addr,
         state = state_dir.to_string_lossy(),
-        key = public_key_hex,
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");

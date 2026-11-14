@@ -93,6 +93,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Ed25519 verification of downloaded package artifacts (ADR-0026) — the same ring already vendored
 # for TLS, used directly, so no new crypto backend enters the build.
 ring = "0.17"
+# A Package Signer's certificate is verified up to a compiled-in Package Root (ADR-0063): the
+# certificate path validation rustls already uses, on the same ring backend, declared directly so
+# `classis-core` names it. Already in the tree through rustls; no new crate enters the build.
+rustls-webpki = { version = "0.103", default-features = false, features = ["std", "ring"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 # Operators' Basic passwords are kept as Argon2id hashes, never in clear (ADR-0021); the
 # RustCrypto implementation, pure Rust, no system library.
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "password-hash"] }

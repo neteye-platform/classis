@@ -25,8 +25,18 @@ The example is `promtail` — one static binary, which is the requirement (see
 
 ## Limits worth knowing first
 
-Three properties of package delivery decide whether this path is open to a given
+Four properties of package delivery decide whether this path is open to a given
 agent. Reading them first is cheaper than discovering them at rollout time.
+
+- **Today the path ends at step 3 for any program but the Client.** A Client
+  and the Server accept a signature only from a Package Signer that the
+  project's Package Root issued, and the project's release run holds the only
+  one, for the Client's own archives. A signature made with a key of your own is
+  refused by the Server (`400`) and by every Client, so `promtail`, the
+  Collector or a program of your own cannot be delivered until Package Signers
+  exist for them. The steps below show the path as it stands; the Client's own
+  update follows it with the release's `.sig` files
+  ([Updating the Client itself](client.md#updating-the-client-itself)).
 
 - **One file by default, a whole tree when you say so.** A statically linked
   single binary — Promtail, Vector, a Go or Rust agent — needs nothing extra. An
@@ -49,13 +59,10 @@ agent. Reading them first is cheaper than discovering them at rollout time.
 
 The program's _written form_ is the whole of this host's consent to being
 updated. A bare file name puts the program in a directory the Client owns.
-Together with the fleet's verification key, that is what makes this Agent
-declare `AcceptsPackages`:
+That is what makes this Agent declare `AcceptsPackages`, with nothing else to
+configure:
 
 ```toml
-[packages]
-verification_key = "<the public key from step 3>"
-
 [[supervisor]]
 type = "command"
 name = "promtail"
@@ -63,9 +70,6 @@ command = "promtail"                  # bare: <supervisor_dir>/promtail/program/
 args = ["-config.file=${config_dir}/promtail-conf"]
 version_args = ["--version"]
 ```
-
-Without `[packages] verification_key` the Client takes no package at all, and
-says so at startup.
 
 Two things this block gets right that are easy to get wrong:
 
@@ -81,8 +85,8 @@ Two things this block gets right that are easy to get wrong:
 **Nothing has to be installed on the host first.** Start the Client with the
 program absent and the Agent comes up, connects, and reports
 `no process installed` — a Supervisor with no process, said plainly, rather than
-a spawn error. With the verification key set it declares `AcceptsPackages` all
-the same, so the first version arrives the same way every later one does.
+a spawn error. It declares `AcceptsPackages` all the same, so the first version
+arrives the same way every later one does.
 
 **The block does not have to be written on the host either.** A Configuration
 typed `supervisor` — the Client's own Agent type — whose body carries this
@@ -186,18 +190,20 @@ different name on disk.
 
 ## 3. Sign it
 
-```console
-$ classisctl package keygen --out fleet-signing.pk8     # prints the public key (hex)
-$ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
-      promtail-3.0.0.tar.gz)
-```
+A signature is the certificate of a Package Signer and that signer's Ed25519
+signature over the Agent type, the version and the artifact's SHA-256, in one
+value written as lowercase hex. The Server and every Client check it up to the
+Package Roots compiled into them; nothing is configured for it on either side.
 
-Put the public key in every Client's `[packages] verification_key`, and —
-optionally — in the Server's, which then checks each signature you give it and
-says whether it is valid. Signing is not optional: a Client without the key
-takes no package, an offer without a signature is refused before anything is
-downloaded, and the Server offers no entry that carries no signature. Keep the
-private key off the Server host.
+The release's `.sig` files are such signatures, for the Client's own archives.
+For `promtail` there is none to be had yet (see
+[Limits](#limits-worth-knowing-first)). `classisctl package keygen` and
+`package sign` still exist, but what they make comes from a key of your own, and
+the Server refuses it in step 4.
+
+Signing is not optional: an offer without a signature is refused before
+anything is downloaded, and the Server offers no entry that carries no
+signature.
 
 The download route requires the Client's certificate, and the content hash and
 this signature are what protect an installed binary.
@@ -246,12 +252,11 @@ $ curl --cacert ca.pem -X PUT -H 'Content-Type: application/json' -d "{\"signatu
        https://127.0.0.1:4321/api/v1/packages/promtail/3.0.0/entries/linux/amd64/signature
 ```
 
-The answer shows the entry's `signature_state`: `valid` or `invalid` when the
-Server holds `[packages] verification_key`, `unchecked` when it does not. An
-`invalid` one is stored and shown as a warning, never refused — each Client's
-own check decides — but a Client with the right key will refuse that artifact,
-so fix it before the rollout. Uploading new bytes to an entry removes its
-signature: it covered the old hash.
+The Server checks the signature up to the Package Roots compiled into it. One
+that does not verify answers `400`, naming the step that failed, and nothing is
+stored; the answer to one that does shows the entry's `signature_state` as
+`valid`. Uploading new bytes to an entry removes its signature: it covered the
+old hash.
 
 Their values are what an Agent reports as `os.type` and `host.arch` — `linux`,
 `darwin`, `windows` and `amd64`, `arm64`. The tokens off an upstream release
@@ -271,11 +276,9 @@ rollout in step 6 is refused while any is left. The Agent type has nothing to do
 with the member name inside the archive — only the _member_ has to match the
 configured program.
 
-For a Package of several platforms, sign them in one go instead: download the
-Package's **Signing info**, sign it with
-`classisctl package sign --signing-info`, and import it on the Packages tab
-— the steps, and the comparison of hashes they depend on, are in
-[Signing a whole Package at once](tools.md#signing-a-whole-package-at-once).
+The Packages tab's **Signing info** and **Import signing file** still exist, but
+the signatures `classisctl package sign --signing-info` puts in the file come
+from a key of your own, and the Server refuses each of them.
 
 ## 5. Put it in a deployment
 
@@ -385,7 +388,7 @@ What to look for, in the order it happens:
 
 | Field                                      | What it tells you                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `capabilities` contains `AcceptsPackages`  | The block's program is named the way step 1 describes, and the Client holds `[packages] verification_key`. If it is missing, nothing else below will happen.                                                                                                                                                                                                  |
+| `capabilities` contains `AcceptsPackages`  | The block's program is named the way step 1 describes. If it is missing, nothing else below will happen.                                                                                                                                                                                                                                                      |
 | `packages[].status`                        | `Downloading` — with `download_percent` and `download_bytes_per_second`, re-reported every 5 s — then `Installing`, then `Installed` or `InstallFailed`.                                                                                                                                                                                                      |
 | `packages[].error`                         | Why an install failed: a missing member, a hash mismatch, a signature that does not verify, a download URL off the Server's origin, a wrong archive key.                                                                                                                                                                                                      |
 | `packages[].version`                       | The version the Agent has installed; empty until the first one lands.                                                                                                                                                                                                                                                                                         |
@@ -440,28 +443,28 @@ forward.
 
 ## Troubleshooting
 
-| Symptom                                                                             | Cause                                                                                                                                                                                                                                                                                                |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The Agent never shows `AcceptsPackages`                                             | The Client has no `[packages] verification_key`, and says so at startup. With the key every Supervisor declares it, so otherwise the Agent is not the one you think it is — check which Supervisor the row belongs to. The startup log states, per Supervisor, what it resolved and what it decided. |
-| `InstallFailed`, "holds no member named …"                                          | The archive's member name does not match the configured program. The error lists what the archive _does_ hold; repack with `--program-name`.                                                                                                                                                         |
-| `InstallFailed`, "holds no member at …"                                             | A tree package whose `program_path` names nothing in the archive. The error lists what it holds — check the path from its end, not from the archive root.                                                                                                                                            |
-| `InstallFailed`, "matches N members"                                                | `program_path` is ambiguous; write more of the path.                                                                                                                                                                                                                                                 |
-| `InstallFailed`, "climbs out" / "is an absolute path" / "not a file or a directory" | The archive carries a member this Client will not write — a `..` path, an absolute one, or a link. Nothing was unpacked and the running tree is untouched.                                                                                                                                           |
-| An agent shows a package version it is not running                                  | Its record outlived the binary it describes — a version switch that did not take effect, or an older Client reinstalled on top of the state. The fleet reads what the agent reports _running_ beside the claim and offers that version again; the Client drops such a record when it starts.         |
-| The agent stops starting right after a successful install                           | The artifact was some container the Client does not open — not gzip, 7z, or zip — so it was installed as if it _were_ the program. Repack as `.tar.gz`.                                                                                                                                              |
-| `InstallFailed`, "holds an encrypted member"                                        | An encrypted `.zip`. Encryption is the `.7z` format's job, where `[packages] archive_key` opens it; repack, or publish the zip unencrypted.                                                                                                                                                          |
-| `InstallFailed`, wrong archive key                                                  | `[packages] archive_key` is missing or not the one the `.7z` was packed with.                                                                                                                                                                                                                        |
-| A package is refused naming `[packages] verification_key`                           | That Client has no key, and a Client without one takes no package. Set the fleet's public key.                                                                                                                                                                                                       |
-| `InstallFailed`, the signature does not verify                                      | The Client's `verification_key` is not the key the entry's signature was made with, or the signature belongs to another artifact. With the Server's `[packages] verification_key` set, the Packages tab shows such an entry `invalid` before the rollout.                                            |
-| `InstallFailed`, naming an origin                                                   | The download URL, or a redirect hop, leads outside the Client's own Server origin. A Client fetches from its Server alone; this Server offers only paths, so look for a redirect off the Server's origin.                                                                                            |
-| The rollout answers `409` naming unsigned platforms                                 | Sign each named entry on the Packages tab (step 4), then press again.                                                                                                                                                                                                                                |
-| An Agent is offered nothing                                                         | Two Deployments claim it, and an Agent belongs to at most one; `package_conflict` on its fleet row names both. Narrow one Selector.                                                                                                                                                                  |
-| Deleting a Configuration, a Package or a Deployment answers `409`                   | An Agent's assignment pins it; the message says how many. Roll those Agents out through a Deployment without it — or forget them — and delete it then.                                                                                                                                               |
-| An Agent shows no deployment at all                                                 | It carries no attribute any channel's Selector matches. That is the ordinary state right after an enrolment — label it into a channel (`PUT /api/v1/agents/<uid>/labels`) or set `channel` in its `[attributes]`.                                                                                    |
-| A package shows `in no deployment`                                                  | Stored and unreachable: nothing aims it. Put it in a channel.                                                                                                                                                                                                                                        |
-| A channel shows `aims at nobody`                                                    | Its Selector names an attribute nobody reports, or a value nobody carries. Compare it against the attributes on the Agents tab.                                                                                                                                                                      |
-| An upload answers `400` about a signature                                           | A signature goes on the entry's own `…/signature` route; the message names it.                                                                                                                                                                                                                       |
-| A signature answers `409`                                                           | The Package is rolled out to an Agent, and its entries — signatures included — are frozen. Ship the next version as a new Package.                                                                                                                                                                   |
-| The package routes answer `404`                                                     | The Package or entry the path names does not exist — check the Agent type and version against `GET /api/v1/packages`.                                                                                                                                                                                |
-| An upload answers `400`, "invalid platform"                                         | `os`/`arch` are required and must be file-name-safe: lowercase letters, digits and `_`, at most 16 characters.                                                                                                                                                                                       |
-| An Agent that accepts packages is offered nothing, and there is no conflict         | No signed artifact for its platform. Check its `os.type` and `host.arch` on its fleet row against the platforms the package holds — this is the case the whole mechanism exists to make visible rather than fatal.                                                                                   |
+| Symptom                                                                             | Cause                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The Agent never shows `AcceptsPackages`                                             | Every Supervisor declares it, so the Agent is not the one you think it is — check which Supervisor the row belongs to. The startup log states, per Supervisor, what it resolved and what it decided.                                                                                         |
+| `InstallFailed`, "holds no member named …"                                          | The archive's member name does not match the configured program. The error lists what the archive _does_ hold; repack with `--program-name`.                                                                                                                                                 |
+| `InstallFailed`, "holds no member at …"                                             | A tree package whose `program_path` names nothing in the archive. The error lists what it holds — check the path from its end, not from the archive root.                                                                                                                                    |
+| `InstallFailed`, "matches N members"                                                | `program_path` is ambiguous; write more of the path.                                                                                                                                                                                                                                         |
+| `InstallFailed`, "climbs out" / "is an absolute path" / "not a file or a directory" | The archive carries a member this Client will not write — a `..` path, an absolute one, or a link. Nothing was unpacked and the running tree is untouched.                                                                                                                                   |
+| An agent shows a package version it is not running                                  | Its record outlived the binary it describes — a version switch that did not take effect, or an older Client reinstalled on top of the state. The fleet reads what the agent reports _running_ beside the claim and offers that version again; the Client drops such a record when it starts. |
+| The agent stops starting right after a successful install                           | The artifact was some container the Client does not open — not gzip, 7z, or zip — so it was installed as if it _were_ the program. Repack as `.tar.gz`.                                                                                                                                      |
+| `InstallFailed`, "holds an encrypted member"                                        | An encrypted `.zip`. Encryption is the `.7z` format's job, where `[packages] archive_key` opens it; repack, or publish the zip unencrypted.                                                                                                                                                  |
+| `InstallFailed`, wrong archive key                                                  | `[packages] archive_key` is missing or not the one the `.7z` was packed with.                                                                                                                                                                                                                |
+| A signature answers `400`, naming the step that failed                              | It comes from no Package Signer the Package Root issued — one `classisctl package sign` made is such a one — or its Package Signer has expired, or it covers another Agent type, version or artifact. For the Client's own archives, give the `.sig` of the same name.                       |
+| `InstallFailed`, the signature does not verify                                      | The signature belongs to another artifact, or its Package Signer's certificate has expired by that host's clock — check the clock. The Server refuses such a signature when it is written and removes it at startup.                                                                         |
+| `InstallFailed`, naming an origin                                                   | The download URL, or a redirect hop, leads outside the Client's own Server origin. A Client fetches from its Server alone; this Server offers only paths, so look for a redirect off the Server's origin.                                                                                    |
+| The rollout answers `409` naming unsigned platforms                                 | Sign each named entry on the Packages tab (step 4), then press again.                                                                                                                                                                                                                        |
+| An Agent is offered nothing                                                         | Two Deployments claim it, and an Agent belongs to at most one; `package_conflict` on its fleet row names both. Narrow one Selector.                                                                                                                                                          |
+| Deleting a Configuration, a Package or a Deployment answers `409`                   | An Agent's assignment pins it; the message says how many. Roll those Agents out through a Deployment without it — or forget them — and delete it then.                                                                                                                                       |
+| An Agent shows no deployment at all                                                 | It carries no attribute any channel's Selector matches. That is the ordinary state right after an enrolment — label it into a channel (`PUT /api/v1/agents/<uid>/labels`) or set `channel` in its `[attributes]`.                                                                            |
+| A package shows `in no deployment`                                                  | Stored and unreachable: nothing aims it. Put it in a channel.                                                                                                                                                                                                                                |
+| A channel shows `aims at nobody`                                                    | Its Selector names an attribute nobody reports, or a value nobody carries. Compare it against the attributes on the Agents tab.                                                                                                                                                              |
+| An upload answers `400` about a signature                                           | A signature goes on the entry's own `…/signature` route; the message names it.                                                                                                                                                                                                               |
+| A signature answers `409`                                                           | The Package is rolled out to an Agent, and its entries — signatures included — are frozen. Ship the next version as a new Package.                                                                                                                                                           |
+| The package routes answer `404`                                                     | The Package or entry the path names does not exist — check the Agent type and version against `GET /api/v1/packages`.                                                                                                                                                                        |
+| An upload answers `400`, "invalid platform"                                         | `os`/`arch` are required and must be file-name-safe: lowercase letters, digits and `_`, at most 16 characters.                                                                                                                                                                               |
+| An Agent that accepts packages is offered nothing, and there is no conflict         | No signed artifact for its platform. Check its `os.type` and `host.arch` on its fleet row against the platforms the package holds — this is the case the whole mechanism exists to make visible rather than fatal.                                                                           |
