@@ -74,8 +74,8 @@ impl PackageBackend for FsPackageBackend {
                         platform,
                         content_hash,
                         size: entry.size,
-                        signature,
-                        signature_set_aside: false,
+                        // Offered only once the store's verifier has checked it (ADR-0063).
+                        signature: signature.map(crate::packages::Signature::Withheld),
                     },
                 );
             }
@@ -137,7 +137,7 @@ impl PackageMeta {
                     arch: entry.platform.arch.clone(),
                     sha256: hex::encode(&entry.content_hash),
                     size: entry.size,
-                    signature_hex: entry.signature.as_ref().map(hex::encode),
+                    signature_hex: entry.signature.as_ref().map(|s| hex::encode(s.bytes())),
                 })
                 .collect(),
         }

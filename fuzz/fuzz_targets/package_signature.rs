@@ -9,8 +9,8 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(parsed) = classis_core::package::parse_signature(data) {
         assert!(data.len() <= classis_core::package::MAX_SIGNATURE_LEN);
         assert_eq!(
-            classis_core::package::encode_signature(parsed.signer, parsed.signature),
-            data,
+            classis_core::package::encode_signature(parsed.signer, parsed.signature).as_deref(),
+            Ok(data),
             "a value that parses is the one DER encoding of what it holds"
         );
     }
