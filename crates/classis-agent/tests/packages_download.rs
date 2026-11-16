@@ -89,8 +89,8 @@ async fn spawn() -> SocketAddr {
     addr
 }
 
-/// A Client whose Server origin is `addr`, holding a verification key. The key never verifies
-/// anything here: every test stops at the size ceiling, the hash, or a refusal before it.
+/// A Client whose Server origin is `addr`. No signature is verified here: every test stops at the
+/// size ceiling, the hash, or a refusal before it.
 fn small_cap_config(max_artifact_size_bytes: u64, addr: SocketAddr) -> ClientConfig {
     ClientConfig {
         endpoint: format!("ws://{addr}/v1/opamp"),

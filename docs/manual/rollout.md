@@ -276,10 +276,6 @@ rollout in step 6 is refused while any is left. The Agent type has nothing to do
 with the member name inside the archive — only the _member_ has to match the
 configured program.
 
-The Packages tab's **Signing info** and **Import signing file** still exist, but
-the signatures `classisctl package sign --signing-info` puts in the file come
-from a key of your own, and the Server refuses each of them.
-
 ## 5. Put it in a deployment
 
 A **Deployment** is the channel this release goes to: a name, a Selector, the

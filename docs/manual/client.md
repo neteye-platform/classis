@@ -849,14 +849,12 @@ fleet's files, under the names the operator tools give them — or, with
 | `server-ca.pem`                         | offers it as the CA certificate of the Server; without `--interactive`, copies it beside `supervisor.toml` and names it in `[tls] ca_file`                                                                                                                                                                                                                                        |
 | `bootstrap.pem` and `bootstrap-key.pem` | offers them as the bootstrap pair; without `--interactive`, enrols with them and waits for an operator's approval. Both or neither: one alone is named in a warning and ignored                                                                                                                                                                                                   |
 | `bootstrap.p12`                         | the bootstrap certificate and its key in one file under a password, as the Server hands it out; offered as the bootstrap certificate, and the password is asked with input hidden. Without `--interactive`, it enrols with it under the password `--bootstrap-password-file` reads. Lying beside `bootstrap.pem` or `bootstrap-key.pem`, neither identity is used, with a warning |
-| `package-signing-key.pub`               | offers its content as the package verification key; without `--interactive`, writes it as `[packages] verification_key`, which the Client no longer reads ([`[packages]`](#packages)). A file that holds no 64-digit hex key is named in a warning and ignored                                                                                                                    |
 
-So a host is set up by copying the program and these four files into one
+So a host is set up by copying the program and these files into one
 directory and running, from there:
 
 ```console
 $ cd /root/fleet-files && sudo ./classis service install --endpoint wss://fleet.example.com:4320/v1/opamp
-took the package verification key 3b6a27bc… from beside the program
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml for wss://fleet.example.com:4320/v1/opamp
 enrolling with /root/fleet-files/bootstrap.pem and /root/fleet-files/bootstrap-key.pem from beside the program
@@ -867,8 +865,8 @@ installed classis
 ```
 
 A value the configuration file already holds wins over a file beside the
-program, and an existing configuration is never overwritten. The CA and the
-verification key are taken only for a `wss://` or `https://` endpoint, and the
+program, and an existing configuration is never overwritten. The CA is taken
+only for a `wss://` or `https://` endpoint, and the
 bootstrap pair only while the host holds no certificate the Server issued. An
 install run from a directory that holds a bootstrap pair waits for the approval;
 Ctrl-C stops it and registers nothing. The files stay where they are: remove the
@@ -910,7 +908,6 @@ This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/ca.pem
 Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
 Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
-Package verification key (ignored: the compiled-in Package Roots decide; leave empty):
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 enrolling with wss://fleet.example.com/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
@@ -931,7 +928,6 @@ Server OpAMP endpoint [wss://fleet.example.com/v1/opamp]:
 This Agent's name (service.instance.name) [host-01]: web-01
 CA certificate of the Server — the CA that signed its certificate (PEM path) [/var/lib/classis/server-ca.pem]:
 enrolled: this Client holds a certificate the Server issued
-Package verification key (ignored: the compiled-in Package Roots decide; - removes it) [3b6a27bc…]:
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 restart the service to apply: supervisor service stop && supervisor service start
@@ -966,14 +962,11 @@ host:
   refusal is logged and the wait goes on, so stop it, delete
   `client-key.pending.pem` and `client-csr.pending.pem` from the state
   directory, and run the questionnaire again for a fresh request. A path that
-  names no readable file, here or for the CA, is asked for again;
-- **the package verification key** ([`[packages]`](#packages)). The question
-  is older than the Package Roots compiled into the Client: the answer is
-  written as `verification_key`, which the Client no longer reads, and what the
-  question and its messages say about taking no packages no longer holds. The
-  Client takes packages, its own update included, whatever the answer. A new
-  file is written with `self_update = true`. Where the file holds a key, `-`
-  removes it.
+  names no readable file, here or for the CA, is asked for again.
+
+The questionnaire asks for no package key: every package is verified up to the
+Package Roots compiled into the Client. A new file is written with
+`self_update = true`.
 
 A new file gets everything else as commented defaults. An existing file is
 edited in place: only the keys asked about change, and every other key, every
@@ -1039,8 +1032,8 @@ sudo classis service install --interactive
 sudo systemctl start classis
 ```
 
-The first asks for the endpoint, the client certificate and its key, and the
-verification key, which is written but ignored. `--endpoint` alone writes a
+The first asks for the endpoint, the client certificate and its key.
+`--endpoint` alone writes a
 file the Client refuses until you add the certificate and its key. An upgrade of
 a host whose service was running restarts it on the delivered binary.
 
@@ -1646,7 +1639,6 @@ archive_key = "the key an encrypted .7z was packed with"
 | Key                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `self_update`      | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. See [Updating the Client itself](#updating-the-client-itself).                                                                                                                                                                                      |
-| `verification_key` | **No longer read.** Every Server-offered package must carry a signature made by a Package Signer, whose certificate the signature carries and a Package Root compiled into the Client issued; there is nothing to configure for it. A file that still holds the key loads, whatever the key holds, and the Client says once at startup that it is ignored: remove it. A signature made with a key of your own, as `classisctl package sign` makes one, is refused. |
 | `archive_key`      | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                                                                                                                                                                                                               |
 
 Note what is _not_ here: which artifact a Supervisor receives is the Server's
@@ -2546,11 +2538,6 @@ signature, in lowercase hex. A fleet updates from the release as published:
 upload each archive with the signature its `.sig` holds, as the release notes
 show. Nothing is configured on the Server or on any Client for it. The release
 publishes no key, and a signature made with a key of your own is refused.
-
-**A Client from before the Package Roots cannot update itself to a release
-that has them**: it expects a signature of another form, checked against its
-`verification_key`. Upgrade each such host once by hand, from the release's
-`.deb`, `.rpm`, `.msi` or archive; from then on it updates from the Server.
 
 An offer under any other name is refused and reported, never applied. That is
 one of two independent guards, and it is the one on this side of the wire: the

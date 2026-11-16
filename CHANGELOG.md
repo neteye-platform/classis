@@ -26,17 +26,12 @@ A section carries a date once its tag exists.
   commands.
 - **A release starts from a pushed tag, `v<version>`.** The `Release` workflow
   no longer creates the tag, and a run started by hand is a dry run. The tag is
-  `v0.1.0`, no longer `version/0.1.0`; a build recognises a release by it
+  `v0.1.0`; a build recognises a release by it
   ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
   clause 11).
 
 ### Changed
 
-- **The version starts again at `0.1.0`.** Earlier releases were tagged
-  `version/0.5.5` to `version/0.7.0`; this one is the first `v<version>` tag.
-  A Client at `0.7.0` or earlier takes `0.1.0` for a downgrade and refuses it,
-  so install it on each host by hand from the release's `.deb`, `.rpm`, `.msi`
-  or archive, as the signature change below requires anyway.
 - **Package signatures are verified up to the Package Roots compiled into the
   Client and the Server**
   ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
@@ -48,32 +43,25 @@ A section carries a date once its tag exists.
   side.
   - **A signature made with a key of your own is refused**, by the Server and by
     every Client: one from `classisctl package sign`, by hand or through the
-    signing file, and every 64-byte signature stored before this release.
-    Today the release's Package Signer is the only one, so only the Client's
-    own Package can be delivered; `otelcol`, other third-party Packages and
-    builds of your own cannot, until Package Signers exist for them.
-    `classisctl package keygen`, `sign` and `public-key`, the signing file,
-    the package key `pki init` writes and the install's key question remain
-    for now; what they make is refused or ignored.
+    signing file. Today the release's Package Signer is the only one, so only
+    the Client's own Package can be delivered; `otelcol`, other third-party
+    Packages and builds of your own cannot, until Package Signers exist for
+    them. `classisctl package keygen`, `sign` and `public-key`, the signing file
+    and the package key `pki init` writes remain for now; what they make is
+    refused.
   - **The Server refuses a signature that does not verify** with `400`, naming
     the step that failed, and stores nothing. At startup it sets aside every
-    stored signature that does not verify — each one stored before this
-    release, and one whose Package Signer has expired — with a warning naming
-    the entry: the entry is offered to nobody, and the signature stays in the
-    store. Upload the release's `.sig` for each entry you need; an entry of a
-    Package already assigned to an Agent is not writable, so release a new
-    version instead.
-  - **`signature_state` is `valid` or `missing`.** `invalid` and `unchecked`
-    no longer occur.
-  - **A Client from before this release cannot update itself to it**: it
-    expects a 64-byte signature checked against its `verification_key`.
-    Upgrade each installation once by hand, from the release's `.deb`, `.rpm`,
-    `.msi` or archive; it updates itself from then on.
+    stored signature that does not verify, one whose Package Signer has expired
+    among them, with a warning naming the entry: the entry is offered to
+    nobody, and the signature stays in the store.
+  - **`signature_state` is `valid` or `missing`.**
+  - **The Packages tab takes the hex of a release's `.sig`** for each entry. It
+    no longer offers or imports a signing file.
 - **Every Client takes packages**
   ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
   Every Supervisor declares `AcceptsPackages`, and the Client's own Agent does
   while `[packages] self_update` consents, which is unchanged. No setting turns
-  packages off: a Client without a verification key no longer takes none.
+  packages off.
 
 ### Removed
 
@@ -86,13 +74,12 @@ A section carries a date once its tag exists.
 - **`[audit]` in `server.toml`** is refused at startup as an unknown key, like
   any other.
 - **`server audit-verify`** is gone.
-- **`[packages] verification_key` is no longer read**, by the Client or the
-  Server
+- **`[packages] verification_key`**, in `supervisor.toml` and in
+  `server.toml`, and with it the Server's whole `[packages]` section
   ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
-  A `supervisor.toml` or `server.toml` that still holds it loads, and the
-  program says once at startup that the key is ignored; remove it. A
-  `package-signing-key.pub` beside the Client's program at install is still
-  written into the file, and ignored.
+  Either is refused at startup as an unknown key, like any other. The install
+  no longer asks for a package key nor reads `package-signing-key.pub`, and the
+  `supervisor.toml.fragment` of `pki init` names none.
 
 ### Fixed
 

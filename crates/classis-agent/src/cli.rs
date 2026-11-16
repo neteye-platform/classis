@@ -338,7 +338,7 @@ pub struct InstallArgs {
     ///
     /// The consent stands by default (ADR-0018): without this flag the written file says
     /// `[packages] self_update = true` and the fleet can replace this Client like any other
-    /// program once a verification key is set. With it, the file says `self_update = false` and
+    /// program. With it, the file says `self_update = false` and
     /// this Client becomes the one program on the host that has to be updated by hand. The other non-interactive half of `--interactive`, for the same
     /// installers `--endpoint` serves — the MSI's checkbox, and a `.deb`/`.rpm` post-install.
     ///
@@ -348,7 +348,7 @@ pub struct InstallArgs {
     pub no_self_update: bool,
     // ADR-0029.
     /// Look for the fleet's files in this directory instead of beside the program:
-    /// `server-ca.pem`, `package-signing-key.pub`, and the bootstrap identity — `bootstrap.pem` with
+    /// `server-ca.pem` and the bootstrap identity — `bootstrap.pem` with
     /// `bootstrap-key.pem`, or `bootstrap.p12`.
     ///
     /// What a host installed from a `.deb` or `.rpm` needs: its program lies where nobody puts
@@ -904,7 +904,7 @@ mod tests {
     /// ADR-0018: the withdrawal travels on the same non-interactive path the endpoint does, and
     /// the consent stands unless the install withdraws it. No flag names the package — it is the
     /// Client's own Agent type — and the withdrawal may not ride `--interactive`, which writes the
-    /// consent and leaves its effect to the verification key.
+    /// consent.
     /// Verifies: ADR-0018
     #[test]
     fn install_carries_the_self_update_answer_without_a_terminal() {

@@ -381,9 +381,6 @@ async fn main() {
         // ADR-0016.
         info!("offering the fleet somewhere to send its own telemetry");
     }
-    if let Some(warning) = config.packages.ignored_key_warning() {
-        warn!("{warning}");
-    }
     // ADR-0063 clause 1: a Root that cannot be read stops the Server here, naming it.
     let roots = match classis_core::package::chain::compiled() {
         Ok(roots) => roots,

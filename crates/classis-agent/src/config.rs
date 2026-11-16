@@ -542,11 +542,10 @@ fn take_integer(table: &mut toml::Table, key: &str) -> Result<Option<i64>, Strin
 /// Keys whose values are secrets: `[packages]`'s `archive_key`, and the `bearer_token` and
 /// `password` a leftover `[auth]` section may still hold — the Client ignores the section
 /// (ADR-0021 clause 3), but the file's text is reported as it stands, so its values stay masked.
-/// Paths and public keys are not on the list — a path locates a secret, it is not one, and the
-/// `verification_key` is the *public* half of the signing pair.
+/// Paths are not on the list — a path locates a secret, it is not one.
 pub(crate) const SECRET_KEYS: &[&str] = &["bearer_token", "password", "archive_key"];
 
-/// The `[packages]` block (ADR-0026): how downloaded package artifacts are verified, and whether
+/// The `[packages]` block (ADR-0026): how downloaded package artifacts are opened, and whether
 /// this Client takes its own (ADR-0018). Where they come from is not configurable: always this
 /// Client's own Server origin (ADR-0033).
 #[derive(Debug, Clone, Deserialize)]
@@ -563,9 +562,6 @@ pub struct PackagesConfig {
     /// over the Client.
     #[serde(default = "default_self_update")]
     pub self_update: bool,
-    /// No longer read (ADR-0063 clause 11): signatures are verified up to the compiled-in
-    /// Package Roots. Kept so an old file loads; the Client says at startup that it is ignored.
-    pub verification_key: Option<String>,
     /// `allowed_sources`, which ADR-0033 removed: a package is downloaded only from this Client's
     /// own Server origin. Read only so that [`ClientConfig::checked`] can refuse it by name — a
     /// list an operator believes is in force, and is not, is worse than a failed start.
@@ -592,7 +588,6 @@ impl Default for PackagesConfig {
     fn default() -> Self {
         PackagesConfig {
             self_update: default_self_update(),
-            verification_key: None,
             leftover_allowed_sources: None,
             archive_key: None,
         }
@@ -1063,18 +1058,6 @@ impl ClientConfig {
         Ok(config)
     }
 
-    /// The startup warning for a `[packages] verification_key` that is no longer read (ADR-0063
-    /// clause 11), if the file holds one.
-    pub fn ignored_key_warning(&self) -> Option<&'static str> {
-        self.packages
-            .as_ref()
-            .and_then(|p| p.verification_key.as_ref())
-            .map(|_| {
-                "[packages] verification_key is ignored: package signatures are checked up to the \
-                 Package Roots compiled into this Client (ADR-0063) — remove the key"
-            })
-    }
-
     /// The CA bundle that replaces the built-in roots, when one is configured (ADR-0013).
     pub fn ca_file(&self) -> Option<&Path> {
         self.tls.as_ref()?.ca_file.as_deref()
@@ -1388,10 +1371,7 @@ mod tests {
 
         // A file that never mentions it is the common case, and it is consent — with or without
         // a [packages] section.
-        for text in [
-            "endpoint = \"wss://h/v1/opamp\"",
-            "[packages]\nverification_key = \"00\"\n",
-        ] {
+        for text in ["endpoint = \"wss://h/v1/opamp\"", "[packages]\n"] {
             let untouched: ClientConfig = toml::from_str(text).expect("parse");
             assert_eq!(
                 untouched.self_update_package(),
@@ -1576,34 +1556,6 @@ mod tests {
         .expect("write");
         let err = ClientConfig::load(&path).expect_err("no client CA");
         assert!(err.contains("client_ca_file is required"), "{err}");
-    }
-
-    /// `[packages] verification_key` is no longer read: a file that holds it loads, whatever it
-    /// holds, and the Client says at startup that it is ignored (ADR-0063 clause 11).
-    /// Verifies: ADR-0063
-    #[test]
-    fn an_old_verification_key_loads_and_is_named_as_ignored() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("supervisor.toml");
-        std::fs::write(&path, "endpoint = \"ws://127.0.0.1:4320/v1/opamp\"\n").expect("write");
-        let config = ClientConfig::load(&path).expect("load");
-        assert_eq!(config.ignored_key_warning(), None);
-        for old in ["ab".repeat(32), "not-hex".to_string()] {
-            std::fs::write(
-                &path,
-                format!(
-                    "endpoint = \"ws://127.0.0.1:4320/v1/opamp\"\n[packages]\nverification_key = \"{old}\"\n"
-                ),
-            )
-            .expect("write");
-            let config = ClientConfig::load(&path).expect("an old key still loads");
-            let warning = config.ignored_key_warning().expect("a warning");
-            assert!(warning.contains("ignored"), "{warning}");
-            assert!(
-                config.package_roots.is_none(),
-                "the compiled-in Roots decide"
-            );
-        }
     }
 
     /// Both keys that would configure package delivery on the host are refused rather than ignored:

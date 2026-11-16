@@ -320,7 +320,7 @@ pub struct SupervisorContext {
     /// success.
     pub retain_previous: Duration,
     /// The key that opens an encrypted `.7z` package artifact (ADR-0026); `None` when none is
-    /// configured. Client-wide, like the package verification key.
+    /// configured. Client-wide.
     pub archive_key: Option<zeroize::Zeroizing<String>>,
     /// The process account's primary group, where a process account is registered: what the
     /// Supervisor shares with its Managed Process belongs to it (ADR-0059 clause 6).

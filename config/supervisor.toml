@@ -130,8 +130,7 @@ state_dir = "client-state"
 
 # Package verification: every Server-offered package MUST carry a signature by a Package Signer
 # that a Package Root compiled into this Client issued, over the artifact's Agent type, version
-# and SHA-256, or it is refused. There is nothing to configure: a [packages] verification_key
-# left from an older Client is ignored, and said so at startup. A [[supervisor]] block
+# and SHA-256, or it is refused. There is nothing to configure. A [[supervisor]] block
 # takes package delivery by naming its program with a bare file name (see the blocks below);
 # *which* artifact it then receives is the Server's decision, expressed as that package's
 # Deployment — never a key in this file.

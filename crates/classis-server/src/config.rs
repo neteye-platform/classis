@@ -61,9 +61,6 @@ pub struct ServerConfig {
     /// Refused at startup, like `config_dir` (ADR-0037). Read only so that a leftover key can be
     /// named.
     pub packages_dir: Option<IgnoredAny>,
-    /// How the Server checks the signatures on its Package entries (ADR-0033).
-    #[serde(default)]
-    pub packages: PackagesConfig,
     /// Where the artifacts' bytes are kept: the filesystem under `data_dir`, or a bucket of an
     /// S3-compatible object store (ADR-0049).
     #[serde(default)]
@@ -206,27 +203,6 @@ const AGENTS_PER_HOST: u64 = 256;
 
 /// The heartbeat the Baseline uses when none is offered.
 const BASELINE_HEARTBEAT_SECS: u64 = 30;
-
-/// The `[packages]` section. Its one key, `verification_key`, is no longer read (ADR-0063
-/// clause 11): signatures are checked up to the compiled-in Package Roots. A file that still holds
-/// it loads, and the Server says at startup that it is ignored.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackagesConfig {
-    /// Ignored, kept so an old `server.toml` loads (ADR-0063 clause 11).
-    pub verification_key: Option<String>,
-}
-
-impl PackagesConfig {
-    /// The startup warning for a `verification_key` that is no longer read, if the file holds one.
-    #[must_use]
-    pub fn ignored_key_warning(&self) -> Option<&'static str> {
-        self.verification_key.as_ref().map(|_| {
-            "[packages] verification_key is ignored: package signatures are checked up to the \
-             Package Roots compiled into this Server (ADR-0063) — remove the key"
-        })
-    }
-}
 
 /// The `[blobs]` section (ADR-0049 clause 2): which store keeps the artifacts' bytes. One store,
 /// the filesystem by default; both are supported in production.
@@ -976,7 +952,6 @@ impl Default for ServerConfig {
             client_ca: None,
             telemetry_offer: None,
             packages_dir: None,
-            packages: PackagesConfig::default(),
             blobs: BlobsConfig::default(),
             database: DatabaseConfig::default(),
             advertised_url: None,
@@ -1709,25 +1684,6 @@ mod tests {
             read_secret_file("[database.postgres] password_file", &path).expect_err("not UTF-8");
         assert!(err.contains("[database.postgres] password_file"), "{err}");
         assert!(err.contains("not UTF-8 text"), "{err}");
-    }
-
-    /// `[packages] verification_key` is no longer read: a file that holds it loads, whatever it
-    /// holds, and the Server says it is ignored (ADR-0063 clause 11).
-    /// Verifies: ADR-0063
-    #[test]
-    fn an_old_verification_key_is_ignored_with_a_warning() {
-        let cfg: ServerConfig = toml::from_str("").expect("parse");
-        assert_eq!(cfg.packages.ignored_key_warning(), None);
-        for old in ["ab".repeat(32), "not-hex".to_string()] {
-            let cfg: ServerConfig =
-                toml::from_str(&format!("[packages]\nverification_key = \"{old}\"\n"))
-                    .expect("an old key still loads");
-            let warning = cfg.packages.ignored_key_warning().expect("a warning");
-            assert!(warning.contains("ignored"), "{warning}");
-        }
-        let refused = toml::from_str::<ServerConfig>("[packages]\nallowed_sources = []\n")
-            .expect_err("the section takes nothing else");
-        assert!(refused.to_string().contains("allowed_sources"), "{refused}");
     }
 
     /// Every package is offered as a path, so a leftover `advertised_url` is named and refused

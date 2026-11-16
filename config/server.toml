@@ -144,8 +144,6 @@ max_package_size_bytes = 1073741824
 # Package signatures need no key here. The Server verifies each one up to the Package Roots
 # compiled into it: an upload that does not verify is refused with 400 and not stored, and one
 # that no longer verifies when the store is loaded is set aside and offered to nobody.
-# [packages] verification_key is no longer read: a file that still holds it loads, and the Server
-# says once at startup that it is ignored.
 
 # Where the artifacts' bytes are kept. Optional; the default, "fs", keeps one file per artifact
 # under data_dir/blobs/. "s3" keeps one object per artifact in a bucket of an S3-compatible store,
