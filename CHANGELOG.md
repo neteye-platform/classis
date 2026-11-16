@@ -19,12 +19,11 @@ A section carries a date once its tag exists.
 - **Each release signs the Client's archives**
   ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
   Beside every `supervisor_<version>_<os>_<arch>.tar.gz`
-  the release carries its `.sig`, and with them `package-signing-key.pub`, the
-  public half of the key they verify against. Set its content as
-  `[packages] verification_key`, or place the file beside the Client's program
-  when you install it, and upload each archive with the signature its `.sig`
-  holds; the release notes give the commands. An installation that signs with a
-  key of its own keeps doing so.
+  the release carries its `.sig`: the certificate of the release's Package
+  Signer and its signature, which the Server and every Client verify up to the
+  Package Roots compiled into them, with nothing to configure. Upload each
+  archive with the signature its `.sig` holds; the release notes give the
+  commands.
 - **A release starts from a pushed tag, `v<version>`.** The `Release` workflow
   no longer creates the tag, and a run started by hand is a dry run. The tag is
   `v0.8.0`, no longer `version/0.8.0`; a build recognises a release by it
