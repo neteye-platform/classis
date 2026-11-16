@@ -117,7 +117,7 @@ workflow() {
     echo "    runs-on: ubuntu-latest"
     echo "    steps:"
     printf '      %s\n' "$@"
-    echo "      - run: bash scripts/check-docs.sh"
+    echo "      - run: bash scripts/check-protocol-baseline.sh"
   } > "$dir/.github/workflows/checks.yml"
 }
 

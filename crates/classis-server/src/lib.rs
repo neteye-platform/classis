@@ -8,8 +8,6 @@
 pub mod agent_rate;
 pub mod agent_store;
 pub mod api;
-pub mod audit;
-pub mod audit_log;
 pub mod blobs;
 pub mod bootstrap;
 pub mod bridge;

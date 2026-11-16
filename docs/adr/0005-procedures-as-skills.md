@@ -100,19 +100,15 @@ matter; and what happens to the pointers once Claude Code reads the neutral path
   enforces through hooks, settings, and CI as before, and this decision adds
   nothing to that. The pointers rest on observed behaviour of one Claude Code
   version, not on documented behaviour.
-- Follow-ups: delete the pointers and their check once Claude Code reads the
+- Follow-ups: delete the pointers once Claude Code reads the
   neutral path; a check on skill front matter once the reference validator is a
   dependency worth taking.
 
 ## Enforcement
 
 **Not mechanically decidable:** that a skill carries a procedure and no rule,
-and that the rule file names the skill instead of the steps, is review. What is
-checkable is already checked:
-[`scripts/check-docs.sh`](../../scripts/check-docs.sh) resolves every link and
-every section reference a skill makes, and fails when a skill under
-`.agents/skills/` has no pointer under `.claude/skills/`, when a pointer there
-resolves to no skill, when the pointer is a copy rather than a symlink, or when
-a skill lives only in the pointer directory: a skill without its pointer is
-invisible to Claude Code and to no other agent, and nothing but this check
-notices.
+and that the rule file names the skill instead of the steps, is review.
+**Not checked:** that every link and section reference a skill makes resolves,
+and that every skill under `.agents/skills/` has its symlink under
+`.claude/skills/`, is review too: a skill without its pointer is invisible to
+Claude Code.

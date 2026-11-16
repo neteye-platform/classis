@@ -25,9 +25,9 @@ OpAMP" this code speaks.
 
 Moving the Baseline to a newer upstream version is a deliberate change — see
 [Upgrading the Baseline](#upgrading-the-baseline) for what it obliges.
-[`scripts/check-docs.sh`](../scripts/check-docs.sh) compares the pinned version
-above against the latest upstream release and warns when they diverge, so
-falling behind is noticed rather than discovered later.
+[`scripts/check-protocol-baseline.sh`](../scripts/check-protocol-baseline.sh)
+compares the pinned version above against the latest upstream release and warns
+when they diverge, so falling behind is noticed rather than discovered later.
 
 Because upstream is itself **Beta**, individual features carry a maturity
 marker. This document reproduces those markers rather than inventing its own.
@@ -115,9 +115,10 @@ edit. The procedure:
    [Protocol Baseline](#protocol-baseline) last, once the steps above actually
    hold.
 
-The automated check in [`scripts/check-docs.sh`](../scripts/check-docs.sh) only
-tells you the Baseline has fallen behind. It cannot tell you what that costs —
-that is what step 1 through 4 are for.
+The automated check in
+[`scripts/check-protocol-baseline.sh`](../scripts/check-protocol-baseline.sh)
+only tells you the Baseline has fallen behind. It cannot tell you what that
+costs — that is what step 1 through 4 are for.
 
 ## How to read the matrix
 

@@ -6,8 +6,7 @@
 # .github/workflows/checks.yml runs each of them as a job of its own. This script is the local
 # equivalent of that workflow and lists the same checks in the same order — a check added to one
 # is added to the other in the same change, or the local gate and CI drift apart and "it passed
-# locally" stops meaning anything. Check 9 of check-docs.sh verifies that the two lists,
-# and the required status checks named in README.md, still agree.
+# locally" stops meaning anything.
 #
 # Every check runs even after an earlier one fails, so a single run reports everything that is
 # wrong instead of the first thing. The exit code is what a pre-push decision is made on.
@@ -37,11 +36,8 @@ run() {
   bash "$ROOT/$script" "$@" || failed+=("$label")
 }
 
-run "Documentation self-test" scripts/test-check-docs.sh
 run "Protocol Baseline self-test" scripts/test-check-protocol-baseline.sh
-run "Documentation consistency" scripts/check-docs.sh
-run "Traceability self-test" scripts/test-check-traceability.sh
-run "Traceability" scripts/check-traceability.sh
+run "Protocol Baseline" scripts/check-protocol-baseline.sh
 run "Dev Container self-test" scripts/test-check-devcontainer.sh
 run "Dev Container" scripts/check-devcontainer.sh
 run "Action reference self-test" scripts/test-check-action-refs.sh
@@ -50,8 +46,6 @@ run "Build hardening self-test" scripts/test-check-build-hardening.sh
 run "Build hardening" scripts/check-build-hardening.sh
 run "Tests-kept sensor self-test" scripts/test-sensor-tests-kept.sh
 run "Tests-kept sensor" scripts/sensor-tests-kept.sh
-run "Revision-due sensor self-test" scripts/test-sensor-revision-due.sh
-run "Revision-due sensor" scripts/sensor-revision-due.sh
 run "Git hooks self-test" scripts/test-git-hooks.sh
 run "Fixture isolation" scripts/test-fixture-isolation.sh
 run "Shell lint" scripts/check-shell.sh

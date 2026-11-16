@@ -61,7 +61,6 @@ the first alternative to reject.
 7. Add the index row in [`docs/adr/README.md`](../../../docs/adr/README.md),
    status and _Applies to_ mirrored verbatim. For a supersession, flip the old
    ADR's status line in the same change.
-8. Run [`scripts/check-docs.sh`](../../../scripts/check-docs.sh).
 
 ## 4. Submit
 

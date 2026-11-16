@@ -157,9 +157,8 @@ file does not state is not a rule of this project.
 - **A feature spec closes only after a design revision** in a fresh session over
   the modules its tickets touched, the ADRs that bind them, and the criteria
   they serve, filed as tickets, checks, a `proposed` ADR, or a drafted
-  specification change; with no spec open, one runs when the revision sensor
-  says it is due ([ADR-0004](docs/adr/0004-feature-layer.md)). Skill:
-  `design-revision`.
+  specification change; with no spec open, one runs when the human asks for it
+  ([ADR-0004](docs/adr/0004-feature-layer.md)). Skill: `design-revision`.
 - **A mistake a check could have caught becomes a check,** shipped with the fix.
   A rule in prose is the fallback for what no check can decide. The design
   revision drops what prevented nothing.

@@ -24,7 +24,6 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::agent_store::{AgentStore, PersistedAgent, Pin};
-use crate::audit::{Audit, Entry};
 use crate::configs::{ConfigBackend, ConfigStore, Configuration, DesiredConfig, Revision};
 use crate::deployments::{self, deployment_for, Deployment, DeploymentError, DeploymentStore};
 use crate::enrolment::{DecisionError, Enrolment};
@@ -543,8 +542,6 @@ pub struct AppState {
     /// What the client CA signed and what is revoked (ADR-0021); `None` only where a test serves
     /// without it.
     revocations: Option<Arc<Revocations>>,
-    /// The audit record every security decision goes to (ADR-0022); `None` only in tests.
-    audit: Option<Arc<dyn Audit>>,
     /// How often an admitted peer may be heard (ADR-0013); `None` only in tests.
     agent_rate: Option<Arc<crate::agent_rate::AgentRate>>,
     /// When an Agent is heard from, and how long ago that was.
@@ -631,7 +628,6 @@ impl AppState {
             enrolment: None,
             bootstrap: None,
             revocations: None,
-            audit: None,
             agent_rate: None,
             clock,
             telemetry_offer: TelemetryOffer::default(),
@@ -912,18 +908,6 @@ impl AppState {
         self.revocations.as_ref()
     }
 
-    /// Arms the audit record (ADR-0022).
-    #[must_use]
-    pub fn with_audit(mut self, audit: Option<Arc<dyn Audit>>) -> Self {
-        self.audit = audit;
-        self
-    }
-
-    /// The audit record.
-    pub fn audit(&self) -> Option<&Arc<dyn Audit>> {
-        self.audit.as_ref()
-    }
-
     /// Arms the rate limit on the Agent plane (ADR-0013).
     #[must_use]
     pub fn with_agent_rate(
@@ -939,66 +923,40 @@ impl AppState {
         self.agent_rate.as_ref()
     }
 
-    /// Records a decision this Server is about to act on; without a record it is not taken
-    /// (ADR-0022 clause 6).
-    fn audited(&self, entry: Entry) -> Result<(), String> {
-        match &self.audit {
-            Some(audit) => audit
-                .record(entry)
-                .map_err(|_| "the audit record is unavailable — retry shortly".to_string()),
-            None => Ok(()),
-        }
-    }
-
-    /// Records a refusal; it is refused either way.
-    pub(crate) fn audit_refusal(&self, entry: Entry) {
-        if let Some(audit) = &self.audit {
-            audit.refusal(entry);
-        }
-    }
-
-    /// Records a certificate the client CA signed, before it is offered (ADR-0021 clause 33,
-    /// ADR-0022 clause 1).
+    /// Records a certificate the client CA signed in the register, before it is offered (ADR-0021
+    /// clause 33), and logs its issuance once it is recorded — for an approval and a CSR alike.
     fn record_issued(
         &self,
         signed: &Signed,
         instance_uid: &[u8],
         predecessor: Option<CertId>,
     ) -> Result<(), String> {
-        self.audited(
-            Entry::new("issuance.signed", "issued")
-                .with(
-                    "kind",
-                    if predecessor.is_some() {
-                        "renewal"
-                    } else {
-                        "enrolment"
-                    },
-                )
-                .with("issuer", signed.facts.issuer_name.clone())
-                .with(
-                    "authority",
-                    self.revocations.as_ref().and_then(|revocations| {
-                        revocations
-                            .authority_of(&signed.facts.id.issuer)
-                            .map(|authority| authority.role.clone())
-                    }),
-                )
-                .with("serial", signed.facts.id.serial.clone())
-                .with("subject", signed.facts.subject.clone())
-                .with("key_fingerprint", signed.facts.key_fingerprint.clone())
-                .with("instance_uid", hex::encode(instance_uid))
-                .with(
-                    "predecessor_serial",
-                    predecessor.as_ref().map(|id| id.serial.clone()),
-                ),
-        )?;
-        match &self.revocations {
-            Some(revocations) => revocations
+        let kind = if predecessor.is_some() {
+            "renewal"
+        } else {
+            "enrolment"
+        };
+        let predecessor_serial = predecessor.as_ref().map(|id| id.serial.clone());
+        if let Some(revocations) = &self.revocations {
+            revocations
                 .record(signed.facts.clone(), instance_uid, predecessor)
-                .map_err(|e| format!("cannot record the issued certificate: {e}")),
-            None => Ok(()),
+                .map_err(|e| format!("cannot record the issued certificate: {e}"))?;
         }
+        info!(
+            event = "issuance.signed",
+            kind,
+            authority = self.revocations.as_ref().and_then(|revocations| revocations
+                .authority_of(&signed.facts.id.issuer)
+                .map(|authority| authority.role.clone())),
+            issuer = %signed.facts.issuer_name,
+            serial = %signed.facts.id.serial,
+            subject = %signed.facts.subject,
+            key_fingerprint = %signed.facts.key_fingerprint,
+            instance_uid = %hex::encode(instance_uid),
+            predecessor_serial,
+            "issued a client certificate"
+        );
+        Ok(())
     }
 
     /// What a CSR renews, the host the new certificate is for (ADR-0021 clause 27), and the
@@ -1809,13 +1767,8 @@ impl AppState {
             if revocations.may_report(host, uid.as_bytes()).is_err() {
                 let new_uid = InstanceUid::default();
                 warn!(
-                    claimed = %uid, new = %new_uid, host,
+                    event = "identity.claimed", claimed = %uid, new = %new_uid, host,
                     "an Agent of another host was claimed; rekeying the reporter"
-                );
-                self.audit_refusal(
-                    Entry::new("identity.claimed", "rekeyed")
-                        .with("claimed", uid.to_string())
-                        .with("host", host.to_string()),
                 );
                 identification = Some(AgentIdentification {
                     new_instance_uid: new_uid.as_bytes().to_vec(),
@@ -1991,7 +1944,7 @@ impl AppState {
         }
         if let Some(status) = msg.connection_settings_status {
             if status.status == opamp::proto::ConnectionSettingsStatuses::Failed as i32 {
-                warn!(agent = %uid, error = %status.error_message, "connection settings rejected");
+                warn!(agent = %uid, error = bounded(&status.error_message), "connection settings rejected");
             }
             record.connection_settings_status = Some(status);
         }
@@ -2014,30 +1967,29 @@ impl AppState {
                     outcome,
                     before != Some((status.status, status.agent_has_version.clone())),
                 ) {
-                    self.audit_refusal(
-                        Entry::new("package.outcome", outcome)
-                            .with("instance_uid", uid.to_string())
-                            .with("package", name.clone())
-                            .with("version", status.agent_has_version.clone())
-                            .with("offered_version", status.server_offered_version.clone())
-                            .with(
-                                "error",
-                                (!status.error_message.is_empty())
-                                    .then(|| status.error_message.clone()),
-                            ),
+                    info!(
+                        event = "package.outcome",
+                        agent = %uid,
+                        package = bounded(name),
+                        outcome,
+                        version = bounded(&status.agent_has_version),
+                        offered_version = bounded(&status.server_offered_version),
+                        error = (!status.error_message.is_empty())
+                            .then(|| bounded(&status.error_message)),
+                        "an Agent reported a package outcome"
                     );
                 }
             }
             for status in statuses.packages.values() {
                 if status.status == opamp::proto::PackageStatusEnum::InstallFailed as i32 {
-                    warn!(agent = %uid, package = %status.name, error = %status.error_message, "package installation failed");
+                    warn!(agent = %uid, package = bounded(&status.name), error = bounded(&status.error_message), "package installation failed");
                 }
             }
             // An Agent that refuses the offer itself has no package to hang the reason on, so the
             // report carries it. Logged and surfaced, or a Client refusing every offer it is sent
             // would look like one that is simply not installing anything.
             if !statuses.error_message.is_empty() {
-                warn!(agent = %uid, error = %statuses.error_message, "the agent refused the package offer");
+                warn!(agent = %uid, error = bounded(&statuses.error_message), "the agent refused the package offer");
             }
             record.package_statuses = Some(statuses);
         }
@@ -2074,8 +2026,8 @@ impl AppState {
         {
             None => None,
             Some(request) => {
-                // `Ok(Err(..))` is a request the Server refuses; `Err(..)` a record it cannot write,
-                // which the Agent retries (ADR-0022 clause 6).
+                // `Ok(Err(..))` is a request the Server refuses; `Err(..)` a register it cannot
+                // write, which the Agent retries (ADR-0021 clause 33).
                 let outcome: Result<Result<Signed, String>, String> = match &self.client_ca {
                     // The Baseline's MUST when the Server cannot act on the request. An Agent
                     // reaching here ignored the undeclared capability, so it is a client error.
@@ -2098,7 +2050,7 @@ impl AppState {
                 let outcome = match outcome {
                     Ok(outcome) => outcome,
                     Err(e) => {
-                        warn!(agent = %uid, error = %e, "held back a certificate: the audit record is unavailable");
+                        warn!(agent = %uid, error = %e, "held back a certificate: it cannot be recorded");
                         self.persist_if_dirty(&uid, record);
                         return Processed {
                             reply: unavailable(&msg.instance_uid, &e),
@@ -2109,11 +2061,6 @@ impl AppState {
                 };
                 match outcome {
                     Ok(signed) => {
-                        info!(
-                            agent = %uid,
-                            serial = %signed.facts.id.serial,
-                            "issued a client certificate"
-                        );
                         Some(TlsCertificate {
                             cert: signed.pem.into_bytes(),
                             // The Agent generated its own key and keeps it — the point of the CSR
@@ -2123,12 +2070,7 @@ impl AppState {
                         })
                     }
                     Err(e) => {
-                        warn!(agent = %uid, error = %e, "refused a certificate signing request");
-                        self.audit_refusal(
-                            Entry::new("issuance.refused", "refused")
-                                .with("instance_uid", uid.to_string())
-                                .with("reason", e.clone()),
-                        );
+                        warn!(event = "issuance.refused", agent = %uid, error = %e, "refused a certificate signing request");
                         // The report's updates above are already in the record, so they are
                         // persisted even though the CSR is refused (ADR-0024).
                         self.persist_if_dirty(&uid, record);
@@ -3480,6 +3422,22 @@ pub fn unavailable(instance_uid: &[u8], message: &str) -> ServerToAgent {
     }
 }
 
+/// The longest text a log field keeps when a peer chose it, in bytes: a request path, a user name
+/// or what an Agent reports is cut short, so a peer cannot write lines of any length.
+const MAX_LOGGED_TEXT: usize = 256;
+
+/// `text` cut to [`MAX_LOGGED_TEXT`] bytes on a character boundary.
+pub(crate) fn bounded(text: &str) -> &str {
+    if text.len() <= MAX_LOGGED_TEXT {
+        return text;
+    }
+    let mut end = MAX_LOGGED_TEXT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// Renders a reported config map for the operator: single unnamed entry as-is, named entries with
 /// a `# <name>` heading.
 fn config_map_text(map: Option<&AgentConfigMap>) -> String {
@@ -3797,10 +3755,27 @@ mod tests {
         );
     }
 
-    /// Every `Unavailable` — a full enrolment queue, the record ceiling, an audit record that cannot
+    /// A log field a peer chose keeps at most 256 bytes, cut on a character boundary: a two-byte
+    /// character straddling byte 256 is dropped whole, and a short text is kept as it is.
+    /// Verifies: ADR-0022
+    #[test]
+    fn a_logged_text_is_bounded_on_a_character_boundary() {
+        assert_eq!(bounded("short"), "short");
+        let exact = "a".repeat(256);
+        assert_eq!(bounded(&exact), exact);
+        // 255 bytes, then a two-byte `é` over bytes 255 and 256.
+        let straddling = format!("{}é and more", "a".repeat(255));
+        assert_eq!(bounded(&straddling), "a".repeat(255));
+        let multibyte = "€".repeat(200);
+        let cut = bounded(&multibyte);
+        assert!(cut.len() <= 256 && cut.len() > 252, "{}", cut.len());
+        assert!(cut.chars().all(|c| c == '€'));
+    }
+
+    /// Every `Unavailable` — a full enrolment queue, the record ceiling, a register that cannot
     /// be written — tells the Agent when to ask again, so it retries instead of giving up or
-    /// hammering (ADR-0021 clause 21, ADR-0022 clause 6).
-    /// Verifies: ADR-0021, ADR-0022, ADR-0013
+    /// hammering (ADR-0021 clause 21).
+    /// Verifies: ADR-0021, ADR-0013
     #[test]
     fn unavailable_tells_the_agent_when_to_retry() {
         let reply = unavailable(&[7; 16], "busy");

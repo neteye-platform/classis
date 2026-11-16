@@ -124,18 +124,15 @@ pub fn loaded(files: &[PathBuf]) -> Vec<Ending> {
 }
 
 /// The running Server's look at what it depends on (ADR-0028 clause 11): a certificate that is
-/// ending is a warning and `pki.expiring`, one that has ended an error and `pki.expired`.
+/// ending is a warning with the event `pki.expiring`, one that has ended an error with the event
+/// `pki.expired`.
 /// Nothing stops: the hosts decide for themselves.
 ///
 /// It judges the certificates as [`loaded`] read them, since those are what the Server serves
 /// until it restarts. A file that now holds another certificate is said too, as one a restart
 /// would take, and answered, so a replaced file neither silences the warning for the certificate
 /// still served nor goes unnoticed.
-pub fn warn_endings(
-    loaded: &[Ending],
-    audit: Option<&dyn crate::audit::Audit>,
-    now: OffsetDateTime,
-) -> Vec<PathBuf> {
+pub fn warn_endings(loaded: &[Ending], now: OffsetDateTime) -> Vec<PathBuf> {
     let mut replaced = Vec::new();
     for ending in loaded {
         match read_ending(&ending.file) {
@@ -154,39 +151,25 @@ pub fn warn_endings(
             // Said every day, as before: the next start reads this file and would fail on it.
             Err(e) => tracing::warn!("cannot read when a certificate ends: {e}"),
         }
-        let (event, outcome) = match ending.standing(now) {
-            Standing::Fine => continue,
-            Standing::Ending => {
-                tracing::warn!(
-                    file = %ending.file.display(),
-                    subject = %ending.subject,
-                    not_after = %ending.not_after.date(),
-                    days_left = ending.days_left(now),
-                    "a certificate the Server depends on ends soon; renew it"
-                );
-                ("pki.expiring", "expiring")
-            }
-            Standing::Ended => {
-                tracing::error!(
-                    file = %ending.file.display(),
-                    subject = %ending.subject,
-                    not_after = %ending.not_after.date(),
-                    "a certificate the Server depends on has ended; renew it"
-                );
-                ("pki.expired", "expired")
-            }
-        };
-        if let Some(audit) = audit {
-            let not_after_ms = u64::try_from(ending.not_after.unix_timestamp())
-                .unwrap_or(0)
-                .saturating_mul(1000);
-            let _ = audit.record(
-                crate::audit::Entry::new(event, outcome)
-                    .with("file", ending.file.display().to_string())
-                    .with("subject", ending.subject.clone())
-                    .with("serial", ending.serial.clone())
-                    .with("not_after_ms", not_after_ms),
-            );
+        match ending.standing(now) {
+            Standing::Fine => {}
+            Standing::Ending => tracing::warn!(
+                event = "pki.expiring",
+                file = %ending.file.display(),
+                subject = %ending.subject,
+                serial = %ending.serial,
+                not_after = %ending.not_after.date(),
+                days_left = ending.days_left(now),
+                "a certificate the Server depends on ends soon; renew it"
+            ),
+            Standing::Ended => tracing::error!(
+                event = "pki.expired",
+                file = %ending.file.display(),
+                subject = %ending.subject,
+                serial = %ending.serial,
+                not_after = %ending.not_after.date(),
+                "a certificate the Server depends on has ended; renew it"
+            ),
         }
     }
     replaced
@@ -212,19 +195,43 @@ mod tests {
         std::fs::write(file, params.self_signed(&key).expect("ca").pem()).expect("write");
     }
 
-    #[derive(Default)]
-    struct Recorded(std::sync::Mutex<Vec<crate::audit::Entry>>);
+    /// A writer the log goes to, for a test to read back.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
-    impl crate::audit::Audit for Recorded {
-        fn record(&self, entry: crate::audit::Entry) -> Result<(), crate::audit::Unavailable> {
-            self.0.lock().expect("lock").push(entry);
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
 
+    /// What `f` answers, and the lines it logged that name an `event`.
+    fn events<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+        let log = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .with_ansi(false)
+            .finish();
+        let answer = tracing::subscriber::with_default(subscriber, f);
+        let text = String::from_utf8(log.0.lock().expect("log lock").clone()).expect("utf-8");
+        let lines = text
+            .lines()
+            .filter(|line| line.contains("event="))
+            .map(str::to_string)
+            .collect();
+        (answer, lines)
+    }
+
     // Verifies: ADR-0028
     #[test]
-    fn the_server_records_what_is_ending_and_what_has_ended() {
+    fn the_server_logs_what_is_ending_and_what_has_ended() {
         let root = tempfile::tempdir().expect("tempdir");
         let fine = root.path().join("fine.pem");
         let ending = root.path().join("ending.pem");
@@ -232,28 +239,21 @@ mod tests {
         aged_ca(&fine, 10, 3000);
         aged_ca(&ending, 3600, 10);
         aged_ca(&ended, 3650, -1);
-        let audit = Recorded::default();
-        let replaced = warn_endings(
-            &loaded(&[fine, ending.clone(), ended.clone()]),
-            Some(&audit),
-            OffsetDateTime::now_utc(),
-        );
+        let loaded = loaded(&[fine, ending.clone(), ended.clone()]);
+        let (replaced, lines) = events(|| warn_endings(&loaded, OffsetDateTime::now_utc()));
         assert!(replaced.is_empty(), "an unchanged file is no replacement");
-        let recorded = audit.0.lock().expect("lock");
-        let seen: Vec<(String, String)> = recorded
-            .iter()
-            .map(|entry| (entry.event.clone(), entry.outcome.clone()))
-            .collect();
-        assert_eq!(
-            seen,
-            [
-                ("pki.expiring".to_string(), "expiring".to_string()),
-                ("pki.expired".to_string(), "expired".to_string())
-            ]
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("WARN")
+                && lines[0].contains("event=\"pki.expiring\"")
+                && lines[0].contains(&format!("file={}", ending.display())),
+            "{lines:?}"
         );
-        assert_eq!(
-            recorded[0].fields.get("file"),
-            Some(&crate::audit::Field::Text(ending.display().to_string()))
+        assert!(
+            lines[1].contains("ERROR")
+                && lines[1].contains("event=\"pki.expired\"")
+                && lines[1].contains(&format!("file={}", ended.display())),
+            "{lines:?}"
         );
     }
 
@@ -268,16 +268,11 @@ mod tests {
         aged_ca(&served, 3600, 10);
         let loaded = loaded(std::slice::from_ref(&served));
         aged_ca(&served, 1, 3000);
-        let audit = Recorded::default();
-        let replaced = warn_endings(&loaded, Some(&audit), OffsetDateTime::now_utc());
-        let recorded = audit.0.lock().expect("lock");
-        assert_eq!(
-            recorded
-                .iter()
-                .map(|entry| entry.event.as_str())
-                .collect::<Vec<_>>(),
-            ["pki.expiring"],
-            "the certificate still served is ending, whatever the file holds now"
+        let (replaced, lines) = events(|| warn_endings(&loaded, OffsetDateTime::now_utc()));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("event=\"pki.expiring\""),
+            "the certificate still served is ending, whatever the file holds now: {lines:?}"
         );
         assert_eq!(
             replaced,
