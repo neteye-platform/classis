@@ -161,10 +161,10 @@ the project already has:
 - **A Managed Process cannot take the second service's place by its socket or
   pipe, nor, on Linux, reach into it once it has marked itself** (ADR-0059
   clause 4): before the Client writes anything on a new connection it reads the
-  process at the other end — `SO_PEERPIDFD` on Linux, `LOCAL_PEERPID` on macOS,
-  `GetNamedPipeServerProcessId` on Windows — and accepts it only where systemd,
-  launchd or the SCM runs that process as the second service. A Managed Process
-  that replaces the socket or creates an instance of the pipe hears nothing: the
+  process at the other end — `SO_PEERPIDFD` on Linux,
+  `GetNamedPipeServerProcessId` on Windows — and accepts it only where systemd
+  or the SCM runs that process as the second service. A Managed Process that
+  replaces the socket or creates an instance of the pipe hears nothing: the
   Client closes the connection, logs an error naming the socket or pipe and the
   process, and waits for the second service as for one that is away. On Linux
   the second service's program marks itself not dumpable before it parses its
@@ -176,13 +176,12 @@ the project already has:
   duplicate its pipe handle or run code in it; on Linux where Yama is absent or
   `ptrace_scope` is 0, a Managed Process can kill the second service and attach
   to the one its service manager starts again between its `execve` and the mark,
-  and as its tracer make it read a `TracerPid` of 0; on Linux before 6.5, on
-  macOS and on Windows a process that listened and ended can leave its id to the
-  second service, which the Client does not tell apart; a Managed Process can
-  remove or replace the socket, and the Client then finds the second service
-  away; where the service manager cannot be asked — no system bus, a
-  `launchctl print` that fails — no Managed Process starts until it answers
-  again.
+  and as its tracer make it read a `TracerPid` of 0; on Linux before 6.5 and on
+  Windows a process that listened and ended can leave its id to the second
+  service, which the Client does not tell apart; a Managed Process can remove or
+  replace the socket, and the Client then finds the second service away; where
+  the service manager cannot be asked — no system bus — no Managed Process
+  starts until it answers again.
 - **An install acts only on directories an administrator named or its roots
   hold** (ADR-0053, ADR-0042 clause 2): `supervisor.toml` belongs to the
   service's account, and `service install` and `service config` run as root or

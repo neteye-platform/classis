@@ -93,6 +93,9 @@ A section carries a date once its tag exists.
   program says once at startup that the key is ignored; remove it. A
   `package-signing-key.pub` beside the Client's program at install is still
   written into the file, and ignored.
+- **Support for macOS**
+  ([ADR-0064](docs/adr/0064-no-program-of-the-product-is-built-for-macos.md)).
+  No release carries a macOS build of the Client or of `classisctl`.
 
 ### Fixed
 

@@ -22,14 +22,14 @@ and they are also where signing lives, which `fetch` deliberately does not do.
 
 ## Getting it
 
-Every release publishes it for Linux and macOS, on amd64 and arm64, as
+Every release publishes it for Linux, on amd64 and arm64, as
 `classisctl_<version>_<os>_<arch>.tar.gz` beside the Client's assets, with its
 CycloneDX SBOM `classisctl_<version>_<os>_<arch>.cdx.json`, covered by the same
 `SHA256SUMS` and by the release's build-provenance attestation. Verify the
 archive before you run it, since this program makes the fleet's keys: the
 attestation proves it was built by this repository's release workflow, and its
-hash must match its line in `SHA256SUMS` (`sha256sum`, or `shasum -a 256` on
-macOS). The archive holds the one program, executable:
+hash must match its line in `SHA256SUMS` (`sha256sum`). The archive holds the
+one program, executable:
 
 ```console
 $ gh attestation verify classisctl_<version>_linux_amd64.tar.gz --repo neteye-platform/classis \
@@ -94,15 +94,14 @@ Run it with no arguments and it asks for what it cannot know:
 ```console
 $ classisctl package fetch
 Which agent:
-  otelcol          linux, darwin, windows — as the release publishes
-> otelcol-contrib  linux, darwin, windows — as the release publishes
-  supervisor       linux/amd64+arm64 darwin/arm64+amd64 windows/amd64
+  otelcol          linux, windows — as the release publishes
+> otelcol-contrib  linux, windows — as the release publishes
+  supervisor       linux/amd64+arm64 windows/amd64
 Reading the last releases of open-telemetry/opentelemetry-collector-releases …
 Which version› 0.158.0
 Which platforms (space to select, enter to confirm)
   [x] linux/amd64
   [x] windows/amd64
-  [ ] darwin/arm64
 Upload these to a fleet Server? yes
 Server base URL› https://127.0.0.1:4321
 ```
@@ -144,7 +143,7 @@ $ classisctl package fetch --agent otelcol-contrib --version 0.158.0 \
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--agent <name>`       | `otelcol`, `otelcol-contrib`, or `supervisor` (this fleet's own Client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--version <v>`        | The version **as upstream numbers it** — `0.158.0`, `1.19` — never the tag (`v0.158.0`). Omitted, the last five are offered.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--platform <os/arch>` | Repeatable. `linux/amd64`, `windows/amd64`, `darwin/arm64`, … A platform the release does not publish is refused with the list of those it does.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `--platform <os/arch>` | Repeatable. `linux/amd64`, `windows/amd64`, … A platform the release does not publish is refused with the list of those it does.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `--out-dir <path>`     | Where artifacts are written. Created if missing. Defaults to the working directory.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `--server <url>`       | The Operator plane's `https://` URL. Create the Package and upload each artifact as its platform's entry. It stops there: putting the Package in a deployment is an operator act, and the tool prints the call that does it. Cannot be combined with `--no-upload`.                                                                                                                                                                                                                                                                                                                         |
 | `--cacert <file>`      | The CA certificate (PEM) the Operator plane's certificate chains to — for a fleet made with [`pki init`](#pki), the `server-ca.pem` in its offline directory, or your PKI's CA when `[rest.tls]` names a certificate of its own ([setup](setup.md#the-uis-own-certificate)). It replaces the system's roots for the calls to the Server alone; the downloads from upstream are still checked against the system's roots. Without it, a Server certificate no system root vouches for ends the upload with `invalid peer certificate: UnknownIssuer`. Cannot be combined with `--no-upload`. |
