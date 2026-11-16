@@ -8,10 +8,17 @@ use webpki::{EndEntityCert, ExtendedKeyUsageValidator, KeyPurposeIdIter};
 
 use super::{parse_signature, Roots, SignatureError};
 
-/// The Package Roots compiled into every binary (ADR-0063 clause 1), each a DER certificate. The
-/// custodian's Root is added by a reviewed change; until then the list is empty and nothing
-/// verifies.
-const COMPILED_ROOTS: &[&[u8]] = &[];
+/// The Package Roots compiled into every binary (ADR-0063 clause 1), each a DER certificate. A
+/// Root is added or dropped only by a reviewed change; the test below pins each by its SHA-256.
+const COMPILED_ROOTS: &[&[u8]] = &[
+    // CN=Signing Packages Root CA, Ed25519, 2026-11-16 to 2066-11-16; its key is the custodian's.
+    include_bytes!("../package-roots/signing-packages-root-ca-2026.der"),
+];
+
+/// The SHA-256 of each compiled-in Root, in the order of [`COMPILED_ROOTS`].
+#[cfg(test)]
+const COMPILED_ROOT_FINGERPRINTS: &[&str] =
+    &["16b7c670cbd11cbe9724dc4e2366bddea0352e7ac67fe9b23d18cb2c7e4a810f"];
 
 /// The Package Roots compiled into this binary (ADR-0063 clause 1). A debug build adds the one
 /// [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) names, if it is set; see [`debug_root`].
@@ -319,5 +326,18 @@ mod tests {
     #[test]
     fn the_compiled_in_roots_are_certificates() {
         assert!(anchors(&compiled()).is_ok());
+    }
+
+    /// The compiled-in Roots are the custodian's, byte for byte: a change to the list is a
+    /// change to this test too (ADR-0063 clause 1).
+    /// Verifies: ADR-0063
+    #[test]
+    fn the_compiled_in_roots_are_the_custodians() {
+        use sha2::{Digest, Sha256};
+        let found: Vec<String> = COMPILED_ROOTS
+            .iter()
+            .map(|der| hex::encode(Sha256::digest(der)))
+            .collect();
+        assert_eq!(found, COMPILED_ROOT_FINGERPRINTS);
     }
 }
