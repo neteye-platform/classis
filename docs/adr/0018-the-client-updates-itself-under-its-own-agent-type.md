@@ -1,7 +1,7 @@
 # ADR-0018: The Client updates itself only from a signed package — as its own Agent, under its own Agent type, by a consent that stands, through a staged version and a restart it does not issue
 
 - **Status:** 🟢 accepted
-  · clauses 2 and 5 superseded by
+  · clauses 2, 3 and 5 superseded by
   [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-10-11
 - **Deciders:** Markus Brigl, Davide Zeni

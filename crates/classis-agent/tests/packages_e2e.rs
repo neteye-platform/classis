@@ -98,7 +98,9 @@ fn spawn_client(config_path: &Path) -> ClientUnderTest {
         Command::new(env!("CARGO_BIN_EXE_supervisor"))
             .env(
                 classis_core::package::DEBUG_ROOT_ENV,
-                &common::package_roots().ours_file,
+                common::package_root_file(
+                    config_path.parent().expect("the configuration's directory"),
+                ),
             )
             .arg("--config")
             .arg(config_path)
