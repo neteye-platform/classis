@@ -56,7 +56,7 @@ const ROUTE_PREFIX: &str = "/api/v1/packages/";
 
 /// The SAN URI prefix naming the host a certificate was issued to (ADR-0021 clause 7), as the
 /// Server writes it.
-const HOST_URI_PREFIX: &str = "urn:opamp-fleet:host:";
+const HOST_URI_PREFIX: &str = "urn:classis:host:";
 
 /// How many fetches run at a time (ADR-0026 clause 42): a rollout rarely offers more distinct
 /// artifacts at once, and each one holds a reservation of up to the per-artifact limit.
@@ -113,7 +113,7 @@ impl Artifact {
     }
 }
 
-/// The host a certificate names (`urn:opamp-fleet:host:<id>`), if it names one.
+/// The host a certificate names (`urn:classis:host:<id>`), if it names one.
 #[must_use]
 pub fn host_of(der: &[u8]) -> Option<String> {
     let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
@@ -1540,13 +1540,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A host certificate issued before the rename to Classis still names its host here.
-    /// Verifies: ADR-0061
-    #[test]
-    fn the_host_uri_keeps_its_spelling() {
-        assert_eq!(HOST_URI_PREFIX, "urn:opamp-fleet:host:");
-    }
-
     const DEADLINE: Duration = Duration::from_secs(20);
 
     fn held(len: u64, used: u64) -> Held {
@@ -2386,7 +2379,7 @@ mod tests {
         std::fs::create_dir_all(store.parent().expect("dir")).expect("dir");
         HeldDir::open(&dir.path().join(DIR))
             .expect("held")
-            .write(store::NAME, b"opamp-fleet-gateway-bindings 9\n", 0o600)
+            .write(store::NAME, b"classis-gateway-bindings 9\n", 0o600)
             .expect("write");
         let cache = open_cache(config("127.0.0.1:9".parse().expect("addr"), dir.path(), 16)).await;
         assert!(cache
@@ -2405,7 +2398,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             std::fs::read(&store).expect("read"),
-            b"opamp-fleet-gateway-bindings 9\n"
+            b"classis-gateway-bindings 9\n"
         );
     }
 

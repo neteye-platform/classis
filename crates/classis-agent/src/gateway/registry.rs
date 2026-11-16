@@ -26,7 +26,7 @@ use crate::gateway::policy::End;
 /// Who is waiting for an Agent's replies, and the host its certificate names.
 struct Route {
     downstream: Downstream,
-    /// The host the downstream connection's certificate names (`urn:opamp-fleet:host:<id>`), the
+    /// The host the downstream connection's certificate names (`urn:classis:host:<id>`), the
     /// one an offer relayed over it is recorded for (ADR-0026 clause 45).
     host: Option<String>,
 }

@@ -16,8 +16,7 @@
         quiet: { label: "Quiet", href: "/ui-quiet.css" },
       };
       const UI_STYLE_KEY = "classis-style";
-      // Light, dark, or whichever the operating system prefers: one choice, whatever the look. Its
-      // key is the one the UI has always used, so a browser's earlier light or dark still holds.
+      // Light, dark, or whichever the operating system prefers: one choice, whatever the look.
       const UI_THEMES = ["system", "light", "dark"];
       const UI_THEME_KEY = "classis-theme";
       const SYSTEM_DARK = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1572,7 +1571,7 @@
       });
 
       // The signing file's one format (ADR-0027): written by the download, required by the import.
-      const SIGNING_FORMAT = "opamp-fleet-signing-v1";
+      const SIGNING_FORMAT = "classis-signing-v1";
 
       // What a signature covers (ADR-0026 clause 54), as a file to take to where the key is: the
       // Agent type, the version and each entry's SHA-256. Built from what the page already read —
@@ -1766,7 +1765,7 @@
       // answer: the entry's platform always, and — while a new Set is being created — whatever of
       // the name, the agent type, and the version is still empty. The type is not picked from a
       // list; it is read out of the file's name, which for a release artifact is the type its
-      // agents report (`otelcol-contrib_…`, `classis-client_…`). A suggestion in a visible,
+      // agents report (`otelcol-contrib_…`, `supervisor_…`). A suggestion in a visible,
       // editable identity field that OK confirms — not the silent server-side default ADR-0026
       // rejected — so a package named for the rollout rather than the type (a canary) is one
       // correction in the field before OK. It never rewrites a value already given, never an

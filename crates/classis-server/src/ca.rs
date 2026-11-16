@@ -21,7 +21,7 @@ use crate::config::ClientCaConfig;
 use crate::revocation::{CertId, Facts, Signed, SubjectValues};
 
 /// The SAN URI prefix naming the host a certificate was issued to (ADR-0021 clause 7).
-pub const HOST_URI_PREFIX: &str = "urn:opamp-fleet:host:";
+pub const HOST_URI_PREFIX: &str = "urn:classis:host:";
 
 /// The issuing authority, loaded once at startup. Holding it parsed is what makes `AppState`'s
 /// capability honest: `AcceptsConnectionSettingsRequest` is declared only while this exists.
@@ -874,13 +874,6 @@ fn at_ms(ms: u64) -> Result<time::OffsetDateTime, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A host certificate issued before the rename to Classis still names its host.
-    /// Verifies: ADR-0061
-    #[test]
-    fn the_host_uri_keeps_its_spelling() {
-        assert_eq!(HOST_URI_PREFIX, "urn:opamp-fleet:host:");
-    }
 
     /// A CA and a Client, end to end: the Client's key never leaves it, and what comes back is a
     /// certificate the CA signed over the public half it was sent.

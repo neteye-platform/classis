@@ -73,7 +73,7 @@ impl Pki {
     }
 
     /// A certificate and key signed by this CA naming `host` the way the Server's own signer does
-    /// (ADR-0021 clause 7): `urn:opamp-fleet:host:<host>`, and no other name.
+    /// (ADR-0021 clause 7): `urn:classis:host:<host>`, and no other name.
     fn issue_to_host(&self, host: &str) -> (String, String) {
         let key = KeyPair::generate().expect("key");
         let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");

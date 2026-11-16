@@ -499,7 +499,7 @@ validity_days = 30
 
 Without it, every host holds a certificate an operator provisioned, and such a
 certificate is served an uploaded artifact only when it names its host as a URI
-SAN, `urn:opamp-fleet:host:<id>`. A certificate that names no host fetches
+SAN, `urn:classis:host:<id>`. A certificate that names no host fetches
 nothing from the download route. A Server started without `[client_ca]` says so
 once at startup.
 
@@ -795,7 +795,7 @@ bootstrap CA's certificate as `[gateway.tls] bootstrap_ca_file` relays the
 enrolment request of a host behind it (see
 [Enrolment through a Gateway](#enrolment-through-a-gateway)).
 
-**A certificate names its host.** The Server puts `urn:opamp-fleet:host:<id>`
+**A certificate names its host.** The Server puts `urn:classis:host:<id>`
 into every certificate it signs: a host is minted when an operator approves an
 enrolment, a certificate an operator provisioned is given one on its first
 renewal, and every renewal keeps it — the Client proves with its current key
@@ -1763,7 +1763,7 @@ Gateway, from its aggregate bucket.
 
 A `404` for an Agent that was offered an artifact therefore means one of three
 things: its host's certificate names no host (provision it with
-`urn:opamp-fleet:host:<id>`, see [`[client_ca]`](#client_ca)), the Agent now
+`urn:classis:host:<id>`, see [`[client_ca]`](#client_ca)), the Agent now
 reports another Agent type than the Package was built for, or a later rollout
 changed what it is offered.
 

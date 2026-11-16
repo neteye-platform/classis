@@ -1732,7 +1732,7 @@ downstream, so a polling Client works as well as a WebSocket one.
 
 **Each Agent belongs to the host that first reported it.** An Agent's
 `instance_uid` is bound to the host of the certificate of the first report for
-it — the host the certificate names (`urn:opamp-fleet:host:<id>`), or, for a
+it — the host the certificate names (`urn:classis:host:<id>`), or, for a
 certificate an operator made without one, the host the Server will give it at
 its first renewal, so its Agents stay bound across that renewal. A report for an
 `instance_uid` bound to another host is not forwarded: over WebSocket it is
@@ -1845,7 +1845,7 @@ Agent:
   address, behind the same handshake and revocation list as its OpAMP endpoint.
   A downstream Client is served an artifact only when the Gateway relayed an
   offer of it to an Agent carried over a connection whose certificate names the
-  same host (`urn:opamp-fleet:host:<id>`) as the requesting certificate. An
+  same host (`urn:classis:host:<id>`) as the requesting certificate. An
   Agent's `instance_uid` belongs to the host of the first report for it, as
   above; an offer relayed for it over another host's connection is not recorded,
   and the log says so. An offer relayed over a certificate that names no host

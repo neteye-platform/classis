@@ -140,7 +140,7 @@ peer's message is still input from the network.
 Forces that shape the rate limit:
 
 - **The host is the unit admission knows.** A certificate names the host it was
-  issued to as `urn:opamp-fleet:host:<id>` (ADR-0021 clause 7). `instance_uid`
+  issued to as `urn:classis:host:<id>` (ADR-0021 clause 7). `instance_uid`
   is self-asserted (ADR-0021 clause 14), so a limit keyed on it alone binds
   nothing: a peer chooses a new uid for each message. A certificate an operator
   provisioned outside the CSR flow names no host until it is first renewed. It

@@ -1967,7 +1967,7 @@ async fn the_ui_lists_hosts_and_marks_inherited_labels() {
 /// the page writes the one format `classisctl package sign --signing-info` reads, and the
 /// fields it reads must be the ones the API serves. A rename on either side breaks here rather than
 /// in an empty column or a signing file with a hole in it.
-/// Verifies: ADR-0023, ADR-0027, ADR-0033, ADR-0061
+/// Verifies: ADR-0023, ADR-0027, ADR-0033
 #[tokio::test]
 async fn the_ui_shows_the_sha256_and_carries_the_signing_file_the_api_serves() {
     let server = spawn().await;
@@ -1986,7 +1986,7 @@ async fn the_ui_shows_the_sha256_and_carries_the_signing_file_the_api_serves() {
         "p.version",
         "e.os",
         "e.arch",
-        "\"opamp-fleet-signing-v1\"",
+        "\"classis-signing-v1\"",
         "format: SIGNING_FORMAT",
         "/entries/${encodeURIComponent(os)}/${encodeURIComponent(arch)}/signature",
         "entrySigPath(info.agent_type, info.version, e.os, e.arch)",

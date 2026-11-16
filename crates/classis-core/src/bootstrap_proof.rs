@@ -10,13 +10,13 @@
 pub use crate::renewal::{decode, encode};
 
 /// The SAN URI prefix of a bootstrap proof.
-pub const URI_PREFIX: &str = "urn:opamp-fleet:bootstrap:v1:";
+pub const URI_PREFIX: &str = "urn:classis:bootstrap:v1:";
 
 /// What the bootstrap key signs: a fixed prefix and the SHA-256 of the new key's
 /// SubjectPublicKeyInfo, in lowercase hex.
 #[must_use]
 pub fn statement(new_key_sha256: &[u8]) -> Vec<u8> {
-    crate::renewal::statement_of("opamp-fleet-bootstrap-v1", new_key_sha256)
+    crate::renewal::statement_of("classis-bootstrap-v1", new_key_sha256)
 }
 
 #[cfg(test)]
@@ -29,10 +29,7 @@ mod tests {
         let content = encode(b"cert", b"sig");
         assert_eq!(decode(&content), Some((&b"cert"[..], &b"sig"[..])));
         assert_eq!(decode(&content[..6]), None);
-        assert_eq!(
-            statement(&[0xab]),
-            b"opamp-fleet-bootstrap-v1\nab\n".to_vec()
-        );
+        assert_eq!(statement(&[0xab]), b"classis-bootstrap-v1\nab\n".to_vec());
     }
 
     /// The bootstrap proof's statement is not the renewal proof's, for the same key: a signature

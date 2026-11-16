@@ -4,7 +4,7 @@
   [ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
 - **Date:** 2026-10-12
 - **Deciders:** Markus Brigl, Davide Zeni
-- **Applies to:** the signing file format `opamp-fleet-signing-v1`, the
+- **Applies to:** the signing file format `classis-signing-v1`, the
   `package sign` command of `classisctl` in
   `crates/classis-tools/src/package.rs` and the module that reads the file, the
   signing-info download of the Packages tab and the signature import of the
@@ -17,7 +17,7 @@ A Deployment offers an entry only once it holds the operator's Ed25519 signature
 for it, and a rollout is refused while any entry lacks one
 ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
 clauses 28 and 54). The signature covers a statement, not the artifact's bytes:
-`opamp-fleet-package-v1`, the Agent type, the version and the artifact's SHA-256
+`classis-package-v1`, the Agent type, the version and the artifact's SHA-256
 in lowercase hex, one per line (`classis_core::package::statement`). Today
 `classisctl package sign` makes it from the **artifact file**, one entry per
 call, and the operator types each signature into the Deployment form with its
@@ -46,7 +46,7 @@ because signing a hash the Server supplied is signing what the Server claims.
 ## Decision
 
 We will carry what a Package's signatures cover in one JSON file,
-`opamp-fleet-signing-v1`, that the UI offers for download per Package, that
+`classis-signing-v1`, that the UI offers for download per Package, that
 `classisctl package sign --signing-info <file>` signs entry by entry from
 its hashes alone and writes back with each entry's signature, and that the UI
 imports into a Deployment's signatures.
@@ -55,7 +55,7 @@ imports into a Deployment's signatures.
 
    ```json
    {
-     "format": "opamp-fleet-signing-v1",
+     "format": "classis-signing-v1",
      "agent_type": "supervisor",
      "version": "0.5.1",
      "entries": [
@@ -69,7 +69,7 @@ imports into a Deployment's signatures.
    }
    ```
 
-   `format` is exactly `opamp-fleet-signing-v1`; a reader refuses any other
+   `format` is exactly `classis-signing-v1`; a reader refuses any other
    value rather than guess at it. `agent_type`, `version`, `os` and `arch` are
    the names the REST API uses for the same values. `sha256` is the entry's
    `content_hash`, 64 lowercase hex characters. `signature` is absent in the
@@ -187,11 +187,11 @@ file — the statement is documented in ADR-0026 for whoever wants to build one.
 - `classisctl`'s tests sign a signing file and verify every written
   signature against `classis_core::package::statement` with the public key, as the
   Client does; they refuse a file whose `format` is not
-  `opamp-fleet-signing-v1`, whose hash is not 64 lowercase hex characters, or
+  `classis-signing-v1`, whose hash is not 64 lowercase hex characters, or
   that names a platform twice, and assert that nothing was signed then. These
   tests carry `Verifies: ADR-0027`.
 - A Server test reads the bundled UI and asserts that the download writes
-  `opamp-fleet-signing-v1` and the fields the API serves, and that the import
+  `classis-signing-v1` and the fields the API serves, and that the import
   calls the signature route; the OpenAPI document must still carry those fields.
   It carries `Verifies: ADR-0027`.
 - **Not mechanically decidable:** that the operator compares the hashes before

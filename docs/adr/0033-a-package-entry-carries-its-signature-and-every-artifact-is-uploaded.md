@@ -36,7 +36,7 @@ signature, and every artifact is uploaded to the Server.
 
 What the signature covers decides where it belongs. The signed statement
 (`classis_core::package::statement`, ADR-0026 clause 54) is
-`opamp-fleet-package-v1`, the Agent type, the version and the artifact's
+`classis-package-v1`, the Agent type, the version and the artifact's
 SHA-256. It names no Deployment. Signing the same Package in two Deployments
 therefore stores the same signature twice. A Deployment as the place of the
 release decision is an arrangement of the Server's data, not something a Client
@@ -220,7 +220,7 @@ a test that runs every combination through both keeps them from disagreeing.
     takes a signed signing file and puts each entry's signature through
     `PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature`,
     one call per entry, and reports per entry what the Server answered, the
-    `signature_state` included. The file format `opamp-fleet-signing-v1` is
+    `signature_state` included. The file format `classis-signing-v1` is
     unchanged: it names no Deployment.
 
 13. **Restates ADR-0026 clause 53. The Client downloads only from its own Server

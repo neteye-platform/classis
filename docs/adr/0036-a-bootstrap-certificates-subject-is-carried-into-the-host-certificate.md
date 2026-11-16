@@ -101,7 +101,7 @@ issues from it and into every renewal after it.
      - the common name ADR-0028 clause 28 derives.
    - The Server signs a client-authentication leaf only — `CA:FALSE`,
      `digitalSignature`, `clientAuth`. It drops every requested SAN and puts in
-     one of its own, the URI `urn:opamp-fleet:host:<id>`.
+     one of its own, the URI `urn:classis:host:<id>`.
    - The CSR's subject is still searched for claims (ADR-0021 clause 29) and is
      never copied.
    - The host is minted when an operator approves an enrolment and carried on by
@@ -239,7 +239,7 @@ which a private fleet PKI does not need.
 - **Keep O and OU only (ADR-0028 as it stands).** It is enough for customer and
   site, but the human wanted the location and a customer number optional beside
   them.
-- **Free key-value pairs as SAN URIs (`urn:opamp-fleet:attr:<key>=<value>`).**
+- **Free key-value pairs as SAN URIs (`urn:classis:attr:<key>=<value>`).**
   They extend without bound and map one-to-one onto labels. But they are not
   standard, other tools do not show them as a subject, and they invite per-host
   values into a certificate shared by many hosts.

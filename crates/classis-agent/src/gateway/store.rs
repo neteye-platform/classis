@@ -32,7 +32,7 @@ use crate::nofollow::HeldDir;
 pub const NAME: &str = "bindings";
 
 /// The first line: the format, and its version.
-const FORMAT: &str = "opamp-fleet-gateway-bindings";
+const FORMAT: &str = "classis-gateway-bindings";
 const VERSION: &str = "1";
 
 /// The longest line, its newline not counted.
@@ -424,13 +424,6 @@ fn lines(changes: &[Change]) -> io::Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::gateway::policy::Bindings;
-
-    /// A store written before the rename to Classis still opens: the format keeps its spelling.
-    /// Verifies: ADR-0061
-    #[test]
-    fn the_header_keeps_its_spelling() {
-        assert_eq!(header(), "opamp-fleet-gateway-bindings 1");
-    }
 
     fn end(serial: &str) -> End {
         End {

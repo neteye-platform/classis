@@ -262,7 +262,7 @@ loopback, `localhost` included.
    subject to the common name ADR-0028 clause 28 derives and nothing else, signs
    a client-authentication leaf only — `CA:FALSE`, `digitalSignature`,
    `clientAuth` — drops every requested SAN, and puts in one of its own, the URI
-   `urn:opamp-fleet:host:<id>`. The CSR's subject is still listed with a pending
+   `urn:classis:host:<id>`. The CSR's subject is still listed with a pending
    enrolment (clause 22) and still searched for claims (clause 29). The host is
    minted when an operator approves an enrolment and carried on by every renewal
    (clause 27); a certificate an operator provisioned without one is given a
@@ -493,9 +493,9 @@ loopback, `localhost` included.
 
 27. **A renewal proves which certificate it renews.** A Client that holds a
     certificate and its key adds to its CSR the SAN URI
-    `urn:opamp-fleet:renewal:v1:` followed by the base64url, without padding, of
+    `urn:classis:renewal:v1:` followed by the base64url, without padding, of
     the certificate's DER and a signature made with its key over
-    `opamp-fleet-renewal-v1\n<SHA-256 of the new SubjectPublicKeyInfo, lowercase
+    `classis-renewal-v1\n<SHA-256 of the new SubjectPublicKeyInfo, lowercase
     hex>\n`,
     each prefixed by its length as four big-endian bytes. The Server accepts the
     proof only when the certificate was issued by the client CA, is valid now,

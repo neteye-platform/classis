@@ -269,7 +269,7 @@ Forces on the download route and the Gateway:
   Gateway enrols with the Server directly or is provisioned by an operator
   ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
   clause 25). A certificate the Server issued carries
-  `urn:opamp-fleet:host:<id>`, and an operator who provisions by hand names the
+  `urn:classis:host:<id>`, and an operator who provisions by hand names the
   host with that SAN URI (clause 37). The Gateway reads it from its own
   handshake. The host register is the Server's, and the Gateway does not hold
   it.
@@ -754,7 +754,7 @@ was taken is why this object is called a Deployment.
     releases it.
 
 37. **What a certificate speaks for.** The host a member certificate names
-    (`urn:opamp-fleet:host:<id>`,
+    (`urn:classis:host:<id>`,
     [ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
     clause 7) speaks for the `instance_uid`s bound to it in the host register. A
     host marked as a Gateway speaks for any Agent: the register binds no
@@ -767,7 +767,7 @@ was taken is why this object is called a Deployment.
     clause 9). An operator who provisions certificates by hand names the host
     with that SAN URI. A Server started without `[client_ca]` logs one notice at
     startup: uploaded artifacts reach only hosts whose certificate names a host
-    (`urn:opamp-fleet:host:<id>`). A request that presents no certificate at all
+    (`urn:classis:host:<id>`). A request that presents no certificate at all
     exists only behind `Admission::open`, which serves tests and loopback
     development and which no Server configuration serves
     ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
@@ -883,7 +883,7 @@ was taken is why this object is called a Deployment.
     ([ADR-0015](0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)
     clauses 11, 14).
     - **Binding.** An `instance_uid` is bound to the host
-      (`urn:opamp-fleet:host:<id>`) of the certificate of the first downstream
+      (`urn:classis:host:<id>`) of the certificate of the first downstream
       connection that reports for it since the Gateway started, as the Server
       binds an `instance_uid` to the host that first reports it
       ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
@@ -1096,7 +1096,7 @@ was taken is why this object is called a Deployment.
     before the artifact is opened, so an unverified archive is never parsed
     beyond its hash and signature. There is no unsigned posture: a Client
     without a key takes no packages (clause 50). The signature covers a
-    statement of what the artifact is, not its bytes: `opamp-fleet-package-v1`,
+    statement of what the artifact is, not its bytes: `classis-package-v1`,
     the Agent type (the offered package's name), the version and the artifact's
     SHA-256 in lowercase hex, one per line, each ended by a newline
     (`classis_core::package::statement`).
@@ -1761,7 +1761,7 @@ for `classisctl package pack`.
   The startup notice (clause 37) and the `download.refused` event say why. The
   manual (`docs/manual/server.md`, `[client_ca]` and the download route) states
   that without `[client_ca]` a hand-provisioned certificate must carry
-  `urn:opamp-fleet:host:<id>` to receive uploaded artifacts.
+  `urn:classis:host:<id>` to receive uploaded artifacts.
 - Negative / trade-offs: a partition is only as strong as the hosts it
   partitions (Context). A compromised host can report another partition's
   attributes under a fresh `instance_uid`, be assigned by that partition's next

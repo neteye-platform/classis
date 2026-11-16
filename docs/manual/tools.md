@@ -326,7 +326,7 @@ artifact and typing each signature there, carry them in one file:
 
    ```json
    {
-     "format": "opamp-fleet-signing-v1",
+     "format": "classis-signing-v1",
      "agent_type": "supervisor",
      "version": "1.2.3",
      "entries": [

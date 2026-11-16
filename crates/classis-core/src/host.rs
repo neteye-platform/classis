@@ -1,6 +1,6 @@
 //! The host a client certificate that names none is taken for.
 //!
-//! A certificate the Server issues names its host (`urn:opamp-fleet:host:<id>`). One an operator
+//! A certificate the Server issues names its host (`urn:classis:host:<id>`). One an operator
 //! provisioned may name none; the Server gives it a host derived from its issuer and serial when it
 //! first renews it (ADR-0036 clause 2), and a Gateway binds its Agents to that same host before the
 //! renewal (ADR-0039 clause 6), so the renewal does not move them.

@@ -454,7 +454,7 @@ async fn an_unreadable_store_of_bindings_refuses_downstream_and_the_host_goes_on
     let gateway_port = free_port();
     let store = state_dir.join("gateway-packages").join("bindings");
     std::fs::create_dir_all(store.parent().expect("dir")).expect("create the gateway's dir");
-    std::fs::write(&store, "opamp-fleet-gateway-bindings 99\n").expect("write the store");
+    std::fs::write(&store, "classis-gateway-bindings 99\n").expect("write the store");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -520,7 +520,7 @@ async fn an_unreadable_store_of_bindings_refuses_downstream_and_the_host_goes_on
     }
     assert_eq!(
         std::fs::read_to_string(&store).expect("read the store"),
-        "opamp-fleet-gateway-bindings 99\n",
+        "classis-gateway-bindings 99\n",
         "the store is left for the operator"
     );
     assert!(marker.exists(), "the supervised process runs");

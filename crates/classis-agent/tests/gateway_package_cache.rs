@@ -63,9 +63,7 @@ impl Pki {
         let mut params = CertificateParams::new(vec![name.to_string()]).expect("params");
         if let Some(host) = host {
             params.subject_alt_names.push(SanType::URI(
-                format!("urn:opamp-fleet:host:{host}")
-                    .try_into()
-                    .expect("uri"),
+                format!("urn:classis:host:{host}").try_into().expect("uri"),
             ));
         }
         let cert = params.signed_by(&key, &issuer).expect("signed");

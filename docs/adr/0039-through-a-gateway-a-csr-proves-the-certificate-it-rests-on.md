@@ -88,9 +88,9 @@ the Server decides as any enrolment.
 
 1. **Restates ADR-0021 clause 27. A renewal proves which certificate it
    renews.** A Client that holds a certificate and its key adds to its CSR the
-   SAN URI `urn:opamp-fleet:renewal:v1:` followed by the base64url, without
+   SAN URI `urn:classis:renewal:v1:` followed by the base64url, without
    padding, of the certificate's DER and a signature made with its key over
-   `opamp-fleet-renewal-v1\n<SHA-256 of the new SubjectPublicKeyInfo, lowercase
+   `classis-renewal-v1\n<SHA-256 of the new SubjectPublicKeyInfo, lowercase
    hex>\n`,
    each prefixed by its length as four big-endian bytes. The Server accepts the
    proof only when the certificate was issued by the client CA, is valid now, is
@@ -220,7 +220,7 @@ the Server decides as any enrolment.
      the first downstream connection that reports for it since the Gateway
      started, as the Server binds an `instance_uid` to the host that first
      reports it (ADR-0036 clause 2). The host is the one the certificate names
-     (`urn:opamp-fleet:host:<id>`). A certificate that names none is a host of
+     (`urn:classis:host:<id>`). A certificate that names none is a host of
      its own: the host the Server derives from its issuer and serial when it
      first renews it (ADR-0036 clause 2), computed the same way. So it neither
      shares a binding with another certificate nor takes one over, and the
@@ -270,9 +270,9 @@ the Server decides as any enrolment.
    Together they are the download refusal of clause 4.
 
 7. **The bootstrap proof.** An enrolling Client adds to its CSR the SAN URI
-   `urn:opamp-fleet:bootstrap:v1:` followed by the base64url, without padding,
+   `urn:classis:bootstrap:v1:` followed by the base64url, without padding,
    of the bootstrap certificate's DER and a signature made with its key over
-   `opamp-fleet-bootstrap-v1\n<SHA-256 of the new SubjectPublicKeyInfo,
+   `classis-bootstrap-v1\n<SHA-256 of the new SubjectPublicKeyInfo,
    lowercase hex>\n`,
    the certificate prefixed by its length as four big-endian bytes, as the
    renewal proof is (ADR-0021 clause 27). The statement differs from the

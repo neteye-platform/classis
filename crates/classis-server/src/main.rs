@@ -715,7 +715,7 @@ mod tests {
     fn a_server_without_client_ca_says_uploaded_artifacts_need_a_host() {
         let notice = uploaded_artifacts_notice(false).expect("a notice");
         assert!(notice.contains("uploaded artifacts"), "{notice}");
-        assert!(notice.contains("urn:opamp-fleet:host:<id>"), "{notice}");
+        assert!(notice.contains("urn:classis:host:<id>"), "{notice}");
         assert!(uploaded_artifacts_notice(true).is_none());
     }
 }

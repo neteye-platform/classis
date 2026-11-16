@@ -26,7 +26,7 @@ The Server already knows hosts, but it shows them nowhere and records them only
 as far as admission needs:
 
 - A host is minted when an operator approves an enrolment. Its id goes into the
-  client certificate as the SAN URI `urn:opamp-fleet:host:<id>`, and every
+  client certificate as the SAN URI `urn:classis:host:<id>`, and every
   renewal carries it on
   ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
   clauses 7 and 27).

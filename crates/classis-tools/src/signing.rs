@@ -16,7 +16,7 @@ use std::path::Path;
 
 /// The one format this tool reads and writes. Another value is refused rather than guessed at: a
 /// later format is a new value, never an edit of this one.
-pub const FORMAT: &str = "opamp-fleet-signing-v1";
+pub const FORMAT: &str = "classis-signing-v1";
 
 /// A signing file is a handful of lines per platform; anything near this is not one.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -140,13 +140,6 @@ mod tests {
     use super::*;
     use ring::signature::KeyPair;
 
-    /// A signing file written before the rename to Classis is still read.
-    /// Verifies: ADR-0061
-    #[test]
-    fn the_format_keeps_its_spelling() {
-        assert_eq!(FORMAT, "opamp-fleet-signing-v1");
-    }
-
     const HASH_A: &str = "127f9a4866448977b174bc2718e4d53646c7ff571782756837ae9bf1412cfb9e";
     const HASH_B: &str = "ee7df45231deda067856816d7735fe7bc5c2b9d7875bdece0461af056f6cfec8";
 
@@ -240,7 +233,7 @@ mod tests {
         let cases: Vec<(&str, serde_json::Value)> = vec![
             ("format", {
                 let mut v = downloaded();
-                v["format"] = "opamp-fleet-signing-v2".into();
+                v["format"] = "classis-signing-v2".into();
                 v
             }),
             ("uppercase hash", {

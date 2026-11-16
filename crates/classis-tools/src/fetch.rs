@@ -344,20 +344,8 @@ pub async fn run(args: Args) -> Result<(), String> {
     let assets = release_assets(&source, &tag).await?;
     let available = plans(agent, &version, &assets).await?;
     if available.is_empty() {
-        // For this project's own releases the likeliest reason is a known one, and saying it saves
-        // the operator a trip to the release page: older releases carry another name and container,
-        // and a Set built from those fits no Client reporting the type `supervisor` anyway
-        // (ADR-0019).
-        let why = match agent {
-            AgentKind::Supervisor => {
-                " — a release from before the rename publishes \
-                 `classis-client_<version>_<os>_<arch>.7z`, which is a package no Client of \
-                 this type installs"
-            }
-            _ => "",
-        };
         return Err(format!(
-            "{} {version} publishes nothing this tool can install{why}",
+            "{} {version} publishes nothing this tool can install",
             source.service_name
         ));
     }

@@ -916,9 +916,7 @@ mod tests {
         let key = rcgen::KeyPair::generate().expect("key");
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
         params.subject_alt_names.push(rcgen::SanType::URI(
-            format!("urn:opamp-fleet:host:{host}")
-                .try_into()
-                .expect("uri"),
+            format!("urn:classis:host:{host}").try_into().expect("uri"),
         ));
         params.self_signed(&key).expect("cert").der().to_vec()
     }
@@ -1657,7 +1655,7 @@ mod tests {
         let dir = state.join(cache::DIR);
         let path = dir.join(store::NAME);
         std::fs::create_dir_all(&dir).expect("dir");
-        let header = "opamp-fleet-gateway-bindings 1\n";
+        let header = "classis-gateway-bindings 1\n";
         let write = |contents: &str| {
             crate::nofollow::HeldDir::open(&dir)
                 .expect("held")
@@ -1668,7 +1666,7 @@ mod tests {
             "an unparsable line before its last" => {
                 write(&format!("{header}garbage\nu {}\n", InstanceUid::default()));
             }
-            "an unknown version" => write("opamp-fleet-gateway-bindings 2\n"),
+            "an unknown version" => write("classis-gateway-bindings 2\n"),
             "past its bound" => {
                 write(header);
                 std::fs::OpenOptions::new()
@@ -1790,7 +1788,7 @@ mod tests {
         .map(|change| store::line(change).expect("line"))
         .collect();
         let contents = format!(
-            "opamp-fleet-gateway-bindings 1\n{}\n{}\nb {other} cut-of",
+            "classis-gateway-bindings 1\n{}\n{}\nb {other} cut-of",
             lines[0], lines[1]
         );
         held.write(store::NAME, contents.as_bytes(), 0o600)
@@ -1817,9 +1815,7 @@ mod tests {
         let key = rcgen::KeyPair::generate().expect("key");
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
         params.subject_alt_names.push(rcgen::SanType::URI(
-            format!("urn:opamp-fleet:host:{host}")
-                .try_into()
-                .expect("uri"),
+            format!("urn:classis:host:{host}").try_into().expect("uri"),
         ));
         params.not_before = not_after - time::Duration::days(60);
         params.not_after = not_after;

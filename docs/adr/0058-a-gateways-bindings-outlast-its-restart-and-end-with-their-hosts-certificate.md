@@ -118,7 +118,7 @@ expired or is revoked, and never let a binding take the place of another host's.
      `instance_uid` to the host that first reports it (ADR-0036 clause 2), and
      the binding is kept across the Gateway's restarts (clause 3) until it ends
      (clause 4). The host is the one the certificate names
-     (`urn:opamp-fleet:host:<id>`). A certificate that names none is a host of
+     (`urn:classis:host:<id>`). A certificate that names none is a host of
      its own: the host the Server derives from its issuer and serial when it
      first renews it (ADR-0036 clause 2), computed the same way. So it neither
      shares a binding with another certificate nor takes one over, and the

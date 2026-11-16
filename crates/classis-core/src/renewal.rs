@@ -8,13 +8,13 @@
 //! signs; an extension of its own would need an OID this project does not hold.
 
 /// The SAN URI prefix of a renewal proof.
-pub const URI_PREFIX: &str = "urn:opamp-fleet:renewal:v1:";
+pub const URI_PREFIX: &str = "urn:classis:renewal:v1:";
 
 /// What the current key signs: a fixed prefix and the SHA-256 of the new key's
 /// SubjectPublicKeyInfo, in lowercase hex.
 #[must_use]
 pub fn statement(new_key_sha256: &[u8]) -> Vec<u8> {
-    statement_of("opamp-fleet-renewal-v1", new_key_sha256)
+    statement_of("classis-renewal-v1", new_key_sha256)
 }
 
 /// `label`, a newline, the SHA-256 of the new key in lowercase hex, and a newline: what a proof's
@@ -55,30 +55,14 @@ pub fn decode(content: &[u8]) -> Option<(&[u8], &[u8])> {
 mod tests {
     use super::*;
 
-    /// The URIs a certificate already issued carries, and the bootstrap proof's statement, keep
-    /// their spelling across the rename to Classis.
-    /// Verifies: ADR-0061
-    #[test]
-    fn the_certificate_uris_keep_their_spelling() {
-        assert_eq!(URI_PREFIX, "urn:opamp-fleet:renewal:v1:");
-        assert_eq!(
-            crate::bootstrap_proof::URI_PREFIX,
-            "urn:opamp-fleet:bootstrap:v1:"
-        );
-        assert_eq!(
-            crate::bootstrap_proof::statement(&[0xab]),
-            b"opamp-fleet-bootstrap-v1\nab\n".to_vec()
-        );
-    }
-
-    /// Verifies: ADR-0021, ADR-0061
+    /// Verifies: ADR-0021
     #[test]
     fn a_proof_round_trips_and_a_torn_one_does_not_parse() {
         let content = encode(b"cert", b"sig");
         assert_eq!(decode(&content), Some((&b"cert"[..], &b"sig"[..])));
         assert_eq!(decode(&content[..6]), None);
         assert_eq!(decode(&encode(b"cert", b"")), None);
-        assert_eq!(statement(&[0xab]), b"opamp-fleet-renewal-v1\nab\n".to_vec());
+        assert_eq!(statement(&[0xab]), b"classis-renewal-v1\nab\n".to_vec());
     }
 
     /// A length prefix past what the content holds — the largest one included — does not parse,
