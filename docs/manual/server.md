@@ -1548,10 +1548,14 @@ is refused, so a Package of any other Agent type, the Collector's above
 included, cannot be signed yet.
 
 Each entry reports its `signature_state`: `valid` or `missing`. At startup the
-Server checks every stored signature again and removes one that no longer
-verifies — a signature stored before the Package Roots, or one whose Package
+Server checks every stored signature again and sets aside one that does not
+verify — a signature stored before the Package Roots, or one whose Package
 Signer has expired — with a warning in its log naming the entry and the step.
-That entry is then unsigned: upload its `.sig` again.
+That entry is offered to nobody and reported `missing` while the Server runs;
+the signature stays in the store, so a Server started with a wrong clock loses
+nothing and offers the entry again once its clock is right. Replace the
+signature with the release's `.sig`; an entry of a Package already assigned to
+an Agent is not writable, so release a new version instead.
 
 A Package is one file, `data_dir/packages/<agent type>@<version>.json`, naming
 each entry's artifact by its SHA-256; the bytes are `data_dir/blobs/<sha256>`.

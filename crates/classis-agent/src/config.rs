@@ -1578,6 +1578,34 @@ mod tests {
         assert!(err.contains("client_ca_file is required"), "{err}");
     }
 
+    /// `[packages] verification_key` is no longer read: a file that holds it loads, whatever it
+    /// holds, and the Client says at startup that it is ignored (ADR-0063 clause 11).
+    /// Verifies: ADR-0063
+    #[test]
+    fn an_old_verification_key_loads_and_is_named_as_ignored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("supervisor.toml");
+        std::fs::write(&path, "endpoint = \"ws://127.0.0.1:4320/v1/opamp\"\n").expect("write");
+        let config = ClientConfig::load(&path).expect("load");
+        assert_eq!(config.ignored_key_warning(), None);
+        for old in ["ab".repeat(32), "not-hex".to_string()] {
+            std::fs::write(
+                &path,
+                format!(
+                    "endpoint = \"ws://127.0.0.1:4320/v1/opamp\"\n[packages]\nverification_key = \"{old}\"\n"
+                ),
+            )
+            .expect("write");
+            let config = ClientConfig::load(&path).expect("an old key still loads");
+            let warning = config.ignored_key_warning().expect("a warning");
+            assert!(warning.contains("ignored"), "{warning}");
+            assert!(
+                config.package_roots.is_none(),
+                "the compiled-in Roots decide"
+            );
+        }
+    }
+
     /// Both keys that would configure package delivery on the host are refused rather than ignored:
     /// `package` would name the artifact (the Server's Selector does, ADR-0026), and
     /// `accepts_packages` would say whether to take one (ADR-0017 derives that from the program's

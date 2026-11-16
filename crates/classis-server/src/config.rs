@@ -584,12 +584,6 @@ impl RootsVerifier {
     pub fn new(roots: classis_core::package::Roots) -> Self {
         RootsVerifier(roots)
     }
-
-    /// Up to the Package Roots compiled into this binary (ADR-0063 clause 1).
-    #[must_use]
-    pub fn compiled() -> Self {
-        RootsVerifier(classis_core::package::chain::compiled())
-    }
 }
 
 impl crate::packages::SignatureVerifier for RootsVerifier {

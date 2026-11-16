@@ -117,6 +117,7 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
                 content_hash,
                 size: unsigned(row.get(5)),
                 signature,
+                signature_set_aside: false,
             },
         );
     }
@@ -184,6 +185,7 @@ mod tests {
                             size: u64::from(*byte) << 40,
                             signature: (*byte % 2 == 0)
                                 .then(|| vec![*byte; classis_core::package::ED25519_SIGNATURE_LEN]),
+                            signature_set_aside: false,
                         },
                     )
                 })

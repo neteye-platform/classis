@@ -199,8 +199,18 @@ fn der_len(len: usize, out: &mut Vec<u8>) {
 
 /// Writes a `PackageSignature` from a Package Signer's DER certificate and its signature — what
 /// the release run's `sign` job writes in hex (ADR-0063 clause 13).
+///
+/// # Panics
+///
+/// A certificate too long for the two length octets this format uses (past 65 000 bytes), which
+/// no Package Signer's certificate comes near; [`parse_signature`] refuses anything past
+/// [`MAX_SIGNATURE_LEN`] in any case.
 #[must_use]
 pub fn encode_signature(signer: &[u8], signature: &[u8; ED25519_SIGNATURE_LEN]) -> Vec<u8> {
+    assert!(
+        signer.len() <= 0xffff - 3 - 2 - ED25519_SIGNATURE_LEN,
+        "a certificate too long for a PackageSignature"
+    );
     let mut body = vec![0x02, 0x01, 0x01];
     body.extend_from_slice(signer);
     body.extend([0x04, ED25519_SIGNATURE_LEN as u8]);

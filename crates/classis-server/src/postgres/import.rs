@@ -458,6 +458,7 @@ mod tests {
                         content_hash: hex::decode(&sha256).expect("hex"),
                         size,
                         signature: Some(vec![7; 64]),
+                        signature_set_aside: false,
                     },
                 )]),
             })
