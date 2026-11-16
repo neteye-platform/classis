@@ -1300,6 +1300,18 @@ fn the_tracked_certificate_is_a_package_signer() {
     let carried = classis_core::package::encode_signature(&der, &[0; 64]);
     let parsed = classis_core::package::parse_signature(&carried).expect("a PackageSignature");
     assert_eq!(parsed.signer, der.as_slice());
+    // And it was issued by a compiled-in Root: with a placeholder signature the check gets past
+    // the chain and stops at the signature, the step a real one passes.
+    let statement = classis_core::package::statement("supervisor", "1.0.0", &[0; 32]);
+    assert_eq!(
+        classis_core::package::chain::verify_now(
+            &statement,
+            &carried,
+            &classis_core::package::chain::compiled()
+        ),
+        Err(classis_core::package::SignatureError::Signature),
+        "the tracked Package Signer chains to a compiled-in Package Root"
+    );
 }
 
 /// A release is started by a signed tag, which is an annotated one: `ls-remote` lists it as its
