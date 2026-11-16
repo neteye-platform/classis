@@ -75,6 +75,7 @@ impl PackageBackend for FsPackageBackend {
                         content_hash,
                         size: entry.size,
                         signature,
+                        signature_set_aside: false,
                     },
                 );
             }

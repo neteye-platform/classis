@@ -141,10 +141,16 @@ jobs:
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader"
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           export GIT_CONFIG_VALUE_0
-          on=$(git ls-remote --tags origin "refs/tags/$tag" | cut -f1)
+          # An annotated tag — a signed one is (README, the tag ruleset) — is listed as its tag
+          # object, and as the commit it names on the `^{}` line; a lightweight tag has only the
+          # first. Either may be what `GITHUB_SHA` holds, so both are compared with it.
+          refs=$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          object=$(printf '%s\n' "$refs" | awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }')
+          peeled=$(printf '%s\n' "$refs" | awk -v ref="refs/tags/$tag^{}" '$2 == ref { print $1 }')
+          on=${peeled:-$object}
           if [ -n "$on" ]; then
             # On a push run this very tag is what started us; anywhere else it is a spent number.
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$on" = "$GITHUB_SHA" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && { [ "$on" = "$GITHUB_SHA" ] || [ "$object" = "$GITHUB_SHA" ]; }; then
               echo "$tag is the tag that started this run"
             else
               echo "::error::the tag $tag already exists, on ${on:0:7}"
@@ -293,7 +299,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history *and* the tag the version job just pushed, or this build bakes `-dev`.
+          # Full history *and* the tag that started the run, or this build bakes `-dev`.
           fetch-depth: 0
           # Nothing in this job talks to the remote after the checkout. No cache either: what ships
           # is built from the sources and the lockfile, not from a target/ or ~/.cargo/bin other

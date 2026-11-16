@@ -1280,14 +1280,107 @@ fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
 fn the_tracked_certificate_is_a_package_signer() {
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signer.der");
     let der = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let (_, cert) = x509_parser::parse_x509_certificate(&der).expect("a DER certificate");
+    let (rest, cert) = x509_parser::parse_x509_certificate(&der).expect("a DER certificate");
+    assert!(
+        rest.is_empty(),
+        "{} bytes follow the certificate",
+        rest.len()
+    );
     assert!(!cert.is_ca(), "a Package Signer is no CA");
     assert!(
         cert.extended_key_usage().ok().flatten().is_none(),
         "a Package Signer carries no extendedKeyUsage"
     );
+    assert_eq!(
+        cert.public_key().algorithm.algorithm.to_id_string(),
+        "1.3.101.112",
+        "a Package Signer's key is Ed25519 (RFC 8410)"
+    );
+    // What every `.sig` of a release will carry parses as a PackageSignature, within its bound.
+    let carried = classis_core::package::encode_signature(&der, &[0; 64]);
+    let parsed = classis_core::package::parse_signature(&carried).expect("a PackageSignature");
+    assert_eq!(parsed.signer, der.as_slice());
+}
+
+/// A release is started by a signed tag, which is an annotated one: `ls-remote` lists it as its
+/// tag object and as the commit it names. The step that refuses a spent number takes the tag that
+/// started the run, whichever of the two `GITHUB_SHA` holds, and refuses one on another commit.
+// Verifies: ADR-0062
+#[test]
+fn the_version_step_takes_the_annotated_tag_that_started_the_run() {
+    let workflow = workflow();
+    let script = run_script(step(
+        job(&workflow, "version"),
+        "This version has not been released yet",
+    ))
+    .replace("${{ steps.read.outputs.version }}", "1.2.3")
+    .replace("${{ github.repository }}", "owner/repo");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str], cwd: &Path| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let origin = dir.path().join("origin");
+    std::fs::create_dir(&origin).expect("origin");
+    git(&["init", "-q"], &origin);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"], &origin);
+    git(&["tag", "-a", "version/1.2.3", "-m", "release"], &origin);
+    let commit = git(&["rev-parse", "HEAD"], &origin);
+    let object = git(&["rev-parse", "version/1.2.3"], &origin);
+    assert_ne!(commit, object, "an annotated tag");
+    git(
+        &["clone", "-q", origin.to_str().expect("utf-8"), "clone"],
+        dir.path(),
+    );
+    // No release exists: `gh release view` answers "not found".
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).expect("bin");
+    std::fs::write(bin.join("gh"), "#!/bin/sh\nexit 1\n").expect("gh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+    }
+    let script_file = dir.path().join("step.sh");
+    std::fs::write(&script_file, &script).expect("script");
+    let run = |sha: &str| {
+        std::process::Command::new("bash")
+            .arg(&script_file)
+            .current_dir(dir.path().join("clone"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("GITHUB_EVENT_NAME", "push")
+            .env("GITHUB_SHA", sha)
+            .env("GITHUB_SERVER_URL", "https://example.invalid")
+            .env("GH_TOKEN", "unused")
+            .status()
+            .expect("bash")
+            .success()
+    };
+    assert!(run(&commit), "the commit the tag names");
+    assert!(run(&object), "the tag object");
     assert!(
-        classis_core::package::encode_signature(&der, &[0; 64]).len()
-            <= classis_core::package::MAX_SIGNATURE_LEN
+        !run(&"0".repeat(40)),
+        "a tag on another commit is a spent number"
     );
 }

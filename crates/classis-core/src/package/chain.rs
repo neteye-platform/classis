@@ -6,7 +6,7 @@
 use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use webpki::{EndEntityCert, ExtendedKeyUsageValidator, KeyPurposeIdIter};
 
-use super::{parse_signature, Roots, SignatureError, DEBUG_ROOT_ENV};
+use super::{parse_signature, Roots, SignatureError};
 
 /// The Package Roots compiled into every binary (ADR-0063 clause 1), each a DER certificate. The
 /// custodian's Root is added by a reviewed change; until then the list is empty and nothing
@@ -14,20 +14,22 @@ use super::{parse_signature, Roots, SignatureError, DEBUG_ROOT_ENV};
 const COMPILED_ROOTS: &[&[u8]] = &[];
 
 /// The Package Roots compiled into this binary (ADR-0063 clause 1). A debug build adds the one
-/// [`DEBUG_ROOT_ENV`] names, if it is set; see [`debug_root`].
+/// [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) names, if it is set; see [`debug_root`].
 ///
 /// # Panics
 ///
 /// A compiled-in Root that is not a certificate, which a test of this module rules out; in a
-/// debug build, a [`DEBUG_ROOT_ENV`] that names no readable certificate.
+/// debug build, a [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) that names no readable certificate.
 #[must_use]
 pub fn compiled() -> Roots {
+    // Only a debug build adds to it.
+    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
     let mut der: Vec<Vec<u8>> = COMPILED_ROOTS.iter().map(|d| d.to_vec()).collect();
     #[cfg(debug_assertions)]
     if let Some(path) = debug_root() {
         match std::fs::read(&path) {
             Ok(extra) => der.push(extra),
-            Err(e) => panic!("{DEBUG_ROOT_ENV}={}: {e}", path.display()),
+            Err(e) => panic!("{}={}: {e}", super::DEBUG_ROOT_ENV, path.display()),
         }
     }
     Roots::from_der(der.iter().map(Vec::as_slice)).expect("compiled-in Package Roots")
@@ -39,7 +41,7 @@ pub fn compiled() -> Roots {
 pub fn debug_root() -> Option<std::path::PathBuf> {
     #[cfg(debug_assertions)]
     {
-        std::env::var_os(DEBUG_ROOT_ENV).map(std::path::PathBuf::from)
+        std::env::var_os(super::DEBUG_ROOT_ENV).map(std::path::PathBuf::from)
     }
     #[cfg(not(debug_assertions))]
     {
@@ -127,7 +129,16 @@ pub fn verify(
         .map_err(|e| SignatureError::Chain(chain_error(&e)))?;
     signer
         .verify_signature(webpki::ring::ED25519, statement, parsed.signature)
-        .map_err(|_| SignatureError::Signature)
+        .map_err(|e| {
+            #[allow(deprecated)] // the variant without context is still what some paths return
+            match e {
+                webpki::Error::UnsupportedSignatureAlgorithmForPublicKey
+                | webpki::Error::UnsupportedSignatureAlgorithmForPublicKeyContext(_) => {
+                    SignatureError::Chain("its key is not Ed25519".into())
+                }
+                _ => SignatureError::Signature,
+            }
+        })
 }
 
 /// [`verify`] at the current time.
@@ -215,6 +226,17 @@ mod tests {
                 "{deviation:?}"
             );
         }
+        // An Ed25519 Root's certificate for a P-256 key: the chain holds, the pinned algorithm
+        // refuses the key (ADR-0063 clause 4).
+        let p256 = root.signer_with(Deviation::EcdsaKey);
+        assert_eq!(
+            verify_now(
+                &stmt(),
+                &encode_signature(&p256.der, &[7; 64]),
+                &root.roots()
+            ),
+            Err(SignatureError::Chain("its key is not Ed25519".into()))
+        );
         let ecdsa = TestRoot::ecdsa();
         let sig = ecdsa.signer().sign(&stmt());
         assert_eq!(

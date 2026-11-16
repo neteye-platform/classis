@@ -2755,7 +2755,7 @@ Agent declares `AcceptsPackages` only while `[packages] self_update` consents.
 Two Deployments may claim the Agent, which `package_conflict` on its fleet row
 names. Or the entry for its platform carries no signature, and the Server offers
 no unsigned entry; the Server's log names an entry whose stored signature it
-removed at startup because it no longer verifies.
+set aside at startup because it does not verify.
 
 **A download fails naming an origin.** The offered URL, or a redirect hop, leads
 off this Client's own Server origin (see
