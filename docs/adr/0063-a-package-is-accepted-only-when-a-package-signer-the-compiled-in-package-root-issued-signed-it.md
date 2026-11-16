@@ -243,9 +243,12 @@ and that signer's Ed25519 signature over the Package's statement verifies;
     - On a write, a signature that does not verify is refused with `400`, naming
       the step that failed. Nothing is stored.
     - On loading the store, an entry whose stored signature does not verify is
-      treated as unsigned: the signature is removed, and a warning names the
-      entry and the step. A signature stored before this ADR, 64 raw bytes, is
-      one of them, and so is one whose Package Signer has expired.
+      treated as unsigned while this Server runs: it is offered to nobody, and
+      a warning names the entry and the step. A signature stored before this
+      ADR, 64 raw bytes, is one of them, and so is one whose Package Signer has
+      expired. The store keeps the signature: a Server started with a wrong
+      clock or another list of Roots loses nothing, and offers the entry again
+      once it is started right.
     - Each entry reports `signature_state`, `valid` or `missing`. `invalid` and
       `unchecked` no longer occur.
     - A signature that expires while the Server runs stays stored until the next
@@ -481,9 +484,13 @@ Read on 2026-11-13 and 2026-11-14.
   stops installing, a reinstall included, unless it is signed again. A host
   whose clock is wrong refuses valid signatures, as it would refuse the
   Server's TLS certificate.
-- **The Server refuses on write and drops on load.** An entry may lose a stored
-  signature at startup, named in a warning; an operator who sees a Package
-  turn unsigned uploads its `.sig` again.
+- **The Server refuses on write and sets aside on load.** An entry whose stored
+  signature does not verify at startup turns unsigned, named in a warning, and
+  its signature stays on disk. An operator replaces it with the release's
+  `.sig`; for a Package already assigned to an Agent that write is refused, as
+  every write to its entries is
+  ([ADR-0025](0025-rollout-and-what-reaches-an-agent.md) clause 8), so the
+  operator rolls out a new version instead.
 - **A Root is a single point.** Its key signs every Package Signer, and its
   custody is outside this repository. Losing it means a release that ships a
   new Root, and a hand upgrade for every Client that cannot take it.
@@ -526,9 +533,9 @@ Tests carrying `Verifies: ADR-0063`:
     lengths.
 - `fuzz/fuzz_targets/`: a target for the `PackageSignature` parser.
 - `crates/classis-server`: a `PUT` of a signature that does not verify answers
-  `400` and stores nothing; a stored 64-byte signature is removed at load with a
-  warning; `signature_state` takes `valid` and `missing` only; a
-  `verification_key` in `server.toml` is ignored with a warning.
+  `400` and stores nothing; a stored 64-byte signature turns the entry unsigned
+  at load and stays in the store; `signature_state` takes `valid` and `missing`
+  only; a `verification_key` in `server.toml` is ignored with a warning.
 - `crates/classis-agent`: every Supervisor-backed Agent declares
   `AcceptsPackages` without any key; an offer whose signature does not verify is
   refused before the artifact is opened; the self-update takes a release signed
