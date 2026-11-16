@@ -168,6 +168,23 @@ impl TestRoot {
     }
 }
 
+impl std::fmt::Debug for TestRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestRoot")
+            .field("der_len", &self.der.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The key stays out of it, test key or not.
+impl std::fmt::Debug for TestSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestSigner")
+            .field("der_len", &self.der.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for TestRoot {
     fn default() -> Self {
         Self::new()
@@ -211,7 +228,7 @@ impl TestSigner {
     pub fn sign(&self, statement: &[u8]) -> Vec<u8> {
         let key = ring::signature::Ed25519KeyPair::from_pkcs8(&self.pkcs8).expect("key");
         let sig: [u8; 64] = key.sign(statement).as_ref().try_into().expect("64 bytes");
-        super::encode_signature(&self.der, &sig)
+        super::encode_signature(&self.der, &sig).expect("a test certificate fits the format")
     }
 
     /// The `PackageSignature` of an artifact's statement, DER.

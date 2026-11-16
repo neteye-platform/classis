@@ -537,6 +537,7 @@ dependencies = [
  "rustls-pki-types",
  "rustls-webpki",
  "sha2",
+ "tempfile",
  "time",
  "x509-parser",
  "zeroize",

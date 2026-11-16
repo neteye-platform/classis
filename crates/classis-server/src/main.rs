@@ -384,7 +384,14 @@ async fn main() {
     if let Some(warning) = config.packages.ignored_key_warning() {
         warn!("{warning}");
     }
-    let roots = classis_core::package::chain::compiled();
+    // ADR-0063 clause 1: a Root that cannot be read stops the Server here, naming it.
+    let roots = match classis_core::package::chain::compiled() {
+        Ok(roots) => roots,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     if let Some(path) = classis_core::package::chain::debug_root() {
         // ADR-0063 clause 1: a debug build only.
         warn!(

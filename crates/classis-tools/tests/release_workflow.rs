@@ -1319,7 +1319,8 @@ fn the_tracked_certificate_is_a_package_signer() {
         "a Package Signer's key is Ed25519 (RFC 8410)"
     );
     // What every `.sig` of a release will carry parses as a PackageSignature, within its bound.
-    let carried = classis_core::package::encode_signature(&der, &[0; 64]);
+    let carried = classis_core::package::encode_signature(&der, &[0; 64])
+        .expect("the tracked certificate fits a PackageSignature");
     let parsed = classis_core::package::parse_signature(&carried).expect("a PackageSignature");
     assert_eq!(parsed.signer, der.as_slice());
     // And it was issued by a compiled-in Root: with a placeholder signature the check gets past
@@ -1329,7 +1330,7 @@ fn the_tracked_certificate_is_a_package_signer() {
         classis_core::package::chain::verify_now(
             &statement,
             &carried,
-            &classis_core::package::chain::compiled()
+            &classis_core::package::chain::compiled().expect("the compiled-in Roots")
         ),
         Err(classis_core::package::SignatureError::Signature),
         "the tracked Package Signer chains to a compiled-in Package Root"

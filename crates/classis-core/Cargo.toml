@@ -46,3 +46,4 @@ zeroize.workspace = true
 [dev-dependencies]
 ring.workspace = true
 time.workspace = true
+tempfile = "3"

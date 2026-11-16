@@ -490,8 +490,7 @@ fn carry_packages(
                     platform,
                     content_hash: hex::decode(&sha256).expect("a blob's hash is hex"),
                     size,
-                    signature,
-                    signature_set_aside: false,
+                    signature: signature.map(crate::packages::Signature::Withheld),
                 },
             );
         }
