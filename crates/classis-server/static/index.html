@@ -192,8 +192,8 @@
         <div id="entry-editor">
         <div class="config-fields">
           <label class="field narrow"><span class="field-cap">OS <b class="need req">required</b></span>
-            <input required aria-required="true" id="entry-os" placeholder="os: linux, darwin, windows" autocomplete="off"
-                   title="The operating system this entry is built for, as the agent reports os.type. Other spellings (macos) are accepted and stored canonically." />
+            <input required aria-required="true" id="entry-os" placeholder="os: linux, windows" autocomplete="off"
+                   title="The operating system this entry is built for, as the agent reports os.type. Other spellings (win64) are accepted and stored canonically." />
           </label>
           <label class="field narrow"><span class="field-cap">Arch <b class="need req">required</b></span>
             <input required aria-required="true" id="entry-arch" placeholder="arch: amd64, arm64" autocomplete="off"
@@ -1730,9 +1730,9 @@
 
       // Older and foreign spellings, mirroring the server's table. The server canonicalises
       // whatever it is sent anyway, so a drift here costs a prefilled field and never correctness.
-      const OS_ALIASES = { macos: "darwin", osx: "darwin", win: "windows", win32: "windows", win64: "windows" };
+      const OS_ALIASES = { win: "windows", win32: "windows", win64: "windows" };
       const ARCH_ALIASES = { x86_64: "amd64", x64: "amd64", aarch64: "arm64" };
-      const KNOWN_OS = new Set(["linux", "darwin", "windows", ...Object.keys(OS_ALIASES)]);
+      const KNOWN_OS = new Set(["linux", "windows", ...Object.keys(OS_ALIASES)]);
       const KNOWN_ARCH = new Set(["amd64", "arm64", ...Object.keys(ARCH_ALIASES)]);
 
       // What an artifact's file name already says. A release is `<name><sep><version><sep><os>`
