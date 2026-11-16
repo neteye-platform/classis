@@ -1,7 +1,7 @@
 # ADR-0061: The product is named Classis in every name it gives itself
 
-- **Status:** 🟡 proposed
-- **Date:** 2026-11-12
+- **Status:** 🟢 accepted
+- **Date:** 2026-11-16
 - **Deciders:** Davide Zeni
 - **Applies to:** every name the project gives itself — the crates under
   `crates/`, the build-time product name and title in
