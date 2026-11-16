@@ -713,7 +713,7 @@ async fn a_set_at_the_running_version_reaches_nobody() {
         id
     };
     let same = set_of(&running);
-    let older = set_of("0.0.1");
+    let older = set_of("0.0.0");
     let newer = set_of("9.9.9");
 
     let (addr, state) = spawn_server(store).await;
