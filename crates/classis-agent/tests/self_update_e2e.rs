@@ -400,7 +400,7 @@ impl Supervised {
         Command::new(program)
             .env(
                 classis_core::package::DEBUG_ROOT_ENV,
-                &common::package_roots().ours_file,
+                common::package_root_file(config.parent().expect("the configuration's directory")),
             )
             .arg("--config")
             .arg(config)

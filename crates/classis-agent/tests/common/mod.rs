@@ -127,8 +127,6 @@ pub struct PackageRoots {
     pub signer: classis_core::package::testing::TestSigner,
     pub theirs: classis_core::package::testing::TestRoot,
     pub their_signer: classis_core::package::testing::TestSigner,
-    /// `ours`, DER, where the Client under test reads it from.
-    pub ours_file: std::path::PathBuf,
 }
 
 #[allow(dead_code)]
@@ -137,23 +135,39 @@ pub fn package_roots() -> &'static PackageRoots {
     ROOTS.get_or_init(|| {
         let ours = classis_core::package::testing::TestRoot::new();
         let theirs = classis_core::package::testing::TestRoot::new();
-        let ours_file = std::env::temp_dir().join(format!(
-            "classis-test-package-root-{}-{}.der",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        ));
-        std::fs::write(&ours_file, &ours.der).expect("write the test Package Root");
         PackageRoots {
             signer: ours.signer(),
             their_signer: theirs.signer(),
             ours,
             theirs,
-            ours_file,
         }
     })
+}
+
+/// The file the Client under test reads `ours` from through
+/// [`classis_core::package::DEBUG_ROOT_ENV`]: in `dir`, a directory the test owns — beside its
+/// configuration — so it goes when the test's temporary directory does. Created exclusively; a
+/// second Client of the same test finds the same Root there.
+#[allow(dead_code)]
+pub fn package_root_file(dir: &Path) -> std::path::PathBuf {
+    use std::io::Write as _;
+    let path = dir.join("test-package-root.der");
+    let der = &package_roots().ours.der;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => file.write_all(der).expect("write the test Package Root"),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => assert_eq!(
+            &std::fs::read(&path).expect("read the test Package Root"),
+            der,
+            "{} holds another Root",
+            path.display()
+        ),
+        Err(e) => panic!("{}: {e}", path.display()),
+    }
+    path
 }
 
 /// A Server's package store on `dir`, checking signatures up to both test Roots (ADR-0063).
