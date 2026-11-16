@@ -474,7 +474,6 @@ pub fn run_service(socket: &Path, client_uid: u32) -> Result<Served, String> {
         let terminated = terminated();
         let listener =
             bind(socket).map_err(|e| format!("cannot listen on {}: {e}", socket.display()))?;
-        #[cfg(target_os = "linux")]
         info!(
             socket = %socket.display(),
             client_uid,
@@ -482,8 +481,6 @@ pub fn run_service(socket: &Path, client_uid: u32) -> Result<Served, String> {
             dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) },
             "second service listening"
         );
-        #[cfg(not(target_os = "linux"))]
-        info!(socket = %socket.display(), client_uid, "second service listening");
         let served = serve(listener, client_uid, superseded, terminated).await;
         let _ = std::fs::remove_file(socket);
         if served == Served::Superseded {

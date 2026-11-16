@@ -656,13 +656,9 @@ pub(crate) mod handle {
     /// [`open_beneath`] each component before the last, and [`step_trusting`] each on the way to
     /// a root, from `/` on. So the Client passes through what it may only search, and the second
     /// service, as the process account, through a Supervisor's directory (`0710`, ADR-0059
-    /// clause 6) to what it purges. On Linux a path-only handle.
-    #[cfg(target_os = "linux")]
+    /// clause 6) to what it purges. A path-only handle.
     pub(crate) const SEARCH: libc::c_int =
         libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    /// Elsewhere a directory read, as [`DIRECTORY`].
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) const SEARCH: libc::c_int = DIRECTORY;
 
     /// A regular file, opened to change its owner and mode: never through a link, and never
     /// blocking on a FIFO or taking a terminal.
