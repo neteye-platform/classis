@@ -473,7 +473,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "classis-agent"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "classis-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "der 0.8.2",
  "git2",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "classis-server"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "classis-tools"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "clap",
  "classis-agent",
