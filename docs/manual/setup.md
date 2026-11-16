@@ -366,8 +366,7 @@ This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/server-ca.pem
 Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
 Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
-Package verification key (hex Ed25519 public key; empty takes no packages):
-no verification key: this Client installs no package until one is set
+Package verification key (ignored: the compiled-in Package Roots decide; leave empty):
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 enrolling with wss://fleet.example.com:4320/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
@@ -376,9 +375,9 @@ enrolled: the issued certificate is in /var/lib/classis/state
 installed classis
 ```
 
-Leave the package verification key empty. The question and the message after it
-are older than the Package Roots: the Client no longer reads the key, and it
-takes packages whatever the answer.
+Leave the package verification key empty. The question is older than the Package
+Roots: the Client no longer reads the key, and it takes packages whatever the
+answer.
 
 With the files beside the program, each of the three path questions offers the
 file there, and Enter takes it. Answering a `bootstrap.p12` asks its password
