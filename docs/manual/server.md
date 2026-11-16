@@ -1530,9 +1530,9 @@ verify — a signature stored before the Package Roots, or one whose Package
 Signer has expired — with a warning in its log naming the entry and the step.
 That entry is offered to nobody and reported `missing` while the Server runs;
 the signature stays in the store, so a Server started with a wrong clock loses
-nothing and offers the entry again once its clock is right. Replace the
-signature with the release's `.sig`; an entry of a Package already assigned to
-an Agent is not writable, so release a new version instead.
+nothing: once the clock is right, restart the Server to offer the entry again,
+or upload the release's `.sig` to replace it. An entry of a Package already
+assigned to an Agent is not writable, so release a new version instead.
 
 A Package is one file, `data_dir/packages/<agent type>@<version>.json`, naming
 each entry's artifact by its SHA-256; the bytes are `data_dir/blobs/<sha256>`.

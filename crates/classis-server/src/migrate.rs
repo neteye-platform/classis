@@ -1021,10 +1021,13 @@ mod tests {
         let id = PackageId::new("otelcol", "1.0.0").expect("id");
         let summary = packages.summary(&id).expect("carried");
         assert_eq!(summary.entries.len(), 1);
+        // Carried as it was; a store armed with no verifier offers it to nobody (ADR-0063).
+        let platform = crate::packages::Platform::new("linux", "amd64").expect("platform");
         assert_eq!(
-            summary.entries[0].signature.as_deref(),
-            Some(old.signature.as_str())
+            packages.stored_signature(&id, &platform).map(hex::encode),
+            Some(old.signature.clone())
         );
+        assert_eq!(summary.entries[0].signature, None);
         assert_eq!(
             summary.entries[0].content_hash,
             hex::encode(Sha256::digest(&old.uploaded))

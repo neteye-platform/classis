@@ -726,6 +726,11 @@ jobs:
             echo "::error::$CERT is too long for a PackageSignature (ADR-0063 clause 3)"
             exit 1
           fi
+          # The public key every signature is checked against before it is kept: the certificate's.
+          # A secret that is not this Package Signer's key fails here, not on every Client.
+          pub=$(mktemp)
+          trap 'rm -f -- "$pub"' EXIT
+          openssl x509 -inform DER -in "$CERT" -pubkey -noout > "$pub"
           cd "$ENTRIES"
           signed=0
           for f in "${AGENT_TYPE}"_*.tar.gz.sha256; do
@@ -746,6 +751,10 @@ jobs:
             openssl pkeyutl -sign -rawin -keyform DER -inkey "$KEY" -in "$name.statement" -out "$name.sig.bin"
             if [ "$(wc -c < "$name.sig.bin" | tr -d ' ')" -ne 64 ]; then
               echo "::error::OpenSSL wrote no 64-byte Ed25519 signature for $name"
+              exit 1
+            fi
+            if ! openssl pkeyutl -verify -rawin -pubin -inkey "$pub" -in "$name.statement" -sigfile "$name.sig.bin" > /dev/null; then
+              echo "::error::the signature of $name does not verify under $CERT — PACKAGE_SIGNING_KEY is not this Package Signer's key (ADR-0063 clause 13)"
               exit 1
             fi
             sig=$(od -An -v -tx1 "$name.sig.bin" | tr -d ' \n')

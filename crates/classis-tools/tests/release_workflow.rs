@@ -1235,6 +1235,23 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
     std::fs::remove_file(entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"))
         .expect("remove");
 
+    // A key that is not the tracked certificate's is refused: each signature is verified under the
+    // certificate before it is kept (ADR-0063 clause 13).
+    let other = root.signer();
+    std::fs::write(&key_file, other.pkcs8_v1()).expect("another key");
+    let sig_file = entries.join("supervisor_1.2.3_linux_amd64.tar.gz.sig");
+    let before = std::fs::read(&sig_file).expect("sig");
+    assert!(
+        !run().success(),
+        "a key that is not the certificate's signed"
+    );
+    assert_eq!(
+        std::fs::read(&sig_file).expect("sig"),
+        before,
+        "nothing written over the good signature"
+    );
+    std::fs::write(&key_file, signer.pkcs8_v1()).expect("key file");
+
     // A certificate file that is no DER certificate is refused before anything is signed.
     std::fs::write(&cert_file, b"not a certificate").expect("certificate file");
     assert!(!run().success(), "a non-certificate was carried");

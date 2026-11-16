@@ -252,10 +252,11 @@ pub struct Entry {
     /// `None` until one is written; new bytes remove it, because a signature covers the hash
     /// (ADR-0033). An entry without one is offered to nobody.
     pub signature: Option<Vec<u8>>,
-    /// Whether the stored signature did not verify when the store was loaded (ADR-0063 clause
+    /// Whether the stored signature has not verified since the store was loaded (ADR-0063 clause
     /// 10): it is kept, and persisted as it is, but offered to nobody and reported `missing`
     /// while this Server runs. A wrong clock or another list of Roots then loses nothing. Never
-    /// persisted itself; every store loads it `false`.
+    /// persisted itself: every stored signature loads set aside, and the verifier the store is
+    /// armed with lets through the ones that pass.
     pub signature_set_aside: bool,
 }
 
@@ -308,7 +309,7 @@ pub trait SignatureVerifier: Send + Sync {
 
 /// What a store checks with until one is armed: nothing verifies. The composition root arms the
 /// compiled-in Package Roots ([`RootsVerifier`](crate::config::RootsVerifier)); a store that was
-/// never armed holds no signature (ADR-0063 clause 10).
+/// never armed takes no signature and offers none it loaded (ADR-0063 clause 10).
 struct Unarmed;
 
 impl SignatureVerifier for Unarmed {
@@ -484,7 +485,12 @@ impl PackageStore {
     ) -> Result<Self, String> {
         let stored: BTreeMap<String, u64> = blobs.list()?.into_iter().collect();
         let mut sets = BTreeMap::new();
-        for package in backend.load()? {
+        for mut package in backend.load()? {
+            // Fail closed: a stored signature is offered to nobody until a verifier has checked it
+            // (ADR-0063 clause 10). [`PackageStore::with_verifier`] lets through the ones that pass.
+            for entry in package.entries.values_mut() {
+                entry.signature_set_aside = entry.signature.is_some();
+            }
             for entry in package.entries.values() {
                 let sha256 = hex::encode(&entry.content_hash);
                 match stored.get(&sha256) {
@@ -568,6 +574,19 @@ impl PackageStore {
                 }
             }
         }
+    }
+
+    /// The signature an entry stores, set aside or not — what a migration carried, for its tests.
+    #[cfg(test)]
+    pub(crate) fn stored_signature(&self, id: &PackageId, platform: &Platform) -> Option<Vec<u8>> {
+        self.sets
+            .read()
+            .expect("sets lock")
+            .get(id)?
+            .entries
+            .get(platform)?
+            .signature
+            .clone()
     }
 
     /// Every Package, in identity order — the REST list view; never the artifact bytes.
@@ -1651,7 +1670,8 @@ mod tests {
     /// The Server holds only a signature that verifies up to its Package Roots (ADR-0063 clause
     /// 10): a Package Signer of another Root is refused on write, and a stored signature that does
     /// not verify — 64 raw bytes from before ADR-0063 — is set aside when the store is loaded: the
-    /// entry is offered to nobody, and the store keeps the signature, through later writes too.
+    /// entry is offered to nobody, and the store keeps the signature, through later writes too. A
+    /// store no verifier armed offers no stored signature at all.
     /// Verifies: ADR-0063
     #[test]
     fn the_server_refuses_what_does_not_verify_and_sets_it_aside_on_load() {
@@ -1718,6 +1738,15 @@ mod tests {
             Some(vec![1u8; 64]),
             "the store kept what it set aside"
         );
+        // Fail closed: a store no verifier has armed offers none of what it loaded, the signature
+        // that verifies included.
+        assert_eq!(
+            states(&raw),
+            [SignatureState::Missing, SignatureState::Missing]
+        );
+        assert!(raw
+            .offer_for_assigned(Some(&set), Some(&agent("linux", "amd64", &[])))
+            .is_none());
     }
 
     /// The gate an explicit rollout act runs (ADR-0025): the Package must hold entries and fit the

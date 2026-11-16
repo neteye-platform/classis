@@ -11,7 +11,7 @@
   target of the signature parser
 - **Supersedes:**
   [ADR-0018](0018-the-client-updates-itself-under-its-own-agent-type.md)
-  clauses 2 and 5;
+  clauses 2, 3 and 5;
   [ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
   clauses 50 and 54;
   [ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
@@ -305,6 +305,10 @@ and that signer's Ed25519 signature over the Package's statement verifies;
         `openssl pkeyutl -sign -rawin -keyform DER -inkey <key> -in <statement>`.
         OpenSSL takes Ed25519 only with `-rawin` and from a file. The step
         script reads its inputs from environment variables only.
+      - It verifies each signature with the public key of the tracked
+        certificate before it keeps it, and fails otherwise: a secret that is
+        not this Package Signer's key stops the release here, not on every
+        Client.
     - **The key on the runner.** The key is decoded into a file under
       `RUNNER_TEMP`, mode `0600`. A step with `if: always()` removes it.
     - **What it writes.**
@@ -366,6 +370,23 @@ and that signer's Ed25519 signature over the Package's statement verifies;
       number, since versions are compared without build metadata
       ([ADR-0012](0012-versions-resolved-in-the-internal-crate.md)).
 
+16. **Restates ADR-0018 clause 3, with the key gone. Every install path can
+    withdraw the consent, none asks for a name, and the answer is written into
+    the configuration.**
+    - `service install --no-self-update` withdraws it on the non-interactive
+      `--endpoint` path
+      ([ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)
+      clause 42).
+    - **The interactive questionnaire asks nothing about it**: it writes the
+      consent. Whatever it asks about a package key decides nothing (clause 11).
+    - The MSI shows a checked-by-default checkbox on its endpoint dialog backed
+      by the public property `SELFUPDATE` (default `1`). `SELFUPDATE=0` or an
+      empty value withdraws it, so `msiexec /qn … SELFUPDATE=0` is how Intune or
+      Group Policy declines.
+    - Whatever path wrote it, the first configuration carries
+      `[packages] self_update = true` or `= false`, so the decision is visible
+      and editable on the host; no installer holds state of its own.
+
 **Out of scope:**
 
 - the operator's signing tools and what asks for or writes the old key:
@@ -381,8 +402,7 @@ and that signer's Ed25519 signature over the Package's statement verifies;
 - the `[packages] self_update` consent, kept as ADR-0018 has it (clause 7);
 - the Root's ceremony, its custody and the procedure that issues a Package
   Signer, which belong to its custodian;
-- `publish` verifying every `.sig` before the release is created, and the
-  `sign` job checking that the secret's key matches the tracked certificate;
+- `publish` verifying every `.sig` before the release is created;
 - the Packages tab of the bundled UI.
 
 ## Alternatives considered
@@ -547,7 +567,8 @@ Tests carrying `Verifies: ADR-0063`:
   warning.
 - `crates/classis-tools/tests/release_workflow.rs`: the `sign` job's script, run
   with a test Root's Package Signer and `openssl`, writes `.sig` files the
-  verifier accepts.
+  verifier accepts, and fails, writing nothing, with a key that is not the
+  tracked certificate's.
 
 **Not mechanically decidable:**
 
