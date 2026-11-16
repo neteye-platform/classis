@@ -5,21 +5,21 @@
   · clauses 21 and 37 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
-- **Applies to:** crates/fleet-agent/src/supervisor/ (core, ports, process
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** crates/classis-agent/src/supervisor/ (core, ports, process
   runner with its preflight, version probe and process-group stop, endpoint,
   placeholders, start, every kind and the delivered-block check
   (`check_delivered_block`) each kind states, the Client's own Agent in
   `build_engine`, the capability set and the handling of a received or stored
   remote configuration of the Client's own Agent and of a Supervisor's Agent in
-  agent.rs), crates/fleet-agent/src/config.rs (supervisor_dir, program
+  agent.rs), crates/classis-agent/src/config.rs (supervisor_dir, program
   resolution, the `server_manages_set` and `remote_config_disabled` keys),
-  crates/fleet-agent/src/reconfigure.rs (the Supervisor-set apply), the stored
-  `remote-config.pb` and entry files in crates/fleet-agent/src/storage.rs, the
+  crates/classis-agent/src/reconfigure.rs (the Supervisor-set apply), the stored
+  `remote-config.pb` and entry files in crates/classis-agent/src/storage.rs, the
   `[[supervisor]]` blocks and the `[supervisors]` section of supervisor.toml
   (among them `delivered_env`, `delivered_args`, `server_manages_set` and
   `remote_config_disabled`), the `[features]` table of
-  crates/fleet-agent/Cargo.toml, the artifact documents under docs/artifacts/
+  crates/classis-agent/Cargo.toml, the artifact documents under docs/artifacts/
   each wrapped kind adds
 
 ## Context
@@ -53,7 +53,7 @@ plus `args` — because it supervises a binary somebody else installed. This
 Client is in the opposite position: it installs every program it supervises,
 into a directory it owns, from an artifact this project packs (clauses 21 and
 24). It is the one end that can know an agent's layout, and
-`opamp-fleetctl package fetch` already carries per-agent knowledge (service
+`classisctl package fetch` already carries per-agent knowledge (service
 name, release source, default Configuration names). Writing that knowledge into
 every host's TOML by hand — one block per platform for an agent whose invocation
 differs by platform, one key per layout path for an agent that has to be
@@ -161,12 +161,12 @@ in `[supervisors]`, the one per Supervisor keyed by the Supervisor's `name`,
 which is unique across blocks and names its directory (clause 3).
 
 The Client's own Agent is built by `AgentState::new` in
-`crates/fleet-agent/src/supervisor/agent.rs` and declares the constant
+`crates/classis-agent/src/supervisor/agent.rs` and declares the constant
 `AGENT_CAPABILITIES`: `ReportsStatus`, `AcceptsRemoteConfig`,
 `ReportsEffectiveConfig`, `ReportsRemoteConfig`, `ReportsHealth`,
 `AcceptsOpAmpConnectionSettings`, `ReportsConnectionSettingsStatus` and
 `ReportsOwnMetrics`, `ReportsOwnTraces` and `ReportsOwnLogs`. `build_engine` in
-`crates/fleet-agent/src/supervisor/mod.rs` adds `ReportsHeartbeat` when
+`crates/classis-agent/src/supervisor/mod.rs` adds `ReportsHeartbeat` when
 heartbeats are enabled, and `AcceptsPackages` with `ReportsPackageStatuses` when
 `[self_update]` consents and a verification key is configured
 ([ADR-0018](0018-the-client-updates-itself-under-its-own-agent-type.md)). Its
@@ -187,7 +187,7 @@ differs ([ADR-0023](0023-configurations-and-the-rest-api.md) clause 6).
 
 The Server offers a remote configuration only to an Agent declaring
 `AcceptsRemoteConfig` ([ADR-0023](0023-configurations-and-the-rest-api.md)
-clause 6, `offer` in `crates/fleet-server/src/fleet.rs`), as the Baseline
+clause 6, `offer` in `crates/classis-server/src/fleet.rs`), as the Baseline
 requires, and a Client's capabilities bind what it reports and acts on
 ([ADR-0014](0014-connection-settings-offered-without-a-credential-and-server-capabilities.md)
 clauses 12 and 17); the same rule read the other way means an Agent that does
@@ -266,7 +266,7 @@ remote configuration and run only on what the operator placed on the host.
    (the Custom Supervisor for any Foreign Agent), and the wrapped kinds, each of
    which knows one third-party agent (clause 15). A new process kind is one
    module and one registry line (`registry()` in `supervisor/mod.rs`); the core
-   stays untouched. Each wrapped kind is a feature of `fleet-agent` named after
+   stays untouched. Each wrapped kind is a feature of `classis-agent` named after
    its `type`, and the default features are all of them, so the published build
    carries every kind and a build that leaves one out is built with
    `--no-default-features --features <kinds>`. A new wrapped kind is a feature
@@ -461,7 +461,7 @@ remote configuration and run only on what the operator placed on the host.
     and Selectors do not match it.
 
 19. **A kind binds itself to one artifact's shape.** The derived paths are those
-    of the artifact `opamp-fleetctl package fetch` builds. A tree packed
+    of the artifact `classisctl package fetch` builds. A tree packed
     differently does not fit, and the answer is to repack it with the tool, not
     to reopen a key.
 
@@ -843,10 +843,10 @@ never searches `$PATH`.
 
 54. **A delivered block for a listed Supervisor repeats the running block
     whole.** In the Supervisor-set apply, the check of a delivered block
-    (`check_delivered_block` in `crates/fleet-agent/src/supervisor/mod.rs`,
-    called from `apply_inner` in `crates/fleet-agent/src/reconfigure.rs`)
+    (`check_delivered_block` in `crates/classis-agent/src/supervisor/mod.rs`,
+    called from `apply_inner` in `crates/classis-agent/src/reconfigure.rs`)
     ignores `delivered_args` and `delivered_env` (the `SupervisorsConfig` fields
-    of `crates/fleet-agent/src/config.rs`) for a block whose name is in
+    of `crates/classis-agent/src/config.rs`) for a block whose name is in
     `remote_config_disabled`, and holds such a block to this:
     - **A block of that name runs:** the delivered block equals it entirely,
       compared as the parsed block. That covers `type`, the core keys
@@ -1196,18 +1196,18 @@ through a job object.
   removal.
 - The code read for the switch: `AGENT_CAPABILITIES`, `AgentState::new`,
   `restore`, `handle`, `apply` and `config_applied` in
-  `crates/fleet-agent/src/supervisor/agent.rs`; `build_engine`,
+  `crates/classis-agent/src/supervisor/agent.rs`; `build_engine`,
   `start_supervisor` and `remote_config_disabled_notices` in
-  `crates/fleet-agent/src/supervisor/mod.rs`; `SupervisorsConfig` in
-  `crates/fleet-agent/src/config.rs`; `store_remote_config` and
-  `drop_remote_config` in `crates/fleet-agent/src/storage.rs`; the self-Agent
-  dispatch in `crates/fleet-agent/src/engine.rs`; the `AcceptsRemoteConfig` gate
-  in `crates/fleet-server/src/fleet.rs`; for the switch per Supervisor, `apply`
-  in `crates/fleet-agent/src/supervisor/agent.rs`, each kind's configuration
+  `crates/classis-agent/src/supervisor/mod.rs`; `SupervisorsConfig` in
+  `crates/classis-agent/src/config.rs`; `store_remote_config` and
+  `drop_remote_config` in `crates/classis-agent/src/storage.rs`; the self-Agent
+  dispatch in `crates/classis-agent/src/engine.rs`; the `AcceptsRemoteConfig` gate
+  in `crates/classis-server/src/fleet.rs`; for the switch per Supervisor, `apply`
+  in `crates/classis-agent/src/supervisor/agent.rs`, each kind's configuration
   source in `collector.rs` and `command.rs`, `apply_inner` in
-  `crates/fleet-agent/src/reconfigure.rs`, `config_entries` in
-  `crates/fleet-agent/src/storage.rs` and `offer` in
-  `crates/fleet-server/src/fleet.rs`.
+  `crates/classis-agent/src/reconfigure.rs`, `config_entries` in
+  `crates/classis-agent/src/storage.rs` and `offer` in
+  `crates/classis-server/src/fleet.rs`.
 - OpAMP specification v0.20.0, further: the Client MUST set
   `AcceptsRemoteConfig` if the Agent can accept a remote configuration; an Agent
   MAY update its capabilities; the `AgentCapabilities` enum
@@ -1351,14 +1351,14 @@ through a job object.
 ## Enforcement
 
 - Registry, defaults and refusals, in
-  `crates/fleet-agent/src/supervisor/mod.rs`:
+  `crates/classis-agent/src/supervisor/mod.rs`:
   `every_wrapped_kinds_block_is_two_lines`,
   `an_unwrapped_kind_still_says_everything_itself`,
   `a_client_reports_the_kinds_it_was_compiled_with`,
   `the_fleets_timing_reaches_a_supervisor_that_says_nothing`,
   `a_build_carries_exactly_the_wrapped_kinds_its_features_name`,
   `a_kind_left_out_of_the_build_is_an_unknown_type`. `scripts/check-rust.sh`
-  lints `fleet-agent` on Linux without any wrapped kind and with each one alone,
+  lints `classis-agent` on Linux without any wrapped kind and with each one alone,
   and runs its tests without any, so a smaller build stays compiling and the
   second test decides something. Windows and macOS lint the default build only;
   a smaller build there is checked by whoever builds one. That a wrapped kind's
@@ -1371,20 +1371,20 @@ through a job object.
   `a_supervisor_block_needs_type_and_a_valid_name`,
   `duplicate_supervisor_names_are_rejected`,
   `attributes_describe_the_host_and_a_block_no_longer_tags_one_agent`
-  (`crates/fleet-agent/src/config.rs`); `settings_parse_strictly` and
+  (`crates/classis-agent/src/config.rs`); `settings_parse_strictly` and
   `the_retired_keys_are_refused_by_name` in `command.rs`,
   `settings_parse_strictly` in `collector.rs`;
   `an_unreadable_configuration_resolves_the_update_in_flight`
-  (`crates/fleet-agent/src/service/runtime.rs`).
+  (`crates/classis-agent/src/service/runtime.rs`).
 - Agents over one connection and the Endpoint:
   `poll_reports_carries_every_agent_with_distinct_identities`,
   `a_reply_reaches_only_the_agent_its_uid_names`
-  (`crates/fleet-agent/src/engine.rs`);
+  (`crates/classis-agent/src/engine.rs`);
   `extension_reports_are_folded_into_process_events` (`supervisor/endpoint.rs`);
   `a_config_change_reaches_both_supervised_agents_over_one_connection`
-  (`crates/fleet-agent/tests/e2e.rs`).
+  (`crates/classis-agent/tests/e2e.rs`).
 - Process management and the lifecycle vocabulary, in
-  `crates/fleet-agent/tests/supervisor_process.rs`:
+  `crates/classis-agent/tests/supervisor_process.rs`:
   `an_exiting_process_turns_unhealthy_and_is_restarted`,
   `a_process_surviving_the_apply_grace_is_acknowledged_applied`,
   `a_process_exiting_within_the_grace_fails_the_apply_and_stays_supervised`,
@@ -1397,25 +1397,25 @@ through a job object.
   `retiring_uninstalls_the_removed_and_only_stops_the_changed` (`engine.rs`),
   `a_collector_supervisor_passes_each_config_entry_as_a_config_flag`,
   `sigterm_stops_the_managed_process_and_the_client_cleanly`
-  (`crates/fleet-agent/tests/supervisor.rs`).
+  (`crates/classis-agent/tests/supervisor.rs`).
 - Artifact documents (clause 20): each wrapped kind's ADR names the two tests
   that pin its document, one in the kind's module and one in
-  `crates/fleet-tools/src/fetch.rs`. Each names its document.
+  `crates/classis-tools/src/fetch.rs`. Each names its document.
 - Preflight (clause 57):
   `a_package_that_cannot_run_here_is_refused_without_stopping_what_runs`
-  (`crates/fleet-agent/tests/supervisor_process.rs`) and
+  (`crates/classis-agent/tests/supervisor_process.rs`) and
   `a_package_that_fails_the_configured_version_check_is_refused`
-  (`crates/fleet-agent/tests/packages_e2e.rs`, through `command`'s
+  (`crates/classis-agent/tests/packages_e2e.rs`, through `command`'s
   `version_args`).
 - Version probe (clause 58):
   `find_semver_extracts_the_first_strict_version_from_free_text`
-  (`crates/fleet-agent/src/supervisor/process.rs`, the strict default);
+  (`crates/classis-agent/src/supervisor/process.rs`, the strict default);
   `the_probe_reports_a_version_description`,
   `a_failing_or_versionless_probe_stays_silent` and
   `a_swapped_binary_is_probed_again_for_its_version`
-  (`crates/fleet-agent/tests/supervisor_process.rs`). A kind's own parser is
+  (`crates/classis-agent/tests/supervisor_process.rs`). A kind's own parser is
   tested with that kind.
-- [`crates/fleet-agent/src/reconfigure.rs`](../../crates/fleet-agent/src/reconfigure.rs)
+- [`crates/classis-agent/src/reconfigure.rs`](../../crates/classis-agent/src/reconfigure.rs)
   tests: `a_delivered_block_may_not_add_environment_the_operator_did_not_allow`,
   `a_loader_variable_is_refused_whatever_the_operator_allowed`,
   `a_delivered_block_keeps_the_environment_it_already_runs_with`,
@@ -1424,14 +1424,14 @@ through a job object.
   `delivered_tables_from_two_entries_keep_their_sub_tables` (clause 40). The
   confinement of clause 39 is tested with the kind that states a file setting,
   by the tests its ADR names.
-- Directory and program, in `crates/fleet-agent/src/config.rs`:
+- Directory and program, in `crates/classis-agent/src/config.rs`:
   `the_supervisor_root_defaults_under_the_state_dir_and_is_relocatable`,
   `a_relative_state_dir_yields_absolute_directories`,
   `a_bare_name_resolves_and_everything_else_is_refused`,
   `an_absolute_program_path_is_refused_and_names_the_way_across`,
   `the_retired_package_keys_are_refused`,
   `a_program_path_must_stay_inside_the_package`.
-- Consent and start, in `crates/fleet-agent/src/supervisor/mod.rs`:
+- Consent and start, in `crates/classis-agent/src/supervisor/mod.rs`:
   `every_supervisor_declares_package_acceptance`,
   `installs_packages_reflects_declared_package_acceptance`,
   `a_tree_supervisor_prepares_its_root_and_leaves_the_tree_to_the_package`,
@@ -1440,11 +1440,11 @@ through a job object.
   `an_orphaned_supervisor_directory_is_not_reaped_at_startup`.
 - Placeholders: `the_placeholders_name_this_supervisors_own_directories` and
   `an_unknown_placeholder_is_passed_through_untouched`
-  (`crates/fleet-agent/src/supervisor/ports.rs`),
+  (`crates/classis-agent/src/supervisor/ports.rs`),
   `a_command_supervisors_arguments_are_expanded_to_its_own_directories`
-  (`crates/fleet-agent/tests/supervisor.rs`), `the_spec_carries_the_environment`
+  (`crates/classis-agent/tests/supervisor.rs`), `the_spec_carries_the_environment`
   (`collector.rs`).
-- The set apply, in `crates/fleet-agent/src/reconfigure.rs`:
+- The set apply, in `crates/classis-agent/src/reconfigure.rs`:
   `foreign_top_level_keys_are_ignored`,
   `duplicate_supervisor_names_fail_the_offer`,
   `a_malformed_block_names_its_entry`,
@@ -1460,34 +1460,34 @@ through a job object.
   `the_purge_does_not_follow_a_symlink_out_of_the_supervisors_root`,
   `an_empty_offer_removes_every_block`;
   `retiring_uninstalls_the_removed_and_only_stops_the_changed`
-  (`crates/fleet-agent/src/engine.rs`); and end to end
+  (`crates/classis-agent/src/engine.rs`); and end to end
   `a_config_change_reaches_both_supervised_agents_over_one_connection`
-  (`crates/fleet-agent/tests/e2e.rs`), which adds, keeps and removes a
+  (`crates/classis-agent/tests/e2e.rs`), which adds, keeps and removes a
   Supervisor through a delivered set and checks the purge.
 - The switch (clauses 41 to 47):
   `server_manages_set_defaults_to_true_and_reads_false`
-  (`crates/fleet-agent/src/config.rs`, clause 41);
+  (`crates/classis-agent/src/config.rs`, clause 41);
   `the_own_agent_of_a_host_that_keeps_its_set_declares_neither_remote_config_capability`,
   `a_set_offered_anyway_to_a_host_that_keeps_it_is_neither_stored_nor_applied_nor_reported`
   and `a_set_ignored_by_a_host_that_keeps_it_is_logged_once_per_hash`
-  (`crates/fleet-agent/src/supervisor/agent.rs`, clauses 42 and 43);
+  (`crates/classis-agent/src/supervisor/agent.rs`, clauses 42 and 43);
   `the_supervisor_set_apply_refuses_to_run_on_a_host_that_keeps_its_set`
-  (`crates/fleet-agent/src/transport/mod.rs`, clause 43);
+  (`crates/classis-agent/src/transport/mod.rs`, clause 43);
   `a_host_that_keeps_its_set_drops_the_stored_set_and_reports_no_status`,
   `a_stored_set_that_cannot_be_removed_does_not_stop_startup`,
   `a_copy_that_cannot_be_removed_still_leaves_no_hash_to_report`,
   `an_undecodable_stored_set_is_deleted_and_config_is_left_alone` and
   `the_removed_stored_set_is_logged_naming_its_hash`
-  (`crates/fleet-agent/src/supervisor/mod.rs`, clauses 42, 44 and 47); and end
+  (`crates/classis-agent/src/supervisor/mod.rs`, clauses 42, 44 and 47); and end
   to end `a_server_offers_no_supervisor_set_to_a_host_that_keeps_it`
-  (`crates/fleet-agent/tests/e2e.rs`, clauses 42, 45 and 47).
+  (`crates/classis-agent/tests/e2e.rs`, clauses 42, 45 and 47).
 - The switch per Supervisor (clauses 48 to 55):
-  - `crates/fleet-agent/src/config.rs`:
+  - `crates/classis-agent/src/config.rs`:
     `remote_config_disabled_defaults_to_empty_and_lists_supervisor_names`
     (clause 48),
     `a_remote_config_disabled_name_outside_the_instance_name_grammar_fails_startup`
     (clause 49).
-  - `crates/fleet-agent/src/supervisor/agent.rs`:
+  - `crates/classis-agent/src/supervisor/agent.rs`:
     `a_supervisor_with_remote_config_disabled_declares_neither_remote_config_capability`
     (clause 50: the report's `capabilities` lack both bits and keep
     `ReportsEffectiveConfig`, `AcceptsRestartCommand` and the package bits),
@@ -1495,7 +1495,7 @@ through a job object.
     (clause 51: no `remote-config.pb`, no entry file, no pending apply, no
     `remote_config_status` in the next report),
     `an_ignored_remote_config_is_logged_once_per_hash` (clause 51).
-  - `crates/fleet-agent/src/supervisor/mod.rs`:
+  - `crates/classis-agent/src/supervisor/mod.rs`:
     `a_listed_name_without_a_block_is_a_notice_not_a_refusal` (clause 49),
     `a_listed_supervisor_drops_the_stored_remote_config_and_keeps_the_operators_files`
     (clause 52: unchanged entries and `.supplementary` deleted, an overwritten
@@ -1507,7 +1507,7 @@ through a job object.
     (clause 52),
     `the_clients_own_agent_keeps_accepting_its_supervisor_set_when_its_name_is_listed`
     (clause 49).
-  - `crates/fleet-agent/src/reconfigure.rs`:
+  - `crates/classis-agent/src/reconfigure.rs`:
     `a_delivered_set_cannot_switch_remote_config_back_on_for_a_listed_name`
     (clause 48: a set that removes and re-adds the listed block leaves the
     started Agent without `AcceptsRemoteConfig`, and the written file keeps
@@ -1521,14 +1521,14 @@ through a job object.
     with no running block, `type`, `name` and `binary` for a `collector`, and
     `command` for a `command`, pass; any further key, an empty `args` or `env`
     among them, fails the offer naming it).
-  - `crates/fleet-agent/src/storage.rs`:
+  - `crates/classis-agent/src/storage.rs`:
     `a_store_cut_short_leaves_no_previous_entry_file_beside_a_new_pb` (clause
     52: a store cut short while it writes the new entry files leaves the
     previous `remote-config.pb` beside no previous entry file, so nothing of the
     previous offer stays unattributed).
-  - `crates/fleet-agent/tests/supervisor.rs`:
+  - `crates/classis-agent/tests/supervisor.rs`:
     `a_listed_collector_runs_on_the_entries_the_operator_placed` (clause 53).
-  - `crates/fleet-agent/tests/e2e.rs`:
+  - `crates/classis-agent/tests/e2e.rs`:
     `a_server_offers_no_configuration_to_a_listed_supervisor` (clauses 50 and
     55: a released Configuration reaches the unlisted Supervisor and not the
     listed one over the same connection).
@@ -1536,4 +1536,4 @@ through a job object.
 **Not mechanically decidable:** the process-group stop (clause 56) has no
 dedicated test: a worker left behind shows only with an agent that forks one, so
 review of the spawn and of `signal_child` in
-`crates/fleet-agent/src/supervisor/process.rs` holds it.
+`crates/classis-agent/src/supervisor/process.rs` holds it.

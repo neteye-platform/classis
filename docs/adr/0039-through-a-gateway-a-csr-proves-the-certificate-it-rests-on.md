@@ -7,21 +7,21 @@
 - **Date:** 2026-10-19
 - **Deciders:** Davide Zeni
 - **Applies to:** the CSR handling on a member connection in
-  `crates/fleet-server/src/fleet.rs` (the host and predecessor a CSR is issued
-  to), the certificate register in `crates/fleet-server/src/revocation.rs`, the
-  renewal and bootstrap proofs and the reading of a CSR in `crates/fleet-core/`
-  and `crates/fleet-server/src/ca.rs`, the Client's renewal and enrolment CSR in
-  `crates/fleet-agent/src/csr.rs` and `crates/fleet-agent/src/service/enrol.rs`,
-  the requester an enrolment request is filed under in
-  `crates/fleet-server/src/enrolment.rs` and
-  `crates/fleet-server/src/transport.rs`, the admission throttle's buckets in
-  `crates/fleet-server/src/transport.rs` and
-  `crates/fleet-server/src/agent_rate.rs`, the downstream admission, the
+  `crates/classis-server/src/fleet.rs` (the host and predecessor a CSR is issued
+  to), the certificate register in `crates/classis-server/src/revocation.rs`, the
+  renewal and bootstrap proofs and the reading of a CSR in `crates/classis-core/`
+  and `crates/classis-server/src/ca.rs`, the Client's renewal and enrolment CSR
+  in `crates/classis-agent/src/csr.rs` and
+  `crates/classis-agent/src/service/enrol.rs`, the requester an enrolment
+  request is filed under in `crates/classis-server/src/enrolment.rs` and
+  `crates/classis-server/src/transport.rs`, the admission throttle's buckets in
+  `crates/classis-server/src/transport.rs` and
+  `crates/classis-server/src/agent_rate.rs`, the downstream admission, the
   enrolling peer, the forwarding and routing of reports and replies and the
-  bindings in `crates/fleet-agent/src/gateway/`, the host derived for a
-  certificate that names none in `crates/fleet-core/src/host.rs`, the
+  bindings in `crates/classis-agent/src/gateway/`, the host derived for a
+  certificate that names none in `crates/classis-core/src/host.rs`, the
   `[gateway.tls]` section of `supervisor.toml` and its parsing in
-  `crates/fleet-agent/src/config.rs`, and every document that tells an operator
+  `crates/classis-agent/src/config.rs`, and every document that tells an operator
   what a Gateway passes on, how an Agent behind one renews its certificate, or
   how a host behind one enrols
 - **Supersedes:**
@@ -88,9 +88,9 @@ the Server decides as any enrolment.
 
 1. **Restates ADR-0021 clause 27. A renewal proves which certificate it
    renews.** A Client that holds a certificate and its key adds to its CSR the
-   SAN URI `urn:opamp-fleet:renewal:v1:` followed by the base64url, without
+   SAN URI `urn:classis:renewal:v1:` followed by the base64url, without
    padding, of the certificate's DER and a signature made with its key over
-   `opamp-fleet-renewal-v1\n<SHA-256 of the new SubjectPublicKeyInfo, lowercase
+   `classis-renewal-v1\n<SHA-256 of the new SubjectPublicKeyInfo, lowercase
    hex>\n`,
    each prefixed by its length as four big-endian bytes. The Server accepts the
    proof only when the certificate was issued by the client CA, is valid now, is
@@ -220,7 +220,7 @@ the Server decides as any enrolment.
      the first downstream connection that reports for it since the Gateway
      started, as the Server binds an `instance_uid` to the host that first
      reports it (ADR-0036 clause 2). The host is the one the certificate names
-     (`urn:opamp-fleet:host:<id>`). A certificate that names none is a host of
+     (`urn:classis:host:<id>`). A certificate that names none is a host of
      its own: the host the Server derives from its issuer and serial when it
      first renews it (ADR-0036 clause 2), computed the same way. So it neither
      shares a binding with another certificate nor takes one over, and the
@@ -270,9 +270,9 @@ the Server decides as any enrolment.
    Together they are the download refusal of clause 4.
 
 7. **The bootstrap proof.** An enrolling Client adds to its CSR the SAN URI
-   `urn:opamp-fleet:bootstrap:v1:` followed by the base64url, without padding,
+   `urn:classis:bootstrap:v1:` followed by the base64url, without padding,
    of the bootstrap certificate's DER and a signature made with its key over
-   `opamp-fleet-bootstrap-v1\n<SHA-256 of the new SubjectPublicKeyInfo,
+   `classis-bootstrap-v1\n<SHA-256 of the new SubjectPublicKeyInfo,
    lowercase hex>\n`,
    the certificate prefixed by its length as four big-endian bytes, as the
    renewal proof is (ADR-0021 clause 27). The statement differs from the
@@ -362,7 +362,7 @@ the Server decides as any enrolment.
 
 13. **Restates ADR-0013 clause 22. Which bucket a message or a download is
     counted in.** The key comes from the certificate admission proved (`Proofs`
-    in [`transport.rs`](../../crates/fleet-server/src/transport.rs)):
+    in [`transport.rs`](../../crates/classis-server/src/transport.rs)):
 
 - **A certificate that names a host:** that host.
 - **A member's certificate that names no host** (one an operator provisioned
@@ -463,11 +463,11 @@ address.
 
 ## Sources / Prior art
 
-- The code as it stood: `renews` in `crates/fleet-server/src/fleet.rs` fell back
+- The code as it stood: `renews` in `crates/classis-server/src/fleet.rs` fell back
   to the presented certificate's host; `forward_from_socket` and
-  `forward_exchange` in `crates/fleet-agent/src/gateway/mod.rs` forwarded
+  `forward_exchange` in `crates/classis-agent/src/gateway/mod.rs` forwarded
   without consulting the binding that `PackageCache::bind` already held;
-  `renewal_proof` and `sign` in `crates/fleet-server/src/ca.rs` read one CSR
+  `renewal_proof` and `sign` in `crates/classis-server/src/ca.rs` read one CSR
   through x509-parser's and the `pem` crate's PEM readers, which select
   different blocks of a crafted input.
 - The OpAMP specification's Agent-initiated CSR flow: the Agent requests, and

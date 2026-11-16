@@ -7,13 +7,13 @@
   · clause 6 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `packaging/linux/postinst` and `packaging/linux/postrm`, the
   `[package.metadata.deb]` and `[package.metadata.generate-rpm]` tables of
-  `crates/fleet-agent/Cargo.toml`, the `--run-as` flag of `service install` and
-  the account a registration takes in `crates/fleet-agent/src/main.rs` and
-  `crates/fleet-agent/src/service/run_as.rs`, the systemd unit and the launchd
-  plist `crates/fleet-agent/src/service/manager.rs` registers, the ownership
+  `crates/classis-agent/Cargo.toml`, the `--run-as` flag of `service install` and
+  the account a registration takes in `crates/classis-agent/src/main.rs` and
+  `crates/classis-agent/src/service/run_as.rs`, the systemd unit and the launchd
+  plist `crates/classis-agent/src/service/manager.rs` registers, the ownership
   handover, and every document that tells an operator which account an installed
   Client runs as
 - **Supersedes:**
@@ -365,18 +365,18 @@ binary through the `PATH` symlink (see _Consequences_).
 ## Sources / Prior art
 
 - The code as it stands:
-  - `crates/fleet-agent/src/service/manager.rs:149-175`: `contents: None`, with
+  - `crates/classis-agent/src/service/manager.rs:149-175`: `contents: None`, with
     `username` passed through.
-  - `crates/fleet-agent/src/main.rs:147-153`: the account is resolved only when
+  - `crates/classis-agent/src/main.rs:147-153`: the account is resolved only when
     `--run-as` is given.
   - `main.rs:278-311`: the hand-over runs only then.
-  - `crates/fleet-agent/src/service/run_as.rs:136-148`: the missing-account
+  - `crates/classis-agent/src/service/run_as.rs:136-148`: the missing-account
     message.
   - `run_as.rs:155-167`: `chown_tree` checks with `symlink_metadata`, then calls
     `read_dir` on the path. That leaves a window in which a directory swapped
     for a link is followed; the comment at `run_as.rs:173-175` names the same
     risk.
-  - `crates/fleet-agent/src/service/windows_config.rs:124-136`.
+  - `crates/classis-agent/src/service/windows_config.rs:124-136`.
   - `packaging/linux/postinst:43`: a plain `service install` on every run.
   - `scripts/check-shell.sh:33-35`: shellcheck scans `*.sh` and `.githooks/`
     only, so `packaging/linux/*` is not linted.
@@ -431,7 +431,7 @@ binary through the `PATH` symlink (see _Consequences_).
   receiver reading `root:adm` files. The operator either grants what is missing
   (a `sudoers` entry, a drop-in with `AmbientCapabilities=` or
   `SupplementaryGroups=`, `usermod -aG adm`) or chooses root with
-  `sudo opamp-fleet service install --run-as root`. The manual and the
+  `sudo classis service install --run-as root`. The manual and the
   post-install text say so.
 - Negative / trade-offs: the sandbox is thin under the account. The account is
   the confinement, and `ProtectControlGroups=` adds little. The root tier adds
@@ -455,7 +455,7 @@ binary through the `PATH` symlink (see _Consequences_).
   its last `service install` wrote. New directives reach it at its next
   re-registration.
 - Negative / trade-offs: the trust boundary of ADR-0019 clause 13 is now the
-  default. The account owns the layout, so `sudo opamp-fleet …` through the
+  default. The account owns the layout, so `sudo classis …` through the
   `PATH` symlink runs code the account can replace. With root as the default,
   every Managed Process held root already. The account narrows that to an
   administrator's own command.
@@ -468,7 +468,7 @@ binary through the `PATH` symlink (see _Consequences_).
 
 Tests that will carry `Verifies: ADR-0042`:
 
-- `crates/fleet-agent/src/service/manager.rs`:
+- `crates/classis-agent/src/service/manager.rs`:
   - `the_system_unit_is_the_clients_own_text`: the rendered unit holds
     `Description=<PRODUCT_NAME>`, a quoted `ExecStart` with the marker and
     absolute paths, `Restart=on-failure`, `RestartSec=<RESTART_DELAY_SECS>` and
@@ -476,7 +476,7 @@ Tests that will carry `Verifies: ADR-0042`:
   - `exec_start_survives_spaces_percent_and_dollar`: a root with a space, a `%`
     and a `$` renders `"…"`, `%%` and `$$`.
   - `an_account_unit_sets_nothing_that_implies_no_new_privs`: under
-    `User=opamp-fleet` the unit holds `ProtectControlGroups=yes`. It holds none
+    `User=classis` the unit holds `ProtectControlGroups=yes`. It holds none
     of `NoNewPrivileges`, `ProtectKernelTunables`, `ProtectKernelModules`,
     `ProtectKernelLogs`, `ProtectClock`, `ProtectHostname`, `PrivateDevices`,
     `RestrictAddressFamilies`, `LockPersonality`, `RestrictRealtime`,
@@ -489,7 +489,7 @@ Tests that will carry `Verifies: ADR-0042`:
     `ProtectSystem`, `ProtectHome`, `PrivateTmp` or `CapabilityBoundingSet`.
   - `a_user_unit_is_left_to_service_manager`: the user scope passes
     `contents: None`.
-- `crates/fleet-agent/src/service/run_as.rs` (or the module that decides the
+- `crates/classis-agent/src/service/run_as.rs` (or the module that decides the
   account):
   - `a_reregistration_without_run_as_keeps_the_units_account`: a unit fixture
     with `User=telegraf` yields `telegraf`, from the unit.
@@ -505,20 +505,20 @@ Tests that will carry `Verifies: ADR-0042`:
     a directory is replaced by a link to a directory outside it. The outside
     directory's entries keep their owner.
   - `the_handover_skips_a_file_with_a_second_hard_link`.
-- `crates/fleet-agent/tests/linux_post_install.rs`:
+- `crates/classis-agent/tests/linux_post_install.rs`:
   - `the_post_install_creates_the_account_before_it_registers`: `getent passwd`
     and the `useradd` line appear before every `service install`. The line is
     `--system`, without a password and with a `nologin` shell.
   - `the_post_install_names_the_account_only_where_no_unit_is_registered`:
-    `--run-as opamp-fleet` appears only in the branch where
-    `/etc/systemd/system/opamp-fleet.service` is absent, and the other branch
+    `--run-as classis` appears only in the branch where
+    `/etc/systemd/system/classis.service` is absent, and the other branch
     runs `service install` without `--run-as`.
   - `no_maintainer_script_removes_the_account`: no `userdel` or `groupdel` in
     `postrm`, `prerm` or `posttrans`.
 - `scripts/check-shell.sh` lints `packaging/linux/*` as POSIX `sh`. The release
   job's "The RPM carries its scriptlets" step also requires `useradd` and
   `--run-as`.
-- `crates/fleet-agent/tests/service_smoke.rs`, run with `--ignored` by the
+- `crates/classis-agent/tests/service_smoke.rs`, run with `--ignored` by the
   `service-smoke` workflow:
   - `a_reregistration_keeps_the_account_and_the_service_keeps_its_privileges`:
     install with `--run-as` a temporary system account, then re-install without

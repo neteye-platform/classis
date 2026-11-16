@@ -89,8 +89,8 @@ repo() {
   workflow "$dir" "- uses: actions/checkout@v7" "  with:" "    persist-credentials: false"
   printf '[toolchain]\nchannel = "1.99.0"\ncomponents = ["rustfmt", "clippy"]\n' > "$dir/rust-toolchain.toml"
   printf '[workspace]\nresolver = "2"\n\n[profile.release]\noverflow-checks = true\n' > "$dir/Cargo.toml"
-  for crate_root in crates/opamp/src/lib.rs crates/fleet-core/src/lib.rs \
-                    crates/fleet-server/src/lib.rs crates/fleet-tools/src/main.rs; do
+  for crate_root in crates/opamp/src/lib.rs crates/classis-core/src/lib.rs \
+                    crates/classis-server/src/lib.rs crates/classis-tools/src/main.rs; do
     mkdir -p "$dir/$(dirname "$crate_root")"
     printf '//! A crate.\n\n#![forbid(unsafe_code)]\n\npub mod a;\n' > "$dir/$crate_root"
   done
@@ -244,16 +244,16 @@ expect fail "overflow checks off" "$d" "no 'overflow-checks = true'"
 # --- 7. unsafe code ---------------------------------------------------------------------------
 
 d="$(repo unsafe-allowed)"
-printf '//! A crate.\n\npub mod a;\n' > "$d/crates/fleet-core/src/lib.rs"
-expect fail "a crate root without the attribute" "$d" "crates/fleet-core/src/lib.rs: does not carry"
+printf '//! A crate.\n\npub mod a;\n' > "$d/crates/classis-core/src/lib.rs"
+expect fail "a crate root without the attribute" "$d" "crates/classis-core/src/lib.rs: does not carry"
 
 d="$(repo unsafe-commented)"
 printf '//! A crate.\n\n// #![forbid(unsafe_code)]\n' > "$d/crates/opamp/src/lib.rs"
 expect fail "the attribute in a comment" "$d" "crates/opamp/src/lib.rs: does not carry"
 
 d="$(repo crate-root-gone)"
-rm "$d/crates/fleet-tools/src/main.rs"
-expect fail "a named crate root missing" "$d" "crates/fleet-tools/src/main.rs: not found"
+rm "$d/crates/classis-tools/src/main.rs"
+expect fail "a named crate root missing" "$d" "crates/classis-tools/src/main.rs: not found"
 
 # --- summary ----------------------------------------------------------------------------------
 

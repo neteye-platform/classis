@@ -15,9 +15,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 opamp = { path = "../crates/opamp", features = ["client", "server"] }
-fleet-agent = { path = "../crates/fleet-agent" }
-fleet-server = { path = "../crates/fleet-server" }
-fleet-core = { path = "../crates/fleet-core" }
+classis-agent = { path = "../crates/classis-agent" }
+classis-server = { path = "../crates/classis-server" }
+classis-core = { path = "../crates/classis-core" }
 prost = "0.14"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 tempfile = "3"

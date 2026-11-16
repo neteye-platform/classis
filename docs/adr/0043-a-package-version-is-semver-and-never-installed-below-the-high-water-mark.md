@@ -2,19 +2,19 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
-- **Applies to:** the version rule of `crates/fleet-core/src/version.rs` and its
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the version rule of `crates/classis-core/src/version.rs` and its
   callers, the Package identity and the store's reading of it in
-  `crates/fleet-server/src/packages.rs`,
-  `crates/fleet-server/src/fs/packages.rs` and
-  `crates/fleet-server/src/migrate.rs`, the package routes of
-  `crates/fleet-server/src/api.rs`, the candidate test of
-  `crates/fleet-server/src/packages.rs`, the `package sign` and `package fetch`
-  commands of `opamp-fleetctl` in `crates/fleet-tools/`, the Supervisor's check
-  of a package offer in `crates/fleet-agent/src/supervisor/agent/packages.rs`,
-  the installed-package record in `crates/fleet-agent/src/storage.rs`, the file
+  `crates/classis-server/src/packages.rs`,
+  `crates/classis-server/src/fs/packages.rs` and
+  `crates/classis-server/src/migrate.rs`, the package routes of
+  `crates/classis-server/src/api.rs`, the candidate test of
+  `crates/classis-server/src/packages.rs`, the `package sign` and `package fetch`
+  commands of `classisctl` in `crates/classis-tools/`, the Supervisor's check
+  of a package offer in `crates/classis-agent/src/supervisor/agent/packages.rs`,
+  the installed-package record in `crates/classis-agent/src/storage.rs`, the file
   `package-high-water.json` under the Client's `state_dir`, the purge in
-  `crates/fleet-agent/src/reconfigure.rs`, and every document that tells an
+  `crates/classis-agent/src/reconfigure.rs`, and every document that tells an
   operator how a Package is numbered or how a Supervisor is moved to an older
   version
 - **Supersedes:**
@@ -29,7 +29,7 @@
 ## Context
 
 A package signature covers the Agent type, the version and the artifact's
-SHA-256 (`fleet_core::package::statement`,
+SHA-256 (`classis_core::package::statement`,
 [ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
 It binds an artifact to its own version, but it says nothing about how that
 version orders against another. A build the operator signed once stays validly
@@ -51,7 +51,7 @@ that:
   or another one. The re-added Supervisor has no record. The Server then offers
   an old, validly signed build of that Agent type, and the Supervisor takes it.
 - **A version that does not compare is not refused.** ADR-0026 clause 65 says so
-  explicitly. `precedence` in `crates/fleet-core/src/version.rs` returns `None`
+  explicitly. `precedence` in `crates/classis-core/src/version.rs` returns `None`
   for any value that is not SemVer, and the Supervisor then takes the offer. The
   Server stores any token of letters, digits, `.`, `_`, `+` and `-` as a version
   ([ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
@@ -62,7 +62,7 @@ that:
 The Client's own self-update already has neither gap. It refuses an offered
 version that does not parse, and one that orders below the running binary
 ([ADR-0018](0018-the-client-updates-itself-under-its-own-agent-type.md),
-`crates/fleet-agent/src/update/installer.rs`). Its floor is the binary that is
+`crates/classis-agent/src/update/installer.rs`). Its floor is the binary that is
 running, and no Server act lowers that binary.
 
 The Server side does not move an Agent backwards either. A rollout reaches an
@@ -107,10 +107,10 @@ type, kept under `state_dir` where no purge reaches it.
    same request arriving twice.
 
 2. **One predicate decides what is SemVer, in the internal crate.** A version is
-   SemVer when `fleet_core::version::parse` accepts it
+   SemVer when `classis_core::version::parse` accepts it
    ([ADR-0012](0012-versions-resolved-in-the-internal-crate.md) clause 9) and no
    numeric pre-release identifier has a leading zero. The Server,
-   `opamp-fleetctl` and the Client all call this predicate, and none of them has
+   `classisctl` and the Client all call this predicate, and none of them has
    a second copy. Two versions are ordered by `precedence`, build metadata
    ignored, as before. Two builds of one release compare equal.
 
@@ -127,7 +127,7 @@ type, kept under `state_dir` where no purge reaches it.
    carries such a Package over as it reads it. The operator republishes the
    content under a SemVer version, signs it again, and rolls that out.
 
-4. **`opamp-fleetctl package sign` signs only a SemVer version.** It refuses a
+4. **`classisctl package sign` signs only a SemVer version.** It refuses a
    `--version`, and a signing-file entry
    ([ADR-0027](0027-a-signing-file-carries-what-a-signature-covers-to-the-key-and-the-signatures-back.md)),
    whose version is not SemVer. It does so before it reads the key, and names
@@ -154,7 +154,7 @@ type, kept under `state_dir` where no purge reaches it.
    and a leading zero is dropped from a numeric component (`24.04.1` becomes
    `24.4.1`). Both keep the program's own order. A number that cannot be written
    as SemVer this way gets a SemVer version that the operator chooses in the
-   same order. `opamp-fleetctl package fetch` names a Package by this rule. It
+   same order. `classisctl package fetch` names a Package by this rule. It
    still fetches the release under upstream's own tag, and it refuses an
    upstream number it cannot write this way, naming it.
 
@@ -298,25 +298,25 @@ clause 18 leaves undecided. Also out of scope:
 ## Sources / Prior art
 
 - The code as it stands:
-  - `crates/fleet-agent/src/supervisor/agent/packages.rs:309-326` refuses a
+  - `crates/classis-agent/src/supervisor/agent/packages.rs:309-326` refuses a
     lower version only when `precedence` returns `Some(Less)`, and only against
     `installed_package`.
   - That record is read from `installed-package.json` in the Supervisor's own
-    directory (`crates/fleet-agent/src/storage.rs:24`, `:256-266`;
-    `crates/fleet-agent/src/supervisor/mod.rs:260`).
-  - `crates/fleet-core/src/version.rs:152-154` (`precedence`) returns `None`
+    directory (`crates/classis-agent/src/storage.rs:24`, `:256-266`;
+    `crates/classis-agent/src/supervisor/mod.rs:260`).
+  - `crates/classis-core/src/version.rs:152-154` (`precedence`) returns `None`
     when either side does not parse.
-  - `crates/fleet-server/src/packages.rs:111-123` (`validate_identity_token`)
+  - `crates/classis-server/src/packages.rs:111-123` (`validate_identity_token`)
     checks a version's characters and length only, and `:148-155`
     (`PackageId::new`) is the one gate every write and every load goes through.
-  - `crates/fleet-agent/src/reconfigure.rs:216` (`purge_removed`) deletes the
+  - `crates/classis-agent/src/reconfigure.rs:216` (`purge_removed`) deletes the
     whole Supervisor directory.
-  - `crates/fleet-agent/src/update/installer.rs:205-225` is the self-update's
+  - `crates/classis-agent/src/update/installer.rs:205-225` is the self-update's
     refusal of a value that does not parse and of a lower version.
-  - `crates/fleet-agent/src/supervisor/process.rs:993-1006` (`is_semver`)
+  - `crates/classis-agent/src/supervisor/process.rs:993-1006` (`is_semver`)
     already holds the leading zero rule of SemVer item 9 that `parse` does not.
-  - `crates/fleet-core/src/package.rs:9-15` is the signed statement.
-  - `crates/fleet-agent/src/config.rs:328-345` is the Supervisor name grammar,
+  - `crates/classis-core/src/package.rs:9-15` is the signed statement.
+  - `crates/classis-agent/src/config.rs:328-345` is the Supervisor name grammar,
     which has no `.`.
 - Semantic Versioning 2.0.0:
   - item 2: a normal version is `X.Y.Z` of non-negative integers without leading
@@ -379,7 +379,7 @@ clause 18 leaves undecided. Also out of scope:
 
 Tests that will carry `Verifies: ADR-0043`:
 
-- **fleet-core:** the SemVer predicate takes `1.2.3`, `1.19.0` and
+- **classis-core:** the SemVer predicate takes `1.2.3`, `1.19.0` and
   `1.2.3-rc.1+abc`. It refuses `1.19`, `24.04.1`, `v1.2.3`, `1.0.0-01`,
   `nightly` and a value of 65 characters.
 - **Server routes:** `PUT /api/v1/packages/otelcol/1.19` is answered `400` with
@@ -390,7 +390,7 @@ Tests that will carry `Verifies: ADR-0043`:
   entry write, a signature write and adding it to a Deployment are each answered
   `400`. Its `DELETE` succeeds while nothing pins it. An Agent record whose
   assignment pins it loads, and that Agent is still offered the Package.
-- **opamp-fleetctl:** `package sign --version 1.19`, and a signing file with an
+- **classisctl:** `package sign --version 1.19`, and a signing file with an
   entry at `1.19`, each fail naming the version, without reading the key file.
 - **Client, non-SemVer offer:** a Supervisor with no installed record and no
   mark refuses an offer at `1.19`. Nothing is downloaded, and `error_message`
@@ -411,10 +411,10 @@ Tests that will carry `Verifies: ADR-0043`:
   is taken.
 - **Client, old record:** an installed record at `1.19` is dropped at load with
   a warning, and the Agent reports no `agent_has_version`.
-- **opamp-fleetctl fetch:** `package fetch` turns upstream `1.19` into the
+- **classisctl fetch:** `package fetch` turns upstream `1.19` into the
   Package version `1.19.0` and fetches tag `1.19`.
 
 The self-update's existing tests `install_refuses_a_downgrade` and
 `the_probe_refuses_an_offer_that_is_not_a_version` in
-`crates/fleet-agent/src/update/installer.rs` stay, and also carry
+`crates/classis-agent/src/update/installer.rs` stay, and also carry
 `Verifies: ADR-0043` for clause 13.

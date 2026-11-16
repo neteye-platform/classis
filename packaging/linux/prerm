@@ -28,5 +28,5 @@ esac
 # still be able to remove the package. The payload path, not the PATH symlink (ADR-0019): the
 # symlink resolves through a layout an operator may have already deleted by hand, while the
 # payload is the file this package guarantees to still exist at this moment.
-/usr/libexec/opamp-fleet/supervisor service stop >/dev/null 2>&1 || true
-/usr/libexec/opamp-fleet/supervisor service uninstall || true
+/usr/libexec/classis/supervisor service stop >/dev/null 2>&1 || true
+/usr/libexec/classis/supervisor service uninstall || true

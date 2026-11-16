@@ -2,12 +2,12 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-19
-- **Deciders:** Markus Brigl
-- **Applies to:** the host register in `crates/fleet-server/src/revocation.rs`
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** the host register in `crates/classis-server/src/revocation.rs`
   and its filesystem adapter, the forgetting of an Agent in
-  `crates/fleet-server/src/fleet.rs` and the
+  `crates/classis-server/src/fleet.rs` and the
   `DELETE /api/v1/agents/{instance_uid}` route of
-  `crates/fleet-server/src/api.rs`, and every document that tells an operator
+  `crates/classis-server/src/api.rs`, and every document that tells an operator
   when a Host or a binding ends
 - **Supersedes:**
   [ADR-0035](0035-a-host-is-what-a-client-certificate-names-and-its-agents-inherit-from-it.md)
@@ -25,7 +25,7 @@ clause 1).
 
 Nothing releases a binding. Forgetting an Agent removes its record but leaves
 its `instance_uid` bound ([ADR-0024](0024-the-fleet-record.md) clause 11;
-`owners` in `crates/fleet-server/src/revocation.rs` loses an entry only on a
+`owners` in `crates/classis-server/src/revocation.rs` loses an entry only on a
 re-key). A Host with a bound Agent is therefore never removed, even long after
 its last certificate expired. The register grows with every approval for the
 life of the installation, up to 256 bindings per host, and each new binding
@@ -108,9 +108,9 @@ certificates already limit.
 
 ## Sources / Prior art
 
-- The code as it stands: `prune` in `crates/fleet-server/src/revocation.rs`
+- The code as it stands: `prune` in `crates/classis-server/src/revocation.rs`
   keeps every host with a bound `instance_uid`; `owners` loses an entry only in
-  `rebind`; `forget_agent` in `crates/fleet-server/src/fleet.rs` does not touch
+  `rebind`; `forget_agent` in `crates/classis-server/src/fleet.rs` does not touch
   the host register.
 
 ## Consequences

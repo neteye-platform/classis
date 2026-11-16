@@ -13,13 +13,13 @@
   · clauses 3 and 39 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
-- **Applies to:** `crates/fleet-agent/src/cli.rs`,
-  `crates/fleet-agent/src/main.rs`, `crates/fleet-agent/src/service/`,
-  `crates/fleet-agent/src/config_init.rs`, `crates/fleet-agent/src/logging.rs`,
-  `crates/fleet-agent/src/product.rs`, `crates/fleet-agent/build.rs`, the
+- **Deciders:** Markus Brigl, Davide Zeni
+- **Applies to:** `crates/classis-agent/src/cli.rs`,
+  `crates/classis-agent/src/main.rs`, `crates/classis-agent/src/service/`,
+  `crates/classis-agent/src/config_init.rs`, `crates/classis-agent/src/logging.rs`,
+  `crates/classis-agent/src/product.rs`, `crates/classis-agent/build.rs`, the
   `[package.metadata.deb]` and `[package.metadata.generate-rpm]` tables of
-  `crates/fleet-agent/Cargo.toml`, `.github/workflows/release.yml`,
+  `crates/classis-agent/Cargo.toml`, `.github/workflows/release.yml`,
   `packaging/`, the program, Agent type and configuration-file names of the
   Client, `service install --endpoint`, `service config`, and every path, name
   or account an installed Client uses
@@ -150,20 +150,20 @@ and run its own `service install`.
    and a registered service carries the configuration's _path_, never its
    content. clap's `version` is wired to `opamp::version::current()`
    ([ADR-0012](0012-versions-resolved-in-the-internal-crate.md) clause 5). The
-   daemon code lives in `crates/fleet-agent/src/service/` (`runtime`, `layout`,
+   daemon code lives in `crates/classis-agent/src/service/` (`runtime`, `layout`,
    `manager`, `run_as`, and the Windows-only `windows`, `windows_config`,
    `windows_rights`), behind the narrow `ServiceControl` seam (`start`, `stop`,
    `state`) that the self-update depends on. Errors are `Result<_, String>`.
 
-2. **`PRODUCT_NAME` is a build-time constant.** Default **`opamp-fleet`**,
+2. **`PRODUCT_NAME` is a build-time constant.** Default **`classis`**,
    overridable with `OPAMP_PRODUCT_NAME` for a variant build.
-   `crates/fleet-agent/build.rs` validates it against the intersection of the
+   `crates/classis-agent/build.rs` validates it against the intersection of the
    systemd-unit, launchd-label, SCM-name and directory-name grammars — lowercase
    `[a-z0-9-]`, 1–32 characters, no leading or trailing `-`, never a Windows
    reserved device name (`con`, `prn`, `aux`, `nul`, `com1`–`com9`,
    `lpt1`–`lpt9`) — and **fails the build** on a name that breaks it, so an
    illegal name cannot reach a service manager. The display name, default
-   **`OpAMP Fleet Agent`**, is the constant `PRODUCT_TITLE`, overridable with
+   **`Classis Agent`**, is the constant `PRODUCT_TITLE`, overridable with
    `OPAMP_PRODUCT_TITLE` and only required to be non-blank: it is prose, cannot
    be derived from the slug by any rule that would read correctly for the next
    variant, and appears only where prose belongs — the Add/Remove Programs
@@ -183,7 +183,7 @@ and run its own `service install`.
 
    | Name                                                  | Names              | Appears in                                                                                                                                                              |
    | ----------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | `PRODUCT_NAME` (`opamp-fleet`)                        | the **product**    | the install path, the service, the `.deb`/`.rpm` package, the `/usr/libexec/<PRODUCT_NAME>/` and `Program Files\<PRODUCT_NAME>` payload directories, the `PATH` symlink |
+   | `PRODUCT_NAME` (`classis`)                            | the **product**    | the install path, the service, the `.deb`/`.rpm` package, the `/usr/libexec/<PRODUCT_NAME>/` and `Program Files\<PRODUCT_NAME>` payload directories, the `PATH` symlink |
    | `supervisor` (`layout::COMPONENT`, `BINARY_FILENAME`) | the **program**    | the file, its configuration `supervisor.toml`, the version directories, the archive member                                                                              |
    | `supervisor` (`CLIENT_AGENT_TYPE`)                    | the **Agent type** | `service.name` on the wire, the package Set's key                                                                                                                       |
 
@@ -520,7 +520,7 @@ and run its own `service install`.
 
 25. **The Agent type is `supervisor`** — the constant `CLIENT_AGENT_TYPE` every
     Client reports as `service.name`
-    ([`agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs)), the same
+    ([`agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs)), the same
     on every host, because every Client in a fleet is the same kind of thing.
 
 26. **The package that carries the Client is `supervisor` too.** The self-update
@@ -536,7 +536,7 @@ and run its own `service install`.
     is typed `supervisor` as well.
 
 27. **The program is `supervisor`.** `supervisor.exe` on Windows: the binary
-    Cargo builds (`[[bin]] name = "supervisor"` in the package `fleet-agent`),
+    Cargo builds (`[[bin]] name = "supervisor"` in the package `classis-agent`),
     the file in every version directory
     (`supervisor-<MAJOR.MINOR.PATCH>-<hash>`), the member a package artifact
     carries, the payload file under `/usr/libexec/<PRODUCT_NAME>/`, the log
@@ -547,8 +547,8 @@ and run its own `service install`.
     program's name is not derived from the product's, so one published package
     serves every variant build: the member a self-update extracts is the same in
     all of them. Two names deliberately stay where they are: the Cargo package
-    `fleet-agent`, a build-time identifier that never leaves the repository, and
-    the OTLP instrumentation scope `opamp-fleet-client`, which names the library
+    `classis-agent`, a build-time identifier that never leaves the repository, and
+    the OTLP instrumentation scope `classis-client`, which names the library
     a signal came from — renaming it would move every operator's dashboards.
 
 28. **The instance name is a separate attribute, and its default is
@@ -597,7 +597,7 @@ and run its own `service install`.
     deployment asks for it; adding it is one row.
 
 31. **Every archive is a `.tar.gz` written by
-    `opamp-fleetctl package pack --format tar.gz`,** the operator tool the same
+    `classisctl package pack --format tar.gz`,** the operator tool the same
     run builds and publishes
     ([ADR-0028](0028-one-operator-program-that-makes-the-fleets-certificates.md)).
     The packer names the single member after the program, with its executable
@@ -709,8 +709,8 @@ and run its own `service install`.
     the two remaining steps:
 
     ```console
-    sudo opamp-fleet service install --interactive
-    sudo systemctl start opamp-fleet
+    sudo classis service install --interactive
+    sudo systemctl start classis
     ```
 
     The second `service install` is a re-install, which is idempotent and writes
@@ -824,7 +824,7 @@ and run its own `service install`.
     | `.rpm` | `cargo-generate-rpm`, no `rpmbuild` needed                  | both Linux runners, natively |
     | `.msi` | WiX Toolset 6 as the `wix` .NET tool, with its UI extension | the Windows runner           |
 
-    Package metadata lives in `crates/fleet-agent/Cargo.toml` under
+    Package metadata lives in `crates/classis-agent/Cargo.toml` under
     `[package.metadata.deb]` and `[package.metadata.generate-rpm]`, reading the
     workspace's version, licence and description; `cargo-deb` derives `Depends`
     from what the binary links (`$auto`). The RPM `Release` is `1` and stays
@@ -951,11 +951,11 @@ which an operator deploys rather than the fleet.
   — the setting that fills a disk. **Remotely configurable logging** — the
   Client's own configuration stays on the machine. **The log in the version
   directory** — a self-update would scatter it and a rollback take it away.
-- **Keep a product name such as `opamp-fleet-client` for the type, the package
+- **Keep a product name such as `classis-client` for the type, the package
   and the program.** The type would repeat a product name the row already
   carries as its instance name, and the fleet could not say what the Client
   _is_.
-- **A reverse FQDN type, `io.opamp-fleet.supervisor`.** A recommendation
+- **A reverse FQDN type, `io.classis.supervisor`.** A recommendation
   enforced nowhere else here, in a table column where the short form is what
   gets read.
 - **Rename only some layers.** A package name that is not the type splits the
@@ -1006,7 +1006,7 @@ which an operator deploys rather than the fleet.
   they were at the keyboard.
 - **Rename the dpkg/rpm identity or `UpgradeCode` with the program.** Costs
   every host a second product beside the first.
-- **Name the build variables for this project (`OPAMP_FLEET_PRODUCT_NAME`, …)**
+- **Name the build variables for this project (`CLASSIS_PRODUCT_NAME`, …)**
   — a build of `acme-agent` would set a variable that names a product the build
   is not.
 - **No prefix (`PRODUCT_NAME`, `PRODUCT_TITLE`)** — common in other toolchains:
@@ -1150,7 +1150,7 @@ which an operator deploys rather than the fleet.
   service on all three platforms, from any location, and still runs in the
   foreground. A service stop sends the OpAMP goodbye. A self-update stages a
   version and switches `current` without re-registering.
-- Positive: the layout says what it is — `/opt/opamp-fleet/current/supervisor`,
+- Positive: the layout says what it is — `/opt/classis/current/supervisor`,
   the product, then the program. An illegal name fails the build, not the host.
   One Set updates every variant build. An MSI host and an archive host put the
   same things in the same places.
@@ -1220,7 +1220,7 @@ which an operator deploys rather than the fleet.
   collide, but the margin is thin.
 - Negative — `dpkg -l` and `rpm -q` report the _delivered_ version, which
   diverges from the running one after the first self-update;
-  `opamp-fleet --version` and the fleet view are the truth, and the manual must
+  `classis --version` and the fleet view are the truth, and the manual must
   say so. Until `service install` has run the symlink dangles, and a
   broken-by-hand layout makes the CLI fail loudly rather than answer for the
   wrong binary.
@@ -1251,11 +1251,11 @@ which an operator deploys rather than the fleet.
 
 ## Enforcement
 
-- `crates/fleet-agent/build.rs` fails the build on a `PRODUCT_NAME` outside the
+- `crates/classis-agent/build.rs` fails the build on a `PRODUCT_NAME` outside the
   grammar or a blank display name, and `product.rs` reads `OPAMP_PRODUCT_NAME`
-  and `OPAMP_PRODUCT_TITLE` through `env!`; `crates/fleet-agent/src/product.rs`
+  and `OPAMP_PRODUCT_TITLE` through `env!`; `crates/classis-agent/src/product.rs`
   `product_name_satisfies_the_grammar`, `display_name_is_prose`.
-- `crates/fleet-agent/src/service/manager.rs`:
+- `crates/classis-agent/src/service/manager.rs`:
   `every_backend_renders_the_same_name`,
   `the_service_is_named_after_the_product_not_the_program`,
   `the_service_name_carries_no_suffix`, `the_names_a_human_reads`,
@@ -1263,23 +1263,23 @@ which an operator deploys rather than the fleet.
   `both_platforms_restart_after_the_same_delay`,
   `the_default_root_is_one_level_named_after_the_product`,
   `the_linux_system_layout_executes_from_opt`, `no_other_platform_splits`.
-- `crates/fleet-agent/src/cli.rs`: `instance_is_not_a_flag_any_more`,
+- `crates/classis-agent/src/cli.rs`: `instance_is_not_a_flag_any_more`,
   `both_roots_can_be_named`, `service_verbs_parse_with_scope_and_root`,
   `the_installed_command_line_parses`,
   `install_is_not_interactive_unless_asked`,
   `bare_invocation_has_no_subcommand`.
-- `crates/fleet-agent/src/service/layout.rs`:
+- `crates/classis-agent/src/service/layout.rs`:
   `the_directory_name_is_base_plus_hash_never_the_prerelease`,
   `set_current_points_and_repoints`, `stage_writes_binary_manifest_and_pointer`,
   `restaging_identical_bytes_leaves_the_staged_binary_untouched`,
   `restaging_replaces_a_staged_binary_with_different_bytes`,
   `a_torn_pointer_is_healed_a_correct_one_left_alone`,
   `the_layout_is_found_from_the_pointer_the_service_was_registered_against`.
-- `crates/fleet-agent/src/service/run_as.rs`:
+- `crates/classis-agent/src/service/run_as.rs`:
   `windows_forms_are_the_passwordless_ones`,
   `a_missing_account_is_refused_with_the_way_out`,
   `the_handover_walks_the_tree_and_skips_what_is_missing`.
-- `crates/fleet-agent/src/config_init.rs`:
+- `crates/classis-agent/src/config_init.rs`:
   `an_existing_file_is_never_overwritten`,
   `an_endpoint_given_never_overwrites_an_existing_file`,
   `an_edit_changes_the_asked_keys_and_keeps_the_rest`,
@@ -1301,28 +1301,28 @@ which an operator deploys rather than the fleet.
   `installer_answers_alone_fail_validation_and_stay_on_disk` (clauses 17, 19);
   `a_rendered_file_has_no_auth_section`, which renders complete answers and
   asserts that the file holds no `[auth]` (clause 17).
-- `crates/fleet-agent/src/config_file.rs`:
+- `crates/classis-agent/src/config_file.rs`:
   `admission_needs_a_client_identity_and_nothing_else`, which asserts that
   `ClientConfig::check_admission` passes a file with a client identity and no
   `[auth]` and refuses one without an identity, naming `[tls] cert_file` and
-  `key_file` (clauses 19, 20). `crates/fleet-agent/src/config.rs`, shared with
+  `key_file` (clauses 19, 20). `crates/classis-agent/src/config.rs`, shared with
   [ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md):
   `a_leftover_auth_section_is_ignored_with_a_notice`, which loads a file with an
   `[auth]` section, asserts that it loads, that nothing is sent from it, and
   that the notice names `[auth]` (clause 17).
-- Logging: `crates/fleet-agent/tests/logging.rs`
+- Logging: `crates/classis-agent/tests/logging.rs`
   (`a_service_run_writes_a_log_file`, `a_foreground_run_writes_no_log_file`);
-  `crates/fleet-agent/src/config.rs`
+  `crates/classis-agent/src/config.rs`
   `the_log_file_is_on_by_default_and_its_retention_is_not_optional`;
-  `crates/fleet-agent/src/logging.rs`
+  `crates/classis-agent/src/logging.rs`
   `the_writer_discards_until_a_file_is_opened`,
   `the_log_directory_hangs_off_the_state_directory`.
-- `crates/fleet-agent/tests/shutdown.rs`
+- `crates/classis-agent/tests/shutdown.rs`
   `sigterm_shuts_the_client_down_cleanly`;
-  `crates/fleet-agent/tests/service_smoke.rs`
+  `crates/classis-agent/tests/service_smoke.rs`
   `the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_stop`,
   run with `--ignored` by the `service-smoke` workflow on an ephemeral runner.
-- `crates/fleet-agent/tests/msi_exe_command.rs`
+- `crates/classis-agent/tests/msi_exe_command.rs`
   `the_msi_names_no_root_so_no_directory_property_reaches_a_command_line`; the
   `.rpm` scriptlet assertions in
   [`.github/workflows/release.yml`](../../.github/workflows/release.yml) require
@@ -1334,18 +1334,18 @@ which an operator deploys rather than the fleet.
   `service install`, `service uninstall`, `ln -sfn`, the layout-root and
   data-root removals are in the package, and that the RPM's architecture is the
   ecosystem's (clauses 32, 36, 38).
-- [`supervisor/agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs):
+- [`supervisor/agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs):
   `the_clients_own_agent_type_is_the_one_name_this_program_has`,
   `the_clients_own_agent_reports_its_type_and_its_configured_name_separately`
   (clauses 25, 27, 28).
-- [`config.rs`](../../crates/fleet-agent/src/config.rs):
+- [`config.rs`](../../crates/classis-agent/src/config.rs):
   `the_configurations_old_name_beside_the_new_one_is_refused_rather_than_defaulted`
   (clause 29).
-- [`service/layout.rs`](../../crates/fleet-agent/src/service/layout.rs):
+- [`service/layout.rs`](../../crates/classis-agent/src/service/layout.rs):
   `the_directory_name_is_base_plus_hash_never_the_prerelease`,
   `restaging_identical_bytes_leaves_the_staged_binary_untouched` (clauses 27,
   38).
-- [`tests/msi_exe_command.rs`](../../crates/fleet-agent/tests/msi_exe_command.rs)
+- [`tests/msi_exe_command.rs`](../../crates/classis-agent/tests/msi_exe_command.rs)
   parses the WiX source's command lines as the C runtime will:
   `register_service_with_endpoint_survives_the_crt`,
   `register_service_survives_the_crt`,
@@ -1358,7 +1358,7 @@ which an operator deploys rather than the fleet.
   `packaging/windows/supervisor.wxs` as text on every platform, so the prefill
   is checked by `cargo test` wherever it runs, not by building or installing the
   MSI.
-- [`tests/linux_post_install.rs`](../../crates/fleet-agent/tests/linux_post_install.rs)
+- [`tests/linux_post_install.rs`](../../crates/classis-agent/tests/linux_post_install.rs)
   `the_post_install_prints_no_endpoint_the_client_refuses_at_startup` reads
   `packaging/linux/postinst` as text and holds every endpoint it prints to the
   same rule (clauses 37, 42).
@@ -1366,13 +1366,13 @@ which an operator deploys rather than the fleet.
   step is `service install --interactive`, that no endpoint-only step is
   offered, that the manual alternative names `cert_file` and `key_file`, and
   that the printed text names neither `[auth]` nor a credential (clause 37).
-- [`tests/msi_exe_command.rs`](../../crates/fleet-agent/tests/msi_exe_command.rs):
+- [`tests/msi_exe_command.rs`](../../crates/classis-agent/tests/msi_exe_command.rs):
   `the_endpoint_dialog_names_the_identity_and_no_credential`, which reads
   `packaging/windows/EndpointDlg.wxs` as text and asserts that its note names
   the client certificate and mentions no credential (clause 39).
 - `--endpoint` (clause 42): `install_takes_an_endpoint_without_a_terminal` and
   `an_endpoint_and_interactive_are_refused_together` in
-  [`cli.rs`](../../crates/fleet-agent/src/cli.rs);
+  [`cli.rs`](../../crates/classis-agent/src/cli.rs);
   `an_endpoint_given_is_written_and_loads`,
   `a_bad_endpoint_is_refused_before_anything_is_written`,
   `an_endpoint_given_never_overwrites_an_existing_file`,
@@ -1380,13 +1380,13 @@ which an operator deploys rather than the fleet.
   `a_plaintext_endpoint_is_accepted_only_on_a_loopback_literal`, which refuses a
   plaintext endpoint off the loopback and one naming `localhost`, names the
   setting, and writes nothing, in
-  [`config_init.rs`](../../crates/fleet-agent/src/config_init.rs).
-- [`tests/enrolment_e2e.rs`](../../crates/fleet-agent/tests/enrolment_e2e.rs)
+  [`config_init.rs`](../../crates/classis-agent/src/config_init.rs).
+- [`tests/enrolment_e2e.rs`](../../crates/classis-agent/tests/enrolment_e2e.rs)
   `the_questionnaires_enrolment_stores_the_issued_certificate_and_copies_nothing`,
   which enrols through the questionnaire's enrolment against the real Server,
   approves the request, and asserts that the issued certificate is in the state
   directory and nothing was written beside the configuration (clause 17);
-  [`cli.rs`](../../crates/fleet-agent/src/cli.rs)
+  [`cli.rs`](../../crates/classis-agent/src/cli.rs)
   `config_takes_the_install_roots` (clause 15).
 
 **Not mechanically decidable:** that the layout starts under an enforcing

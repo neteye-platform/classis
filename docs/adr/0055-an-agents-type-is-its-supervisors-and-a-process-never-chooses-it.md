@@ -2,12 +2,12 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-24
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the fold of a Managed Process's description and the type it
-  reads in `crates/fleet-agent/src/supervisor/agent/description.rs` and
-  `crates/fleet-agent/src/supervisor/agent.rs`, the Agent type resolution in
-  `crates/fleet-agent/src/supervisor/block.rs` and
-  `crates/fleet-agent/src/supervisor/mod.rs`, the `service_name` key of a
+  reads in `crates/classis-agent/src/supervisor/agent/description.rs` and
+  `crates/classis-agent/src/supervisor/agent.rs`, the Agent type resolution in
+  `crates/classis-agent/src/supervisor/block.rs` and
+  `crates/classis-agent/src/supervisor/mod.rs`, the `service_name` key of a
   `[[supervisor]]` block, and every document that tells an operator where an
   Agent's type comes from
 - **Supersedes:** [ADR-0016](0016-what-an-agent-reports-about-itself.md) clause
@@ -20,17 +20,17 @@
 An Agent's type is its `service.name` (ADR-0016 clause 1), and the Server
 decides by it. A Configuration fits an Agent whose reported `service.name`
 equals the Configuration's type, and a release pins the fitting ones to it
-(`crates/fleet-server/src/configs.rs:148-171`). A Deployment's Selector can aim
-at `service.name` (`crates/fleet-server/src/deployments.rs:35-50`). A package is
-resolved for the type the Agent reports
-(`crates/fleet-server/src/packages.rs:1126-1153`).
+(`crates/classis-server/src/configs.rs:148-171`). A Deployment's Selector can aim
+at `service.name` (`crates/classis-server/src/deployments.rs:35-50`). A package
+is resolved for the type the Agent reports
+(`crates/classis-server/src/packages.rs:1126-1153`).
 
 Today the first source of the type is the Managed Process. ADR-0016 clause 1
 puts "what the Managed Process reports" above the kind's own type, the block's
 `service_name` and the program's file name, and ADR-0041 clause 1 keeps that:
 "The process's `service.name` wins: `dist.name` is a better type than anything a
 file can infer". The fold makes no exception for any kind
-(`crates/fleet-agent/src/supervisor/agent/description.rs:137-173`), and ADR-0041
+(`crates/classis-agent/src/supervisor/agent/description.rs:137-173`), and ADR-0041
 names the consequence and leaves it open: "a process can still choose which
 type's Configurations and packages fit its Agent on its own host".
 
@@ -49,16 +49,16 @@ Packages are already safe from this. The Supervisor refuses an offered package
 whose name is not its own type before anything is downloaded, and the high-water
 mark is kept per the Supervisor's type
 ([ADR-0043](0043-a-package-version-is-semver-and-never-installed-below-the-high-water-mark.md)
-clauses 7 and 8, `crates/fleet-agent/src/supervisor/agent/packages.rs:359-369`).
+clauses 7 and 8, `crates/classis-agent/src/supervisor/agent/packages.rs:359-369`).
 Both read the Supervisor's value, not the fold. So an honest Collector whose
 `dist.name` differs from its block's type is already offered packages it then
 refuses.
 
 The process contributes one thing to the type that nobody else knows: a
 Collector's `dist.name`. On main no kind states a type of its own
-(`crates/fleet-agent/src/supervisor/mod.rs:43-48`, `:556`); `collector` and
+(`crates/classis-agent/src/supervisor/mod.rs:43-48`, `:556`); `collector` and
 `command` take the block's `service_name` or fall back to the program's file
-name (`crates/fleet-agent/src/supervisor/block.rs:226-246`).
+name (`crates/classis-agent/src/supervisor/block.rs:226-246`).
 
 ## Decision
 
@@ -169,27 +169,27 @@ reports.
 
 ## Sources / Prior art
 
-- `crates/fleet-agent/src/supervisor/agent/description.rs:137-173`: the fold;
+- `crates/classis-agent/src/supervisor/agent/description.rs:137-173`: the fold;
   `:145-146` "The process's `service.name` deliberately _does_ win".
-  `crates/fleet-agent/src/supervisor/agent.rs:377-395`: `service_name()` reads
-  the same precedence, and `crates/fleet-agent/src/engine.rs:233` uses it for
+  `crates/classis-agent/src/supervisor/agent.rs:377-395`: `service_name()` reads
+  the same precedence, and `crates/classis-agent/src/engine.rs:233` uses it for
   the telemetry label.
-- `crates/fleet-agent/src/supervisor/block.rs:226-246`: the block's
+- `crates/classis-agent/src/supervisor/block.rs:226-246`: the block's
   `service_name`, the kind's default, the program's file name.
-  `crates/fleet-agent/src/supervisor/mod.rs:43-48`, `:556`: the kinds on main
+  `crates/classis-agent/src/supervisor/mod.rs:43-48`, `:556`: the kinds on main
   and the empty `WRAPPED` list.
-- `crates/fleet-agent/src/supervisor/process.rs:869-873`: every Managed Process
+- `crates/classis-agent/src/supervisor/process.rs:869-873`: every Managed Process
   is handed `OPAMP_SUPERVISOR_TOKEN`, last, with no cleared environment.
-  `crates/fleet-agent/src/supervisor/endpoint.rs:180-225`: a bearer token admits
+  `crates/classis-agent/src/supervisor/endpoint.rs:180-225`: a bearer token admits
   a connection, whose description is passed on as an event.
-- `crates/fleet-server/src/configs.rs:148-171`, `:351-363` and
-  `crates/fleet-server/src/fleet.rs:1238-1267`, `:2368-2385`: the Configuration
+- `crates/classis-server/src/configs.rs:148-171`, `:351-363` and
+  `crates/classis-server/src/fleet.rs:1238-1267`, `:2368-2385`: the Configuration
   fit by the reported `service.name` at a release, and the pinned assignment
-  served after it. `crates/fleet-server/src/deployments.rs:35-50`: a Selector by
-  attribute equality. `crates/fleet-server/src/packages.rs:1126-1153`: a package
-  resolved for the reported type.
-- `crates/fleet-agent/src/supervisor/agent/packages.rs:359-369` and its test in
-  `crates/fleet-agent/src/supervisor/agent.rs:1942-1989`: a package for another
+  served after it. `crates/classis-server/src/deployments.rs:35-50`: a Selector
+  by attribute equality. `crates/classis-server/src/packages.rs:1126-1153`: a
+  package resolved for the reported type.
+- `crates/classis-agent/src/supervisor/agent/packages.rs:359-369` and its test in
+  `crates/classis-agent/src/supervisor/agent.rs:1942-1989`: a package for another
   type is refused before anything is fetched; `:62`, `:151`, `:349`: the
   high-water mark keyed by the Supervisor's type.
 - `SECURITY.md:113-115`: a host that reports another partition's attributes is
@@ -222,7 +222,7 @@ reports.
 
 Tests that will carry `Verifies: ADR-0055`:
 
-- In `crates/fleet-agent/src/supervisor/agent.rs`: a process that reports
+- In `crates/classis-agent/src/supervisor/agent.rs`: a process that reports
   `service.name = other` in the identifying and in the non-identifying list
   leaves the description's `service.name` at the Supervisor's type, once, in the
   identifying list, while the same report's `service.version` is reported;
@@ -231,6 +231,6 @@ Tests that will carry `Verifies: ADR-0055`:
   naming both values and `service_name`, a second report of the same value emits
   none, a report of `another` emits one more, and a report of the Supervisor's
   own type emits none.
-- In `crates/fleet-agent/tests/collector_extension_e2e.rs`: an extension report
+- In `crates/classis-agent/tests/collector_extension_e2e.rs`: an extension report
   whose `service.name` differs from the block's type reaches the Server under
   the block's type, with its `service.version` and health.

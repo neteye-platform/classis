@@ -11,14 +11,14 @@
 - **Date:** 2026-10-14
 - **Deciders:** Davide Zeni
 - **Applies to:** the bootstrap-certificate routes of the Operator plane in
-  `crates/fleet-server/src/api.rs` and the module that issues and records
+  `crates/classis-server/src/api.rs` and the module that issues and records
   bootstrap certificates, the `bootstrap-certificates/` directory under
   `config_dir`, the Enrolments tab of the bundled UI in
-  `crates/fleet-server/static/index.html`, `service install`, its flags and the
-  questionnaire of the Client in `crates/fleet-agent/src/cli.rs`,
-  `crates/fleet-agent/src/main.rs` and `crates/fleet-agent/src/config_init.rs`,
+  `crates/classis-server/static/index.html`, `service install`, its flags and the
+  questionnaire of the Client in `crates/classis-agent/src/cli.rs`,
+  `crates/classis-agent/src/main.rs` and `crates/classis-agent/src/config_init.rs`,
   the steps `packaging/linux/postinst` prints, the enrolment in
-  `crates/fleet-agent/src/service/enrol.rs`, the `p12-keystore` crate in
+  `crates/classis-agent/src/service/enrol.rs`, the `p12-keystore` crate in
   `Cargo.toml`, and every document that tells an operator how to hand out,
   revoke or list a bootstrap certificate or install a Client
 - **Supersedes:**
@@ -314,9 +314,9 @@ revocation on the revocation list.
     non-interactive install of clause 10:
 
     ```console
-    sudo opamp-fleet service install --endpoint wss://<server>/v1/opamp \
+    sudo classis service install --endpoint wss://<server>/v1/opamp \
       --fleet-files /root/fleet --bootstrap-password-file /root/fleet/bootstrap.pass
-    sudo systemctl start opamp-fleet
+    sudo systemctl start classis
     ```
 
     That step waits for the operator's approval as clause 10 states; a
@@ -339,8 +339,8 @@ revocation on the revocation list.
     delivered binary. The post-install prints the two remaining steps:
 
     ```console
-    sudo opamp-fleet service install --interactive
-    sudo systemctl start opamp-fleet
+    sudo classis service install --interactive
+    sudo systemctl start classis
     ```
 
     The second `service install` is a re-install, which is idempotent and writes
@@ -391,7 +391,7 @@ revocation on the revocation list.
 
 - A PKCS#12 file for anything but a bootstrap certificate: the Client's issued
   identity, the Server's or a Gateway's certificate, and the `pki` commands of
-  `opamp-fleetctl`.
+  `classisctl`.
 - Changing the password of a kept PKCS#12 file, or making one for a certificate
   issued without a password; the operator issues a new certificate.
 - Removing `bootstrap.p12` or the password file from the host after enrolment,
@@ -553,7 +553,7 @@ Tests that will carry `Verifies: ADR-0029`:
   ended, and the file is gone from `config_dir` (clause 4).
 - Issuance and download log their events, and no log line holds the password
   or the key: `no_secret_reaches_the_log` in
-  `crates/fleet-server/tests/no_secret_in_the_log.rs` (clauses 2 and 4).
+  `crates/classis-server/tests/no_secret_in_the_log.rs` (clauses 2 and 4).
 - `bootstrap.p12` is found beside the program; lying beside a file of the pair,
   neither is taken (clause 6).
 - With `--fleet-files <dir>` the files are found in `<dir>` and not beside the

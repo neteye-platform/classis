@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Creates the certificates a development Server and Client need, since both refuse to run without
-# them (ADR-0013, ADR-0021), with the operator tool's `opamp-fleetctl pki init`
+# them (ADR-0013, ADR-0021), with the operator tool's `classisctl pki init`
 # (ADR-0028) — no openssl. Every certificate of the set says it is a development one:
-# `OpAMP Fleet Dev … CA`, `O=Development` (ADR-0028 clause 30).
+# `Classis Dev … CA`, `O=Development` (ADR-0028 clause 30).
 # Everything lands in one directory, gitignored, and is for a development machine only: the keys
 # are unencrypted and the CAs are throwaway.
 #
@@ -43,9 +43,9 @@ mkdir -p "$OUT"
 chmod 700 "$OUT"
 OUT="$(cd "$OUT" && pwd)"  # the configurations name the set by absolute path
 
-(cd "$ROOT" && cargo run -q -p fleet-tools -- pki init \
+(cd "$ROOT" && cargo run -q -p classis-tools -- pki init \
   --server-dir "$OUT/server" --offline-dir "$OUT/offline" \
-  --product "OpAMP Fleet Dev" --organization "Development" --name localhost)
+  --product "Classis Dev" --organization "Development" --name localhost)
 
 {
   echo '# The Agent plane on every interface, for Clients on other machines (see config/server.toml).'
@@ -69,7 +69,7 @@ cat <<EOF
 
 Created in $OUT, with a server.toml and a supervisor.toml that use the set:
 
-  cargo run -p fleet-server -- --config $OUT/server.toml
+  cargo run -p classis-server -- --config $OUT/server.toml
   scripts/seed_test_configs.sh --enrol     # issues the bootstrap certificate, approves the enrolment
-  cargo run -p fleet-agent -- --config $OUT/supervisor.toml   # while --enrol waits
+  cargo run -p classis-agent -- --config $OUT/supervisor.toml   # while --enrol waits
 EOF

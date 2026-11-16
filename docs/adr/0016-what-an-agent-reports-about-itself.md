@@ -5,17 +5,17 @@
   clause 1 superseded by
   [ADR-0055](0055-an-agents-type-is-its-supervisors-and-a-process-never-chooses-it.md)
 - **Date:** 2026-10-03
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** AgentDescription building in
-  crates/fleet-agent/src/supervisor/agent.rs, the Agent type resolution in
-  crates/fleet-agent/src/supervisor/mod.rs, [attributes] and service_namespace
+  crates/classis-agent/src/supervisor/agent.rs, the Agent type resolution in
+  crates/classis-agent/src/supervisor/mod.rs, [attributes] and service_namespace
   in supervisor.toml, the fleet view's name and network columns;
-  crates/fleet-agent/src/telemetry.rs, the telemetry half of
-  crates/fleet-agent/src/connection.rs, the operation spans in the Client's
+  crates/classis-agent/src/telemetry.rs, the telemetry half of
+  crates/classis-agent/src/connection.rs, the operation spans in the Client's
   transport, engine, reconfigure, packages, update
-  (crates/fleet-agent/src/update/) and Supervisor modules, the Server's
-  `[telemetry_offer]` (crates/fleet-server/src/config.rs,
-  crates/fleet-server/src/fleet.rs), and the OpenTelemetry crates in Cargo.toml
+  (crates/classis-agent/src/update/) and Supervisor modules, the Server's
+  `[telemetry_offer]` (crates/classis-server/src/config.rs,
+  crates/classis-server/src/fleet.rs), and the OpenTelemetry crates in Cargo.toml
 
 ## Context
 
@@ -747,7 +747,7 @@ three capability bits.
 
 ## Enforcement
 
-- [`agent.rs`](../../crates/fleet-agent/src/supervisor/agent.rs) unit tests:
+- [`agent.rs`](../../crates/classis-agent/src/supervisor/agent.rs) unit tests:
   `a_process_reporting_its_type_does_not_take_the_operators_name_with_it`,
   `the_supervisors_own_attributes_survive_whichever_list_a_process_reports_them_in`,
   `the_reported_type_is_the_processs_own_word_where_it_gives_one`,
@@ -761,17 +761,17 @@ three capability bits.
   `the_cpu_model_is_reported`,
   `the_agent_reports_the_host_name_a_selector_would_pin_it_by`,
   `the_os_is_reported_as_a_name_and_a_version_not_only_as_prose`.
-- [`config.rs`](../../crates/fleet-agent/src/config.rs) unit tests:
+- [`config.rs`](../../crates/classis-agent/src/config.rs) unit tests:
   `a_block_may_state_its_agent_type_and_a_reverse_fqdn_is_accepted`,
   `an_empty_agent_type_is_refused_rather_than_treated_as_absent`,
   `attributes_describe_the_host_and_a_block_no_longer_tags_one_agent`,
   `non_string_attributes_are_rejected`;
-  [`supervisor/mod.rs`](../../crates/fleet-agent/src/supervisor/mod.rs)
+  [`supervisor/mod.rs`](../../crates/classis-agent/src/supervisor/mod.rs)
   `a_wrapped_block_that_restates_a_derived_value_is_refused`.
-- Server: [`fleet.rs`](../../crates/fleet-server/src/fleet.rs) unit test
+- Server: [`fleet.rs`](../../crates/classis-server/src/fleet.rs) unit test
   `the_view_joins_a_string_array_attribute`.
 
-- [`crates/fleet-agent/src/telemetry.rs`](../../crates/fleet-agent/src/telemetry.rs)
+- [`crates/classis-agent/src/telemetry.rs`](../../crates/classis-agent/src/telemetry.rs)
   tests: `no_destination_builds_nothing` (clause 25),
   `cleartext_is_admitted_by_address_and_nowhere_else`, which refuses
   `localhost`, the rest of `127.0.0.0/8`, the private ranges and an
@@ -797,26 +797,26 @@ three capability bits.
   `a_span_this_client_writes_reaches_the_offered_destination` (clauses 16–17),
   `a_trace_survives_being_written_down_and_picked_up_again`,
   `an_unreadable_trace_reference_is_ignored` (clause 20).
-- [`crates/fleet-agent/src/connection.rs`](../../crates/fleet-agent/src/connection.rs)
+- [`crates/classis-agent/src/connection.rs`](../../crates/classis-agent/src/connection.rs)
   tests: `an_offer_naming_one_signal_stops_the_others`,
   `an_offer_silent_about_telemetry_leaves_all_three_alone` (clause 27),
   `an_empty_endpoint_withdraws_the_signal` (clause 28).
-- [`crates/fleet-agent/src/transport/mod.rs`](../../crates/fleet-agent/src/transport/mod.rs):
+- [`crates/classis-agent/src/transport/mod.rs`](../../crates/classis-agent/src/transport/mod.rs):
   `a_refused_telemetry_destination_is_reported_failed_on_the_same_offer` (clause
   31).
-- [`crates/fleet-agent/src/update/installer.rs`](../../crates/fleet-agent/src/update/installer.rs):
+- [`crates/classis-agent/src/update/installer.rs`](../../crates/classis-agent/src/update/installer.rs):
   `a_marker_carries_its_trace_and_one_written_without_it_still_parses` (clause
   20);
-  [`crates/fleet-agent/src/packages.rs`](../../crates/fleet-agent/src/packages.rs):
+  [`crates/classis-agent/src/packages.rs`](../../crates/classis-agent/src/packages.rs):
   `the_download_source_drops_whatever_authorises_it` (clause 23).
-- [`crates/fleet-agent/tests/supervisor_process.rs`](../../crates/fleet-agent/tests/supervisor_process.rs):
+- [`crates/classis-agent/tests/supervisor_process.rs`](../../crates/classis-agent/tests/supervisor_process.rs):
   `the_phases_of_an_install_hang_off_the_span_that_came_with_it` (clause 18).
-- [`crates/fleet-server/tests/own_telemetry.rs`](../../crates/fleet-server/tests/own_telemetry.rs):
+- [`crates/classis-server/tests/own_telemetry.rs`](../../crates/classis-server/tests/own_telemetry.rs):
   `every_declared_signal_is_offered_a_destination`,
   `a_withdrawn_signal_is_offered_as_an_empty_destination`,
   `an_undeclared_signal_gets_no_destination`,
   `an_agent_that_reports_no_own_telemetry_is_offered_none` (clause 33); and
-  [`crates/fleet-server/src/config.rs`](../../crates/fleet-server/src/config.rs):
+  [`crates/classis-server/src/config.rs`](../../crates/classis-server/src/config.rs):
   `an_empty_endpoint_is_a_withdrawal_and_a_wrong_one_is_still_an_error` (clause
   33).
 

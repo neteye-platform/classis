@@ -35,7 +35,7 @@
 #       (ADR-0028): asks the Server for a fresh bootstrap certificate for the customer and site
 #       "Development" under a throwaway password, downloads its bootstrap.p12 — the Server hands
 #       the key out in no other form (ADR-0036) — and extracts the pair with
-#       `opamp-fleetctl pki p12-extract` where the development supervisor.toml names it
+#       `classisctl pki p12-extract` where the development supervisor.toml names it
 #       ($SEED_BOOTSTRAP_DIR, default .dev-pki/offline/), replacing a pair already there,
 #       opens the enrolment window for ten minutes, waits up to two minutes for
 #       requests — start the Client then — and approves every one it finds, printing each key
@@ -105,7 +105,7 @@ if [ "$mode" = enrol ]; then
     curl -fsS "${curl_tls[@]}" -o "$work/bootstrap.p12" \
         "$server/api/v1/bootstrap-certificates/$serial/p12"
     rm -f "$bootstrap_dir/bootstrap.pem" "$bootstrap_dir/bootstrap-key.pem"
-    (cd "$root" && cargo run -q -p fleet-tools -- pki p12-extract "$work/bootstrap.p12" \
+    (cd "$root" && cargo run -q -p classis-tools -- pki p12-extract "$work/bootstrap.p12" \
         --out "$bootstrap_dir" --password-file "$work/password")
     echo "wrote the bootstrap pair, serial $serial, to $bootstrap_dir"
     curl -fsS "${curl_tls[@]}" -X POST -H 'Content-Type: application/json' \

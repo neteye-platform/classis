@@ -1,6 +1,6 @@
-# OpAMP Fleet — User Manual
+# Classis — User Manual
 
-This manual is for the people who **run** OpAMP Fleet: it says what each end can
+This manual is for the people who **run** Classis: it says what each end can
 do, how to start it, and what every configuration key means. It is split the way
 a deployment is split — the Server is one machine, the Clients are all the
 others — so each half can be read on its own:
@@ -38,8 +38,8 @@ commands live in the [root README](../../README.md), under _Build, Test & Run_,
 and are not repeated here. It assumes you can run:
 
 ```sh
-cargo run -p fleet-server -- --config config/server.toml
-cargo run -p fleet-agent -- --config config/supervisor.toml
+cargo run -p classis-server -- --config config/server.toml
+cargo run -p classis-agent -- --config config/supervisor.toml
 ```
 
 An installed deployment runs the same two programs under the names `server` and
@@ -54,7 +54,7 @@ so the first step makes a development set of them.
 
 1. **Create the development certificates.**
    [`scripts/dev-pki.sh`](../../scripts/dev-pki.sh) makes them with the operator
-   tool's `opamp-fleetctl pki init`, so it needs no other tool: the three CAs of
+   tool's `classisctl pki init`, so it needs no other tool: the three CAs of
    [Setting up a fleet](setup.md#the-certificates-at-a-glance), a Server
    certificate for `localhost`, `127.0.0.1` and `::1`, and the bootstrap
    certificate the Client enrols with. Everything lands in `.dev-pki/`, which
@@ -76,7 +76,7 @@ so the first step makes a development set of them.
    bundled UI at `/`). Both are on the loopback by default.
 
    ```sh
-   cargo run -p fleet-server -- --config .dev-pki/server.toml
+   cargo run -p classis-server -- --config .dev-pki/server.toml
    ```
 
 3. **Start a Client, and approve its enrolment.** With no `[[supervisor]]` block
@@ -86,7 +86,7 @@ so the first step makes a development set of them.
    seed script opens the window and approves it:
 
    ```console
-   $ cargo run -p fleet-agent -- --config .dev-pki/supervisor.toml
+   $ cargo run -p classis-agent -- --config .dev-pki/supervisor.toml
    $ scripts/seed_test_configs.sh --enrol
    approved the request with key fingerprint f1e9…
    ```
@@ -216,9 +216,9 @@ source the operator allowed.
 
 **Configuration files.** Both ends read a hand-edited TOML file. The Client's is
 the one `--config` names, `supervisor.toml` by default. The Server's is the one
-`--config` or else `FLEET_SERVER_CONFIG` names — a named file that does not
+`--config` or else `CLASSIS_SERVER_CONFIG` names — a named file that does not
 exist stops the start — and otherwise `server.toml` in the working directory
-when there is one; its keys can also be set by `FLEET_SERVER__…` environment
+when there is one; its keys can also be set by `CLASSIS_SERVER__…` environment
 variables, checked as strictly as the file, so a Server may run from its
 environment alone
 ([Configuration from the environment](server.md#configuration-from-the-environment)).

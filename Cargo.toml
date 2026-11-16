@@ -1,10 +1,10 @@
 # Cargo workspace (ADR-0010): the Server and the Client are two binaries sharing one wire layer
 # (`opamp`, publishable, with the client and the server behind features — ADR-0010) and
-# the project's own common code (`fleet-core`). One workspace, one lockfile, one pinned toolchain (`rust-toolchain.toml`), so both ends
+# the project's own common code (`classis-core`). One workspace, one lockfile, one pinned toolchain (`rust-toolchain.toml`), so both ends
 # resolve the same compiler and dependency versions and cannot drift apart on the wire format.
 [workspace]
 resolver = "2"
-members = ["crates/opamp", "crates/fleet-core", "crates/fleet-server", "crates/fleet-agent", "crates/fleet-tools"]
+members = ["crates/opamp", "crates/classis-core", "crates/classis-server", "crates/classis-agent", "crates/classis-tools"]
 
 [workspace.package]
 version = "0.7.0"
@@ -16,7 +16,7 @@ publish = false
 # Versions are pinned once here and referenced from each crate with `<dep>.workspace = true`.
 [workspace.dependencies]
 opamp = { path = "crates/opamp", version = "0.20" }
-fleet-core = { path = "crates/fleet-core" }
+classis-core = { path = "crates/classis-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "io-util", "process"] }
 axum = "0.8"
 prost = "0.14"
@@ -53,8 +53,8 @@ flate2 = "1"
 # `ring` compiles C and assembly in its build script, so a C compiler is required either way
 # (ADR-0021).
 # `compress` adds the *writer*, which is behind that one feature in its entirety: it is what lets
-# `opamp-fleetctl package pack` build the artifact an operator has otherwise no supported way to
-# produce. Only `crates/fleet-tools` and the Client's own tests ask for it (ADR-0010); the
+# `classisctl package pack` build the artifact an operator has otherwise no supported way to
+# produce. Only `crates/classis-tools` and the Client's own tests ask for it (ADR-0010); the
 # Client daemon never encodes, and does not enable it.
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256"] }
 # Reading a `.zip` package artifact (ADR-0026 clause 66) — the container the GLPI Agent's portable Windows

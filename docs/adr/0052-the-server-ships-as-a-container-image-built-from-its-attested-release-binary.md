@@ -2,13 +2,13 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-23
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `packaging/container/Containerfile`, the Linux rows of the
   `build` job, the `sbom` job, a new `image` job and the attestation,
   verification and publishing steps of the `publish` job in
   `.github/workflows/release.yml`, the image
-  `ghcr.io/mbrigl/opamp-fleet-server`, `.github/dependabot.yml`,
-  `crates/fleet-tools/tests/release_workflow.rs`, and every document that tells
+  `ghcr.io/neteye-platform/classis-server`, `.github/dependabot.yml`,
+  `crates/classis-tools/tests/release_workflow.rs`, and every document that tells
   an operator how to run or verify the Server (`README.md`, `docs/manual/`,
   `CHANGELOG.md`)
 - **Supersedes:**
@@ -23,14 +23,14 @@ CycloneDX SBOM per shipped program and target
 ([ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)).
 Clause 2 of ADR-0045 says the Server gets no SBOM, because nothing of it is
 published. An operator builds the Server from source with
-`cargo build -p fleet-server`, and nothing ties the binary they run to a
+`cargo build -p classis-server`, and nothing ties the binary they run to a
 reviewed commit.
 
 The Server is to run in a container.
 [ADR-0051](0051-the-servers-configuration-may-come-from-its-environment.md) lets
 its whole configuration come from the environment,
-`FLEET_SERVER__<SECTION>__<KEY>`, with `server.toml` optional and every secret a
-file whose path the environment names. What is still missing is the image
+`CLASSIS_SERVER__<SECTION>__<KEY>`, with `server.toml` optional and every secret
+a file whose path the environment names. What is still missing is the image
 itself: a defined runtime, the binary in it, and a way for an operator to check
 that the image they pull is the one the release workflow built from the tagged
 commit.
@@ -56,7 +56,7 @@ This ADR decides against all three.
 ## Decision
 
 We will publish, with every release, a multi-architecture image of the Server at
-`ghcr.io/mbrigl/opamp-fleet-server:<version>`, built from
+`ghcr.io/neteye-platform/classis-server:<version>`, built from
 `packaging/container/Containerfile` by copying the Server binary the release
 workflow built and checked into a distroless glibc base, and attested and
 described by an SBOM like every other release artifact.
@@ -67,11 +67,11 @@ described by an SBOM like every other release artifact.
    needs no emulation and the image holds exactly the binary the release built,
    tested for its version and described by its SBOM. A developer builds the
    image the same way after
-   `cargo build --release -p fleet-server --bin server`.
+   `cargo build --release -p classis-server --bin server`.
 
 2. **The release builds the Server for both Linux targets.** The `build` rows
    for `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` also run
-   `cargo build --release -p fleet-server --bin server --target <triple> --locked`,
+   `cargo build --release -p classis-server --bin server --target <triple> --locked`,
    assert that `server --version` reports the release's version, and upload the
    binary to the run. The binary is not a release asset of its own; the image is
    how it ships.
@@ -85,9 +85,9 @@ described by an SBOM like every other release artifact.
 4. **The image runs unprivileged, and configures nothing that holds a secret.**
    - It runs as UID and GID `65532`, set numerically with `USER 65532:65532`. It
      needs no capability: both planes listen on ports above 1024.
-   - It sets `FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet`,
-     `FLEET_SERVER__LISTEN=0.0.0.0:4320` and
-     `FLEET_SERVER__REST__LISTEN=0.0.0.0:4321`, declares `/var/lib/opamp-fleet`
+   - It sets `CLASSIS_SERVER__DATA_DIR=/var/lib/classis`,
+     `CLASSIS_SERVER__LISTEN=0.0.0.0:4320` and
+     `CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321`, declares `/var/lib/classis`
      a volume owned by `65532`, and exposes `4320` and `4321`. Its working
      directory is `/`, which that account cannot write, so the `server.toml` the
      Server reads by default is never a file it could have written to its own
@@ -118,14 +118,14 @@ described by an SBOM like every other release artifact.
 7. **Restates ADR-0045 clause 2, with the Server added. One CycloneDX SBOM per
    shipped program and target.** The release publishes
    `supervisor_<version>_<os>_<arch>.cdx.json` for each of the Client's five
-   targets, `opamp-fleetctl_<version>_<os>_<arch>.cdx.json` for each of the
+   targets, `classisctl_<version>_<os>_<arch>.cdx.json` for each of the
    operator tool's four, and `server_<version>_linux_<arch>.cdx.json` for each
    of the Server's two. The stem of the first two is that of the archive it
    describes (ADR-0019 clause 32); the Server's names the binary inside the
    image of that architecture. `.cdx.json` is the extension the CycloneDX
    specification recommends. Each SBOM is CycloneDX 1.5 JSON written by
    `cargo cyclonedx` with `--describe binaries` and `--target <triple>`, for:
-   - the one binary that ships, `supervisor`, `opamp-fleetctl` or `server`;
+   - the one binary that ships, `supervisor`, `classisctl` or `server`;
    - the default features, which the release builds with;
    - every transitive dependency on that target, resolved from the committed
      `Cargo.lock`.
@@ -177,10 +177,10 @@ described by an SBOM like every other release artifact.
     - `SHA256SUMS` itself.
 
     A second `actions/attest@v4` step attests the image, with `subject-name`
-    `ghcr.io/mbrigl/opamp-fleet-server`, `subject-digest` the index digest from
-    `image`, and `push-to-registry: true`, so the attestation travels with the
-    image. The digests of the files are computed from the files themselves, not
-    read out of `SHA256SUMS`. The per-file `.sha256` files are folded into
+    `ghcr.io/neteye-platform/classis-server`, `subject-digest` the index digest
+    from `image`, and `push-to-registry: true`, so the attestation travels with
+    the image. The digests of the files are computed from the files themselves,
+    not read out of `SHA256SUMS`. The per-file `.sha256` files are folded into
     `SHA256SUMS` and not published, so they are not subjects. Each attestation
     is signed through the Sigstore public-good instance, which this public
     repository gets, recorded in Rekor and stored in the repository's
@@ -204,7 +204,7 @@ described by an SBOM like every other release artifact.
     - the eleven SBOMs (clause 7);
     - one `SHA256SUMS` covering every asset.
 
-    Beside it, `ghcr.io/mbrigl/opamp-fleet-server:<version>` holds the Server's
+    Beside it, `ghcr.io/neteye-platform/classis-server:<version>` holds the Server's
     image. Every asset is a subject of the release's build-provenance
     attestation, and the image of its own (clause 10). The notes say:
     - which file is for which purpose, and the image's name and digest;
@@ -214,7 +214,7 @@ described by an SBOM like every other release artifact.
       and `sha256sum -c --ignore-missing SHA256SUMS` once `SHA256SUMS` has
       verified;
     - how to verify the image:
-      `gh attestation verify oci://ghcr.io/mbrigl/opamp-fleet-server@<digest>
+      `gh attestation verify oci://ghcr.io/neteye-platform/classis-server@<digest>
       --repo <repository>
       --signer-workflow <repository>/.github/workflows/release.yml`;
     - the procedure that uploads the Client's archives, selected by their
@@ -293,8 +293,8 @@ the image.
   hence clause 13's fallback.
 - The code as it stands: the `build`, `sbom` and `publish` jobs of
   `.github/workflows/release.yml`, `DEFAULT_LISTEN` and `DEFAULT_REST_LISTEN` in
-  `crates/fleet-server/src/config.rs`, and the absence of a health route in
-  `crates/fleet-server/src/api.rs`.
+  `crates/classis-server/src/config.rs`, and the absence of a health route in
+  `crates/classis-server/src/api.rs`.
 
 ## Consequences
 
@@ -317,16 +317,16 @@ the image.
 
 ## Enforcement
 
-Tests in `crates/fleet-tools/tests/release_workflow.rs` will carry
+Tests in `crates/classis-tools/tests/release_workflow.rs` will carry
 `Verifies: ADR-0052`. They read the workflow and the Containerfile as text, as
 the tests of ADR-0045 there do.
 
 - **The Containerfile.** `packaging/container/Containerfile` has exactly one
   `FROM`, naming `gcr.io/distroless/cc-debian13:nonroot@sha256:`, no `RUN`,
   `USER 65532:65532`, no `HEALTHCHECK`, a last `WORKDIR` of `/`, and sets no
-  `FLEET_SERVER__` variable beyond `DATA_DIR`, `LISTEN` and `REST__LISTEN`
+  `CLASSIS_SERVER__` variable beyond `DATA_DIR`, `LISTEN` and `REST__LISTEN`
   (clauses 1, 3, 4, 5).
-- **The build rows.** Both Linux rows build `-p fleet-server --bin server` with
+- **The build rows.** Both Linux rows build `-p classis-server --bin server` with
   `--locked` and assert its version (clause 2).
 - **The `sbom` job.** It writes `server_…_linux_<arch>.cdx.json` for both Linux
   rows (clause 7).

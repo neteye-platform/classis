@@ -3,17 +3,17 @@
 - **Status:** 🟢 accepted · clause 23 superseded by
   [ADR-0051](0051-the-servers-configuration-may-come-from-its-environment.md)
 - **Date:** 2026-10-10
-- **Deciders:** Markus Brigl
+- **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** Cargo.toml, `crates/opamp/` (its manifest and `[features]`,
-  `build.rs`, `src/`, `LICENSE`, `NOTICE` and `README.md`), crates/fleet-core/,
-  every OpAMP connection and listener of `crates/fleet-server/` and
-  `crates/fleet-agent/` (the Server's two planes, the Client's upstream
+  `build.rs`, `src/`, `LICENSE`, `NOTICE` and `README.md`), crates/classis-core/,
+  every OpAMP connection and listener of `crates/classis-server/` and
+  `crates/classis-agent/` (the Server's two planes, the Client's upstream
   connection and its verification probe, the Gateway's downstream endpoint and
   upstream pool, the Supervisor Endpoint), `AgentState` in
-  `crates/fleet-agent/src/supervisor/agent.rs`, the Client's `Session` in
-  `crates/fleet-agent/src/transport/`, crates/fleet-agent/src/lib.rs and
-  main.rs, crates/fleet-tools/, the bundled UI under
-  crates/fleet-server/static/, server.toml and supervisor.toml, the per-feature
+  `crates/classis-agent/src/supervisor/agent.rs`, the Client's `Session` in
+  `crates/classis-agent/src/transport/`, crates/classis-agent/src/lib.rs and
+  main.rs, crates/classis-tools/, the bundled UI under
+  crates/classis-server/static/, server.toml and supervisor.toml, the per-feature
   lint in `.github/workflows/ci.yml` and `README.md`, and every new crate,
   module placement or dependency
 
@@ -52,10 +52,10 @@ a router and never a listener, a client that lets the application build the TLS
 connector, the HTTP client and the headers — leaves each surface writing its own
 transport plumbing.
 
-- **Server TLS twice.** `fleet-server/src/tls.rs` and
-  `fleet-agent/src/gateway/mod.rs` each build a rustls `ServerConfig` from a
+- **Server TLS twice.** `classis-server/src/tls.rs` and
+  `classis-agent/src/gateway/mod.rs` each build a rustls `ServerConfig` from a
   certificate, a key and an optional client CA, with the same ALPN fix.
-- **Listener bounds once.** `fleet-server/src/listen.rs` bounds the header read
+- **Listener bounds once.** `classis-server/src/listen.rs` bounds the header read
   and the TLS handshake
   ([ADR-0013](0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
   The Gateway's downstream listener and the Supervisor Endpoint have neither
@@ -66,7 +66,7 @@ transport plumbing.
   and the Gateway's upstream pool connects a third time. Each one builds the
   WebSocket request, the `Authorization` header and the TLS connector by hand.
 - **The ring provider and the PEM readers.** Both ends install the provider with
-  the same function. The PEM readers sit in `fleet-core` only because both ends
+  the same function. The PEM readers sit in `classis-core` only because both ends
   need them for TLS.
 
 The maintainer wants the whole communication layer in `opamp`, with its
@@ -90,7 +90,7 @@ the PEM readers, the platform aliases — is this project's own, and lives in an
 internal crate. **How does a test reach the Client?** Cargo hands a test a
 helper binary's path (`CARGO_BIN_EXE_<name>`) only in an integration test, and
 an integration test links only a package's library. **Where do operator tools
-live?** `opamp-fleetctl`, the operator tool
+live?** `classisctl`, the operator tool
 ([ADR-0028](0028-one-operator-program-that-makes-the-fleets-certificates.md)),
 runs on an operator's machine and uses a few Client items: the 7z Unix-mode
 convention, the unpackers, and the TLS provider helper.
@@ -103,12 +103,12 @@ not affected.
 
 ## Decision
 
-We will build one Cargo workspace of five crates (`opamp`, `fleet-core`,
-`fleet-server`, `fleet-agent`, `fleet-tools`) on `tokio` and `axum`, make
+We will build one Cargo workspace of five crates (`opamp`, `classis-core`,
+`classis-server`, `classis-agent`, `classis-tools`) on `tokio` and `axum`, make
 `crates/opamp` the whole OpAMP communication layer — the wire layer always, and
 behind `client` and `server` each side's connection end to end, its TLS and its
 listener included, built from values the application hands it and never from a
-file or a configuration format of its own — keep in `fleet-core` what both ends
+file or a configuration format of its own — keep in `classis-core` what both ends
 implement identically beyond the Baseline, as measured, make the Client a
 library under a thin binary, keep the operator tool in its own crate depending
 on the Client, and configure both binaries from strict TOML files.
@@ -223,9 +223,9 @@ on the Client, and configure both binaries from strict TOML files.
       the loopback is refused rather than warned about (clauses 4, 6 and 8).
 
 11. **One workspace, five crates, one lockfile, one toolchain.** `crates/opamp`
-    (the publishable communication layer), `crates/fleet-core` (the internal
-    shared crate), `crates/fleet-server`, `crates/fleet-agent` and
-    `crates/fleet-tools`. Versions are pinned once in
+    (the publishable communication layer), `crates/classis-core` (the internal
+    shared crate), `crates/classis-server`, `crates/classis-agent` and
+    `crates/classis-tools`. Versions are pinned once in
     `[workspace.dependencies]`; `rust-toolchain.toml` pins the compiler. Every
     crate but `opamp` is `publish = false`. A further crate needs a concrete
     need a module cannot meet (compile time, reuse, a dependency boundary);
@@ -245,7 +245,7 @@ on the Client, and configure both binaries from strict TOML files.
     [ADR-0013](0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)'s.
 
 14. **The bundled UI is static assets embedded in the Server binary.** Plain
-    HTML, CSS and JS under `crates/fleet-server/static/`, embedded with
+    HTML, CSS and JS under `crates/classis-server/static/`, embedded with
     `include_str!`; no frontend toolchain. The REST API is the contract, and the
     UI is one client of it.
 
@@ -255,7 +255,7 @@ on the Client, and configure both binaries from strict TOML files.
     release-built on all three; the Server is built on Linux only.
 
 16. **The internal shared crate holds what both ends implement identically,
-    established by measurement.** Code enters `fleet-core` when both ends
+    established by measurement.** Code enters `classis-core` when both ends
     implement it identically, or would have to, and the Baseline does not define
     it; an end and the operator tool count as two ends here, because the tool
     makes what an end must accept — what it defines goes to `opamp` (clause 17).
@@ -282,7 +282,7 @@ on the Client, and configure both binaries from strict TOML files.
       the PEM readers `certificates` and `private_key`. Their path-based
       wrappers and error wording stay in each end, where what the file means is
       known.
-    - `fleet-core`: `version`, the version helper
+    - `classis-core`: `version`, the version helper
       ([ADR-0012](0012-versions-resolved-in-the-internal-crate.md)); `platform`,
       the platform alias table
       ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md));
@@ -300,7 +300,7 @@ on the Client, and configure both binaries from strict TOML files.
     moves it under clause 16.
 
 19. **The Client is a library with a thin binary on top.**
-    `crates/fleet-agent/src/lib.rs` declares the module tree; `src/main.rs`
+    `crates/classis-agent/src/lib.rs` declares the module tree; `src/main.rs`
     keeps only what starting a process needs: parsing the command line, handing
     off to the daemon or the `service` verbs, and the exit code.
 
@@ -313,21 +313,21 @@ on the Client, and configure both binaries from strict TOML files.
 21. **Tests reach what they test through the library.** Integration tests import
     constants rather than restating them, and tests that spawn a real program
     spawn the Client's own cross-platform stubs (`stub_agent`, `stub_crasher`,
-    under `crates/fleet-agent/src/bin/`) instead of a shell, so they run on all
+    under `crates/classis-agent/src/bin/`) instead of a shell, so they run on all
     three platforms. A `#[cfg(unix)]` gate sits only on what is genuinely a Unix
-    fact, such as a file mode. The stubs stay in `fleet-agent`, because
+    fact, such as a file mode. The stubs stay in `classis-agent`, because
     `CARGO_BIN_EXE_*` resolves only inside the crate that declares them.
 
 22. **The operator tool is its own crate, depending on the Client.**
-    `crates/fleet-tools` produces `opamp-fleetctl` (ADR-0028) and has no
-    library. The arrow points one way: `fleet-tools` uses
-    `fleet_agent::archive`, `opamp::tls` and the items of `fleet-core` clause 17
-    names rather than restating them, and its tests open what the tool produces
-    with the Client's own unpacker. Nothing in `fleet-agent`, `fleet-server` or
-    `opamp` depends on `fleet-tools`. Tool-only dependencies (the 7z writer,
-    release listing) are declared there, so `cargo build -p fleet-agent` does
-    not build them. The code that makes the fleet's certificate authorities
-    lives there too; no end runs it.
+    `crates/classis-tools` produces `classisctl` (ADR-0028) and has no
+    library. The arrow points one way: `classis-tools` uses
+    `classis_agent::archive`, `opamp::tls` and the items of `classis-core`
+    clause 17 names rather than restating them, and its tests open what the tool
+    produces with the Client's own unpacker. Nothing in `classis-agent`,
+    `classis-server` or `opamp` depends on `classis-tools`. Tool-only
+    dependencies (the 7z writer, release listing) are declared there, so `cargo
+    build -p classis-agent` does not build them. The code that makes the fleet's
+    certificate authorities lives there too; no end runs it.
 
 23. **Both binaries are configured from TOML.** `server.toml` and
     `supervisor.toml`, parsed with the `toml` crate into `serde` structs. Each
@@ -402,7 +402,7 @@ whether a release ships the operator tools.
   or fail depending on the command that ran it.
 - **Moving the supervision core into its own crate for testability.** A library
   target meets the need without turning every internal seam into a crate API.
-- **Operator tools inside `fleet-agent`, or `archive` moved into `opamp`.** The
+- **Operator tools inside `classis-agent`, or `archive` moved into `opamp`.** The
   first keeps tooling in the crate that runs on every managed host; the second
   widens the shared crate with something only the Client implements, since the
   Server never opens an artifact.
@@ -462,7 +462,7 @@ whether a release ships the operator tools.
 - Positive: a Rust OpAMP implementer gets a working client or server, TLS
   included, from one dependency and a few values. This project's three surfaces
   share the connect, the listener and the bounds, so a fix lands once.
-- Positive: `fleet-core` no longer links `rustls`; it holds the version and the
+- Positive: `classis-core` no longer links `rustls`; it holds the version and the
   platform aliases.
 - Positive: one lockfile and one toolchain, and both ends share `opamp`, so they
   cannot drift on the wire types, the Baseline's fixed strings, the gzip rule,
@@ -471,7 +471,7 @@ whether a release ships the operator tools.
 - Positive: the Server is one binary embedding its UI. The operations that write
   to a host (binary swap, health gate, rollback, tree install) are tested on all
   three platforms.
-- Positive: `crates/fleet-agent` is what runs on a managed host, and its
+- Positive: `crates/classis-agent` is what runs on a managed host, and its
   manifest says so.
 - Negative / trade-offs: the published API grows by `Connection`, the listener
   and the TLS types. `axum-server`'s `Handle` and `tokio-tungstenite`'s socket
@@ -485,7 +485,7 @@ whether a release ships the operator tools.
   plane, and is unmeasured.
 - Negative / trade-offs: `tokio` and axum are a deep commitment; reversing them
   touches every I/O boundary. A UI change needs a Server rebuild.
-- Negative / trade-offs: every dependency of `opamp` or `fleet-core` recompiles
+- Negative / trade-offs: every dependency of `opamp` or `classis-core` recompiles
   both ends. `endpoint` being framework-free means each caller writes its own
   mapping from `BodyError` to a status code.
 - Negative / trade-offs: `pub` inside the Client does not mean "interface", and
@@ -510,7 +510,7 @@ whether a release ships the operator tools.
   transports (clause 5); `crates/opamp/tests/server_listen.rs` holds a message
   whose fragments are interleaved with Pings to the floor, and leaves a peer
   that only pings open (clause 5).
-- `crates/fleet-agent/tests/enrolment_e2e.rs` issues one certificate per
+- `crates/classis-agent/tests/enrolment_e2e.rs` issues one certificate per
   enrolment and per renewal (clause 9).
 - `crates/opamp/tests/server_listen.rs` proves the header-read bound, the
   required and the optional client certificate, and the peer certificate in the
@@ -520,18 +520,18 @@ whether a release ships the operator tools.
   `crates/opamp/src/client/connection.rs` tests the scheme choice and the
   cleartext rule, and `crates/opamp/tests/client_connection.rs` the probe on
   both transports, the redirect refusal and a run (clause 8).
-- The structural test `crates/fleet-core/tests/dependency_direction.rs` lists
+- The structural test `crates/classis-core/tests/dependency_direction.rs` lists
   every module. The application suites run unchanged on the moved code (clauses
   9, 10).
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml):
   `build-test-lint` (clause 15), `client-platform-check` on Windows and macOS,
   and `release-build` (clauses 15, 21). The workspace manifest lists the five
-  members, and Cargo refuses a dependency cycle, so `fleet-agent` cannot come to
-  depend on `fleet-tools` (clause 22).
-- [`crates/fleet-agent/tests/supervisor_process.rs`](../../crates/fleet-agent/tests/supervisor_process.rs)
+  members, and Cargo refuses a dependency cycle, so `classis-agent` cannot come
+  to depend on `classis-tools` (clause 22).
+- [`crates/classis-agent/tests/supervisor_process.rs`](../../crates/classis-agent/tests/supervisor_process.rs)
   spawns `stub_agent` through `CARGO_BIN_EXE_stub_agent`, and
-  [`crates/fleet-agent/tests/self_update_e2e.rs`](../../crates/fleet-agent/tests/self_update_e2e.rs)
-  imports `fleet_agent::update::EXIT_RESTART_FOR_UPDATE` (clauses 19, 21).
+  [`crates/classis-agent/tests/self_update_e2e.rs`](../../crates/classis-agent/tests/self_update_e2e.rs)
+  imports `classis_agent::update::EXIT_RESTART_FOR_UPDATE` (clauses 19, 21).
 - `crates/opamp/src/attributes.rs` `an_empty_string_is_not_a_value`;
   `crates/opamp/src/endpoint.rs`
   `a_gzip_bomb_buys_no_more_memory_than_a_plain_body_would`,
@@ -539,8 +539,8 @@ whether a release ships the operator tools.
   `an_encoding_this_endpoint_does_not_implement_names_itself`;
   `crates/opamp/src/tls.rs` `a_file_holding_no_certificate_is_an_error` (clause
   17).
-- `crates/fleet-server/src/config.rs` `rejects_unknown_keys` and
-  `crates/fleet-agent/src/config.rs`
+- `crates/classis-server/src/config.rs` `rejects_unknown_keys` and
+  `crates/classis-agent/src/config.rs`
   `rejects_an_unknown_scheme_and_unknown_keys` (clause 24).
 
 **Not mechanically decidable:** whether a piece of code is implemented

@@ -20,7 +20,7 @@ section carries a date once its tag exists.
   structured event on its log output, standard error
   ([ADR-0022](docs/adr/0022-security-decisions-are-structured-log-events.md)).
   Keep the log with whatever runs the Server; the refusals a peer can repeat
-  at will are logged at `debug`, shown with `RUST_LOG=info,fleet_server=debug`.
+  at will are logged at `debug`, shown with `RUST_LOG=info,classis_server=debug`.
 - **`[audit]` in `server.toml`** is refused at startup as an unknown key, like
   any other.
 - **`server audit-verify`** is gone.

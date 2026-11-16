@@ -3,11 +3,11 @@
 - **Status:** 🟢 accepted
 - **Date:** 2026-11-11
 - **Deciders:** Davide Zeni
-- **Applies to:** every place in `crates/fleet-server/src/` that admits or
+- **Applies to:** every place in `crates/classis-server/src/` that admits or
   refuses a peer, issues or revokes a certificate, takes an operator's act or
   records a package outcome, the Server's log output set up in
-  `crates/fleet-server/src/main.rs`, the top-level keys of `server.toml` in
-  `crates/fleet-server/src/config.rs`, and the layout of `data_dir`
+  `crates/classis-server/src/main.rs`, the top-level keys of `server.toml` in
+  `crates/classis-server/src/config.rs`, and the layout of `data_dir`
 
 ## Context
 
@@ -171,17 +171,17 @@ the Client.
 
 Tests that carry `Verifies: ADR-0022`:
 
-- `crates/fleet-server/src/config.rs`, `rejects_unknown_keys`: a `server.toml`
+- `crates/classis-server/src/config.rs`, `rejects_unknown_keys`: a `server.toml`
   with an `[audit]` section fails to parse (clause 5).
-- `crates/fleet-server/src/fs/mod.rs`,
+- `crates/classis-server/src/fs/mod.rs`,
   `the_data_directory_has_one_layout_and_no_other`: opening a `data_dir`
   creates no `audit/` (clause 5).
 
-- `crates/fleet-server/tests/no_secret_in_the_log.rs`,
+- `crates/classis-server/tests/no_secret_in_the_log.rs`,
   `no_secret_reaches_the_log`: the Server binary at `RUST_LOG=trace` logs no
   `Authorization` or Bearer value, no Basic password in clear or in base64, no
   bootstrap PKCS#12 password and no private key (clause 2).
-- `crates/fleet-server/src/fleet.rs`,
+- `crates/classis-server/src/fleet.rs`,
   `a_logged_text_is_bounded_on_a_character_boundary`: a text a peer chose is cut
   at 256 bytes on a character boundary (clause 2).
 

@@ -1,7 +1,7 @@
-OpAMP Fleet
+Classis
 Copyright (c) 2026 Würth IT Italy S.r.l.
 
-This product includes software developed by the OpAMP Fleet contributors.
+This product includes software developed by the Classis contributors.
 
 Licensed under the MIT License (LICENSE-MIT) or the Apache License, Version 2.0
 (LICENSE-APACHE), at your option.
@@ -11,12 +11,12 @@ Licensed under the MIT License (LICENSE-MIT) or the Apache License, Version 2.0
 This product bundles the following third-party software, vendored as a static
 asset embedded into the Server binary (ADR-0010):
 
-Redoc (redoc@2.5.3) — crates/fleet-server/static/redoc.standalone.js
+Redoc (redoc@2.5.3) — crates/classis-server/static/redoc.standalone.js
   Copyright (c) Redocly
   Licensed under the MIT License.
   https://github.com/Redocly/redoc
 
-Shiki (shiki@4.5.0) — crates/fleet-server/static/shiki.js, built by
+Shiki (shiki@4.5.0) — crates/classis-server/static/shiki.js, built by
 scripts/vendor-shiki.sh (ADR-0038), bundling:
   shiki, @shikijs/core, @shikijs/engine-javascript, @shikijs/langs,
   @shikijs/primitive, @shikijs/types (4.5.0)

@@ -8,7 +8,7 @@ implementation, at the far end of a connection with this project's Server or
 Client. It decides nothing. It reports what `opamp-go` sees as one JSON object
 per line on stdout and takes commands on stdin. The scenarios and every
 assertion live in
-[`crates/fleet-agent/tests/interop_opamp_go.rs`](../crates/fleet-agent/tests/interop_opamp_go.rs),
+[`crates/classis-agent/tests/interop_opamp_go.rs`](../crates/classis-agent/tests/interop_opamp_go.rs),
 where both ends' state can be read.
 
 `go.mod` pins the oracle. Moving the pin is a deliberate change, like a Baseline
@@ -23,7 +23,7 @@ toolchain on `PATH` (nothing else in the repository needs one, and the Dev
 Container ships none):
 
 ```console
-cargo test -p fleet-agent --test interop_opamp_go -- --ignored --nocapture --test-threads=1
+cargo test -p classis-agent --test interop_opamp_go -- --ignored --nocapture --test-threads=1
 ```
 
 The test builds this program itself with `go build`.

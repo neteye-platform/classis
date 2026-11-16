@@ -1,4 +1,4 @@
-// The entry of crates/fleet-server/static/shiki.js, bundled by scripts/vendor-shiki.sh (ADR-0038).
+// The entry of crates/classis-server/static/shiki.js, bundled by scripts/vendor-shiki.sh (ADR-0038).
 // Shiki's fine-grained core: the JavaScript regex engine (no WebAssembly), the CSS-variables theme
 // with this project's TOML and INI token rules (each look's stylesheet defines the colours) and
 // only the grammars ADR-0038 clause 3 names.

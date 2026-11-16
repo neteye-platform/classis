@@ -20,7 +20,7 @@
       // once and kept; the lock keeps the two launches of "Server + Supervisor" from making it twice.
       "label": "dev pki",
       "type": "shell",
-      "command": "flock /tmp/opamp-fleet-dev-pki.lock sh -c 'test -f .dev-pki/supervisor.toml || scripts/dev-pki.sh'",
+      "command": "flock /tmp/classis-dev-pki.lock sh -c 'test -f .dev-pki/supervisor.toml || scripts/dev-pki.sh'",
       "options": { "cwd": "${workspaceFolder}" },
       "presentation": { "reveal": "silent" },
       "problemMatcher": []

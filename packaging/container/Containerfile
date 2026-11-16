@@ -6,9 +6,9 @@
 # by its SBOM. The build context is a directory holding `server-linux-<arch>` for each platform
 # built, `amd64` and `arm64`, as `docker buildx` names them. A developer builds it the same way:
 #
-#     cargo build --release -p fleet-server --bin server
+#     cargo build --release -p classis-server --bin server
 #     mkdir -p image && cp target/release/server image/server-linux-amd64
-#     docker buildx build --platform linux/amd64 --load -t opamp-fleet-server:dev \
+#     docker buildx build --platform linux/amd64 --load -t classis-server:dev \
 #       -f packaging/container/Containerfile image
 #
 # The base carries glibc, libgcc_s, CA certificates and time zone data, and no shell and no package
@@ -22,8 +22,8 @@ ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=unknown
 
-LABEL org.opencontainers.image.title="opamp-fleet-server" \
-      org.opencontainers.image.source="https://github.com/mbrigl/opamp-fleet" \
+LABEL org.opencontainers.image.title="classis-server" \
+      org.opencontainers.image.source="https://github.com/neteye-platform/classis" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.licenses="Apache-2.0"
@@ -39,8 +39,8 @@ USER 65532:65532
 
 # The data directory. `WORKDIR` after `USER` creates it owned by 65532, which no `RUN` could do
 # here; a volume mounted on it starts with that owner.
-WORKDIR /var/lib/opamp-fleet
-VOLUME /var/lib/opamp-fleet
+WORKDIR /var/lib/classis
+VOLUME /var/lib/classis
 # The working directory the Server runs in is `/`, which 65532 cannot write: the `server.toml` it
 # reads by default, and every other relative path, then never resolve into the volume it writes.
 WORKDIR /
@@ -48,9 +48,9 @@ WORKDIR /
 # Everything else, certificates, keys and every secret included, is mounted as a file and named
 # through the environment (ADR-0051). Off the loopback the Server refuses to start without TLS and
 # without `[rest.auth]`, so this image started with nothing mounted names what is missing and stops.
-ENV FLEET_SERVER__DATA_DIR=/var/lib/opamp-fleet \
-    FLEET_SERVER__LISTEN=0.0.0.0:4320 \
-    FLEET_SERVER__REST__LISTEN=0.0.0.0:4321
+ENV CLASSIS_SERVER__DATA_DIR=/var/lib/classis \
+    CLASSIS_SERVER__LISTEN=0.0.0.0:4320 \
+    CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321
 
 # The Agent plane and the Operator plane. No HEALTHCHECK: there is no shell to run one and no health
 # endpoint to ask; an orchestrator probes 4320 over TCP.

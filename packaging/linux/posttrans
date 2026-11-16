@@ -11,4 +11,4 @@
 # the deb's link is never at risk and cargo-deb is not given this file.
 set -e
 
-ln -sfn /opt/opamp-fleet/current/supervisor /usr/bin/opamp-fleet
+ln -sfn /opt/classis/current/supervisor /usr/bin/classis

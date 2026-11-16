@@ -12,7 +12,7 @@
 #
 # Deliberately *not* anchored to the repository root: these are relative defaults, so they are
 # created under whatever directory the process runs in — and `cargo test` runs a crate's unit tests
-# with its package directory as the working directory, which puts `crates/fleet-agent/client-state/` in
+# with its package directory as the working directory, which puts `crates/classis-agent/client-state/` in
 # the tree. Anchored patterns left those untracked and waiting to be committed by accident.
 # The Server's data directory holds the package artifacts too — programs of hundreds of megabytes
 # each; they belong in a store, never in the repository (ADR-0026, ADR-0037).

@@ -62,8 +62,7 @@ every later visit to the page, until the certificate ends or is revoked; the
 private key never leaves the Server in any other form. It does not keep the
 password: hand that to whoever installs the hosts by another way than the file,
 a phone call rather than the same mail. A host that needs the pair as PEM takes
-it out of the file with `opamp-fleetctl pki p12-extract`
-([`pki`](tools.md#pki)).
+it out of the file with `classisctl pki p12-extract` ([`pki`](tools.md#pki)).
 
 One pair may go to every host of that customer or site. It opens nothing on its
 own: a host that holds it can ask for a certificate only while the enrolment
@@ -79,12 +78,12 @@ Details:
 Each host needs the server CA and the bootstrap certificate, best kept in one
 directory such as `/etc/opamp/`:
 
-| File                | From                                                  | Notes                                                                               |
-| ------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `server-ca.pem`     | the offline directory `pki init` made                 | The Client trusts this CA, and only it.                                             |
-| `bootstrap.p12`     | step 1                                                | Or the two files below. The install asks for its password, or reads it from a file. |
-| `bootstrap.pem`     | `opamp-fleetctl pki p12-extract` from `bootstrap.p12` |                                                                                     |
-| `bootstrap-key.pem` | `opamp-fleetctl pki p12-extract` from `bootstrap.p12` | Readable by root only.                                                              |
+| File                | From                                              | Notes                                                                               |
+| ------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `server-ca.pem`     | the offline directory `pki init` made             | The Client trusts this CA, and only it.                                             |
+| `bootstrap.p12`     | step 1                                            | Or the two files below. The install asks for its password, or reads it from a file. |
+| `bootstrap.pem`     | `classisctl pki p12-extract` from `bootstrap.p12` |                                                                                     |
+| `bootstrap-key.pem` | `classisctl pki p12-extract` from `bootstrap.p12` | Readable by root only.                                                              |
 
 Install the Client from the release's `.deb`, `.rpm` or `.msi`. The package
 registers the service and leaves it stopped. Then configure it in one of two
@@ -92,16 +91,15 @@ ways:
 
 - **Interactively**, once you have
   [opened the enrolment window](#3-enrol-the-host):
-  `sudo opamp-fleet service install --interactive` asks for the Server's
-  address, the host's name, the three files and the package verification key,
-  writes the configuration, and enrols the host on the spot. It waits for your
-  approval and shows the key fingerprint to approve. On Windows, run it in an
-  elevated shell.
+  `sudo classis service install --interactive` asks for the Server's address,
+  the host's name, the three files and the package verification key, writes the
+  configuration, and enrols the host on the spot. It waits for your approval and
+  shows the key fingerprint to approve. On Windows, run it in an elevated shell.
 - **From a script**, which suits configuration management: after the package,
   run
-  `sudo opamp-fleet service install --endpoint <address> --fleet-files /etc/opamp`,
+  `sudo classis service install --endpoint <address> --fleet-files /etc/opamp`,
   adding `--bootstrap-password-file <file>` for a `bootstrap.p12`. It enrols the
-  host and waits for your approval, then `systemctl start opamp-fleet`. The
+  host and waits for your approval, then `systemctl start classis`. The
   package's own install never waits.
 - **With a file**: write `supervisor.toml` naming the server CA and the PEM
   pair, then start the service. It enrols when it starts. A `bootstrap.p12`
@@ -128,7 +126,7 @@ leaves the host.
    its own, and sends a certificate request. It logs the key's fingerprint:
 
    ```console
-   $ journalctl -u opamp-fleet | grep key_fingerprint
+   $ journalctl -u classis | grep key_fingerprint
    INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
    ```
 
@@ -223,7 +221,7 @@ new, greater version and roll that out.
    machine that holds the signing key:
 
    ```sh
-   opamp-fleetctl package sign --key fleet-signing.pk8 --signing-info promtail_3.1.0_signing.json
+   classisctl package sign --key fleet-signing.pk8 --signing-info promtail_3.1.0_signing.json
    ```
 
    Back on the **Packages** tab, choose the signed file and press **Import
