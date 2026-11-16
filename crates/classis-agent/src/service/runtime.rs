@@ -363,7 +363,8 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
             classis_core::package::DEBUG_ROOT_ENV
         );
     }
-    if crate::packages::package_roots(&config).is_empty() {
+    // ADR-0063 clause 1: a Root that cannot be read stops the Client here, naming it.
+    if crate::packages::package_roots(&config)?.is_empty() {
         tracing::warn!(
             "this build carries no Package Root: every package will be refused (ADR-0063)"
         );

@@ -118,7 +118,7 @@ pub async fn download_and_verify_patiently(
     ensure_safe_package_name(&package.name)?;
     // Refused before a byte is fetched: an offer with no signature (ADR-0026, ADR-0063).
     signature_policy(&package.signature)?;
-    let roots = package_roots(config);
+    let roots = package_roots(config)?;
     let url = resolve_url(&package.download_url, &config.endpoint)?;
     let origin = ServerOrigin::new(config)?;
     // Every request goes to this Client's own Server origin (ADR-0033), which is where its
@@ -555,11 +555,16 @@ fn verify_staged(
 
 /// The Package Roots this Client verifies up to (ADR-0063 clause 1): the compiled-in ones, unless a
 /// test put its own in the configuration.
-pub fn package_roots(config: &ClientConfig) -> classis_core::package::Roots {
-    config
-        .package_roots
-        .clone()
-        .unwrap_or_else(classis_core::package::chain::compiled)
+///
+/// # Errors
+///
+/// A compiled-in Root, or a debug build's `CLASSIS_DEBUG_PACKAGE_ROOT` file, that cannot be read,
+/// named — the Client checks this at startup and does not start on it.
+pub fn package_roots(config: &ClientConfig) -> Result<classis_core::package::Roots, String> {
+    match &config.package_roots {
+        Some(roots) => Ok(roots.clone()),
+        None => classis_core::package::chain::compiled(),
+    }
 }
 
 /// The signature policy (ADR-0026, ADR-0063): there is no unsigned posture. An offer that carries

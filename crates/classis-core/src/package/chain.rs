@@ -21,25 +21,31 @@ const COMPILED_ROOT_FINGERPRINTS: &[&str] =
     &["16b7c670cbd11cbe9724dc4e2366bddea0352e7ac67fe9b23d18cb2c7e4a810f"];
 
 /// The Package Roots compiled into this binary (ADR-0063 clause 1). A debug build adds the one
-/// [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) names, if it is set; see [`debug_root`].
+/// [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) names, if it is set; see [`debug_root`]. The Client
+/// and the Server ask it once at startup, and refuse to start on an error.
 ///
-/// # Panics
+/// # Errors
 ///
 /// A compiled-in Root that is not a certificate, which a test of this module rules out; in a
-/// debug build, a [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) that names no readable certificate.
-#[must_use]
-pub fn compiled() -> Roots {
-    // Only a debug build adds to it.
-    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
-    let mut der: Vec<Vec<u8>> = COMPILED_ROOTS.iter().map(|d| d.to_vec()).collect();
+/// debug build, a [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) that names no readable certificate,
+/// naming the file.
+pub fn compiled() -> Result<Roots, String> {
+    let compiled = Roots::from_der(COMPILED_ROOTS.iter().copied())
+        .map_err(|e| format!("the compiled-in Package Roots: {e}"))?;
     #[cfg(debug_assertions)]
     if let Some(path) = debug_root() {
-        match std::fs::read(&path) {
-            Ok(extra) => der.push(extra),
-            Err(e) => panic!("{}={}: {e}", super::DEBUG_ROOT_ENV, path.display()),
-        }
+        return Ok(compiled.with(debug_root_from(&path)?));
     }
-    Roots::from_der(der.iter().map(Vec::as_slice)).expect("compiled-in Package Roots")
+    Ok(compiled)
+}
+
+/// The one Root a debug build reads from `path`, as [`compiled`] takes it.
+#[cfg(debug_assertions)]
+fn debug_root_from(path: &std::path::Path) -> Result<Roots, String> {
+    let named =
+        |e: &dyn std::fmt::Display| format!("{}={}: {e}", super::DEBUG_ROOT_ENV, path.display());
+    let der = std::fs::read(path).map_err(|e| named(&e))?;
+    Roots::from_der([der.as_slice()]).map_err(|e| named(&e))
 }
 
 /// The file a debug build takes one more Package Root from, so a program can say so at startup.
@@ -239,7 +245,7 @@ mod tests {
         assert_eq!(
             verify_now(
                 &stmt(),
-                &encode_signature(&p256.der, &[7; 64]),
+                &encode_signature(&p256.der, &[7; 64]).expect("it fits"),
                 &root.roots()
             ),
             Err(SignatureError::Chain("its key is not Ed25519".into()))
@@ -274,7 +280,10 @@ mod tests {
         let root = TestRoot::new();
         let good = root.signer().sign(&stmt());
         let parsed = parse_signature(&good).unwrap();
-        assert_eq!(encode_signature(parsed.signer, parsed.signature), good);
+        assert_eq!(
+            encode_signature(parsed.signer, parsed.signature).as_ref(),
+            Ok(&good)
+        );
 
         let mut trailing = good.clone();
         trailing.push(0);
@@ -309,7 +318,7 @@ mod tests {
         assert!(parse_signature(&[0u8; 64]).is_err(), "a raw signature");
         assert!(parse_signature(&[]).is_err());
         let sig = [9u8; 64];
-        let short = encode_signature(&[0x30, 0x00], &sig);
+        let short = encode_signature(&[0x30, 0x00], &sig).expect("it fits");
         assert_eq!(parse_signature(&short).unwrap().signature, &sig);
         let mut long_sig = short.clone();
         long_sig[1] += 1;
@@ -325,7 +334,30 @@ mod tests {
     /// Verifies: ADR-0063
     #[test]
     fn the_compiled_in_roots_are_certificates() {
-        assert!(anchors(&compiled()).is_ok());
+        let roots = compiled().expect("the compiled-in Roots");
+        assert!(anchors(&roots).is_ok());
+    }
+
+    /// A debug build's extra Root that cannot be read, or is no certificate, is an error naming
+    /// the variable and the file — the Client and the Server then refuse to start.
+    /// Verifies: ADR-0063
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_debug_root_that_cannot_be_read_is_an_error_naming_its_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = dir.path();
+        let missing = dir.join("missing.der");
+        let error = debug_root_from(&missing).expect_err("no such file");
+        assert!(error.starts_with(crate::package::DEBUG_ROOT_ENV), "{error}");
+        assert!(error.contains("missing.der"), "{error}");
+        let garbage = dir.join("garbage.der");
+        std::fs::write(&garbage, b"not a certificate").expect("write");
+        let error = debug_root_from(&garbage).expect_err("no certificate");
+        assert!(error.contains("not a DER certificate"), "{error}");
+        let root = TestRoot::new();
+        let good = dir.join("root.der");
+        std::fs::write(&good, &root.der).expect("write");
+        assert_eq!(debug_root_from(&good), Ok(root.roots()));
     }
 
     /// The compiled-in Roots are the custodian's, byte for byte: a change to the list is a

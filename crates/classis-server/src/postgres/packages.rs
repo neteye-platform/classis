@@ -116,8 +116,8 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
                 platform,
                 content_hash,
                 size: unsigned(row.get(5)),
-                signature,
-                signature_set_aside: false,
+                // Offered only once the store's verifier has checked it (ADR-0063).
+                signature: signature.map(crate::packages::Signature::Withheld),
             },
         );
     }
@@ -154,7 +154,10 @@ pub(crate) async fn write(client: &impl GenericClient, package: &Package) -> Res
                     &entry.platform.arch,
                     &hex::encode(&entry.content_hash),
                     &signed(entry.size),
-                    &entry.signature,
+                    &entry
+                        .signature
+                        .as_ref()
+                        .map(crate::packages::Signature::bytes),
                 ],
             )
             .await
@@ -183,9 +186,12 @@ mod tests {
                             platform,
                             content_hash: vec![*byte; 32],
                             size: u64::from(*byte) << 40,
-                            signature: (*byte % 2 == 0)
-                                .then(|| vec![*byte; classis_core::package::ED25519_SIGNATURE_LEN]),
-                            signature_set_aside: false,
+                            signature: (*byte % 2 == 0).then(|| {
+                                crate::packages::Signature::Withheld(vec![
+                                    *byte;
+                                    classis_core::package::ED25519_SIGNATURE_LEN
+                                ])
+                            }),
                         },
                     )
                 })
@@ -209,7 +215,7 @@ mod tests {
                         entry.platform.arch.clone(),
                         entry.content_hash.clone(),
                         entry.size,
-                        entry.signature.clone(),
+                        entry.signature.as_ref().map(|s| s.bytes().to_vec()),
                     )
                 })
                 .collect(),
