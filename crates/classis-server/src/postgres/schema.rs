@@ -49,7 +49,7 @@ pub const TABLES: [&str; 14] = [
 /// The schema, in order.
 pub const MIGRATIONS: &[Migration] = &[Migration {
     version: 1,
-    oldest_server: "0.6.1",
+    oldest_server: "0.0.1",
     sql: RECORDS,
 }];
 
