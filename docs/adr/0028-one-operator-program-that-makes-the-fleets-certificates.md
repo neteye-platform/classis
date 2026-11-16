@@ -8,6 +8,8 @@
   [ADR-0036](0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md)
   · clause 20 superseded by
   [ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)
+  · clauses 4 and 17 superseded by
+  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
 - **Applies to:** the `pki` commands of `classisctl` in
