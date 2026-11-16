@@ -1,12 +1,10 @@
 # ADR-0062: The release run signs every entry of the Client's own package, with a key only a reviewed `v<version>` tag reaches
 
 - **Status:** 🟡 proposed
-  · clauses 1, 6, 8 and 9 superseded by
-  [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-11-13
 - **Deciders:** Davide Zeni
 - **Applies to:** the triggers and the `version`, `sign` and `publish` jobs of
-  `.github/workflows/release.yml`, `packaging/package-signing-key.pub`, the
+  `.github/workflows/release.yml`, `packaging/package-signer.der`, the
   GitHub environment `Package Signing`, the repository's rulesets for `main`,
   for every branch and for tags,
   `crates/classis-tools/tests/release_workflow.rs`, the section _Repository
@@ -30,16 +28,13 @@ SHA-256
 clause 54). Every installation therefore holds a key of its own, and nobody but
 the operator can sign the Client's release for it.
 
-The project means to move package signing into its own release pipeline in
-steps, and this ADR is the first one. The release run signs each entry of the
-Client's own Package, `supervisor` at the release's version, with one key and
-in the format the Client and the Server verify today. It publishes the
-signatures and the key's public half beside the archives. The Client, the
-Server and the operator tool do not change. An operator who places
-`package-signing-key.pub` beside the Client's program at install already gets it
-as `[packages] verification_key`
-([ADR-0029](0029-a-bootstrap-certificate-as-a-password-protected-pkcs12-file-the-server-keeps.md)
-clause 6, which restates ADR-0020 clause 1).
+This ADR moves the signing of the Client's own Package into the project's
+release run. The release run signs each entry of `supervisor` at the release's
+version with the key of a Package Signer, in the `PackageSignature` form that
+[ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+defines, and publishes the signatures beside the archives. What the Client and
+the Server accept, and why a Package Signer certificate rather than a bare key,
+is ADR-0063's decision.
 
 The forces:
 
@@ -73,25 +68,27 @@ The forces:
 ## Decision
 
 We will sign every entry of the Client's own Package in a `sign` job of the
-release run. The key is one Ed25519 key, a secret of the GitHub environment
-`Package Signing`. Only a run started by a hand-pushed `v<version>` tag reaches
-that job, and only after a second person with write access approves. The release
-publishes each signature, and the key's public half, beside the archives.
+release run. The key is the Ed25519 key of one Package Signer (ADR-0063), a
+secret of the GitHub environment `Package Signing`. Only a run started by a
+hand-pushed `v<version>` tag reaches that job, and only after a second person
+with write access approves. The release publishes each signature beside the
+archives.
 
-1. **One Ed25519 key, made once, outside the release run.**
-   - A repository admin makes it with `classisctl package keygen` on a machine
-     of their own.
-   - They store the base64 of the `package-signing-key.pk8` it writes as the
-     secret `PACKAGE_SIGNING_KEY` of the environment `Package Signing`, then
-     delete the file. No copy is kept.
-   - The public half `keygen` prints is committed as
-     `packaging/package-signing-key.pub` by a reviewed pull request. It is 64
-     hexadecimal digits and a newline, the form ADR-0029 clause 6 takes.
+1. **One Package Signer, made outside the release run.**
+   - A repository admin makes an Ed25519 key on a machine of their own and
+     sends a request for it to the Package Root's custodian, who issues the
+     certificate (ADR-0063 clause 2).
+   - The admin stores the base64 of the key in PKCS#8 DER as the secret
+     `PACKAGE_SIGNING_KEY` of the environment `Package Signing`, then deletes
+     the key. No copy is kept.
+   - The certificate is committed as `packaging/package-signer.der` by a
+     reviewed pull request.
    - The `version` job, which checks out the tag, uploads that tracked file as
-     a run artifact for `publish`. The release never publishes a public half
-     derived from the secret.
-   - A lost or exposed key is replaced the same way: a new key, a new secret,
-     and a new public half under review.
+     a run artifact for `sign`.
+   - Replacing the Package Signer, because it is lost, exposed or close to its
+     end, is the same procedure: a new key, a new certificate from the same
+     Root, a new secret, and a reviewed change to the tracked file. No
+     installation changes.
 
 2. **The environment `Package Signing` holds the key, and a second person releases
    it.**
@@ -141,30 +138,30 @@ publishes each signature, and the key's public half, beside the archives.
      ([ADR-0060](0060-every-github-action-is-pinned-to-a-commit-sha-and-renovate-keeps-it-current.md)).
      Every other step is shell.
    - **What it signs.**
-     - It downloads only the `.sha256` files of the Client's archives.
-     - For each one it writes the statement `classis_core::package::statement`
-       makes to a file: `classis-package-v1`, `supervisor`, the release
-       number, and the SHA-256 in lowercase hex, each line ended by a newline.
-       The prefix is the one
-       [ADR-0061](0061-the-product-is-named-classis.md)
-       names.
+     - It downloads only the `.sha256` files of the Client's archives, and the
+       tracked certificate.
+     - For each archive it writes the statement
+       `classis_core::package::statement` makes to a file:
+       `classis-package-v1`, `supervisor`, the release number, and the SHA-256
+       in lowercase hex, each line ended by a newline. The prefix is the one
+       [ADR-0061](0061-the-product-is-named-classis.md) names.
      - It signs that file with the runner's
        `openssl pkeyutl -sign -rawin -keyform DER -inkey <key> -in <statement>`.
        OpenSSL takes Ed25519 only with `-rawin` and from a file. The step
        script reads its inputs from environment variables only.
+     - It verifies each signature with the public key of the tracked
+       certificate before it keeps it, and fails otherwise: a secret that is
+       not this Package Signer's key stops the release here, not on every
+       Client.
    - **The key on the runner.** The key is decoded into a file under
      `RUNNER_TEMP`, mode `0600`. A step with `if: always()` removes it.
    - **What it writes.**
-     - Each signature goes to `<archive>.sig` as 128 lowercase hexadecimal
-       digits and a newline. That is the form the REST API takes an entry's
+     - Each `PackageSignature` (ADR-0063 clause 3), the certificate and the
+       64-byte signature in one DER value, goes to `<archive>.sig` as lowercase
+       hex and a newline. That is the form the REST API takes an entry's
        signature in.
      - A `.sha256` is written beside each `.sig`.
      - The files are uploaded.
-   - **Why nothing downstream changes.** Ed25519 signing is deterministic. On
-     2026-11-13 OpenSSL 3.5.9 signed a statement with a key from `keygen`'s
-     `ring::signature::Ed25519KeyPair::generate_pkcs8`, and its signature was
-     byte-identical to `ring`'s. What `classisctl package sign` makes with the
-     same key is therefore what this job makes.
 
 7. **Only the Client's own Package is signed.** That means one entry for each of
    the five `supervisor_<version>_<os>_<arch>.tar.gz` archives, for Agent type
@@ -178,14 +175,13 @@ publishes each signature, and the key's public half, beside the archives.
      clause 35);
    - the SBOMs.
 
-8. **Restates ADR-0052 clause 10, with the signatures and the key added and the
-   action pinned to a commit SHA. One build-provenance attestation covers every
+8. **Restates ADR-0052 clause 10, with the signatures added and the action
+   pinned to a commit SHA. One build-provenance attestation covers every
    published asset, and one covers the image.** After `SHA256SUMS` is assembled
    and before the release is created, the `publish` job runs `actions/attest` in
    provenance mode, pinned to a commit SHA (ADR-0060). The subjects are:
    - every file it then publishes: the `.tar.gz` archives, the `.deb`, `.rpm`
-     and `.msi`, the `.cdx.json` SBOMs, the `.tar.gz.sig` signatures and
-     `package-signing-key.pub`;
+     and `.msi`, the `.cdx.json` SBOMs and the `.tar.gz.sig` signatures;
    - `SHA256SUMS` itself.
 
    A second `actions/attest` step attests the image, with `subject-name`
@@ -199,12 +195,10 @@ publishes each signature, and the key's public half, beside the archives.
    attestation store.
 
 9. **Restates ADR-0052 clause 12, which restates ADR-0045 clause 8, which
-   restates ADR-0019 clause 34, with the signatures and the key added. What is
+   restates ADR-0019 clause 34, with the signatures added. What is
    published.** A GitHub release named after the version holds:
    - the Client's five archives, the two `.deb`, the two `.rpm` and the `.msi`;
    - one `.sig` per Client archive, named after it (clause 6);
-   - `package-signing-key.pub`, the tracked public half of the key every `.sig`
-     verifies against (clause 1);
    - the four archives of the operator tool (ADR-0028);
    - the eleven SBOMs (ADR-0052 clause 7);
    - one `SHA256SUMS` covering every asset.
@@ -222,14 +216,11 @@ publishes each signature, and the key's public half, beside the archives.
      `gh attestation verify oci://ghcr.io/neteye-platform/classis-server@<digest>
      --repo <repository>
      --signer-workflow <repository>/.github/workflows/release.yml`;
-   - the procedure that uploads the Client's archives, selected by their
-     `supervisor_` stem, as one package for Agent type `supervisor`, each entry
-     with the signature its `.sig` holds;
-   - what `package-signing-key.pub` is for. Placed beside the Client's program
-     at install, it becomes `[packages] verification_key` (ADR-0029 clause 6).
-     The Server checks the uploaded signatures against it when it holds it
-     ([ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
-     clause 7);
+   - the procedure that uploads the Client's archives by hand, selected by
+     their `supervisor_` stem, as one package for Agent type `supervisor`, each
+     entry with the signature its `.sig` holds;
+   - that the Client and the Server check each `.sig` against the Package
+     Roots they carry, with nothing to configure (ADR-0063);
    - the full baked version string, as provenance. The upload uses the release
      number, since versions are compared without build metadata (ADR-0012).
 
@@ -293,10 +284,9 @@ publishes each signature, and the key's public half, beside the archives.
 
 **Out of scope:**
 
-- a certificate chain: a root certificate compiled into the Client, a signing
-  certificate issued by it, and a container that carries it;
-- any change to the Client, the Server or the operator tool, including its
-  `package sign` and `keygen` commands;
+- what the Client and the Server accept, the Package Signer's profile and the
+  `PackageSignature`, which ADR-0063 decides;
+- the operator tool's `package sign` and `keygen` commands;
 - signing third-party packages in the release run;
 - verifying the `.sig` files in `publish` before the release is created;
 - a `CODEOWNERS` file for the workflows;
@@ -308,8 +298,8 @@ publishes each signature, and the key's public half, beside the archives.
   workflow on any branch.
 - **The rules of `permissionsync` as they are, with no reviewer.** Any one of
   the people with write access could sign, alone, a Package that every Client
-  trusting the key installs. They could do it from any commit, with a workflow
-  they changed themselves. `permissionsync` holds no such secret.
+  trusting the Package Root installs. They could do it from any commit, with a
+  workflow they changed themselves. `permissionsync` holds no such secret.
 - **Keep the release run tagging, and admit `main` in the environment.** The
   environment would then admit any run on `main`. That includes a
   `pull_request_target` workflow there, whose environment rules GitHub
@@ -324,12 +314,11 @@ publishes each signature, and the key's public half, beside the archives.
   needs a cloud account and a policy that live outside this repository. Not
   pursued for this step.
 - **A Sigstore keyless signature (cosign).** Neither the Client nor the Server
-  verifies one. Both verify Ed25519 against a configured key.
+  verifies one. Both verify a `PackageSignature` up to the Package Roots
+  compiled into them (ADR-0063).
 - **Sign in `publish`.** `publish` holds `contents: write`, `packages: write`,
   `id-token: write` and `attestations: write`. The key would sit beside every
   one of them, and ADR-0052 clause 11 limits that job to two actions.
-- **The certificate chain now.** It needs the root certificate a colleague is
-  preparing, and changes to the Client. It is a later step.
 
 ## Sources / Prior art
 
@@ -366,23 +355,21 @@ Read on 2026-11-12 and 2026-11-13.
 ## Consequences
 
 - **Positive:**
-  - An operator trusts the Client's releases by taking one public file. A
-    non-interactive install takes it from beside the program without a
-    question, and the questionnaire offers it as the default (ADR-0029 clause
-    6).
+  - An operator trusts the Client's releases with nothing to configure: the
+    Client and the Server verify each `.sig` up to their Package Roots
+    (ADR-0063).
   - No release is signed by one person alone.
   - The signing job builds nothing and runs nothing from this repository's
     sources or dependencies, only the shell of its own steps.
-  - The Client, the Server and the operator tool stay as they are.
+  - Replacing the Package Signer reaches no installation.
 - **Negative / trade-offs:**
   - A repository admin can change the environment's reviewers and rules, or
     replace the secret. The organisation's audit log records it.
-  - An exposed key signs Packages that every installation trusting it accepts,
-    until each installation's `verification_key` changes. There is no
-    revocation. Reverting the workflow does not undo an installation's trust in
-    the key.
-  - A lost key means a new public half that every installation must take, by
-    hand.
+  - An exposed key signs Packages that every Client accepts until its Package
+    Signer expires. There is no revocation (ADR-0063, Out of scope). Reverting
+    the workflow does not undo it.
+  - A lost key means a new Package Signer from the Root's custodian before the
+    next release.
   - Only the reviewer makes sure a tag names a commit on `main`. GitHub does not
     enforce it, and the check of clause 4 guards against mistakes only.
   - A tag can be neither deleted nor moved. A tag pushed to the wrong commit, or
@@ -394,41 +381,19 @@ Read on 2026-11-12 and 2026-11-13.
     for fear of a typed-tag mistake. Its clause 7 now catches that mistake,
     since a run fails when its tag disagrees with `Cargo.toml`.
 - **Specification:** "Software is installed only when it is signed with a key
-  the operator holds" no longer describes the Client's releases. A change is
-  drafted below. Landing it is the human's, and so is naming the accepted ADRs
-  whose basis it moves ([`AGENTS.md` §3](../../AGENTS.md#3-adr-rules), rule 7).
-  - _Strategy_: "Software is installed only when it is signed with a key the
-    operator chooses to trust, this project's release key or one the operator
-    holds, and fetched from the fleet itself: the Server, or a Gateway relaying
-    it."
-  - _Package_: "…the artifact's content hash, its size and a signature by a key
-    the operator trusts. … the Server checks a signature against the public key
-    it was given, when it has one, and reports a failed check, but the Agent's
-    check decides."
-  - A search for the operator's key found these ADRs:
-    - ADR-0017;
-    - ADR-0026 (Context and Consequences);
-    - ADR-0027;
-    - ADR-0028;
-    - ADR-0033 (Context and clause 7);
-    - ADR-0043 (Context and clause 4).
-
-    The two clauses describe a mechanism that still holds with the release key
-    configured. Whether their wording moves is for the human to judge.
+  the operator holds" no longer describes the Client's releases. The change is
+  drafted in ADR-0063, which decides what a Client trusts; landing it is the
+  human's ([`AGENTS.md` §3](../../AGENTS.md#3-adr-rules), rule 7).
 - **A release tag is `v<version>`** (clauses 11 to 13), the form upstream
   projects use: `classisctl package fetch` reads this project's releases by it,
   and the environment's deployment rule admits it. ADR-0019 clause 30 still
   speaks of "its `version/*` tag"; it defers to ADR-0012 for the form, and this
   ADR restates the clause that decides it.
 - **Follow-ups:**
-  - `publish` verifying every `.sig` against the tracked
-    `packaging/package-signing-key.pub` before the release is created. The
-    check is anchored in the reviewed file, never in the secret: checked
-    against the secret, a signature would only be compared with itself.
-  - A certificate chain: a root certificate compiled into the Client and the
-    Server, a signing certificate issued by it, and a container that carries
-    the certificate. Replacing the signing key would then need no change on any
-    installation.
+  - `publish` verifying every `.sig` through the tracked Package Roots before
+    the release is created. The check is anchored in reviewed files, never in
+    the secret: checked against the secret, a signature would only be compared
+    with itself.
   - The release run signing the third-party Packages the project distributes.
   - A `CODEOWNERS` entry for `.github/workflows/`.
   - Removing the operator's own signing commands, once nothing needs them.
@@ -449,23 +414,27 @@ Tests in `crates/classis-tools/tests/release_workflow.rs`, each marked
     `build`, and holds `contents: read` alone.
   - It has no checkout and no step that builds.
   - Its only actions are `download-artifact` and `upload-artifact`, pinned.
-  - It downloads only `supervisor_*.tar.gz.sha256`.
+  - It downloads only `supervisor_*.tar.gz.sha256` and the tracked
+    certificate.
   - Its key-removal step runs `if: always()`.
   - No other job names `Package Signing`.
 - **The signed statement is the one the Client verifies (clause 6).**
   - The test takes the signing step's script out of the workflow, unchanged,
-    and runs it with a test key from `ring` and the system's `openssl`.
+    and runs it with a test Root's Package Signer and the system's `openssl`.
   - It checks that the file the script signs equals
     `classis_core::package::statement`.
-  - It checks that the `.sig` decodes and verifies under `ring`.
+  - It checks that each `.sig` verifies through `classis_core` up to the test
+    Root.
+  - With a key that is not the tracked certificate's, the script fails and
+    writes nothing.
   - The test fails, never skips, when no OpenSSL 3 `openssl` is on the path.
-- **The signatures and the key are published and attested (clauses 1, 8 and
-  9).**
-  - `version` uploads `packaging/package-signing-key.pub` as an artifact.
-  - `publish` downloads, attests and publishes the `.sig` files and that file.
-  - The notes tell an operator how to use both.
-- **The tracked key has the form an install takes (clause 1).**
-  `packaging/package-signing-key.pub`, trimmed, is 64 hexadecimal digits.
+- **The signatures are published and attested (clauses 1, 8 and 9).**
+  - `version` uploads `packaging/package-signer.der` as an artifact, and
+    `sign` downloads it.
+  - `publish` downloads, attests and publishes the `.sig` files.
+  - The notes tell an operator how to use them.
+- **The tracked certificate is a Package Signer (clause 1).**
+  `packaging/package-signer.der` chains to the compiled-in Package Root.
 
 **Not mechanically decidable:** the repository settings of clauses 2 and 10,
 meaning the environment's reviewers and rules and the rulesets. They live on

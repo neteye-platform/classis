@@ -2,6 +2,8 @@
 
 - **Status:** 🟢 accepted · clause 5 superseded by
   [ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
+  · clause 2 superseded by
+  [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-10-12
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the signing file format `classis-signing-v1`, the
