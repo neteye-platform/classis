@@ -26,15 +26,15 @@ A section carries a date once its tag exists.
   commands.
 - **A release starts from a pushed tag, `v<version>`.** The `Release` workflow
   no longer creates the tag, and a run started by hand is a dry run. The tag is
-  `v0.0.1`, no longer `version/0.0.1`; a build recognises a release by it
+  `v0.1.0`, no longer `version/0.1.0`; a build recognises a release by it
   ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
   clause 11).
 
 ### Changed
 
-- **The version starts again at `0.0.1`.** Earlier releases were tagged
+- **The version starts again at `0.1.0`.** Earlier releases were tagged
   `version/0.5.5` to `version/0.7.0`; this one is the first `v<version>` tag.
-  A Client at `0.7.0` or earlier takes `0.0.1` for a downgrade and refuses it,
+  A Client at `0.7.0` or earlier takes `0.1.0` for a downgrade and refuses it,
   so install it on each host by hand from the release's `.deb`, `.rpm`, `.msi`
   or archive, as the signature change below requires anyway.
 - **Package signatures are verified up to the Package Roots compiled into the
