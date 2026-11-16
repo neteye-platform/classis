@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
   # A release: the tag a person pushed on a commit of `main` (ADR-0062 clause 3).
   push:
-    # `v` and three numbers: `v0.0.1`. Any other tag, `very-old` included, starts nothing.
+    # `v` and three numbers: `v0.1.0`. Any other tag, `very-old` included, starts nothing.
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:

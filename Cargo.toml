@@ -7,7 +7,7 @@ resolver = "2"
 members = ["crates/opamp", "crates/classis-core", "crates/classis-server", "crates/classis-agent", "crates/classis-tools"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
