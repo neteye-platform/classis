@@ -66,8 +66,8 @@ intruder there would not already have.
 
 The operator tool `classisctl` makes every certificate of this page, with its
 `pki` commands; no other tool is needed. Every release publishes it for Linux
-and macOS ([Getting it](tools.md#getting-it)); download it to the machine where
-the offline keys are to stay, typically your own, not the Server host.
+([Getting it](tools.md#getting-it)); download it to the machine where the
+offline keys are to stay, typically your own, not the Server host.
 
 Run `pki init` there. Name every address the Clients will dial with `--name`, as
 a DNS name or an IP address; repeat it for each:

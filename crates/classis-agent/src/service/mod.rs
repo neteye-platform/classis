@@ -20,8 +20,8 @@ pub mod withdrawal;
 /// Whether an action targets the machine's service manager or the current user's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceLevel {
-    /// systemd system unit / launchd `LaunchDaemon` / Windows `LocalSystem` — the default: a
-    /// fleet client must run without a logged-in user and start at boot.
+    /// systemd system unit / Windows `LocalSystem` — the default: a fleet client must run
+    /// without a logged-in user and start at boot.
     System,
     /// The development opt-in (`--user`).
     User,

@@ -54,10 +54,10 @@ fn glob(pattern: &str, name: &str) -> bool {
 
 // Verifies: ADR-0028
 #[test]
-fn the_operator_tool_is_built_for_four_targets_and_its_version_asserted_where_it_runs() {
+fn the_operator_tool_is_built_for_two_targets_and_its_version_asserted_where_it_runs() {
     let workflow = workflow();
     let rows = matrix_rows(&workflow);
-    assert_eq!(rows.len(), 5, "the Client's five rows");
+    assert_eq!(rows.len(), 3, "the Client's three rows");
     let mut tool: Vec<&str> = rows
         .iter()
         .filter(|row| row["operator_tool"] == "true")
@@ -66,12 +66,7 @@ fn the_operator_tool_is_built_for_four_targets_and_its_version_asserted_where_it
     tool.sort_unstable();
     assert_eq!(
         tool,
-        [
-            "aarch64-apple-darwin",
-            "aarch64-unknown-linux-gnu",
-            "x86_64-apple-darwin",
-            "x86_64-unknown-linux-gnu"
-        ]
+        ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
     );
     for row in &rows {
         if row["os"] == "windows" {
@@ -96,15 +91,76 @@ fn the_operator_tool_is_built_for_four_targets_and_its_version_asserted_where_it
         &workflow,
         "The operator tool agrees with the name it will be given",
     );
-    assert!(
-        agrees.contains("if: matrix.native && matrix.operator_tool"),
-        "{agrees}"
-    );
+    assert!(agrees.contains("if: matrix.operator_tool\n"), "{agrees}");
     assert!(agrees.contains("release/classisctl --version"), "{agrees}");
     assert!(
         agrees.contains("${{ needs.version.outputs.full }}"),
         "{agrees}"
     );
+}
+
+/// The release's three targets, each built on a runner that runs it, so every row asserts the
+/// version its own binary reports and none skips it.
+// Verifies: ADR-0064
+#[test]
+fn the_release_builds_three_targets_each_on_a_runner_that_runs_it() {
+    let workflow = workflow();
+    let rows: Vec<[String; 4]> = matrix_rows(&workflow)
+        .into_iter()
+        .map(|row| ["target", "runner", "os", "arch"].map(|key| row[key].clone()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            [
+                "x86_64-unknown-linux-gnu",
+                "ubuntu-latest",
+                "linux",
+                "amd64"
+            ],
+            [
+                "aarch64-unknown-linux-gnu",
+                "ubuntu-24.04-arm",
+                "linux",
+                "arm64"
+            ],
+            [
+                "x86_64-pc-windows-msvc",
+                "windows-latest",
+                "windows",
+                "amd64"
+            ],
+        ]
+        .map(|row| row.map(String::from))
+    );
+    let agrees = step(
+        &workflow,
+        "The binary agrees with the name it will be given",
+    );
+    assert!(
+        !agrees.contains("if:"),
+        "every row asserts its Client: {agrees}"
+    );
+}
+
+/// The workflows that build and test the product on a platform name no macOS target and no macOS
+/// runner.
+// Verifies: ADR-0064
+#[test]
+fn no_workflow_builds_or_tests_on_macos() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
+    let mut found = Vec::new();
+    for name in ["release.yml", "ci.yml", "service-smoke.yml"] {
+        let file = dir.join(name);
+        let text =
+            std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+        for (n, line) in text.lines().enumerate() {
+            if line.contains("apple-darwin") || line.contains("macos-") {
+                found.push(format!("{name}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(found.is_empty(), "a macOS target or runner: {found:#?}");
 }
 
 // Verifies: ADR-0028
@@ -194,7 +250,7 @@ fn the_notes_upload_loop_selects_the_clients_archives_alone() {
     }
     for tool in [
         "classisctl_1.2.3_linux_amd64.tar.gz",
-        "classisctl_1.2.3_darwin_arm64.tar.gz",
+        "classisctl_1.2.3_linux_arm64.tar.gz",
     ] {
         assert!(!glob(&pattern, tool), "{pattern} matches {tool}");
     }
@@ -493,7 +549,7 @@ fn the_sbom_job_writes_one_sbom_per_program_and_target_with_a_pinned_tool() {
     assert_eq!(rows, matrix);
     let tools = matrix.iter().filter(|row| row.ends_with(" true")).count();
     let servers = matrix.iter().filter(|row| row.contains(" linux ")).count();
-    assert_eq!(matrix.len() + tools + servers, 11, "eleven SBOMs");
+    assert_eq!(matrix.len() + tools + servers, 7, "seven SBOMs");
 
     // Uploaded with their checksums, which publish folds into SHA256SUMS.
     let upload = sbom
@@ -702,9 +758,6 @@ fn both_linux_rows_build_the_server_and_assert_its_version() {
         targets,
         ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
     );
-    // Each row runs its own Server, so each asserts it where it was built.
-    assert!(linux.iter().all(|row| row["native"] == "true"), "{linux:?}");
-
     let build = step(&workflow, "Build the Server");
     assert!(build.contains("if: matrix.os == 'linux'"), "{build}");
     assert!(
@@ -1122,8 +1175,8 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
     assert!(decode.contains("umask 077"), "{decode}");
 }
 
-/// The `openssl` on the path, required to be OpenSSL 3: LibreSSL, macOS's `openssl`, signs no raw
-/// Ed25519 input the way the runner's does.
+/// The `openssl` on the path, required to be OpenSSL 3: LibreSSL's `openssl` signs no raw Ed25519
+/// input the way the runner's does.
 fn openssl_3() {
     let out = std::process::Command::new("openssl")
         .arg("version")
@@ -1224,7 +1277,7 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
 
     // A checksum that names another file is refused, and nothing is signed for it.
     std::fs::write(
-        entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"),
+        entries.join("supervisor_1.2.3_linux_arm64.tar.gz.sha256"),
         format!("{}  other.tar.gz\n", hex::encode([1_u8; 32])),
     )
     .expect("checksum");
@@ -1232,7 +1285,7 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
         !run().success(),
         "a checksum naming another file was signed"
     );
-    std::fs::remove_file(entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"))
+    std::fs::remove_file(entries.join("supervisor_1.2.3_linux_arm64.tar.gz.sha256"))
         .expect("remove");
 
     // A key that is not the tracked certificate's is refused: each signature is verified under the

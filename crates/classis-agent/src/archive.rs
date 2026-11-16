@@ -62,7 +62,7 @@ fn accrue_within(total: &mut u64, member_size: u64, limit: u64) -> Result<(), St
 /// How a `.7z` says "Unix mode" — 7-Zip's own convention, which this module both reads and writes.
 ///
 /// The format carries *Windows* attributes. p7zip stashed the Unix `st_mode` in the high 16 bits
-/// and set bit 15 to say it had done so, and 7-Zip on Linux and macOS still writes exactly that
+/// and set bit 15 to say it had done so, and 7-Zip on Linux still writes exactly that
 /// (`Attrib = (a << 16) | FILE_ATTRIBUTE_UNIX_EXTENSION`) while the Windows build does not. Reading
 /// it is how [`list_7z`] spots a symbolic link that the Windows bits alone would not reveal; writing
 /// it is how the packer marks a program executable, so `7z x` yields something that runs.

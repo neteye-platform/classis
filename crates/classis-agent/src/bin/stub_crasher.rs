@@ -7,7 +7,7 @@
 //! serve — arguments belong to the Supervisor's configuration, and swapping a program never changes
 //! them, so a crash driven by arguments would crash the version before the update too.
 //!
-//! Pure Rust and argument-free, so it behaves identically on Linux, macOS and Windows CI.
+//! Pure Rust and argument-free, so it behaves identically on Linux and Windows CI.
 
 use std::process::ExitCode;
 

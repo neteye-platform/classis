@@ -312,8 +312,8 @@ pub fn resolve_program(
     ))
 }
 
-/// A name validated against the intersection of the systemd-unit, launchd-label, Windows
-/// service-name, and directory-name grammars (ADR-0019).
+/// A name validated against the intersection of the systemd-unit, Windows service-name, and
+/// directory-name grammars (ADR-0019).
 ///
 /// It names no instance, since there is no instance flag (ADR-0019 clause 6): it governs
 /// `[[supervisor]]` block names, and `build.rs` holds a second copy of the same rules for
@@ -620,7 +620,7 @@ pub const LEGACY_CONFIG_FILE_NAME: &str = "client.toml";
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     /// Write the file at all. `false` is for an operator whose platform already collects stderr —
-    /// systemd and launchd do — and who does not want the copy.
+    /// systemd does — and who does not want the copy.
     #[serde(default = "default_logging_enabled")]
     pub enabled: bool,
     /// Where the file goes. Absent puts it in the instance's state directory, which survives an

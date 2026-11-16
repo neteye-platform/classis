@@ -5,15 +5,15 @@
 //! Everything real except the service manager: the real Server armed with a package store, the
 //! real Client binary running from a real ADR-0019 install layout, installing a real artifact over
 //! itself. The restart the Client asks for by exiting is performed *here* — that is precisely the
-//! step no CI can delegate to systemd, launchd, or the SCM, and standing in for it is what makes
-//! the rest observable.
+//! step no CI can delegate to systemd or the SCM, and standing in for it is what makes the rest
+//! observable.
 //!
 //! The contract under test is the fleet's, not the mechanism's: whatever number of restarts it
 //! takes, the Server must end up being told the new version is `Installed`. Asserting the step
 //! count instead would freeze an implementation detail that ADR-0018 deliberately leaves open.
 //!
-//! Runs on all three platforms, because the pointer is the part of ADR-0019 that differs between
-//! them — a symlink on Unix, a junction on Windows — and it is precisely what a self-update moves
+//! Runs on both platforms, because the pointer is the part of ADR-0019 that differs between them
+//! — a symlink on Linux, a junction on Windows — and it is precisely what a self-update moves
 //! while the Client is running through it. A test that only ever moved the symlink would leave the
 //! platform whose mechanism is the unusual one entirely unasserted.
 
@@ -223,7 +223,7 @@ fn newer_client() -> &'static (PathBuf, String) {
                 .args(args)
                 .output()
                 .unwrap_or_else(|e| panic!("cannot run git to {what}: {e}"));
-            // stderr, not just the code: this runs on three platforms in CI, where `exit code:
+            // stderr, not just the code: this runs on two platforms in CI, where `exit code:
             // 128` on its own says nothing about which of them git objected to.
             assert!(
                 out.status.success(),

@@ -14,9 +14,9 @@
 //! its job object on Windows, so a Client that restarts finds no process it did not start
 //! (ADR-0059 clause 4).
 //!
-//! On Linux and macOS the channel is a Unix socket and an account is its uid; on Windows it is a
-//! named pipe ([`windows`]) and an account is its SID. The protocol, and everything the two ends do
-//! with it, is the same.
+//! On Linux the channel is a Unix socket and an account is its uid; on Windows it is a named pipe
+//! ([`windows`]) and an account is its SID. The protocol, and everything the two ends do with it,
+//! is the same.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -474,7 +474,6 @@ pub fn run_service(socket: &Path, client_uid: u32) -> Result<Served, String> {
         let terminated = terminated();
         let listener =
             bind(socket).map_err(|e| format!("cannot listen on {}: {e}", socket.display()))?;
-        #[cfg(target_os = "linux")]
         info!(
             socket = %socket.display(),
             client_uid,
@@ -482,8 +481,6 @@ pub fn run_service(socket: &Path, client_uid: u32) -> Result<Served, String> {
             dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) },
             "second service listening"
         );
-        #[cfg(not(target_os = "linux"))]
-        info!(socket = %socket.display(), client_uid, "second service listening");
         let served = serve(listener, client_uid, superseded, terminated).await;
         let _ = std::fs::remove_file(socket);
         if served == Served::Superseded {
@@ -1166,9 +1163,7 @@ fn remove_own(dir: &std::os::fd::OwnedFd, path: &Path) -> Result<(), String> {
 ///
 /// Under systemd this repeats what the service manager already sets for a unit with `User=`
 /// (`SetLoginEnvironment=`, systemd.exec(5)), unless an operator's drop-in turns that off. It
-/// stays for launchd, whose plist names the account in `UserName` and whose manual does not say
-/// that it sets these variables for it, and so that clause 7 holds whatever the service manager
-/// does.
+/// stays so that clause 7 holds whatever the service manager does.
 #[cfg(unix)]
 fn account_env() -> &'static [(String, std::ffi::OsString)] {
     static ACCOUNT: std::sync::OnceLock<Vec<(String, std::ffi::OsString)>> =
@@ -2265,7 +2260,7 @@ const ACCOUNT_IS: &str = "uid";
 const ACCOUNT_IS: &str = "SID";
 
 /// Names the process the service manager runs as the second service (ADR-0059 clause 4): systemd
-/// the unit's `MainPID`, launchd the job's `pid`, the SCM the service's process id — `None` where
+/// the unit's `MainPID`, the SCM the service's process id — `None` where
 /// it runs none. Asked anew at every connection; a test names one in its place.
 #[derive(Clone)]
 pub struct ServiceProcess(Arc<dyn Fn() -> Result<Option<u32>, String> + Send + Sync>);
@@ -2386,34 +2381,6 @@ fn peer_process(socket: std::os::fd::BorrowedFd<'_>) -> io::Result<PeerProcess> 
     Ok(PeerProcess {
         pid: process_id(cred.pid)?,
         pidfd,
-    })
-}
-
-/// The process at the other end of the connected socket `socket` (`LOCAL_PEERPID`), as it was
-/// when it called `listen(2)`.
-///
-/// # Errors
-/// Returns why the process could not be read.
-#[cfg(target_os = "macos")]
-fn peer_process(socket: std::os::fd::BorrowedFd<'_>) -> io::Result<PeerProcess> {
-    use std::os::fd::AsRawFd as _;
-    let mut pid: libc::pid_t = 0;
-    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
-    // SAFETY: a pid_t and its length, both valid for the call.
-    if unsafe {
-        libc::getsockopt(
-            socket.as_raw_fd(),
-            libc::SOL_LOCAL,
-            libc::LOCAL_PEERPID,
-            std::ptr::from_mut(&mut pid).cast(),
-            &mut len,
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(PeerProcess {
-        pid: process_id(pid)?,
     })
 }
 
@@ -3085,10 +3052,10 @@ mod tests {
 
     /// The second service passes through the Supervisors' root and the tombstone, which the
     /// process account may search and not read (`0710`, ADR-0059 clause 6), to the data its
-    /// programs wrote: on Linux through a path-only handle, on macOS through `O_SEARCH`. Run
-    /// unprivileged, the test's own account holds the search right alone on both.
+    /// programs wrote: on Linux through a path-only handle. Run unprivileged, the test's own
+    /// account holds the search right alone.
     /// Verifies: ADR-0059
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_purge_passes_through_directories_it_may_only_search() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3940,10 +3907,10 @@ mod tests {
         );
     }
 
-    /// Both ends read the other's account on Linux and on macOS alike: `peer_cred` is
-    /// `SO_PEERCRED` on Linux and `getpeereid` on macOS, and either end finds the other's uid there
-    /// for the checks of ADR-0059 clause 4. Run as one account, the test cannot tell an effective
-    /// uid from a real one: that both calls give the effective uid is their documentation's.
+    /// Both ends read the other's account: `peer_cred` is `SO_PEERCRED` on Linux, and either end
+    /// finds the other's uid there for the checks of ADR-0059 clause 4. Run as one account, the
+    /// test cannot tell an effective uid from a real one: that the call gives the effective uid is
+    /// its documentation's.
     /// Verifies: ADR-0059
     #[tokio::test]
     async fn a_peer_is_known_by_its_uid_at_either_end() {

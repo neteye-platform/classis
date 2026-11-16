@@ -19,6 +19,8 @@
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
   · clauses 50 and 54 superseded by
   [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+  · clause 7 superseded by
+  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
 - **Applies to:** `crates/classis-server/src/packages.rs`,

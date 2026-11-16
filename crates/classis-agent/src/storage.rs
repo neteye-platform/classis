@@ -656,20 +656,9 @@ pub(crate) mod handle {
     /// [`open_beneath`] each component before the last, and [`step_trusting`] each on the way to
     /// a root, from `/` on. So the Client passes through what it may only search, and the second
     /// service, as the process account, through a Supervisor's directory (`0710`, ADR-0059
-    /// clause 6) to what it purges. On Linux a path-only handle.
-    #[cfg(target_os = "linux")]
+    /// clause 6) to what it purges. A path-only handle.
     pub(crate) const SEARCH: libc::c_int =
         libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    /// On macOS `O_SEARCH` (`O_EXEC | O_DIRECTORY`), which XNU authorizes as a search of the
-    /// directory and not as a read (`vn_authorize_open_existing`). macOS has it from macOS 13 on,
-    /// the oldest macOS a Client runs on (ADR-0059 clause 9); an older kernel would open for
-    /// reading (`FFLAGS`), and a walk through a directory it may only search would fail there
-    /// rather than reach further.
-    #[cfg(target_os = "macos")]
-    pub(crate) const SEARCH: libc::c_int = libc::O_SEARCH | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    /// Elsewhere a directory read, as [`DIRECTORY`].
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    pub(crate) const SEARCH: libc::c_int = DIRECTORY;
 
     /// A regular file, opened to change its owner and mode: never through a link, and never
     /// blocking on a FIFO or taking a terminal.
@@ -725,10 +714,7 @@ pub(crate) mod handle {
 
     /// The permission bits of `st`, set-ID and sticky bits included.
     pub(crate) fn mode(st: &libc::stat) -> u32 {
-        // `mode_t` is `u32` on Linux and `u16` on macOS.
-        #[allow(clippy::useless_conversion)]
-        let mode = u32::from(st.st_mode);
-        mode & 0o7777
+        st.st_mode & 0o7777
     }
 
     /// This process's effective account: the Client's, where the Client walks its own tree
@@ -888,7 +874,7 @@ pub(crate) mod handle {
     /// Whether the link `link` in the directory `dir` is trusted on the way to a root: root or
     /// `own`, the Client's account, owns each of them, and the directory is not writable by its
     /// group or others, so no other account can have placed or changed it. The system's own —
-    /// `/var/run` → `/run`, or `/var` → `private/var` on macOS — and the Client's own, as a link
+    /// `/var/run` → `/run` — and the Client's own, as a link
     /// beneath a data root the hand-over gave the Client, or `~/.local` → `/data` for `--user`: a
     /// link that account placed it could have placed as the root itself.
     pub(crate) fn trusted_link(dir: &libc::stat, link: &libc::stat, own: libc::uid_t) -> bool {
@@ -1061,12 +1047,6 @@ pub(crate) mod handle {
     fn errno() -> *mut libc::c_int {
         // SAFETY: returns the calling thread's errno location.
         unsafe { libc::__errno_location() }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn errno() -> *mut libc::c_int {
-        // SAFETY: returns the calling thread's errno location.
-        unsafe { libc::__error() }
     }
 
     /// Gives every directory and regular file under `dir` to `group`, each at the mode it has
@@ -1258,7 +1238,7 @@ pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
 
 /// Refuses a configuration whose entries cannot each be stored as a file of their own on every
 /// host: a configuration means the same wherever it lands, so what Windows cannot hold is refused
-/// on Linux and macOS too.
+/// on Linux too.
 ///
 /// An entry file name may not be a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`,
 /// `LPT1`–`LPT9`, in any case and with any extension) nor end in a dot, which Windows strips. Two
@@ -1856,17 +1836,15 @@ mod tests {
         }
     }
 
-    /// A root reached through the system's own link — `/var/run` → `/run` on Linux, `/var` →
-    /// `private/var` on macOS — is reached: the link is root's, in a directory only root writes
-    /// (ADR-0059 clause 6).
+    /// A root reached through the system's own link — `/var/run` → `/run` — is reached: the link
+    /// is root's, in a directory only root writes (ADR-0059 clause 6).
     /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn a_root_reached_through_a_link_of_the_systems_is_reached() {
         let root = Path::new("/var/run");
-        let linked = [Path::new("/var"), root].iter().any(|path| {
-            std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
-        });
+        let linked =
+            std::fs::symlink_metadata(root).is_ok_and(|meta| meta.file_type().is_symlink());
         if !linked {
             crate::skipped_unless_ci(
                 "a_root_reached_through_a_link_of_the_systems_is_reached",

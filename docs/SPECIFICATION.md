@@ -67,11 +67,11 @@ The Server exposes a stable, OpenAPI-described REST API and carries only a
 rudimentary user interface of its own, so any external portal can integrate it
 easily and render the fleet however it likes. The Client is one process that can
 supervise many managed processes at once, installs as a native operating-system
-service that updates itself in place, and runs on Linux, macOS, and Windows;
-growing to a new kind of managed process means writing a new plugin, not
-changing the core. Both ends carry a written record of which parts of the
-protocol they implement, kept in step with the upstream specification rather
-than drifting quietly behind it. The project grows from the smallest thing that
+service that updates itself in place, and runs on Linux and Windows; growing
+to a new kind of managed process means writing a new plugin, not changing the
+core. Both ends carry a written record of which parts of the protocol they
+implement, kept in step with the upstream specification rather than drifting
+quietly behind it. The project grows from the smallest thing that
 closes the loop and widens only as the protocol and its agents actually allow.
 
 ## Strategy
@@ -111,11 +111,11 @@ closes the loop and widens only as the protocol and its agents actually allow.
   `instance_uid`. Both ends honour that: the Server never assumes one connection
   means one Agent, and the Client maps _n_ Agents onto _m_ connections (_n_ ≥
   _m_ ≥ 1). A connection is transport, not identity.
-- **Ship the Client as a self-updating OS service across all platforms; the
+- **Ship the Client as a self-updating OS service on Linux and Windows; the
   Server on Linux.** The Client installs as a native operating-system service
-  and can replace its own binary in place, and it is built for Linux, macOS, and
-  Windows so one client shape manages a heterogeneous fleet. The Server targets
-  Linux only.
+  and can replace its own binary in place, and it is built for Linux and Windows
+  so one client shape manages a fleet of both. No program of the project is
+  built for macOS. The Server targets Linux only.
 - **Bring agents the project was never built for into OpAMP.** A Custom
   Supervisor plugin owns a foreign agent — one whose configuration format,
   lifecycle, and health nothing here already knows — and translates all three
@@ -396,9 +396,9 @@ Use these exact words in code, comments, documentation, and ADRs.
     binary — the Collector's, and the Client's own — verifying each Package
     before it is applied, reporting the outcome, and rolling back on failure. A
     failed update is reported, not silent.
-11. **G-11** — **The Client runs and updates itself as an OS service, on every
-    platform.** The Client installs and runs as a native operating-system
-    service on Linux, macOS, and Windows, and can replace its own binary in
+11. **G-11** — **The Client runs and updates itself as an OS service, on Linux
+    and Windows.** The Client installs and runs as a native operating-system
+    service on Linux and Windows, and can replace its own binary in
     place — a self-update that survives the service restart and is rolled back
     on failure. The Server runs on Linux.
 12. **G-12** — **Protocol coverage is on the record.**

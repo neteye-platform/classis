@@ -2619,8 +2619,7 @@ mod tests {
         }
     }
 
-    /// A program in `dir` that exits at once. A script rather than `/bin/true`, which macOS has
-    /// only in `/usr/bin`: `/bin/sh` is where every Unix has it.
+    /// A program in `dir` that exits at once: a script, run by `/bin/sh`.
     #[cfg(unix)]
     fn exiting_at_once(dir: &std::path::Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3026,7 +3025,7 @@ mod tests {
     // What remains here are the cases that reach *into* this module — a private helper and the
     // install function — and need no program to spawn. Everything that supervises a running process
     // lives in `tests/supervisor_process.rs`, where a real stub is reachable (ADR-0010) and the
-    // cases run on all three platforms.
+    // cases run on both platforms.
 
     #[test]
     fn find_semver_extracts_the_first_strict_version_from_free_text() {

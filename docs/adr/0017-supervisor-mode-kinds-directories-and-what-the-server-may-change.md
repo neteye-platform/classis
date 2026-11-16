@@ -4,6 +4,8 @@
   [ADR-0043](0043-a-package-version-is-semver-and-never-installed-below-the-high-water-mark.md)
   · clauses 21 and 37 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
+  · clause 38 superseded by
+  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** crates/classis-agent/src/supervisor/ (core, ports, process

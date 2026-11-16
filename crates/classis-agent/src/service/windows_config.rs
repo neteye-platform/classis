@@ -2,13 +2,12 @@
 //! "restart on failure" true there as well, the display name of ADR-0019, and the logon account
 //! of ADR-0019.
 //!
-//! On systemd and launchd the restart policy handed to `service-manager` is written straight into
-//! the unit (`Restart=on-failure`) or the plist (`KeepAlive{SuccessfulExit:false}`). Its Windows
-//! backend is the `sc.exe` wrapper, whose `install` matches on the policy **only to log a
-//! warning** — *"sc.exe does not support automatic restart policies through 'sc create'; service
-//! '…' will not restart automatically"* — and registers no recovery actions at all. A Windows
+//! On systemd the restart policy handed to `service-manager` is written straight into the unit
+//! (`Restart=on-failure`). Its Windows backend is the `sc.exe` wrapper, whose `install` matches
+//! on the policy **only to log a warning** — *"sc.exe does not support automatic restart
+//! policies through 'sc create'; service '…' will not restart automatically"* — and registers no recovery actions at all. A Windows
 //! Client therefore never came back from any failure, which contradicts ADR-0019 on one of its
-//! three platforms.
+//! two platforms.
 //!
 //! Two calls close that, both on the `windows-service` crate already used for the SCM runtime
 //! shim, so nothing new is depended on:
@@ -44,8 +43,8 @@
 ///
 /// # Errors
 /// Returns an error if the service cannot be opened or reconfigured. On Unix this never fails —
-/// the service manager already carries the policy and the account (`User=`/`UserName`), and
-/// neither systemd nor launchd has a display name or a description column to fill.
+/// the service manager already carries the policy and the account (`User=`), and systemd has
+/// no display name or description column to fill.
 #[cfg(not(windows))]
 pub fn configure(
     _service_name: &str,

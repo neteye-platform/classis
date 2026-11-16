@@ -44,15 +44,11 @@ jobs:
         # makes one, and runs under the Client's account once the process account is dropped. The
         # run step needs `sudo -E` there, which the Windows runner does not (its shell is already
         # elevated).
-        # macOS: the same for launchd — both plists from `service-manager`, the second service's
-        # with the process account in `UserName`, and two role accounts made with `dseditgroup`
-        # and `sysadminctl -roleAccount` as the refusal of a missing process account says. The
-        # runner's `sudo` asks no password, as on Linux.
         # Every platform: the install a script runs after the package (ADR-0029 clause 11) enrols
         # with a `bootstrap.p12` and its password file from `--fleet-files`, against a Server in
         # the test, and the service it registers reaches that Server on the issued certificate; a
         # wrong password fails the install before anything is written.
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,9 +62,6 @@ jobs:
         run: cargo test -p classis-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
       - name: Install, start, kill, restart, stop, uninstall; keep the account and the privileges; the process account
         if: runner.os == 'Linux'
-        run: sudo -E env "PATH=$PATH" cargo test -p classis-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
-      - name: Install, start, kill, restart, stop, uninstall; the process account
-        if: runner.os == 'macOS'
         run: sudo -E env "PATH=$PATH" cargo test -p classis-agent --test service_smoke --locked -- --ignored --nocapture --test-threads=1
       # Run as root, every link the test places is root's, and none beneath the Client's
       # directories is followed all the same (ADR-0059 clause 6). The unprivileged run in CI covers

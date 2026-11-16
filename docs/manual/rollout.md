@@ -259,9 +259,9 @@ stored; the answer to one that does shows the entry's `signature_state` as
 old hash.
 
 Their values are what an Agent reports as `os.type` and `host.arch` — `linux`,
-`darwin`, `windows` and `amd64`, `arm64`. The tokens off an upstream release
-file name work too (`macos` is `darwin`, `x86_64` is `amd64`), and the response
-says which canonical pair was stored.
+`windows` and `amd64`, `arm64`. The tokens off an upstream release file name
+work too (`x86_64` is `amd64`), and the response says which canonical pair was
+stored.
 
 **A fleet on several platforms is still one Package.** Store each build as its
 own entry, and every host is offered its own binary:
