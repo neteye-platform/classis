@@ -75,9 +75,13 @@ and that signer's Ed25519 signature over the Package's statement verifies;
    - `classis-core` holds the list of Package Root certificates, DER files
      beside `package.rs`, read with `include_bytes!`. The Client and the Server
      use the same list.
-   - Today the list holds one Root. It is Ed25519, valid for 40 years, `CA:true`
-     with path length 0. Its key is kept outside this repository and outside
-     GitHub by its custodian, who issues Package Signers and nothing else.
+   - Today the list holds one Root, `CN=Signing Packages Root CA`, SHA-256
+     fingerprint `16b7c670…7e4a810f`. It is Ed25519, valid for 40 years, a CA
+     certificate. Its key is kept outside this repository and outside GitHub by
+     its custodian, who issues Package Signers and nothing else.
+   - A Root's path length is not relied on; this one's is 2. A signature carries
+     one certificate and the verifier passes no intermediate (clause 4), so a
+     path through an intermediate CA is refused whatever the Root allows.
    - A Root's own validity is not checked, because a trust anchor's dates are
      not (RFC 5280 section 6.2). A Root ends when a release drops it from the
      list. A second Root is added the same way, by a reviewed change to the
