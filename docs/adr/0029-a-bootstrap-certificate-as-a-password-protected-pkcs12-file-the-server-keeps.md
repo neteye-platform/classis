@@ -8,6 +8,8 @@
   [ADR-0037](0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)
   · clause 13 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
+  · clauses 6, 8 and 9 superseded by
+  [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-10-14
 - **Deciders:** Davide Zeni
 - **Applies to:** the bootstrap-certificate routes of the Operator plane in
