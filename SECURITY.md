@@ -152,7 +152,7 @@ remedy for a vulnerable version is an upgrade — through the fleet's own
 self-update where the Client is concerned. Each fix is listed in
 [`CHANGELOG.md`](CHANGELOG.md) under the release that carries it.
 
-| Version                        | Supported |
-| ------------------------------ | --------- |
-| the latest `version/*` release | ✅        |
-| any earlier release            | ❌        |
+| Version                          | Supported |
+| -------------------------------- | --------- |
+| the latest `v<version>` release  | ✅        |
+| any earlier release              | ❌        |
