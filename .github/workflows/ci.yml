@@ -1,8 +1,8 @@
 name: CI
 
 # What the Definition of Done (AGENTS.md §5) asks beyond Linux, on the stack of ADR-0010: the
-# Client checked and tested on Windows and macOS, and release builds of the Client on every
-# platform it ships on — Linux, Windows, and macOS — and of the Server on Linux only
+# Client checked and tested on Windows, and release builds of the Client on every platform it
+# ships on — Linux and Windows — and of the Server on Linux only
 # (docs/SPECIFICATION.md). Build, test and lint on Linux are the 'rust' job of checks.yml, which
 # runs scripts/check-rust.sh as the local gate does. The commands MUST match README.md →
 # "Build, Test & Run", the single source of truth.
@@ -16,27 +16,15 @@ permissions:
   contents: read
 
 jobs:
-  # ADR-0019: the client carries platform-specific service paths (the Windows SCM shim, launchd
-  # semantics) that a Linux-only lint never compiles. Keep them honest: clippy and tests on the
-  # real platforms. Actual service registration still needs the manual smoke checklist
-  # (README.md → "Running as an OS service") — CI runners cannot exercise systemd/launchd/SCM.
+  # ADR-0019: the client carries platform-specific service paths (the Windows SCM shim) that a
+  # Linux-only lint never compiles. Keep them honest: clippy and tests on the real platform.
+  # Actual service registration still needs the manual smoke checklist (README.md → "Running as
+  # an OS service") — CI runners cannot exercise systemd/SCM.
   #
   # classis-tools too: the release packs every Client archive with `classisctl`, Windows
-  # included, and publishes it for macOS (ADR-0028).
+  # included (ADR-0028).
   client-windows:
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Clippy
-        run: cargo clippy -p classis-agent -p classis-tools --all-targets --locked -- -D warnings
-      - name: Test
-        run: cargo test -p classis-agent --locked
-
-  client-macos:
-    runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,7 +143,7 @@ jobs:
             exit 1
           fi
 
-  # The Client ships on Linux, macOS, and Windows; the Server on Linux only.
+  # The Client ships on Linux and Windows; the Server on Linux only.
   release-build:
     name: release (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -165,7 +153,6 @@ jobs:
         include:
           - { name: client-linux, os: ubuntu-latest, package: classis-agent, binary: target/release/supervisor }
           - { name: client-windows, os: windows-latest, package: classis-agent, binary: target/release/supervisor.exe }
-          - { name: client-macos, os: macos-latest, package: classis-agent, binary: target/release/supervisor }
           - { name: server-linux, os: ubuntu-latest, package: classis-server, binary: target/release/server }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

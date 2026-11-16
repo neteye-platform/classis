@@ -4,7 +4,7 @@
 //! given a role, so where it belongs is decided when it is written.
 //!
 //! The test reads source text, not the compiled crate, so every `cfg` branch is checked whatever
-//! the host — the Windows and macOS paths included. Code under `#[cfg(test)]` is not checked.
+//! the host — the Windows paths included. Code under `#[cfg(test)]` is not checked.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

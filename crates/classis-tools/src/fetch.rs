@@ -171,7 +171,7 @@ impl AgentKind {
     fn platforms(self) -> String {
         match self {
             AgentKind::Otelcol | AgentKind::OtelcolContrib => {
-                "linux, darwin, windows — as the release publishes".to_string()
+                "linux, windows — as the release publishes".to_string()
             }
             // Named rather than left to the release, unlike the Collectors': this is *this*
             // project's own build matrix (`.github/workflows/release.yml`), so it moves only when
@@ -707,13 +707,8 @@ fn platform_of(name: &str, prefix: &str) -> Option<(String, String)> {
 /// (`.github/workflows/release.yml`). The agent menu names them
 /// ([`AgentKind::platforms`]); what is actually fetched comes from the release's assets, so this
 /// list understating a new target costs a menu line and never a download.
-const SUPERVISOR_PLATFORMS: [(&str, &str); 5] = [
-    ("linux", "amd64"),
-    ("linux", "arm64"),
-    ("darwin", "arm64"),
-    ("darwin", "amd64"),
-    ("windows", "amd64"),
-];
+const SUPERVISOR_PLATFORMS: [(&str, &str); 3] =
+    [("linux", "amd64"), ("linux", "arm64"), ("windows", "amd64")];
 
 /// This fleet's own Client, as its release publishes it: one `.tar.gz` per platform named
 /// `supervisor_<version>_<os>_<arch>` (ADR-0019), holding the binary under the name it is installed
@@ -785,8 +780,7 @@ fn collector_checksum(asset: &str, dist: &str, assets: &[(String, String)]) -> C
 /// match is one nobody would ever be offered.
 fn normalize_os(os: &str) -> Option<String> {
     match os {
-        "linux" | "windows" | "darwin" => Some(os.to_string()),
-        "macos" => Some("darwin".to_string()),
+        "linux" | "windows" => Some(os.to_string()),
         _ => None,
     }
 }
@@ -1690,7 +1684,7 @@ mod tests {
     fn the_supervisor_passes_over_the_operator_tools_archives() {
         let assets = vec![
             asset("classisctl_1.2.3_linux_amd64.tar.gz"),
-            asset("classisctl_1.2.3_darwin_arm64.tar.gz"),
+            asset("classisctl_1.2.3_linux_arm64.tar.gz"),
             asset("supervisor_1.2.3_linux_amd64.tar.gz"),
             asset("SHA256SUMS"),
         ];
@@ -1709,8 +1703,6 @@ mod tests {
             asset("supervisor_1.2.3_linux_amd64.deb"),
             asset("supervisor_1.2.3_linux_amd64.rpm"),
             asset("supervisor_1.2.3_linux_arm64.tar.gz"),
-            asset("supervisor_1.2.3_darwin_arm64.tar.gz"),
-            asset("supervisor_1.2.3_darwin_amd64.tar.gz"),
             asset("supervisor_1.2.3_windows_amd64.tar.gz"),
             asset("supervisor_1.2.3_windows_amd64.msi"),
             asset("supervisor_1.1.0_linux_amd64.tar.gz"),
@@ -1724,13 +1716,7 @@ mod tests {
             .collect();
         assert_eq!(
             platforms,
-            vec![
-                "darwin/amd64",
-                "darwin/arm64",
-                "linux/amd64",
-                "linux/arm64",
-                "windows/amd64",
-            ],
+            vec!["linux/amd64", "linux/arm64", "windows/amd64"],
             "an installer is not an artifact a fleet distributes, and another release's archive              is not this version"
         );
         // The menu promises exactly these, so a target added to the workflow and not to the list
@@ -1767,6 +1753,41 @@ mod tests {
 
         // Nothing to seed beside it: the Client's configuration is its host's (ADR-0017).
         assert!(AgentKind::Supervisor.default_configurations().is_empty());
+    }
+
+    /// No program of the product is built for macOS, and the fetch names no macOS platform: an
+    /// archive for it, in either spelling, is passed over like any platform this fleet cannot
+    /// name — the Client's of an older release and a Collector's alike.
+    /// Verifies: ADR-0064
+    #[test]
+    fn no_macos_archive_is_offered() {
+        let assets = vec![
+            asset("supervisor_1.2.3_linux_amd64.tar.gz"),
+            asset("supervisor_1.2.3_darwin_arm64.tar.gz"),
+            asset("supervisor_1.2.3_darwin_amd64.tar.gz"),
+            asset("supervisor_1.2.3_macos_arm64.tar.gz"),
+            asset("SHA256SUMS"),
+        ];
+        let plans = supervisor_plans("1.2.3", &assets);
+        let names: Vec<&str> = plans.iter().map(|p| p.out_name.as_str()).collect();
+        assert_eq!(names, ["supervisor_1.2.3_linux_amd64.tar.gz"]);
+
+        let assets = vec![
+            asset("otelcol_0.158.0_darwin_arm64.tar.gz"),
+            asset("otelcol_0.158.0_darwin_amd64.tar.gz"),
+            asset("otelcol_0.158.0_macos_arm64.tar.gz"),
+            asset("otelcol_0.158.0_windows_amd64.tar.gz"),
+        ];
+        let plans = collector_plans(AgentKind::Otelcol, "0.158.0", &assets);
+        let names: Vec<&str> = plans.iter().map(|p| p.out_name.as_str()).collect();
+        assert_eq!(names, ["otelcol_0.158.0_windows_amd64.tar.gz"]);
+
+        for agent in AgentKind::value_variants() {
+            let platforms = agent.platforms();
+            for word in ["darwin", "macos", "osx"] {
+                assert!(!platforms.contains(word), "{agent:?}: {platforms:?}");
+            }
+        }
     }
 
     /// The checksum layout changed at 0.158.0, so which one a release uses is read from its assets
