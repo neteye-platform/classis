@@ -232,9 +232,9 @@ and macOS and the Server for Linux.
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md),
 [ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)): the
 version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). A
-release starts when a person with write access pushes the `version/<version>`
-tag on the commit of `main` that carries it, and the run fails when the tag and
-the file disagree or the commit is not on `main`
+release starts when a person with write access pushes the `v<version>` tag,
+`v0.8.0` say, on the commit of `main` that carries it, and the run fails when
+the tag and the file disagree or the commit is not on `main`
 ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
 Its `sign` job waits until a second person with write
 access approves it in the environment `Package Signing`, then signs every Client
@@ -269,7 +269,7 @@ package name needs no translation
 ([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
 Started by hand it is a dry run: it builds and packs everything, and signs and
 publishes nothing. Before it builds anything at all it checks that the version
-is still free — a `version/*` tag or a release already carrying that number
+is still free — a `v<version>` tag or a release already carrying that number
 fails the run on the spot, dry or not, so a forgotten bump costs seconds rather
 than five build jobs — and the built binary must report the version the
 artifacts are named after. Each archive is also a ready package artifact: the
@@ -592,16 +592,16 @@ repository move or transfer:
 - the **environment `Package Signing`**
   ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
   clauses 1 and 2). Its deployment rule admits the tags
-  `version/*` and no branch. It has one required reviewer, from a team of the
-  people with write access, with _Prevent self-review_, and administrators may
-  not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the base64 of a Package
-  Signer's Ed25519 key in PKCS#8 DER, made by an admin on a machine of their
-  own and then deleted; the certificate the Package Root's custodian issues for
-  it is `packaging/package-signer.der`
+  `v[0-9]*.[0-9]*.[0-9]*` and no branch. It has one required reviewer, from a
+  team of the people with write access, with _Prevent self-review_, and
+  administrators may not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the
+  base64 of a Package Signer's Ed25519 key in PKCS#8 DER, made by an admin on a
+  machine of their own and then deleted; the certificate the Package Root's
+  custodian issues for it is `packaging/package-signer.der`
   ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
   clause 12). Replacing it is a new key, a new certificate from the same Root,
   a new secret and a reviewed change to that file; no installation changes.
-  The reviewer approves a run only when the push of a `version/*` tag started
+  The reviewer approves a run only when the push of a `v<version>` tag started
   it and the tag names a commit of `main`;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is

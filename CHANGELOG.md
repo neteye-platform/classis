@@ -7,7 +7,7 @@ an upgrade. The reasoning behind each change lives in the ADR it names
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A
 version is the one `[workspace.package] version` in `Cargo.toml` names, whose
-`version/*` tag a person pushes to release it
+`v<version>` tag a person pushes to release it
 ([ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md),
 [ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
 A section carries a date once its tag exists.
@@ -25,8 +25,11 @@ A section carries a date once its tag exists.
   when you install it, and upload each archive with the signature its `.sig`
   holds; the release notes give the commands. An installation that signs with a
   key of its own keeps doing so.
-- **A release starts from a pushed tag.** The `Release` workflow no longer
-  creates the `version/*` tag, and a run started by hand is a dry run.
+- **A release starts from a pushed tag, `v<version>`.** The `Release` workflow
+  no longer creates the tag, and a run started by hand is a dry run. The tag is
+  `v0.8.0`, no longer `version/0.8.0`; a build recognises a release by it
+  ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
+  clause 11).
 
 ### Changed
 

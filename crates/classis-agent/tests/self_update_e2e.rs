@@ -197,7 +197,7 @@ const NEWER_VERSION: &str = "9.9.9";
 ///
 /// It is built from a **tagless clone** of this repository rather than from the checkout itself,
 /// and that is the whole reason a clone appears in a test: `build.rs` refuses a build whose
-/// `OPAMP_PRODUCT_VERSION` disagrees with a `version/*` tag on HEAD (ADR-0012's drift rule), so this
+/// `OPAMP_PRODUCT_VERSION` disagrees with a release tag on HEAD (ADR-0012's drift rule), so this
 /// helper broke on precisely the commits a release is cut from. The clone carries no tags, so the
 /// override is the only version statement there is and the build is an ordinary `-dev` one.
 ///
@@ -278,7 +278,7 @@ fn newer_client() -> &'static (PathBuf, String) {
         }
 
         // `--no-tags` is the intent; this is the guarantee. The whole point of the clone is a HEAD
-        // no `version/*` tag points at, and a tag that arrived anyway — by a git that copies refs
+        // no release tag points at, and a tag that arrived anyway — by a git that copies refs
         // on a local optimisation, or by a source whose refs moved — would put the drift rule back
         // in the way with a message nobody would connect to this helper.
         let dir = checkout.to_string_lossy().to_string();

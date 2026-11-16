@@ -5,7 +5,7 @@ name: Release
 # for Linux and macOS beside it (ADR-0028).
 #
 # The version comes from `[workspace.package] version` in Cargo.toml. A release starts only when a
-# person pushes the `version/*` tag for it on a commit of `main` (ADR-0062 clause 3); the run checks
+# person pushes the `v<version>` tag for it on a commit of `main` (ADR-0062 clause 3); the run checks
 # that the tag and the file agree and checks the tag out, so ADR-0012's `build.rs` finds it on HEAD
 # and bakes the same number into the binary with its commit metadata. The workflow pushes no tag.
 # A run started by hand is a dry run and nothing else (ADR-0062 clause 5).
@@ -36,7 +36,8 @@ on:
   workflow_dispatch:
   # A release: the tag a person pushed on a commit of `main` (ADR-0062 clause 3).
   push:
-    tags: ["version/*"]
+    # `v` and three numbers: `v0.8.0`. Any other tag, `very-old` included, starts nothing.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: read
@@ -112,7 +113,7 @@ jobs:
           # refuses to resolve silently. A run started by hand is a dry run (ADR-0062 clause 5),
           # even on a tag ref.
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            tagged="${GITHUB_REF_NAME#version/}"
+            tagged="${GITHUB_REF_NAME#v}"
             if [ "$tagged" != "$version" ]; then
               echo "::error::the tag says $tagged and Cargo.toml says $version — bump one of them"
               exit 1
@@ -135,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           version='${{ steps.read.outputs.version }}'
-          tag="version/$version"
+          tag="v$version"
           taken=""
 
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader"
@@ -665,7 +666,7 @@ jobs:
   # checksums and the tracked certificate, writes the statement each entry's signature covers, signs
   # it with the runner's OpenSSL, and writes the PackageSignature that carries both.
   sign:
-    # Only a release: the push of a `version/*` tag. A run started by hand never reaches the
+    # Only a release: the push of a `v<version>` tag. A run started by hand never reaches the
     # environment, on a tag ref neither (ADR-0062 clause 5).
     if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
     needs: [version, build]
@@ -1059,7 +1060,7 @@ jobs:
           signature. Every asset is attested, and \`SHA256SUMS\` covers every asset above; the image
           is attested by its digest.
           EOF
-          gh release create "version/${{ needs.version.outputs.version }}" \
+          gh release create "v${{ needs.version.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.version }}" \
             --notes-file notes.md \

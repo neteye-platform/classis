@@ -14,9 +14,9 @@ fuzz_target!(|data: &[u8]| {
             "a value that parses is the one DER encoding of what it holds"
         );
     }
-    let roots = classis_core::package::Roots::from_der([]).expect("no roots");
+    let roots = classis_core::package::Roots::default();
     assert!(
-        classis_core::package::verify_now(b"statement", data, &roots).is_err(),
+        classis_core::package::chain::verify_now(b"statement", data, &roots).is_err(),
         "a signature verified up to no Root"
     );
 });
