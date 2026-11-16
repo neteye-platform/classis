@@ -56,11 +56,11 @@ data is bound to included, and start without migrating anything.
    _Classis Agent_
    ([ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)
    clause 2). Its services are `classis` and `classis-agents`, its account
-   `classis` (`_classis` on macOS, `NT SERVICE\classis` on Windows), the account
-   of its Managed Processes `classis-agents` (`_classis-agents` on macOS), and
-   its directories follow the product name: `/opt/classis`, `/var/lib/classis`,
-   `/usr/libexec/classis`, `/run/classis-agents`. Its own telemetry's
-   instrumentation scope is `classis-client`.
+   `classis` (`NT SERVICE\classis` on Windows), the account of its Managed
+   Processes `classis-agents`, and its directories follow the product name:
+   `/opt/classis`, `/var/lib/classis`, `/usr/libexec/classis`,
+   `/run/classis-agents`. Its own telemetry's instrumentation scope is
+   `classis-client`.
 3. **The operator program** is `classisctl`, its release assets
    `classisctl_<version>_<os>_<arch>…`.
 4. **The Server's image** is `ghcr.io/neteye-platform/classis-server`, its
