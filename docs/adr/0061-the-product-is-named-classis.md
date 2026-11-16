@@ -54,8 +54,8 @@ data is bound to included, and start without migrating anything.
    `classis-tools`, under directories of the same names; `opamp` keeps its name.
 2. **The Client's product** defaults to the name `classis` and the title
    _Classis Agent_
-   ([ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)
-   clause 2). Its services are `classis` and `classis-agents`, its account
+   ([ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
+   clause 6). Its services are `classis` and `classis-agents`, its account
    `classis` (`NT SERVICE\classis` on Windows), the account of its Managed
    Processes `classis-agents`, and its directories follow the product name:
    `/opt/classis`, `/var/lib/classis`, `/usr/libexec/classis`,

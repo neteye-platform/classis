@@ -9,20 +9,24 @@
   every `target_os = "macos"` branch and every launchd path in
   `crates/classis-agent/`, the platform aliases of
   `crates/classis-core/src/platform.rs`, the platform tokens of the upload form
-  in `crates/classis-server/static/`, the platforms `classisctl fetch` knows in
-  `crates/classis-tools/src/fetch.rs`, and every document that names a platform
-  the product runs on
+  in `crates/classis-server/static/`, the variables a delivered block may not
+  set in `crates/classis-agent/src/supervisor/delivered.rs`, the platforms
+  `classisctl fetch` knows in `crates/classis-tools/src/fetch.rs`, and every
+  document that names a platform the product runs on
 - **Supersedes:**
   [ADR-0010](0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)
-  clause 15; [ADR-0016](0016-what-an-agent-reports-about-itself.md) clause 13;
+  clauses 15 and 21; [ADR-0016](0016-what-an-agent-reports-about-itself.md)
+  clauses 3, 7 and 13;
+  [ADR-0017](0017-supervisor-mode-kinds-directories-and-what-the-server-may-change.md)
+  clause 38;
   [ADR-0018](0018-the-client-updates-itself-under-its-own-agent-type.md) clause
   8;
   [ADR-0019](0019-the-client-supervisor-installed-service-releases-and-installers.md)
-  clauses 2, 7, 11, 12, 22, 30 and 33;
+  clauses 2, 7, 11, 12, 21, 22, 30 and 33, and the sentence of its Decision;
   [ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
   clause 7;
   [ADR-0028](0028-one-operator-program-that-makes-the-fleets-certificates.md)
-  clauses 4 and 17;
+  clauses 4 and 17, and the first sentence of its Decision;
   [ADR-0042](0042-the-linux-packages-run-the-client-under-its-own-account.md)
   clause 3;
   [ADR-0053](0053-the-state-directory-comes-from-the-registration-not-the-file.md)
@@ -54,14 +58,19 @@ of ADR-0054 and ADR-0059 has to make a third time. The operator tool
 `classisctl` is published for Linux and macOS (ADR-0028 clause 17); its macOS
 build serves an operator's workstation and nothing else.
 
-The decision reaches into ten accepted ADRs, because macOS is named in clauses
-that are otherwise about Linux and Windows. The human chose to restate every one
-of those clauses without macOS rather than leave text that names a platform the
-product no longer has, so that no binding clause has to be read past
+The decision reaches into eleven accepted ADRs, because macOS is named, or
+counted as a third platform, in clauses that are otherwise about Linux and
+Windows. The human chose to restate every one of those clauses without macOS
+rather than leave text that names a platform the product no longer has, so that
+no binding clause has to be read past
 ([ADR-0009](0009-an-adr-may-supersede-named-clauses-of-another.md)). The
 proposed [ADR-0061](0061-the-product-is-named-classis.md) names two macOS
 account names in its clause 2; being proposed, it is revised in the same change
-rather than superseded.
+rather than superseded. Two Decision sentences name macOS as well, those of
+ADR-0019 and ADR-0028, and ADR-0009 names numbered clauses only. This ADR
+restates the two sentences as clauses of its own, naming each, which is the
+narrowest step past ADR-0009's form that removes them; ADR-0028's would
+otherwise contradict clause 15 in binding text.
 
 ## Decision
 
@@ -232,8 +241,8 @@ nothing on macOS.
     `classisctl --version` reports the release version, as the Client's build
     does. The Windows row builds the program for its runner only as the packer
     of the Client's archive; no Windows archive of it is published.
-16. **Restates ADR-0042 clause 3. The package delivers one file;
-    `service install` installs.**
+16. **Restates ADR-0042 clause 3, which restates ADR-0019 clause 36. The package
+    delivers one file; `service install` installs.**
 
     |                 | delivers                                 | after install                                                                                                                                                                        | before removal                           |
     | --------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
@@ -255,14 +264,13 @@ nothing on macOS.
     identity is `PRODUCT_NAME` and the MSI's is its display name and
     `UpgradeCode`, so an `apt`, `dnf` or MSI upgrade stays an upgrade.
 
-17. **Restates ADR-0053 clause 2. An upgrade on an installed host is a
-    re-registration, never a migration.**
+17. **Restates ADR-0053 clause 2, which restates ADR-0042 clause 1. An upgrade
+    on an installed host is a re-registration, never a migration.**
     - `--config` keeps pointing into the data root. `--state-dir` keeps pointing
       where the registration has it (clause 18).
     - A re-registration rewrites the program path (`ExecStart`) and the rest of
       the unit from the version that runs it, the directives of ADR-0042 clause
-      7 included. The account stays the one the registration names (ADR-0042
-      clause 2).
+      7 included. The account stays the one the registration names (clause 27).
     - The instance's configuration, identity and state never move.
     - A change that would move the data root or the state directory of an
       installed host must bring its own migration and carries the full weight of
@@ -279,7 +287,7 @@ nothing on macOS.
        - Under the SCM it is the service's binary path name, read with
          `QueryServiceConfig`.
        - The install reads what the Client wrote, never a drop-in and never the
-         manager's loaded state, as ADR-0042 clause 2 reads the account.
+         manager's loaded state, as clause 27 reads the account.
        - A registration that names no `--state-dir`, and every user-scope one,
          offers none. A user scope has no administrator between the file and the
          service.
@@ -293,7 +301,7 @@ nothing on macOS.
 
 19. **Restates ADR-0053 clause 5. A Supervisors' root outside the roots is the
     operator's.** A `supervisor_dir` outside the data root, the layout root and
-    the state directory stays as relocatable as ADR-0017 clause 21 makes it. A
+    the state directory stays as relocatable as ADR-0059 clause 13 makes it. A
     system-scope install on Windows never creates, restricts or hands over such
     a root. It leaves it as it is and names it in a warning. On Linux an install
     never touches a Supervisors' root.
@@ -339,16 +347,16 @@ nothing on macOS.
       itself again. It conflicts with `--process-account`, and a refusal that a
       kept process account causes names it. What the dropped account was granted
       is withdrawn from it (clause 29).
-22. **Restates ADR-0059 clause 2. The service is `PRODUCT_NAME`, with no suffix,
-    on every platform, and the second service is `<PRODUCT_NAME>-agents`.** The
-    label is a single token — no qualifier, no organization — so
-    `service-manager` renders the same string for systemd and the SCM, and the
-    name never contains a dot. The second service exists only where a process
-    account is named (clause 21); its label is the product's with the suffix
-    `-agents`. The `PATH` symlink is `/usr/bin/<PRODUCT_NAME>`, so two variants
-    never collide on one `PATH` entry. On Windows the SCM additionally carries
-    each service's display name and a Description that says what the program
-    does.
+22. **Restates ADR-0059 clause 2, which restates ADR-0019 clause 3. The service
+    is `PRODUCT_NAME`, with no suffix, on every platform, and the second service
+    is `<PRODUCT_NAME>-agents`.** The label is a single token — no qualifier, no
+    organization — so `service-manager` renders the same string for systemd and
+    the SCM, and the name never contains a dot. The second service exists only
+    where a process account is named (clause 21); its label is the product's
+    with the suffix `-agents`. The `PATH` symlink is `/usr/bin/<PRODUCT_NAME>`,
+    so two variants never collide on one `PATH` entry. On Windows the SCM
+    additionally carries each service's display name and a Description that says
+    what the program does.
     - **It is the same program.** The second service runs
       `supervisor run --agents` from the same layout and `current` (ADR-0059
       clause 8), under the process account. The package still delivers one file
@@ -541,11 +549,12 @@ nothing on macOS.
     clause 16). On Linux the second service's own has `HOME`, `USER` and
     `LOGNAME` set to the process account's. On Windows it is the environment the
     SCM gives the second service under the process account, unchanged.
-26. **Restates ADR-0059 clause 9. The Client writes its systemd system units
-    itself, and `service-manager` installs them.** `manager::install` passes
-    `contents: Some(<unit>)` at system scope under systemd. `service-manager`
-    still writes the file (mode `0644`), enables it, which reloads the manager's
-    configuration, and uninstalls it. The unit holds:
+26. **Restates ADR-0059 clause 9, which restates ADR-0042 clause 6. The Client
+    writes its systemd system units itself, and `service-manager` installs
+    them.** `manager::install` passes `contents: Some(<unit>)` at system scope
+    under systemd. `service-manager` still writes the file (mode `0644`),
+    enables it, which reloads the manager's configuration, and uninstalls it.
+    The unit holds:
 
     - `[Unit]`: `Description=<PRODUCT_NAME>`, the same as before. The display
       name stays where clause 6 puts prose. Where a process account is
@@ -584,13 +593,13 @@ nothing on macOS.
     until the service has reported itself stopped and its process has ended, up
     to 60 seconds.
 
-27. **Restates ADR-0059 clause 10. The system service runs under the account its
-    registration names, and both roots belong to it, except what the process
-    account keeps there.** `service install --run-as <account>` names the
-    account. It applies at system scope only and conflicts with `--user`. On
-    Linux, `--run-as root` is how an operator chooses root. It is written as
-    `User=root`, so a unit records that root was chosen. Without the flag, the
-    account is taken in this order:
+27. **Restates ADR-0059 clause 10, which restates ADR-0054 clause 1. The system
+    service runs under the account its registration names, and both roots belong
+    to it, except what the process account keeps there.**
+    `service install --run-as <account>` names the account. It applies at system
+    scope only and conflicts with `--user`. On Linux, `--run-as root` is how an
+    operator chooses root. It is written as `User=root`, so a unit records that
+    root was chosen. Without the flag, the account is taken in this order:
 
     - **A re-registration keeps the account the registration names.** That is
       `User=` in the system unit `/etc/systemd/system/<PRODUCT_NAME>.service`.
@@ -664,21 +673,22 @@ nothing on macOS.
       another `--run-as` re-owns the same directories, and what the former
       account was granted is withdrawn from it (clause 29).
 
-28. **Restates ADR-0059 clause 14. No installer starts a service it registers
-    anew; an upgrade starts again what ran.** The Linux post-install and the MSI
-    register the service and leave it stopped — knowingly departing from Debian
-    Policy and `dh_installsystemd` — because a Client with no configuration
-    holds no client certificate and is refused at startup, at fleet scale where
-    nobody watches a terminal. The exceptions are upgrades of a host whose
-    services were running. On Linux a running service is restarted, so a
-    configured host finishes the upgrade on the delivered binary. On Linux an
-    install that names another process account than the registration, drops it,
-    or names another `--run-as` stops the services first and starts again what
-    ran once it has succeeded (clause 29). On Windows every `service install` —
-    every upgrade of the MSI among them, with a process account or without one —
-    stops both services before it changes any right or SCM entry, and once it
-    has succeeded starts again what ran before it; a first install finds nothing
-    to stop and starts nothing. The post-install prints the two remaining steps:
+28. **Restates ADR-0059 clause 14, which restates ADR-0029 clause 13. No
+    installer starts a service it registers anew; an upgrade starts again what
+    ran.** The Linux post-install and the MSI register the service and leave it
+    stopped — knowingly departing from Debian Policy and `dh_installsystemd` —
+    because a Client with no configuration holds no client certificate and is
+    refused at startup, at fleet scale where nobody watches a terminal. The
+    exceptions are upgrades of a host whose services were running. On Linux a
+    running service is restarted, so a configured host finishes the upgrade on
+    the delivered binary. On Linux an install that names another process account
+    than the registration, drops it, or names another `--run-as` stops the
+    services first and starts again what ran once it has succeeded (clause 29).
+    On Windows every `service install` — every upgrade of the MSI among them,
+    with a process account or without one — stops both services before it
+    changes any right or SCM entry, and once it has succeeded starts again what
+    ran before it; a first install finds nothing to stop and starts nothing. The
+    post-install prints the two remaining steps:
 
     ```console
     sudo classis service install --interactive
@@ -750,6 +760,7 @@ nothing on macOS.
     account in the roots an install acts on (clause 24) is withdrawn, on every
     platform, except a file with a second hard link, which is named in a warning
     (clause 24). A Supervisors' root outside those roots stays the operator's.
+
     - **On Linux a change of owner withdraws it.** The hand-over (clause 27)
       gives what the former account owns there, and what is in its group, to the
       Client's account and group, and what the process account named now keeps
@@ -804,6 +815,71 @@ nothing on macOS.
       it. Either way it then deregisters both services, so none is left to start
       at the next boot.
 
+30. **Restates ADR-0010 clause 21. Tests reach what they test through the
+    library.** Integration tests import constants rather than restating them,
+    and tests that spawn a real program spawn the Client's own cross-platform
+    stubs (`stub_agent`, `stub_crasher`, under `crates/classis-agent/src/bin/`)
+    instead of a shell, so they run on both platforms. A `#[cfg(unix)]` gate
+    sits only on what is genuinely a Unix fact, such as a file mode. The stubs
+    stay in `classis-agent`, because `CARGO_BIN_EXE_*` resolves only inside the
+    crate that declares them.
+31. **Restates ADR-0016 clause 3. The block `name` keeps its local meaning.** It
+    is the Supervisor's directory name and the uniqueness key across blocks,
+    bound by the instance-name grammar of clause 6: lowercase, digits, `-`, no
+    dots. A type may be a reverse FQDN; an instance name is a path component on
+    two operating systems. That is why the two cannot share a key.
+32. **Restates ADR-0016 clause 7. `host.cpu.model.name` and `os.build_id` come
+    from sources already paid for.** The CPU model from the same `sysinfo`, read
+    once per process. The build behind `os.version` from what the platform's
+    `os.*` answer already carries: os-release's `BUILD_ID` (absent where a
+    distribution stamps none), and on Windows the build components of the
+    version line (`10.0.26100.2033` → `26100.2033`).
+33. **Restates ADR-0017 clause 38. A delivered block brings no environment and
+    no arguments the operator did not allow.** In the apply path, a delivered
+    block's `env` entries, `args` and `version_args` must equal those of the
+    running block of the same name, or be allowed by the operator in
+    `supervisor.toml`'s `[supervisors]` section — keys the Server cannot change
+    (ADR-0017 clause 27). `delivered_env` is a list of variable names, each
+    exact or ending in `*` as a prefix (`["OTEL_*", "GOMAXPROCS"]`), and
+    defaults to none; `delivered_args = true` lets delivered blocks state
+    arguments, and defaults to `false`. Names are compared without regard to
+    case, as Windows compares them. Whatever the list says, a delivered `env`
+    that adds or changes a variable steering which code a program loads is
+    refused: `PATH`, every `LD_*`, `GCONV_PATH`, `GLIBC_TUNABLES`,
+    `OPENSSL_CONF`, `OPENSSL_ENGINES`, `DOTNET_STARTUP_HOOKS`, `COR_PROFILER*`,
+    `CORECLR_PROFILER*`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`,
+    `JDK_JAVA_OPTIONS`, `PYTHONPATH`, `PYTHONSTARTUP`, `PERL5LIB`, `PERL5OPT`,
+    `RUBYOPT`, `BASH_ENV` and `ENV`. So is a new or changed value that contains
+    `${config_dir}` or `${supervisor_dir}`: the Server delivers files there that
+    no one signed, and an allowed name such as `OTEL_JAVAAGENT_EXTENSIONS` would
+    load one. The list is a floor, not a guarantee: `delivered_env = ["*"]`
+    leaves only it between a delivered block and every other variable a program
+    reads. A block that breaks this fails the whole offer before anything stops
+    (ADR-0017 clause 28), naming the block and the variable or key. A block the
+    operator writes is unaffected: the rule is about what the Server may add.
+34. **Restates ADR-0019 clause 21. The prompts come from `dialoguer`.** It
+    validates an answer and asks again, offers a default and a yes/no
+    confirmation, the same way on both operating systems; `dialoguer` is
+    MIT-licensed and brings no TLS or crypto backend. The questionnaire asks for
+    no secret, so no prompt hides its input. The terminal check itself is
+    `std::io::IsTerminal`, no dependency.
+35. **Restates the sentence of ADR-0019's Decision.** We will call the fleet's
+    own agent `supervisor` at every layer where it is the program, and make it a
+    `clap` subcommand CLI that registers, controls and runs itself as a native
+    service on systemd and the Windows SCM, under a product name fixed at build
+    time that names the service, the install path, the package and the `PATH`
+    entry; that executes from a versioned layout behind a `current` pointer,
+    kept apart from its data on Linux at system scope; that writes its first
+    configuration when asked and never one the Client would refuse at startup,
+    logs to a bounded file when it runs as a service, and may run under an
+    operator-named account that owns what it rewrites; and publish each release
+    as one `.tar.gz` per target named `supervisor_<version>_<os>_<arch>` — the
+    fleet's artifact — plus a `.deb`, `.rpm` and `.msi` that deliver the same
+    binary and run its own `service install`.
+36. **Restates the first sentence of ADR-0028's Decision.** We will build the
+    operator tools as one program, `classisctl`, from `crates/classis-tools`,
+    and publish it in every release as a `.tar.gz` for Linux on amd64 and arm64.
+
 **Out of scope:**
 
 - A port to macOS, or to any other platform. Should one be asked for, it is a
@@ -811,8 +887,9 @@ nothing on macOS.
   restates.
 - The `darwin` archives of releases already published. They stay where they are;
   nothing in the fleet installs them.
-- The Context, Alternatives and _Out of scope_ text of the earlier ADRs that
-  names macOS. It records why those decisions were taken and binds nothing.
+- The Context, Alternatives, Consequences and _Out of scope_ text of the earlier
+  ADRs that names macOS. It records why those decisions were taken and binds
+  nothing.
 - An Agent that reports `os.type` `darwin` without a Client, such as a Collector
   with its own `opampextension`. The Server serves it as any platform it has
   never heard of (clause 13); no part of the product is tested against it.
@@ -831,6 +908,15 @@ nothing on macOS.
   reading rule is not a supersession of named clauses
   ([ADR-0009](0009-an-adr-may-supersede-named-clauses-of-another.md)). The human
   rejected it.
+- **Leave the Decision sentences of ADR-0019 and ADR-0028 as they are**, because
+  ADR-0009 names numbered clauses only. ADR-0028's would then publish
+  `classisctl` for macOS in binding text that clause 15 contradicts. The human
+  chose to remove them.
+- **Supersede ADR-0028 whole** to change its first sentence. It would restate
+  every clause about the fleet's certificates to remove two words.
+- **Keep `DYLD_*` in the refused variables** of ADR-0017 clause 38, as a
+  harmless extra on Linux and Windows. It is macOS's loader, and the human chose
+  to keep nothing for macOS.
 - **Supersede ADR-0019 and ADR-0059 whole** with consolidated successors. Their
   other clauses are unaffected, and restating them would re-decide what nobody
   asked to change.
@@ -879,10 +965,14 @@ nothing on macOS.
   `classisctl` elsewhere. A future macOS port starts from nothing in the tree
   and has to make again the launchd, account and peer-check decisions this ADR
   removes; the earlier ADRs keep their reasoning.
-- Negative / trade-offs: this ADR restates twenty-six clauses to remove a few
-  words from each. A reviewer checks each against the clause it restates; the
-  differences are the macOS text and the clause numbers it cites, now pointing
-  at this ADR where it restates the clause cited.
+- Negative / trade-offs: this ADR restates thirty-two clauses and two Decision
+  sentences to remove a few words from each. A reviewer checks each against the
+  text it restates. The differences are the macOS text, the platform counts
+  (three becomes two or both), "Unix" read as Linux where it meant Linux and
+  macOS, the clause numbers it cites, each now pointing at the clause in force
+  (this ADR's where it restates it, the successor's where another ADR did), and
+  one positive statement in clause 13: the Client reports Rust's own
+  `linux`/`windows` as `os.type`, where it reported `darwin`.
 - Follow-ups: the implementation, cut into slices — the CI and release rows; the
   macOS code of the Client and its tests; `classisctl` and the platform aliases;
   the documents (`README.md`, `docs/GLOSSARY.md`, `docs/ARCHITECTURE.md`,
