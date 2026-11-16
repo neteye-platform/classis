@@ -1591,18 +1591,18 @@ mod tests {
         };
         static BEHIND: &[schema::Migration] = &[schema::Migration {
             version: 1,
-            oldest_server: "0.1.0",
+            oldest_server: "0.0.0",
             sql: "CREATE TABLE configurations (name text PRIMARY KEY)",
         }];
         static AHEAD: &[schema::Migration] = &[
             schema::Migration {
                 version: 1,
-                oldest_server: "0.1.0",
+                oldest_server: "0.0.0",
                 sql: "CREATE TABLE configurations (name text PRIMARY KEY)",
             },
             schema::Migration {
                 version: 2,
-                oldest_server: "0.1.0",
+                oldest_server: "0.0.0",
                 sql: "CREATE TABLE deployments (name text PRIMARY KEY)",
             },
         ];
