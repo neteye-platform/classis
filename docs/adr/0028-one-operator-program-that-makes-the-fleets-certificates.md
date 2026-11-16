@@ -10,7 +10,7 @@
   [ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)
   · clause 3 superseded by
   [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
-  · clauses 4 and 17 superseded by
+  · clauses 4 and 17, and the first sentence of its Decision, superseded by
   [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
