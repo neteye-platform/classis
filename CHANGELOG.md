@@ -80,6 +80,9 @@ A section carries a date once its tag exists.
   Either is refused at startup as an unknown key, like any other. The install
   no longer asks for a package key nor reads `package-signing-key.pub`, and the
   `supervisor.toml.fragment` of `pki init` names none.
+- **Support for macOS**
+  ([ADR-0064](docs/adr/0064-no-program-of-the-product-is-built-for-macos.md)).
+  No release carries a macOS build of the Client or of `classisctl`.
 
 ### Fixed
 

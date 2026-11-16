@@ -33,7 +33,7 @@ true.
    │     it, started by the second service over a Unix socket or named pipe
    ├── package downloads: the Server's own origin, and no other
    ├── own-telemetry destinations: OTLP/HTTP, as the Server offers them
-   └── service manager: systemd, launchd or the Windows SCM
+   └── service manager: systemd or the Windows SCM
 ```
 
 - **Operators** drive the fleet through the REST API on the Operator plane,
@@ -219,7 +219,7 @@ module has no role.
   dependency offers — the SIDs, the pipe's security descriptor and its two ends'
   identities, the job objects — are declared in `win32`. The registry hands
   every plugin the one `Spawner` of the run, which `service::runtime` chooses
-  once from the Client's command line — the unit or plist
+  once from the Client's command line — the unit
   `service install --process-account` writes names the second service's socket
   there — and hands `build_engine`. The Engine keeps that registry behind the
   port `PluginRegistry` of `supervisor::ports`, so a Supervisor a Supervisor-set
@@ -396,7 +396,7 @@ peer's credentials or the pipe client's token, and stops every program it
 started — by process group on Unix, by job object on Windows — when that
 connection closes. Before it writes anything, the Client accepts the connection
 only from the process the service manager runs as the second service, which
-`service::manager::agents_process` asks of systemd, launchd or the SCM
+`service::manager::agents_process` asks of systemd or the SCM
 ([ADR-0059](adr/0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
 clause 4). Both ends refuse a peer of another build, and the one that `current`
 no longer names exits so its service manager starts it from the new version.

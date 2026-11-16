@@ -3,9 +3,9 @@
 [← User Manual](README.md) · [← The Server](server.md)
 
 The Client is what runs on a managed host: one process, installed as a native
-operating-system service on Linux, macOS, and Windows, that supervises local
-processes, applies the configuration the Server sends them, reports back what
-they are doing, and can replace their binaries — and its own.
+operating-system service on Linux and Windows, that supervises local processes,
+applies the configuration the Server sends them, reports back what they are
+doing, and can replace their binaries — and its own.
 
 Everything about the Client is on this page: what it does, how it is built, how
 to run it, where it puts things, and every configuration key.
@@ -180,8 +180,8 @@ arbitrary binary on your host. And a delivered block **brings nothing that
 reaches past the package signature**: it may set environment variables and
 arguments only as the running block of the same name already has them, or as you
 allow below; never a variable that steers which code a program loads (`PATH`,
-`PATHEXT`, `COMSPEC`, `LD_*`, `DYLD_*`, `JAVA_TOOL_OPTIONS`, `PYTHONPATH`,
-`PERL5LIB`, `RUBYLIB`, `NODE_PATH` and the like) and never a value pointing into
+`PATHEXT`, `COMSPEC`, `LD_*`, `JAVA_TOOL_OPTIONS`, `PYTHONPATH`, `PERL5LIB`,
+`RUBYLIB`, `NODE_PATH` and the like) and never a value pointing into
 the Supervisors' own directories, whether by `${config_dir}`,
 `${supervisor_dir}` or a path under the Supervisors' root.
 
@@ -331,8 +331,8 @@ shows it as deliberately gone rather than as a host that fell off the network.
 
 ## Running it as an OS service
 
-The Client registers _itself_ with systemd, launchd, or the Windows SCM — there
-is no packaging step and no unit file to write:
+The Client registers _itself_ with systemd or the Windows SCM — there is no
+packaging step and no unit file to write:
 
 ```sh
 classis service install --config /etc/opamp/supervisor.toml   # root / Administrator
@@ -345,7 +345,7 @@ classis service uninstall      # deregisters; never deletes the install layout o
 | Flag                          | Applies to                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--user`                      | every `service` action              | Target the current user's service manager instead of the system one. Useful in development; the default is a system service that starts at boot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--root <dir>`                | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/classis` for the layout, `/var/lib/classis` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. macOS uses `/Library/Application Support/classis`, Windows `%ProgramData%\classis`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout). |
+| `--root <dir>`                | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/classis` for the layout, `/var/lib/classis` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. Windows uses `%ProgramData%\classis`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout).                                               |
 | `--data-root <dir>`           | `service install`, `service config` | The data root — `supervisor.toml` and `state/` — when it is to differ from the layout root. A packaged install, the MSI included, passes neither flag and takes the platform defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `--interactive`               | `service install`                   | Ask for the settings a fresh host cannot guess, write or edit the configuration file, and enrol a host that holds no certificate yet, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `--endpoint <url>`            | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no siblings for the CA file or the client identity: it takes them from [beside the program](#files-beside-the-program), or they are files the operator names in the file.                                                                                                                                                                                                                   |
@@ -370,19 +370,18 @@ Which account it is:
 | `service install` …                                               | runs as                                                                                  |
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `--run-as <account>`                                              | that account                                                                             |
-| `--run-as root` (Linux, macOS)                                    | root, written as `User=root` / `UserName` `root`, so the next re-registration keeps root |
-| no flag, the unit or plist names an account                       | that account, kept                                                                       |
+| `--run-as root` (Linux)                                           | root, written as `User=root`, so the next re-registration keeps root                     |
+| no flag, the unit names an account                                | that account, kept                                                                       |
 | no flag, the unit names none, the data root belongs to an account | the data root's owner, and the install says so                                           |
-| no flag, first registration                                       | root (systemd, launchd), `LocalSystem` (Windows)                                         |
+| no flag, first registration                                       | root (systemd), `LocalSystem` (Windows)                                                  |
 
 The Linux packages create the account `classis` and name it on a first
 installation — see
 [Installing from a native package](#installing-from-a-native-package). A
 re-registration reads the account from the file the Client wrote,
-`/etc/systemd/system/classis.service` or
-`/Library/LaunchDaemons/classis.plist`, not from a drop-in. Windows keeps
-the logon account the SCM holds. The install prints the account and where it
-came from:
+`/etc/systemd/system/classis.service`, not from a drop-in. Windows keeps the
+logon account the SCM holds. The install prints the account and where it came
+from:
 
 ```sh
 # classis service install
@@ -391,9 +390,9 @@ installed classis
   runs as:   classis (kept from /etc/systemd/system/classis.service)
 ```
 
-On Linux and macOS the account must already exist, named or kept; the install
-refuses before it writes anything if it does not, and names the file a kept
-account came from. The binary never creates an account:
+On Linux the account must already exist, named or kept; the install refuses
+before it writes anything if it does not, and names the file a kept account came
+from. The binary never creates an account:
 
 ```sh
 # useradd --system --user-group --no-create-home --home-dir /var/lib/classis \
@@ -516,12 +515,12 @@ What the separation gives and what it does not:
   the process account owns, or on Windows create an instance of the pipe, but
   before the Client writes anything on a connection it reads the process at the
   other end and asks the service manager which process it runs as the second
-  service — systemd's `MainPID`, launchd's `pid`, the SCM's process id — and
-  speaks only to that one. Any other is told nothing: the Client closes the
-  connection, its Supervisors report that the second service cannot be reached,
-  and it tries again, on a new connection checked anew, as for a second service
-  that is down; it asks the service manager again at each of those tries, every
-  200 ms. The log names the socket or pipe and the process that served it:
+  service — systemd's `MainPID`, the SCM's process id — and speaks only to that
+  one. Any other is told nothing: the Client closes the connection, its
+  Supervisors report that the second service cannot be reached, and it tries
+  again, on a new connection checked anew, as for a second service that is down;
+  it asks the service manager again at each of those tries, every 200 ms. The
+  log names the socket or pipe and the process that served it:
 
   ```text
   ERROR classis_agent::supervisor::channel: refused a peer that is not the second service, before writing anything to it; no program starts until the service manager's second service serves the socket socket=/run/classis-agents/agents.sock peer_pid=4711 error=/run/classis-agents/agents.sock is served by process 4711, not by the second service (process 812) unlogged=0
@@ -531,7 +530,7 @@ What the separation gives and what it does not:
   `tasklist /FI "PID eq <peer_pid>"`, end it, and restart the second service,
   which binds its socket or pipe again. The same refusal, with the reason in
   `error`, follows where the service manager cannot be asked: on Linux that
-  needs systemd's system bus, on macOS `launchctl print`.
+  needs systemd's system bus.
 
 - A grant an agent needs names the process account, not the Client's: a
   `sudoers` rule for Telegraf's `use_sudo`, the rights Icinga 2 needs on its
@@ -551,15 +550,14 @@ The rules every platform holds the account to:
 - **It is never root or `LocalSystem`, and never the Client's account.** A host
   whose agents need root runs as root as a whole: `--run-as root` and no
   `--process-account`, with no second service.
-- **The Client runs under an account of its own.** On Linux and macOS a Client
-  that runs as root is refused; on Windows one that runs as `LocalSystem` is.
-- **System scope only**: systemd on Linux, launchd on macOS, the SCM on Windows.
-  `--user` is refused with it.
+- **The Client runs under an account of its own.** On Linux a Client that runs
+  as root is refused; on Windows one that runs as `LocalSystem` is.
+- **System scope only**: systemd on Linux, the SCM on Windows. `--user` is
+  refused with it.
 - **It is kept.** A re-registration without the flag — every package upgrade,
   every MSI upgrade — keeps the account the second service's registration names:
-  `/etc/systemd/system/classis-agents.service`,
-  `/Library/LaunchDaemons/classis-agents.plist`, or the SCM's entry. The
-  install prints it:
+  `/etc/systemd/system/classis-agents.service` or the SCM's entry. The install
+  prints it:
 
   ```console
   # classis service install
@@ -576,8 +574,7 @@ their programs do not start, and they start again once it is back. A package
 offered meanwhile is staged and stays `Installing`, and a Configuration stays
 `APPLYING`, each naming the second service as the reason, until it is reached
 again. `service status` reports the Client; ask the service manager for the
-second service (`systemctl status classis-agents`,
-`launchctl print system/classis-agents`, `sc query classis-agents`).
+second service (`systemctl status classis-agents`, `sc query classis-agents`).
 
 Both services run the same program from the same `current` pointer, and a
 self-update restarts the one that is behind: two ends of different builds refuse
@@ -648,29 +645,6 @@ group; everything else under `state_dir`, its logs among them, stays its own:
 A re-registration leaves what the process account owns, and what is in its
 group, as it is. A member of a `.tar.gz` package never lands writable by group
 or others, on every host: `0777` lands `0755`, `0666` lands `0644`.
-
-#### On macOS
-
-The same rules, with launchd: macOS 13 or later, the Client under an account of
-its own (not root), and the process account a role account whose name begins
-with `_`, with a primary group of its own that the Client's account joins:
-
-```console
-# dseditgroup -o create -i <gid> _classis-agents
-# sysadminctl -addUser _classis-agents -UID <uid> -GID <gid> -roleAccount
-# dseditgroup -o edit -a <client account> -t user _classis-agents
-# classis service install --run-as <client account> --process-account _classis-agents
-# classis service stop && classis service start
-```
-
-`<gid>` and `<uid>` are ones no group or account holds. The install registers
-`/Library/LaunchDaemons/classis-agents.plist` with `UserName` naming the
-process account, and creates the socket's directory
-`/Library/Application Support/classis-agents/`, owned by the process account
-and its group, `0750`; the socket is `agents.sock` in it. The install refuses to
-create it where `/Library/Application Support` is writable by an account other
-than root, and it removes the directory with the second service's registration.
-Modes and ownership are those of the Linux table.
 
 #### On Windows
 
@@ -760,13 +734,13 @@ Either way the former account keeps nothing in the roots the install acts on —
 the layout root, the data root and the state directory, with a Supervisors' root
 that lies beneath them. A Supervisors' root outside them is yours: the install
 leaves it as it is and names it in a warning, and you grant or withdraw the
-process account's rights there yourself — on Linux and macOS by re-owning what
-the former account wrote (`chown -R`). The account itself is never removed;
-delete it once nothing else uses it.
+process account's rights there yourself — on Linux by re-owning what the former
+account wrote (`chown -R`). The account itself is never removed; delete it once
+nothing else uses it.
 
-- **On Linux and macOS** the withdrawal is a change of owner: what the former
-  account owns, and what is in its group, goes to the Client's account and
-  group. An install that changes or drops the process account, or names another
+- **On Linux** the withdrawal is a change of owner: what the former account
+  owns, and what is in its group, goes to the Client's account and group. An
+  install that changes or drops the process account, or names another
   `--run-as`, first stops the Client and then the second service, waiting up to
   60 seconds for each process to end, and once it has succeeded starts again
   what ran, the second service first. Where a service cannot be stopped, the
@@ -789,13 +763,12 @@ it in a warning.
 #### Uninstalling
 
 `service uninstall` deregisters both services and leaves the files on disk. Stop
-them first, as the `.deb` and `.rpm` removal does: `classis service stop`,
-then `classis service uninstall`. On macOS the socket's directory goes with
-the second service. On Windows `service uninstall` stops both itself and starts
-neither again; where it holds the install lock and both are stopped it completes
-a recorded withdrawal and removes the record, otherwise it says that the next
-`service install` or `service uninstall` completes it. It deregisters both
-services in every case.
+them first, as the `.deb` and `.rpm` removal does: `classis service stop`, then
+`classis service uninstall`. On Windows `service uninstall` stops both itself
+and starts neither again; where it holds the install lock and both are stopped
+it completes a recorded withdrawal and removes the record, otherwise it says
+that the next `service install` or `service uninstall` completes it. It
+deregisters both services in every case.
 
 #### Before going back to an older release
 
@@ -815,15 +788,15 @@ you will meet:
 
 | Message about                                                                                 | What to do                                                                                                              |
 | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `… does not exist on this host. Create it first (…)`                                          | Linux and macOS: create the account with the command it shows, or name another.                                         |
+| `… does not exist on this host. Create it first (…)`                                          | Linux: create the account with the command it shows, or name another.                                                   |
 | `… cannot be found on this host or its domain`                                                | Windows: name an account that exists, or a gMSA whose domain is reachable.                                              |
 | `… is root, and a process account never is` / `it is LocalSystem`                             | Run everything as root (`--run-as root`, no `--process-account`), or name an account of its own.                        |
 | `the Client runs as root` / `the Client runs as LocalSystem`                                  | Name the Client's account with `--run-as`; on Windows `NT SERVICE\classis`.                                             |
 | `… is the account the Client runs as`                                                         | Name another account for the processes.                                                                                 |
 | `… has the primary group …, and the Client's account … is not in it`                          | Add the Client's account to the group with the command it shows.                                                        |
 | `… is a member of it beside the Client's account`, `… also the primary group of …`, `(gid 0)` | Give the process account a group of its own whose one member is the Client's account.                                   |
-| `… is a member of the primary group of the Client's account`                                  | Take the process account out of that group with the command it shows (`gpasswd --delete`, `dseditgroup -d`).            |
-| `… names no account for the second service`                                                   | The unit or plist was edited: name one with `--process-account`, or drop it with `--no-process-account`.                |
+| `… is a member of the primary group of the Client's account`                                  | Take the process account out of that group with the command it shows (`gpasswd --delete`).                              |
+| `… names no account for the second service`                                                   | The unit was edited: name one with `--process-account`, or drop it with `--no-process-account`.                         |
 | `a process account needs the second service, which only a system service under systemd …`     | Not available at user scope or under another service manager.                                                           |
 | `… is, or lies in, …, the directory of the second service's socket`                           | Name a data root and a layout root outside it.                                                                          |
 | `would need a password` / `belongs to another service`                                        | Use a passwordless form: `NT SERVICE\classis-agents`, a gMSA, `LocalService`, `NetworkService`.                         |
@@ -1103,22 +1076,18 @@ Two things to know about living with a packaged install:
   reinstall after a plain remove keeps the host's identity and configuration and
   stages its own binary fresh.
 
-macOS has no native installer; there, unpack the `.tar.gz` and run
-`service install` yourself.
-
 ### What the service is called
 
 One name on every platform, and it is the **product's** name — not the
 program's:
 
-| Platform            | Service                   |
-| ------------------- | ------------------------- |
-| **Linux** (systemd) | `classis.service`         |
-| **macOS** (launchd) | `classis` (job and plist) |
-| **Windows** (SCM)   | `classis`                 |
+| Platform            | Service           |
+| ------------------- | ----------------- |
+| **Linux** (systemd) | `classis.service` |
+| **Windows** (SCM)   | `classis`         |
 
 So the same command works everywhere it exists: `systemctl status classis`,
-`launchctl list classis`, `sc query classis`. Where a
+`sc query classis`. Where a
 [process account](#managed-processes-under-a-process-account) is registered, the
 second service is `classis-agents` on every platform.
 
@@ -1129,7 +1098,7 @@ directories — nothing about it collides with the first.
 
 Where a platform has a second, human-readable name, it is **Classis Agent**.
 That is the Windows services list; systemd shows the unit name as its
-`Description`, and a launchd job has no name besides its label.
+`Description`.
 
 ### Where the service's logs are
 
@@ -1142,10 +1111,9 @@ A Client started by the service manager writes its own log to
 
 **On Windows this is the only copy there is** — the SCM discards a service's
 stderr, so `sc query` telling you the service will not start is all the platform
-itself offers. On Linux and macOS the same lines are also in
-`journalctl -u classis` and Console/`log show`; the file is written anyway
-so the answer to "where are the logs" is the same everywhere, including in a
-container where neither exists.
+itself offers. On Linux the same lines are also in `journalctl -u classis`; the
+file is written anyway so the answer to "where are the logs" is the same
+everywhere, including in a container where there is no journal.
 
 Running the Client **in the foreground writes no file** — stderr is right there
 in front of you.
@@ -1196,8 +1164,7 @@ layout and the data live on each platform, and what an uninstall leaves behind,
 is [On-disk layout](#on-disk-layout).
 
 After a crash the service manager restarts the service; after an explicit stop
-it stays down. A known platform gap: on macOS `service status` is advisory and
-`install` does not auto-start.
+it stays down.
 
 ### Windows needs an elevated shell, and says so before it writes
 
@@ -1255,14 +1222,12 @@ published release update both.
 
 ### Where the roots are
 
-| Platform | Scope  | Layout root                               | Data root            |
-| -------- | ------ | ----------------------------------------- | -------------------- |
-| Linux    | system | `/opt/<product>`                          | `/var/lib/<product>` |
-| Linux    | user   | `$XDG_DATA_HOME/<product>`                | _the same_           |
-| macOS    | system | `/Library/Application Support/<product>`  | _the same_           |
-| macOS    | user   | `~/Library/Application Support/<product>` | _the same_           |
-| Windows  | system | `%ProgramData%\<product>`                 | _the same_           |
-| Windows  | user   | `%LOCALAPPDATA%\<product>`                | _the same_           |
+| Platform | Scope  | Layout root                | Data root            |
+| -------- | ------ | -------------------------- | -------------------- |
+| Linux    | system | `/opt/<product>`           | `/var/lib/<product>` |
+| Linux    | user   | `$XDG_DATA_HOME/<product>` | _the same_           |
+| Windows  | system | `%ProgramData%\<product>`  | _the same_           |
+| Windows  | user   | `%LOCALAPPDATA%\<product>` | _the same_           |
 
 On Linux, `$XDG_DATA_HOME` falls back to `~/.local/share` when it is unset.
 
@@ -1286,14 +1251,14 @@ execute — the service would register cleanly and then die at its first start.
 software, and files staged there later inherit it. This is why an update can put
 a new version in place without any relabeling step.
 
-**Everywhere else there is one root**, because that reason does not apply: macOS
-has no equivalent restriction, and a user-scope service runs in the user's own
-context. **Windows keeps one root too, whether the MSI installed it or not.**
-The service's own account must be able to write the layout, because the
-self-update stages into it. Granting a low-privileged account write access to a
-tree under `Program Files` that it executes from would be a privilege-escalation
-surface. So the layout stays under `%ProgramData%`, beside the data, and the
-MSI's folder under `Program Files` holds only the program it delivered.
+**Everywhere else there is one root**, because that reason does not apply: a
+user-scope service runs in the user's own context. **Windows keeps one root too,
+whether the MSI installed it or not.** The service's own account must be able to
+write the layout, because the self-update stages into it. Granting a
+low-privileged account write access to a tree under `Program Files` that it
+executes from would be a privilege-escalation surface. So the layout stays under
+`%ProgramData%`, beside the data, and the MSI's folder under `Program Files`
+holds only the program it delivered.
 
 ### Inside the layout root
 
@@ -1314,8 +1279,8 @@ the service.
 
 The version part of a directory name is the plain `MAJOR.MINOR.PATCH`; a
 pre-release suffix is not in the name. The trailing part is the commit the build
-came from. `current` is a symlink on Linux and macOS, and a directory junction
-on Windows, where junctions need no special privilege.
+came from. `current` is a symlink on Linux, and a directory junction on
+Windows, where junctions need no special privilege.
 
 ### Inside the data root
 
@@ -1346,9 +1311,9 @@ the data root or the layout root, and refuses one elsewhere: the service's
 account may rewrite the file, and the install hands the state directory over to
 that account. Left alone, it is `<data-root>/state`.
 
-Logs rotate daily and seven files are kept. On Linux and macOS the service's
-output also reaches the system journal; on Windows the file is the only copy,
-because the service manager discards a service's console output.
+Logs rotate daily and seven files are kept. On Linux the service's output also
+reaches the system journal; on Windows the file is the only copy, because the
+service manager discards a service's console output.
 
 ### One directory per Agent
 
@@ -1419,12 +1384,12 @@ structure by a different route.
 
 ### What an uninstall leaves behind
 
-| What you do                 | What goes                                                                                                                      | What stays                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `service uninstall`         | the service registration, and the second service's where a process account is registered; on macOS the directory of its socket | everything on disk                                                       |
-| `apt remove` / `dnf remove` | the registration, the layout root, the `PATH` symlink                                                                          | the data root: configuration, state, every Agent's identity              |
-| `apt purge`                 | all of the above                                                                                                               | nothing the package made                                                 |
-| MSI uninstall               | the registration and the installation folder                                                                                   | everything under `%ProgramData%\<product>`: layout, configuration, state |
+| What you do                 | What goes                                                                                | What stays                                                               |
+| --------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `service uninstall`         | the service registration, and the second service's where a process account is registered | everything on disk                                                       |
+| `apt remove` / `dnf remove` | the registration, the layout root, the `PATH` symlink                                    | the data root: configuration, state, every Agent's identity              |
+| `apt purge`                 | all of the above                                                                         | nothing the package made                                                 |
+| MSI uninstall               | the registration and the installation folder                                             | everything under `%ProgramData%\<product>`: layout, configuration, state |
 
 The process account stays in every case, after `apt purge` too: you created it,
 and you delete it once nothing else uses it. On Windows an uninstall that did
@@ -1873,12 +1838,12 @@ before the report that made it is forwarded, a removal is appended, the order of
 reports at most once a minute and at shutdown, and the whole file is rewritten
 when the Gateway starts and whenever it has grown to twice the bindings and
 hosts it holds. It is at most 512 MiB, `0600` and owned by the Client's account
-on Linux and macOS, and lies under the state directory's restricted ACL on
-Windows. The offers are kept in memory only (see above).
+on Linux, and lies under the state directory's restricted ACL on Windows. The
+offers are kept in memory only (see above).
 
 **When the file cannot be read, the Gateway carries no Agent.** At start the
-Gateway refuses a file that is a link, is no regular file, on Linux and macOS is
-not `0600` or not owned by the Client's account, is larger than 512 MiB, names a
+Gateway refuses a file that is a link, is no regular file, on Linux is not
+`0600` or not owned by the Client's account, is larger than 512 MiB, names a
 format or version this Client does not read, or holds a line it cannot parse
 before its last, and one it cannot rewrite at start, as on a full disk; a last
 line cut off without its newline, as a crash leaves it, is dropped. While it

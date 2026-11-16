@@ -1415,10 +1415,10 @@ the whole of the model:
 
 - A **Package** is _what_ an Agent type runs at a version. Its identity is the
   **Agent type and the version**, the version a SemVer 2.0.0 version, and it
-  holds one entry per platform — the Linux build, the macOS builds, the Windows
-  build — each an uploaded artifact with its SHA-256 and the operator's
-  **signature**. Nothing else: no name of its own, no Selector. It aims at
-  nobody and is never rolled out.
+  holds one entry per platform — the Linux build, the Windows build — each an
+  uploaded artifact with its SHA-256 and the operator's **signature**. Nothing
+  else: no name of its own, no Selector. It aims at nobody and is never rolled
+  out.
 - A **Deployment** is _where that goes_. A name, the **channel** it aims at, one
   Package per Agent type, and any number of
   [Configurations](#configurations-what-the-fleet-runs). It is the only thing
@@ -1497,10 +1497,10 @@ $ curl --cacert ca.pem -X PUT --data-binary @otelcol-contrib_0.109.0_linux_amd64
 ```
 
 Platform spellings are accepted and stored canonically, so the tokens off an
-upstream release's file name work as they are: `macos` and `osx` mean `darwin`,
-`x86_64` and `x64` mean `amd64`, `aarch64` means `arm64`. An `os`/`arch` this
-Server has never heard of is stored as given rather than refused — the fleet may
-run a system nobody here anticipated.
+upstream release's file name work as they are: `x86_64` and `x64` mean `amd64`,
+`aarch64` means `arm64`. An `os`/`arch` this Server has never heard of is stored
+as given rather than refused — the fleet may run a system nobody here
+anticipated.
 
 **Every artifact is uploaded.** The Server holds what it offers and sends no
 request for a package anywhere; a Client fetches from its own Server's origin

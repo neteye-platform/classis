@@ -61,8 +61,8 @@ Collectors **and** agents that were never built to speak OpAMP:
   and change what it runs; the Server ships only a rudimentary UI of its own and
   is built to be integrated into an existing portal.
 - **Client** — one process, installed as a native operating-system service on
-  Linux, macOS, and Windows and able to update its own binary in place. It has
-  two **modes**, independent of each other and combinable on the same host:
+  Linux and Windows and able to update its own binary in place. It has two
+  **modes**, independent of each other and combinable on the same host:
   **Supervisor Mode** runs **many supervisors at once**, each managing one
   process, applying the configuration it is sent and reporting health and
   effective configuration back; **Gateway Mode** accepts other clients' OpAMP
@@ -181,8 +181,8 @@ here).
   (needs `cargo install cargo-xwin` and
   `rustup target add x86_64-pc-windows-msvc`; the Dev Container carries the
   `llvm-lib` it requires). Worth running whenever a change touches
-  platform-gated code or the tests around it: CI builds the Client on Windows
-  and macOS, and a `#[cfg(unix)]` mistake compiles perfectly well on Linux.
+  platform-gated code or the tests around it: CI builds the Client on Windows,
+  and a mistake in `#[cfg(windows)]` code compiles perfectly well on Linux.
 - **Check the supply chain:** `cargo deny check` (needs
   `cargo install cargo-deny`): advisories, licences, sources and banned crates,
   as [`deny.toml`](deny.toml) sets them; reviewed advisories are recorded there
@@ -214,7 +214,7 @@ here).
   `cargo run --bin classisctl -- package --help` (build, hash, and sign an
   artifact out of any program) or `cargo run --bin classisctl -- pki --help`
   (the fleet's certificates) — documented in [the manual](docs/manual/tools.md).
-  Every release also publishes it for Linux and macOS (ADR-0028).
+  Every release also publishes it for Linux (ADR-0028).
 
 Both binaries read a TOML configuration file
 ([ADR-0010](docs/adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md));
@@ -225,8 +225,8 @@ build/test/lint commands, locally through `scripts/check-all.sh` and in CI as
 the `rust` job of
 [`.github/workflows/checks.yml`](.github/workflows/checks.yml);
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) additionally checks the
-Client on Windows and macOS and release-builds the Client for Linux, Windows,
-and macOS and the Server for Linux.
+Client on Windows and release-builds the Client for Linux and Windows and the
+Server for Linux.
 
 **Releases**
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md),
@@ -239,8 +239,8 @@ the tag and the file disagree or the commit is not on `main`
 Its `sign` job waits until a second person with write
 access approves it in the environment `Package Signing`, then signs every Client
 archive with the key that environment holds. A release publishes one archive per
-platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
-on the architectures each ships on, a `.sig` beside each Client archive, which
+platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux and Windows on
+the architectures each ships on, a `.sig` beside each Client archive, which
 carries the certificate of the release's Package Signer and which the Server and
 every Client verify up to the Package Roots compiled into them
 ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)),
@@ -264,7 +264,7 @@ build rather than a flag. The fields are separated by `_` because a name and a
 version both contain `-`
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)),
 and the last two are exactly what an Agent reports as `os.type` and `host.arch`
-(`linux_amd64`, `darwin_arm64`, …), so uploading a whole release under one
+(`linux_amd64`, `windows_amd64`, …), so uploading a whole release under one
 package name needs no translation
 ([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
 Started by hand it is a dry run: it builds and packs everything, and signs and
@@ -382,8 +382,8 @@ certificate of their own, for example from your organization's PKI, under
 
 ### Running as an OS service
 
-The Client registers _itself_ as a native service on Linux (systemd), macOS
-(launchd), and Windows (SCM) —
+The Client registers _itself_ as a native service on Linux (systemd) and
+Windows (SCM) —
 [ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md):
 
 ```sh
@@ -406,8 +406,8 @@ supervisor service uninstall                                   # never deletes l
   service runs from — lives at `/opt/classis`, while `supervisor.toml` and
   the default `state/` directory stay at `/var/lib/classis` (SELinux never
   lets systemd execute a binary under `/var/lib`). `--data-root <dir>` names
-  that second half explicitly. macOS, Windows and user scope keep one directory
-  for everything — including a Windows host installed by the MSI, where
+  that second half explicitly. Windows and user scope keep one directory for
+  everything — including a Windows host installed by the MSI, where
   `Program Files` holds the delivered payload and the layout goes under
   `%ProgramData%\classis`, because the self-update rewrites the layout at
   runtime and `Program Files` is not a tree a service account should be able to
@@ -443,25 +443,24 @@ brought back by the manager, an explicit stop that stays stopped, uninstall —
 and an install that enrols with a `bootstrap.p12` from `--fleet-files`, whose
 service then reaches the Server on the certificate it was issued. It runs weekly
 and on demand rather than per push (it installs a system service and waits on
-timers), on Linux, macOS and Windows. The test is
+timers), on Linux and Windows. The test is
 `crates/classis-agent/tests/service_smoke.rs`; it is `#[ignore]`d, so an ordinary
 `cargo test` never installs anything.
 
 What still needs a human, per platform: starting at **boot** (a runner never
-reboots), the logs (`journalctl -u classis` on Linux, Console/`log show` on
-macOS), the Agent in the fleet UI, and an **SELinux-enforcing host** (Fedora,
-RHEL, or SUSE 16 with `getenforce` answering `Enforcing`): the `.rpm` install
-must start — a service dying with `status=203/EXEC` and an AVC denial in
-`ausearch -m avc` is the failure ADR-0019 clause 8 exists to prevent. Each
-wrapped kind — Telegraf, Icinga 2 with its plugins, GLPI Agent with its tasks —
-under the packaged account `classis` and under `--run-as root`: it starts,
-reports, and its `sudo` or setuid helpers still work
+reboots), the logs (`journalctl -u classis` on Linux), the Agent in the fleet
+UI, and an **SELinux-enforcing host** (Fedora, RHEL, or SUSE 16 with
+`getenforce` answering `Enforcing`): the `.rpm` install must start — a service
+dying with `status=203/EXEC` and an AVC denial in `ausearch -m avc` is the
+failure ADR-0019 clause 8 exists to prevent. Each wrapped kind — Telegraf,
+Icinga 2 with its plugins, GLPI Agent with its tasks — under the packaged
+account `classis` and under `--run-as root`: it starts, reports, and its `sudo`
+or setuid helpers still work
 ([ADR-0042](docs/adr/0042-the-linux-packages-run-the-client-under-its-own-account.md)).
-Known platform gaps (tracked in the ADR): launchd `status` is advisory and
-`install` does not auto-start there. The SCM still discards a Windows service's
-stderr, but the service now writes its own rotating log under `<state_dir>/logs`
-on every platform (ADR-0019), which is where to look when the manager shows a
-service that will not start.
+A known platform gap (tracked in the ADR): the SCM still discards a Windows
+service's stderr, but the service now writes its own rotating log under
+`<state_dir>/logs` on every platform (ADR-0019), which is where to look when the
+manager shows a service that will not start.
 
 ## Project Layout
 
