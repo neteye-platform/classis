@@ -910,7 +910,7 @@ This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/ca.pem
 Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
 Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
-Package verification key (hex Ed25519 public key; empty takes no packages): 3b6a27bc…
+Package verification key (ignored: the compiled-in Package Roots decide; leave empty):
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 enrolling with wss://fleet.example.com/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
@@ -931,7 +931,7 @@ Server OpAMP endpoint [wss://fleet.example.com/v1/opamp]:
 This Agent's name (service.instance.name) [host-01]: web-01
 CA certificate of the Server — the CA that signed its certificate (PEM path) [/var/lib/classis/server-ca.pem]:
 enrolled: this Client holds a certificate the Server issued
-Package verification key (hex Ed25519 public key; - removes it) [3b6a27bc…]:
+Package verification key (ignored: the compiled-in Package Roots decide; - removes it) [3b6a27bc…]:
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 restart the service to apply: supervisor service stop && supervisor service start
