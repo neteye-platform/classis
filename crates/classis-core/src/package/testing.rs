@@ -175,6 +175,33 @@ impl Default for TestRoot {
 }
 
 impl TestSigner {
+    /// The Ed25519 key as `openssl genpkey` writes it: PKCS#8 v1 (RFC 8410), the seed alone. The
+    /// form a release's `PACKAGE_SIGNING_KEY` holds, and the one OpenSSL 3.0 reads — it refuses
+    /// the v2 form [`TestSigner::pkcs8`] holds.
+    ///
+    /// # Panics
+    ///
+    /// A key this module did not make.
+    #[must_use]
+    pub fn pkcs8_v1(&self) -> Vec<u8> {
+        // ring's v2 is `30 51 02 01 01 30 05 06 03 2b 65 70 04 22 04 20 <seed> 81 21 00 <public>`.
+        assert!(
+            self.pkcs8.len() >= 48
+                && self.pkcs8[..16]
+                    == [
+                        0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+                        0x04, 0x22, 0x04, 0x20
+                    ],
+            "an Ed25519 key in ring's PKCS#8 v2"
+        );
+        let mut v1 = vec![
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        v1.extend_from_slice(&self.pkcs8[16..48]);
+        v1
+    }
+
     /// The `PackageSignature` of `statement`, DER.
     ///
     /// # Panics

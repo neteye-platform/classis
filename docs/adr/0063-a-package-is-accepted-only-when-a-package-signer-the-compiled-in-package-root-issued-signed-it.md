@@ -282,7 +282,7 @@ and that signer's Ed25519 signature over the Package's statement verifies;
 
 13. **Restates ADR-0062 clause 6, with the `PackageSignature` written. The
     `sign` job signs, and does nothing else.**
-    - **When it runs.** Only in a run started by the push of a `version/*` tag
+    - **When it runs.** Only in a run started by the push of a `v<version>` tag
       (`github.event_name == 'push'`). The event is checked because
       `workflow_dispatch` can run on a tag ref too. It runs after `version` and
       `build`, on `ubuntu-latest` and never on a self-hosted runner.

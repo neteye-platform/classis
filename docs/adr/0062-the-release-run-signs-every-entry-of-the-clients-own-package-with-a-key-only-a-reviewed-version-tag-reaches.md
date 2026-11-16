@@ -1,4 +1,4 @@
-# ADR-0062: The release run signs every entry of the Client's own package, with a key only a reviewed `version/*` tag reaches
+# ADR-0062: The release run signs every entry of the Client's own package, with a key only a reviewed `v<version>` tag reaches
 
 - **Status:** 🟡 proposed
   · clauses 1, 6, 8 and 9 superseded by
@@ -13,7 +13,8 @@
   settings_ of `README.md`, and every document that tells an
   operator how to upload or verify the Client's release
 - **Supersedes:**
-  [ADR-0012](0012-versions-resolved-in-the-internal-crate.md) clauses 6 and 8;
+  [ADR-0012](0012-versions-resolved-in-the-internal-crate.md) clauses 2, 4, 6,
+  7 and 8;
   [ADR-0052](0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)
   clauses 10 and 12
 
@@ -55,7 +56,7 @@ The forces:
   Enterprise.** This repository is public.
 - **The release run tags the commit itself** (ADR-0012 clause 6). A run started
   by `workflow_dispatch` therefore runs on `refs/heads/main`, and an environment
-  that admits only `version/*` tags would refuse its signing job.
+  that admits only release tags would refuse its signing job.
 - **Everyone with write access may release.** That is the organisation's
   practice. Another of its repositories, `permissionsync`, has these rules:
   - a ruleset on `main`;
@@ -73,7 +74,7 @@ The forces:
 
 We will sign every entry of the Client's own Package in a `sign` job of the
 release run. The key is one Ed25519 key, a secret of the GitHub environment
-`Package Signing`. Only a run started by a hand-pushed `version/*` tag reaches
+`Package Signing`. Only a run started by a hand-pushed `v<version>` tag reaches
 that job, and only after a second person with write access approves. The release
 publishes each signature, and the key's public half, beside the archives.
 
@@ -94,7 +95,8 @@ publishes each signature, and the key's public half, beside the archives.
 
 2. **The environment `Package Signing` holds the key, and a second person releases
    it.**
-   - Its deployment rule admits the tags `version/*` and no branch.
+   - Its deployment rule admits the tags `v[0-9]*.[0-9]*.[0-9]*` and no
+     branch.
    - It requires one reviewer, taken from a team of the people with write
      access; GitHub lists at most six users or teams.
    - _Prevent self-review_ is on, so whoever started the run cannot approve it.
@@ -102,12 +104,12 @@ publishes each signature, and the key's public half, beside the archives.
    - Only the `sign` job names it (clause 6).
 
    Before approving, the reviewer checks that the run was started by the push
-   of a `version/*` tag and that the tag names a commit on `main`.
+   of a `v<version>` tag and that the tag names a commit on `main`.
 
 3. **Restates ADR-0012 clause 6, reversed: a person creates the tag, and the
    release run checks it against the file.**
-   - A release run starts only on the push of a `version/*` tag.
-   - A person with write access creates `version/<version>` and pushes it. The
+   - A release run starts only on the push of a `v<version>` tag (clause 11).
+   - A person with write access creates `v<version>` and pushes it. The
      tag goes on the commit on `main` that carries the
      `[workspace.package] version` being released, once that commit has merged.
    - The run reads the version with `cargo metadata` and checks out the tag, so
@@ -128,7 +130,7 @@ publishes each signature, and the key's public half, beside the archives.
    `Package Signing`. A `-dev` version is expected there and only there.
 
 6. **The `sign` job signs, and does nothing else.**
-   - **When it runs.** Only in a run started by the push of a `version/*` tag
+   - **When it runs.** Only in a run started by the push of a `v<version>` tag
      (`github.event_name == 'push'`). The event is checked because
      `workflow_dispatch` can run on a tag ref too. It runs after `version` and
      `build`, on `ubuntu-latest` and never on a self-hosted runner.
@@ -247,6 +249,47 @@ publishes each signature, and the key's public half, beside the archives.
       - anyone with write access may create one, since they are authorised to
         release.
     - **The environment `Package Signing`:** as clause 2 states.
+
+11. **Restates ADR-0012 clause 2, with the tag `v<version>`. Git says only what
+    is around the number.**
+
+    | HEAD                                         | Version string                                                      |
+    | -------------------------------------------- | ------------------------------------------------------------------- |
+    | carries `v<base>`                            | `<base>+<hash>` — a release build                                   |
+    | carries no release tag                       | `<base>-dev+<hash>` — a build heading for `<base>`                  |
+    | carries a release tag naming another version | **the build fails**: the file and the tag disagree and neither wins |
+
+    Only tags pointing at HEAD itself count, lightweight or annotated. A release
+    tag is `v` followed by three components in the grammar of ADR-0012 clause 1,
+    separated by `.` or `/` (mixed permitted), normalised to dots. A tag whose
+    `v` is not followed by a digit, `very-old` say, is no release tag and is
+    ignored. A development build therefore names the release it is heading for,
+    and SemVer ordering `0.1.0-dev` before `0.1.0` is simply true. A build
+    outside a git repository fails: it can neither cite a commit nor tell a
+    release from a development build.
+
+12. **Restates ADR-0012 clause 4, with the tag `v<version>`. The resolution runs
+    in `crates/classis-core/build.rs`, through `git2`, with no `git` binary.**
+    The script discovers the repository upward from the manifest directory,
+    reads HEAD and the `refs/tags/v*` references whose `v` a digit follows, and
+    emits `cargo:rustc-env=OPAMP_PRODUCT_RELEASE=<full string>` with
+    `rerun-if-changed` on the repository's `HEAD`, `refs` and `packed-refs` and
+    `rerun-if-env-changed=OPAMP_PRODUCT_VERSION`. `git2` (libgit2, vendored and
+    statically built) is a **build**-dependency of `classis-core` only: nothing
+    of it reaches a shipped binary, nothing parses CLI output, and the result
+    does not vary with the host's git version or locale.
+
+13. **Restates ADR-0012 clause 7, with the tag `v<version>`. A spent number and
+    a disagreement are refused, never resolved.** Before anything is built, the
+    run fails if the tag `v<version>` or a release of that name already exists —
+    both are asked, because either can exist without the other — except the tag
+    that started the run. An annotated tag is compared by the commit it names.
+    The guard runs on a dry run too: whether a version can still be released is
+    a property of the version. A run started by a pushed `v<version>` tag fails
+    unless the tag and `Cargo.toml` agree. After building, the binary must
+    report exactly `<version>+<hash>`. A release is therefore never re-run: a
+    run that dies after the tag is pushed is finished by hand, or the version is
+    skipped.
 
 **Out of scope:**
 
@@ -372,6 +415,11 @@ Read on 2026-11-12 and 2026-11-13.
 
     The two clauses describe a mechanism that still holds with the release key
     configured. Whether their wording moves is for the human to judge.
+- **A release tag is `v<version>`** (clauses 11 to 13), the form upstream
+  projects use: `classisctl package fetch` reads this project's releases by it,
+  and the environment's deployment rule admits it. ADR-0019 clause 30 still
+  speaks of "its `version/*` tag"; it defers to ADR-0012 for the form, and this
+  ADR restates the clause that decides it.
 - **Follow-ups:**
   - `publish` verifying every `.sig` against the tracked
     `packaging/package-signing-key.pub` before the release is created. The
@@ -391,7 +439,7 @@ Tests in `crates/classis-tools/tests/release_workflow.rs`, each marked
 `// Verifies: ADR-0062`:
 
 - **A release starts only from a tag (clauses 3 to 5).**
-  - The workflow triggers on `push: tags: ["version/*"]` and on
+  - The workflow triggers on `push: tags: ["v[0-9]+.[0-9]+.[0-9]+"]` and on
     `workflow_dispatch` with no input.
   - No job pushes a tag.
   - The `version` job holds `contents: read`.

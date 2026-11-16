@@ -129,17 +129,16 @@ impl AgentKind {
         let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
         let rest = tag.strip_prefix(self.tag_prefix())?;
         let parts = rest.split('.').count();
-        // `v0.158.0`, `version/1.2.3` — three numeric parts behind the prefix, and nothing else.
+        // `v0.158.0`, `v1.2.3` — three numeric parts behind the prefix, and nothing else.
         let shaped = parts == 3;
         (shaped && rest.split('.').all(numeric)).then(|| rest.to_string())
     }
 
-    /// What each project puts in front of the version in its tags: `v`, the `version/` this
-    /// project's release workflow creates them under (ADR-0012).
+    /// What each project puts in front of the version in its tags: `v`, for upstream and for this
+    /// project's own releases alike (ADR-0062, restating ADR-0012 clause 2).
     fn tag_prefix(self) -> &'static str {
         match self {
-            AgentKind::Otelcol | AgentKind::OtelcolContrib => "v",
-            AgentKind::Supervisor => "version/",
+            AgentKind::Otelcol | AgentKind::OtelcolContrib | AgentKind::Supervisor => "v",
         }
     }
 
@@ -1561,16 +1560,13 @@ mod tests {
         // the round trip is what `--version` relies on: an operator types what the release page
         // shows, and the tag is derived from it.
         assert_eq!(
-            AgentKind::Supervisor.version_of_tag("version/1.2.3"),
+            AgentKind::Supervisor.version_of_tag("v1.2.3"),
             Some("1.2.3".to_string())
         );
-        for other in ["v1.2.3", "1.2.3", "version/1.2", "version/1.2.3-dev"] {
+        for other in ["version/1.2.3", "1.2.3", "v1.2", "v1.2.3-dev"] {
             assert_eq!(AgentKind::Supervisor.version_of_tag(other), None, "{other}");
         }
-        assert_eq!(
-            AgentKind::Supervisor.tag_of_version("1.2.3"),
-            "version/1.2.3"
-        );
+        assert_eq!(AgentKind::Supervisor.tag_of_version("1.2.3"), "v1.2.3");
     }
 
     /// Upstream `1.19` is fetched under its own tag and named Package `1.19.0`; a leading zero is

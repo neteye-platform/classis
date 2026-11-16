@@ -1022,7 +1022,7 @@ fn a_release_starts_only_from_a_tag_a_person_pushed() {
         [
             "  workflow_dispatch:",
             "  push:",
-            "    tags: [\"version/*\"]"
+            "    tags: [\"v[0-9]+.[0-9]+.[0-9]+\"]"
         ],
         "{on}"
     );
@@ -1064,7 +1064,10 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
         1,
         "one environment"
     );
-    assert!(sign.contains("    environment: Package Signing\n"), "{sign}");
+    assert!(
+        sign.contains("    environment: Package Signing\n"),
+        "{sign}"
+    );
     assert_eq!(workflow.matches("secrets.").count(), 1, "one secret");
     assert!(
         sign.contains("${{ secrets.PACKAGE_SIGNING_KEY }}"),
@@ -1150,7 +1153,9 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
     let signer = root.signer();
     let dir = tempfile::tempdir().expect("tempdir");
     let key_file = dir.path().join("package-signing-key.pk8");
-    std::fs::write(&key_file, &signer.pkcs8).expect("key file");
+    // As the secret holds it: PKCS#8 v1, from `openssl genpkey`, which the runner's OpenSSL 3.0
+    // reads (it refuses ring's v2).
+    std::fs::write(&key_file, signer.pkcs8_v1()).expect("key file");
     let cert_file = dir.path().join("package-signer.der");
     std::fs::write(&cert_file, &signer.der).expect("certificate file");
     let entries = dir.path().join("entries");
@@ -1349,9 +1354,9 @@ fn the_version_step_takes_the_annotated_tag_that_started_the_run() {
     std::fs::create_dir(&origin).expect("origin");
     git(&["init", "-q"], &origin);
     git(&["commit", "-q", "--allow-empty", "-m", "one"], &origin);
-    git(&["tag", "-a", "version/1.2.3", "-m", "release"], &origin);
+    git(&["tag", "-a", "v1.2.3", "-m", "release"], &origin);
     let commit = git(&["rev-parse", "HEAD"], &origin);
-    let object = git(&["rev-parse", "version/1.2.3"], &origin);
+    let object = git(&["rev-parse", "v1.2.3"], &origin);
     assert_ne!(commit, object, "an annotated tag");
     git(
         &["clone", "-q", origin.to_str().expect("utf-8"), "clone"],

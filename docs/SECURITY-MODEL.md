@@ -83,7 +83,7 @@ Replacing the key is a new key, a new certificate from the same Root, a new
 secret and a reviewed change to that file; no installation changes. It is a
 secret of the GitHub environment `Package Signing`, not
 of the repository. Only the `sign` job names that environment, and it receives
-the key only on the push of a `version/*` tag and after a second person with
+the key only on the push of a `v<version>` tag and after a second person with
 write access approves the run. The job checks out no code and builds nothing,
 and it removes the key from the runner whatever the outcome. What this does not
 close: a repository admin can change the environment or replace the secret, a
@@ -162,7 +162,7 @@ remedy for a vulnerable version is an upgrade — through the fleet's own
 self-update where the Client is concerned. Each fix is listed in the release
 notes of the release that carries it.
 
-| Version                        | Supported |
-| ------------------------------ | --------- |
-| the latest `version/*` release | ✅        |
-| any earlier release            | ❌        |
+| Version                          | Supported |
+| -------------------------------- | --------- |
+| the latest `v<version>` release  | ✅        |
+| any earlier release              | ❌        |
