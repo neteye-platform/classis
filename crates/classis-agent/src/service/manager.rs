@@ -377,10 +377,10 @@ fn register(level: ServiceLevel, ctx: ServiceInstallCtx) -> Result<(), String> {
 
 /// Registers the second service (ADR-0059 clause 2), which only a host where [`agents_supported`]
 /// holds gets. The registration first, so an install that may not register a system service is
-/// told so before anything else. On Windows
-/// what `service-manager` leaves undone follows, as for the Client: the recovery actions, the
-/// display name, the description and the logon account — and the required privileges, cut to
-/// `SeChangeNotifyPrivilege` ([`windows_config::configure_agents`](super::windows_config)).
+/// told so before anything else. On Windows what `service-manager` leaves undone follows, as for
+/// the Client: the recovery actions, the display name, the description and the logon account —
+/// and the required privileges, cut to `SeChangeNotifyPrivilege`
+/// ([`windows_config::configure_agents`](super::windows_config)).
 ///
 /// The Client's service is not made to depend on it (`sc config depend=`): the SCM starts no
 /// service whose dependency failed to start, and stops none a running one depends on, so a second
@@ -613,7 +613,8 @@ pub struct Registration {
 }
 
 /// The registration a re-registration finds (ADR-0042 clause 2): the file the Client wrote —
-/// `/etc/systemd/system/<PRODUCT_NAME>.service` — never a drop-in and never the loaded state of the service manager. `None` at user scope, where
+/// `/etc/systemd/system/<PRODUCT_NAME>.service` — never a drop-in and never the loaded state of
+/// the service manager. `None` at user scope, where
 /// no account is named; on Windows, where the SCM keeps the logon account itself; and where no
 /// file exists.
 ///
@@ -1472,7 +1473,7 @@ impl NativeService {
 }
 
 /// Whether the Client's registration starts the second service with it: systemd's `Wants=` in the
-/// Client's unit does (ADR-0059 clause 9); the SCM entry names no dependency (ADR-0059 clause 2).
+/// Client's unit does (ADR-0064 clause 26); the SCM entry names no dependency (ADR-0064 clause 22).
 const PULLED_IN: bool = cfg!(target_os = "linux");
 
 /// What `start` starts, in order. Where a second service is registered and the Client's unit wants
@@ -1620,7 +1621,8 @@ mod tests {
     use crate::service::layout;
 
     /// ADR-0019's whole mechanism: a label with no qualifier and no organization renders the
-    /// same through *both* of the crate's functions, so systemd and the SCM show one name. A dot anywhere in it would split the label again and undo that.
+    /// same through *both* of the crate's functions, so systemd and the SCM show one name. A dot
+    /// anywhere in it would split the label again and undo that.
     /// Verifies: ADR-0019
     #[test]
     fn every_backend_renders_the_same_name() {

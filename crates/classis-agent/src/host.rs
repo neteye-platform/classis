@@ -150,11 +150,6 @@ fn read_os_info() -> OsInfo {
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
-fn read_os_info() -> OsInfo {
-    OsInfo::default()
-}
-
 /// The processor's model designation (`host.cpu.model.name`) — read once, hardware does not
 /// change under a running process. From the same `sysinfo` the addresses come from (ADR-0016);
 /// one CPU answers for all of them, which is what the convention's singular key asks for.
@@ -250,11 +245,6 @@ fn read_host_id() -> Option<String> {
         .last()?
         .to_string();
     (!value.is_empty()).then_some(value)
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn read_host_id() -> Option<String> {
-    None
 }
 
 #[cfg(test)]

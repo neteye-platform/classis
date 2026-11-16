@@ -3,9 +3,9 @@
 //! of ADR-0019.
 //!
 //! On systemd the restart policy handed to `service-manager` is written straight into the unit
-//! (`Restart=on-failure`). Its Windows backend is the `sc.exe` wrapper, whose `install` matches on the policy **only to log a
-//! warning** — *"sc.exe does not support automatic restart policies through 'sc create'; service
-//! '…' will not restart automatically"* — and registers no recovery actions at all. A Windows
+//! (`Restart=on-failure`). Its Windows backend is the `sc.exe` wrapper, whose `install` matches
+//! on the policy **only to log a warning** — *"sc.exe does not support automatic restart
+//! policies through 'sc create'; service '…' will not restart automatically"* — and registers no recovery actions at all. A Windows
 //! Client therefore never came back from any failure, which contradicts ADR-0019 on one of its
 //! two platforms.
 //!

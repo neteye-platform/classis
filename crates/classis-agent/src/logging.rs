@@ -2,7 +2,8 @@
 //!
 //! The Windows SCM discards a service's stderr, so a Client installed there had no readable log at
 //! all; systemd does capture it, and the file is written on Linux too so that "where are the logs"
-//! has one answer everywhere — including in a container, where neither is present. In the foreground nothing is written: somebody is reading stderr there.
+//! has one answer everywhere — including in a container, where there is no journal. In the
+//! foreground nothing is written: somebody is reading stderr there.
 //!
 //! This is not the OTLP own-logs bridge (ADR-0016) under another name. That one needs a Server that
 //! is already reachable, which is exactly what a bad `supervisor.toml`, an unusable certificate, or a
