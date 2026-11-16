@@ -586,12 +586,6 @@ mod tests {
         )
     }
 
-    /// A configuration as `ClientConfig::load` leaves it. Nothing about the key decides any more
-    /// whether anything takes packages (ADR-0063); kept as the name the tests below read.
-    fn keyed(config: ClientConfig) -> ClientConfig {
-        config
-    }
-
     /// The claim of ADR-0017 in one assertion: every wrapped kind's block is `type` and `name`, and
     /// it validates whole — the program resolves inside this Supervisor's own directory, the Agent
     /// type is stated, the timing comes from the fleet, and the kind's own strict parse accepts an
@@ -764,15 +758,13 @@ mod tests {
 
     /// Two Supervisors, `a` and `b`, of the one Agent type `managed-agent`, taking packages.
     fn two_of_a_type(root: &std::path::Path) -> ClientConfig {
-        keyed(
-            toml::from_str(&format!(
-                "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {state:?}\n\
+        toml::from_str(&format!(
+            "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {state:?}\n\
                  [[supervisor]]\ntype = \"command\"\nname = \"a\"\ncommand = \"managed-agent\"\n\
                  [[supervisor]]\ntype = \"command\"\nname = \"b\"\ncommand = \"managed-agent\"\n",
-                state = root.join("state").to_string_lossy(),
-            ))
-            .expect("parse"),
-        )
+            state = root.join("state").to_string_lossy(),
+        ))
+        .expect("parse")
     }
 
     /// Where a process account is registered, the Engine lays out the path to each Managed
@@ -971,7 +963,7 @@ mod tests {
         let (_tx, shutdown) = shutdown_channel();
 
         let owned: ClientConfig =
-            keyed(toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse"));
+            toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
         let mut engine = build_engine(&owned, &shutdown, Spawner::Local).expect("build");
         assert!(
             accepts_packages(&mut engine),
@@ -1028,7 +1020,7 @@ mod tests {
         let (_tx, shutdown) = shutdown_channel();
 
         let owned: ClientConfig =
-            keyed(toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse"));
+            toml::from_str(&config(dir.path(), "managed-agent", None)).expect("parse");
         let engine = build_engine(&owned, &shutdown, Spawner::Local).expect("build");
         assert!(
             engine.installs_packages(),
@@ -1051,7 +1043,7 @@ mod tests {
         // The Client's own Agent consents by default (ADR-0018), so a Client with no Supervisor at
         // all still installs packages — its own.
         let bare: ClientConfig =
-            keyed(toml::from_str("endpoint = \"ws://127.0.0.1:1/v1/opamp\"\n").expect("parse"));
+            toml::from_str("endpoint = \"ws://127.0.0.1:1/v1/opamp\"\n").expect("parse");
         let engine = build_engine(&bare, &shutdown, Spawner::Local).expect("build");
         assert!(
             engine.installs_packages(),
@@ -1073,7 +1065,7 @@ mod tests {
              program_path = \"bin/fluent-bit\"\n",
             state = dir.path().join("state").to_string_lossy(),
         );
-        let parsed: ClientConfig = keyed(toml::from_str(&config).expect("parse"));
+        let parsed: ClientConfig = toml::from_str(&config).expect("parse");
         let mut engine = build_engine(&parsed, &shutdown, Spawner::Local).expect("build");
 
         assert!(

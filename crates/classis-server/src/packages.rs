@@ -252,6 +252,22 @@ pub struct Entry {
     /// `None` until one is written; new bytes remove it, because a signature covers the hash
     /// (ADR-0033). An entry without one is offered to nobody.
     pub signature: Option<Vec<u8>>,
+    /// Whether the stored signature did not verify when the store was loaded (ADR-0063 clause
+    /// 10): it is kept, and persisted as it is, but offered to nobody and reported `missing`
+    /// while this Server runs. A wrong clock or another list of Roots then loses nothing. Never
+    /// persisted itself; every store loads it `false`.
+    pub signature_set_aside: bool,
+}
+
+impl Entry {
+    /// The signature this entry is offered with: none while it is set aside (ADR-0063 clause 10).
+    pub fn offered_signature(&self) -> Option<&[u8]> {
+        if self.signature_set_aside {
+            None
+        } else {
+            self.signature.as_deref()
+        }
+    }
 }
 
 /// Whether an entry carries a signature (ADR-0063 clause 10). The Server holds only signatures
@@ -316,7 +332,7 @@ fn verify_entry(
 
 /// Whether an entry carries a signature (ADR-0063 clause 10).
 pub fn signature_state(entry: &Entry) -> SignatureState {
-    if entry.signature.is_some() {
+    if entry.offered_signature().is_some() {
         SignatureState::Valid
     } else {
         SignatureState::Missing
@@ -400,7 +416,7 @@ impl PackageSummary {
                     size: entry.size,
                     content_hash: hex::encode(&entry.content_hash),
                     package_hash: hex::encode(set.package_hash(entry)),
-                    signature: entry.signature.as_ref().map(hex::encode),
+                    signature: entry.offered_signature().map(hex::encode),
                     signature_state: signature_state(entry),
                 })
                 .collect(),
@@ -529,31 +545,26 @@ impl PackageStore {
         self
     }
 
-    /// Removes every stored signature that does not verify (ADR-0063 clause 10) — one stored
-    /// before ADR-0063, 64 raw bytes, or one whose Package Signer has expired — naming each, so
-    /// the store holds only what an Agent would accept. Run when the store is loaded.
+    /// Sets aside every stored signature that does not verify (ADR-0063 clause 10) — one stored
+    /// before ADR-0063, 64 raw bytes, or one whose Package Signer has expired — naming each. The
+    /// store keeps it: only this Server's view of the entry turns unsigned. Run when the store is
+    /// armed at load.
     fn drop_unverified(&self) {
         let mut sets = self.sets.write().expect("sets lock");
         for set in sets.values_mut() {
-            let mut dropped = false;
             for entry in set.entries.values_mut() {
                 let Some(signature) = entry.signature.clone() else {
                     continue;
                 };
-                if let Err(why) = verify_entry(self.verifier.as_ref(), &set.id, entry, &signature) {
+                let verdict = verify_entry(self.verifier.as_ref(), &set.id, entry, &signature);
+                entry.signature_set_aside = verdict.is_err();
+                if let Err(why) = verdict {
                     tracing::warn!(
                         package = %set.id,
                         platform = %entry.platform.tag(),
-                        "the stored signature is removed, the entry is unsigned — {why}; upload \
-                         the release's .sig again"
+                        "the stored signature does not verify, so the entry is offered to nobody \
+                         — {why}; it stays in the store, and the release's .sig replaces it"
                     );
-                    entry.signature = None;
-                    dropped = true;
-                }
-            }
-            if dropped {
-                if let Err(e) = self.backend.put(set) {
-                    tracing::warn!(package = %set.id, "the unsigned entries could not be persisted: {e}");
                 }
             }
         }
@@ -676,6 +687,7 @@ impl PackageStore {
                             // New bytes take the old signature with them: it covered the old hash
                             // (ADR-0033).
                             signature: None,
+                            signature_set_aside: false,
                         },
                     ),
                     Ok(false) => Err(REMOVED_WHILE_UPLOADED.to_string()),
@@ -737,11 +749,13 @@ impl PackageStore {
         verify_entry(self.verifier.as_ref(), id, entry, &signature)
             .map_err(|why| format!("the signature is refused, nothing is stored — {why}"))?;
         let previous = entry.signature.replace(signature);
+        let was_set_aside = std::mem::replace(&mut entry.signature_set_aside, false);
         let state = signature_state(entry);
         if let Err(e) = self.backend.put(set) {
             // What did not reach the disk did not happen.
             if let Some(entry) = set.entries.get_mut(platform) {
                 entry.signature = previous;
+                entry.signature_set_aside = was_set_aside;
             }
             return Err(e);
         }
@@ -764,9 +778,11 @@ impl PackageStore {
         let Some(previous) = entry.signature.take() else {
             return Ok(false);
         };
+        let was_set_aside = std::mem::replace(&mut entry.signature_set_aside, false);
         if let Err(e) = self.backend.put(set) {
             if let Some(entry) = set.entries.get_mut(platform) {
                 entry.signature = Some(previous);
+                entry.signature_set_aside = was_set_aside;
             }
             return Err(e);
         }
@@ -911,7 +927,7 @@ impl PackageStore {
                 let missing: Vec<String> = set
                     .entries
                     .values()
-                    .filter(|entry| entry.signature.is_none())
+                    .filter(|entry| entry.offered_signature().is_none())
                     .map(|entry| format!("{}/{}", entry.platform.os, entry.platform.arch))
                     .collect();
                 (!missing.is_empty())
@@ -961,7 +977,7 @@ impl PackageStore {
     pub fn offerable(&self, id: &PackageId, platform: &Platform) -> Option<Offerable> {
         let sets = self.sets.read().expect("sets lock");
         let entry = sets.get(id)?.entries.get(platform)?;
-        entry.signature.is_some().then(|| Offerable {
+        entry.offered_signature().is_some().then(|| Offerable {
             id: id.clone(),
             platform: platform.clone(),
         })
@@ -1103,7 +1119,7 @@ fn offered_entry<'a>(
         return None;
     }
     let entry = set.entries.get(&platform)?;
-    let signature = entry.signature.as_deref()?;
+    let signature = entry.offered_signature()?;
     Some((set, entry, signature))
 }
 
@@ -1633,12 +1649,12 @@ mod tests {
     }
 
     /// The Server holds only a signature that verifies up to its Package Roots (ADR-0063 clause
-    /// 10): a Package Signer of another Root is refused on write, and a stored signature that no
-    /// longer verifies — 64 raw bytes from before ADR-0063 — is removed when the store is loaded,
-    /// for good.
+    /// 10): a Package Signer of another Root is refused on write, and a stored signature that does
+    /// not verify — 64 raw bytes from before ADR-0063 — is set aside when the store is loaded: the
+    /// entry is offered to nobody, and the store keeps the signature, through later writes too.
     /// Verifies: ADR-0063
     #[test]
-    fn the_server_refuses_what_does_not_verify_and_drops_it_on_load() {
+    fn the_server_refuses_what_does_not_verify_and_sets_it_aside_on_load() {
         let dir = tempfile::tempdir().expect("tempdir");
         let set = id("otelcol", "1.0.0");
         {
@@ -1682,17 +1698,25 @@ mod tests {
         assert_eq!(
             states(&reopened),
             [SignatureState::Valid, SignatureState::Missing],
-            "the old signature is dropped, the verified one kept"
+            "the old signature is set aside, the verified one kept"
         );
         assert!(reopened
             .offer_for_assigned(Some(&set), Some(&agent("windows", "amd64", &[])))
             .is_none());
+        assert_eq!(
+            reopened.summary(&set).expect("summary").entries[1].signature,
+            None
+        );
+        // A later write to the Package persists it whole, the set-aside signature included.
+        reopened
+            .put_signature(&set, &linux(), signed(&set, b"linux"))
+            .expect("signed again");
         drop(reopened);
         let raw = PackageStore::open(dir.path().to_path_buf()).expect("reopen without a check");
         assert_eq!(
-            states(&raw),
-            [SignatureState::Valid, SignatureState::Missing],
-            "and the removal was persisted"
+            raw.sets.read().expect("sets lock")[&set].entries[&windows()].signature,
+            Some(vec![1u8; 64]),
+            "the store kept what it set aside"
         );
     }
 

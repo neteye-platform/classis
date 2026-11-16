@@ -34,6 +34,10 @@ pub enum Deviation {
     Ca,
     /// Carries `codeSigning`.
     ExtendedKeyUsage,
+    /// Its own key is ECDSA P-256, under an Ed25519 Root: the chain verifies, the signature must
+    /// not. Its [`TestSigner::sign`] panics; put a signature together with
+    /// [`encode_signature`](super::encode_signature).
+    EcdsaKey,
 }
 
 impl TestRoot {
@@ -114,12 +118,21 @@ impl TestRoot {
     /// As [`TestRoot::new`].
     #[must_use]
     pub fn signer_with(&self, deviation: Deviation) -> TestSigner {
-        let pkcs8 =
-            ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-                .expect("signer key")
-                .as_ref()
-                .to_vec();
-        let key = KeyPair::try_from(pkcs8.as_slice()).expect("signer key");
+        let (key, pkcs8) = if deviation == Deviation::EcdsaKey {
+            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("signer key");
+            let pkcs8 = key.serialize_der();
+            (key, pkcs8)
+        } else {
+            let pkcs8 =
+                ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+                    .expect("signer key")
+                    .as_ref()
+                    .to_vec();
+            (
+                KeyPair::try_from(pkcs8.as_slice()).expect("signer key"),
+                pkcs8,
+            )
+        };
         let mut p = CertificateParams::new(Vec::<String>::new()).expect("params");
         p.distinguished_name
             .push(DnType::CommonName, "TEST ONLY Package Signer");
@@ -129,7 +142,7 @@ impl TestRoot {
         p.not_before = now - Duration::days(2);
         p.not_after = now + Duration::days(365 * 10);
         match deviation {
-            Deviation::None => {}
+            Deviation::None | Deviation::EcdsaKey => {}
             Deviation::Expired => p.not_after = now - Duration::days(1),
             Deviation::Ca => p.is_ca = IsCa::Ca(BasicConstraints::Unconstrained),
             Deviation::ExtendedKeyUsage => {

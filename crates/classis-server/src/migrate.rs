@@ -491,6 +491,7 @@ fn carry_packages(
                     content_hash: hex::decode(&sha256).expect("a blob's hash is hex"),
                     size,
                     signature,
+                    signature_set_aside: false,
                 },
             );
         }
