@@ -216,20 +216,12 @@
         <div class="config-actions">
           <button id="set-delete" class="btn btn-ghost"
                   title="Delete this Set — entries, artifacts and metadata — refused while an agent's assignment pins it. It leaves every deployment that holds it. Nothing is uninstalled: an agent keeps running what it took.">Delete</button>
-          <button id="set-signing" class="btn btn-ghost"
-                  title="Download what a signature covers, as JSON: the Agent type, the version, and each entry's platform and SHA-256. The platform is not signed; it says which entry the signature goes to. Sign it with classisctl package sign --signing-info and import it here.">Signing info</button>
-          <label class="field"><span class="field-cap">Signing file to import <b class="need opt">optional</b></span>
-            <input id="set-sig-file" type="file" accept=".json,application/json" style="color: var(--muted); font-size: 13px;" />
-          </label>
-          <button id="set-sig-import" class="btn btn-ghost"
-                  title="Put the signatures of a signed signing file onto the package it names, one request per entry. Each goes to the entry with its platform and SHA-256; one for other bytes is not taken. The Server's answer is reported per entry, its signature check included.">Import signing file</button>
           <span id="set-error" class="err" style="flex: 1"></span>
           <button id="set-cancel" class="btn btn-ghost" style="margin-left: auto"
                   title="Discard the form's changes: back to the stored state, or close the form when it was creating a new Set.">Cancel</button>
           <button id="set-ok" class="btn btn-primary"
                   title="Save the form: creates the Set — and, when a file is chosen above, stores that entry too. Nothing is distributed by this press (ADR-0025).">OK</button>
         </div>
-        <div id="set-sig-result" class="sub" style="margin: 10px 0 0; white-space: pre-line"></div>
       </section>
       </div>
 
@@ -1358,28 +1350,24 @@
         return channels.map((r) => `<span class="pill">${esc(r)}</span>`).join(" ");
       }
 
-      // An entry's signature as the Server found it (ADR-0033): checked against the Server's
-      // verification key when it holds one. An invalid one is a warning, never a refusal — the
-      // Client's own check decides.
+      // An entry's signature as the Server holds it (ADR-0063 clause 10): one that verifies up to
+      // the Package Roots compiled into the Server, or none. The Server refuses any other, and
+      // the Client's own check still decides.
       const SIG_STATES = {
         missing: ["amber", "unsigned", "no signature — offered to nobody until it is signed"],
-        valid: ["green", "🔏 valid", "the signature verifies against the Server's [packages] verification_key"],
-        invalid: ["amber", "⚠ invalid", "the signature does not verify against the Server's [packages] verification_key — it is kept and offered, and every Client with the right key refuses it"],
-        unchecked: ["gray", "🔏 signed", "signed; the Server holds no verification_key to check it with, so only the Clients do"],
+        valid: ["green", "🔏 valid", "the signature verifies up to the Package Roots compiled into the Server"],
       };
       function sigPill(e) {
         const [tone, label, why] = SIG_STATES[e.signature_state] || SIG_STATES.missing;
         return `<span class="pill ${tone}" title="${esc(why)}">${label}</span>`;
       }
 
-      // Whether every entry carries a valid signature (ADR-0033 clause 8), in one pill per row.
+      // Whether every entry carries a valid signature (ADR-0063 clause 16), in one pill per row.
       function signaturesCell(p) {
         const entries = p.entries || [];
         if (!entries.length) return "";
-        const count = (state) => entries.filter((e) => e.signature_state === state).length;
-        if (count("invalid")) return `<span class="pill amber" title="${esc(SIG_STATES.invalid[2])}">⚠ ${count("invalid")} invalid</span>`;
-        if (count("missing")) return `<span class="pill amber" title="${esc(SIG_STATES.missing[2])}">${count("missing")} of ${entries.length} unsigned</span>`;
-        if (count("unchecked")) return `<span class="pill gray" title="${esc(SIG_STATES.unchecked[2])}">🔏 signed</span>`;
+        const missing = entries.filter((e) => e.signature_state === "missing").length;
+        if (missing) return `<span class="pill amber" title="${esc(SIG_STATES.missing[2])}">${missing} of ${entries.length} unsigned</span>`;
         return `<span class="pill green" title="${esc(SIG_STATES.valid[2])}">🔏 all valid</span>`;
       }
 
@@ -1407,7 +1395,7 @@
       }
 
       // The entries of the current Set, one row each: platform, size, the full SHA-256 —
-      // selectable on its own, since it is what an operator compares against the file they sign —
+      // selectable on its own, since it is what an operator compares against the file they uploaded —
       // and the signature (ADR-0033): its state, with a ✕ to take it away, or a field to give it.
       // Each entry carries a ✕ that deletes it; on a Set that is assigned to an agent the entries
       // are frozen and the Server answers 409 with the reason — one rule, held where the
@@ -1422,8 +1410,8 @@
           const at = `data-os="${esc(e.os)}" data-arch="${esc(e.arch)}"`;
           const sig = e.signature_state && e.signature_state !== "missing"
             ? `${sigPill(e)}<span class="entry-sig-del" ${at} style="cursor: pointer; font-weight: 700;" title="Take this signature away. The entry is offered to nobody without one. Refused while the set is assigned to an agent.">✕</span>`
-            : `${sigPill(e)}<input class="entry-sig-hex" ${at} placeholder="hex Ed25519 signature" autocomplete="off" value="${esc(typed[`${e.os}/${e.arch}`] || "")}" title="What classisctl package sign --agent-type … --version … prints for this artifact." /><button class="btn btn-ghost btn-sm entry-sig-put" ${at}>Sign</button>`;
-          return `<span class="chip"><span class="platform">${esc(e.os)}-${esc(e.arch)}</span><span class="size">${fmtBytes(e.size)}</span><span class="sha" title="The SHA-256 each Agent verifies its download against, and the signature covers. Compare it with classisctl package sha256 on the file you sign.">${esc(e.content_hash)}</span><span class="sig">${sig}</span><span class="entry-del" ${at} style="cursor: pointer; font-weight: 700;" title="Delete this entry (its artifact and signature go with it). Refused while the set is assigned to an agent.">✕</span></span>`;
+            : `${sigPill(e)}<input class="entry-sig-hex" ${at} placeholder="hex of the .sig" autocomplete="off" value="${esc(typed[`${e.os}/${e.arch}`] || "")}" title="The content of this artifact's .sig from the release: a Package Signer's certificate and its signature, in hex. One that does not verify up to the Package Roots compiled into the Server is refused, naming the step." /><button class="btn btn-ghost btn-sm entry-sig-put" ${at}>Sign</button>`;
+          return `<span class="chip"><span class="platform">${esc(e.os)}-${esc(e.arch)}</span><span class="size">${fmtBytes(e.size)}</span><span class="sha" title="The SHA-256 each Agent verifies its download against, and the signature covers. Compare it with classisctl package sha256 on the file you uploaded.">${esc(e.content_hash)}</span><span class="sig">${sig}</span><span class="entry-del" ${at} style="cursor: pointer; font-weight: 700;" title="Delete this entry (its artifact and signature go with it). Refused while the set is assigned to an agent.">✕</span></span>`;
         }).join("") || `<span class="chip">no entries yet — a package needs one for a host to take it</span>`;
       }
 
@@ -1450,8 +1438,6 @@
           ? "will be saved — nothing reaches an agent until a rollout act names it"
           : "saved — distributed only by a rollout act; entries freeze while the set is assigned to an agent";
         $("set-delete").disabled = creatingSet;
-        $("set-signing").disabled = creatingSet || !(p.entries || []).length;
-        $("set-sig-import").disabled = creatingSet || !(p.entries || []).length;
         renderSetEntries(p);
         for (const id of ["entry-os", "entry-arch", "entry-file"]) {
           $(id).disabled = false;
@@ -1509,9 +1495,6 @@
         $("set-detail-title").textContent = "New package set — saved, distributed by a rollout act";
         $("set-state").textContent = "will be saved — nothing reaches an agent until a rollout act names it";
         $("set-delete").disabled = true;
-        $("set-signing").disabled = true;
-        $("set-sig-import").disabled = true;
-        $("set-sig-result").textContent = "";
         renderSetEntries(null);
         $("set-error").textContent = "";
         setFormDirty = false;
@@ -1527,7 +1510,6 @@
         creatingSet = false;
         currentSet = currentSet === tr.dataset.key ? null : tr.dataset.key;
         $("set-error").textContent = "";
-        $("set-sig-result").textContent = "";
         clearEntryEditor();
         renderSets();
         showSetDetail();
@@ -1568,30 +1550,6 @@
         currentSet = null;
         renderSets();
         $("set-detail").style.display = "none";
-      });
-
-      // The signing file's one format (ADR-0027): written by the download, required by the import.
-      const SIGNING_FORMAT = "classis-signing-v1";
-
-      // What a signature covers (ADR-0026 clause 54), as a file to take to where the key is: the
-      // Agent type, the version and each entry's SHA-256. Built from what the page already read —
-      // the Server is not asked again, so the file is exactly what the operator saw.
-      $("set-signing").addEventListener("click", () => {
-        const p = currentSetView();
-        if (!p) return;
-        const info = {
-          format: SIGNING_FORMAT,
-          agent_type: p.agent_type,
-          version: p.version,
-          entries: (p.entries || []).map((e) => ({ os: e.os, arch: e.arch, sha256: e.content_hash })),
-        };
-        const blob = new Blob([JSON.stringify(info, null, 2) + "\n"], { type: "application/json" });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${p.agent_type}_${p.version}_signing.json`;
-        link.click();
-        // Released once the click has handed the URL to the download, not before it.
-        setTimeout(() => URL.revokeObjectURL(link.href), 0);
       });
 
       // Delete: the Set goes — entries, artifacts, metadata — and with it the current record, so
@@ -1647,64 +1605,6 @@
       });
 
       $("set-entries").addEventListener("input", () => { setFormDirty = true; });
-
-      // A signed signing file (ADR-0027) matched to the package it names and to each entry by its
-      // platform and SHA-256: a signature for other bytes than the entry's is not taken. Each goes
-      // through the entry's signature route, one request each, and the Server's answer is reported
-      // per entry with what its check found (ADR-0033 clause 12). Nothing is checked against a key
-      // here — the Server does when it holds one, and every Client does before it opens the
-      // artifact (ADR-0026 clause 54).
-      $("set-sig-import").addEventListener("click", async () => {
-        const file = $("set-sig-file").files[0];
-        if (!file) {
-          $("set-sig-result").textContent = "choose a signed signing file first";
-          return;
-        }
-        if (file.size > 1024 * 1024) {
-          $("set-sig-result").textContent = `${file.name} is far larger than a signing file`;
-          return;
-        }
-        let info;
-        try { info = JSON.parse(await file.text()); }
-        catch (e) { $("set-sig-result").textContent = `${file.name} is not JSON: ${e.message}`; return; }
-        if (!info || info.format !== SIGNING_FORMAT || !info.agent_type || !info.version || !Array.isArray(info.entries)) {
-          $("set-sig-result").textContent = `${file.name} is not an ${SIGNING_FORMAT} file`;
-          return;
-        }
-        const key = `${info.agent_type}@${info.version}`;
-        const p = packages.find((x) => setKey(x) === key);
-        if (!p) {
-          $("set-sig-result").textContent = `${key} is not in the package store — upload it first`;
-          return;
-        }
-        const lines = [];
-        for (const e of info.entries) {
-          if (!e || !e.os || !e.arch) {
-            lines.push("an entry names no platform — skipped");
-            continue;
-          }
-          const platform = `${e.os}/${e.arch}`;
-          const entry = (p.entries || []).find((x) => x.os === e.os && x.arch === e.arch);
-          if (!entry) { lines.push(`${platform}: the package has no such entry — skipped`); continue; }
-          if (e.sha256 !== entry.content_hash) { lines.push(`${platform}: the SHA-256 is not this entry's — skipped`); continue; }
-          if (!e.signature) { lines.push(`${platform}: not signed — skipped`); continue; }
-          let res;
-          try {
-            res = await fetch(entrySigPath(info.agent_type, info.version, e.os, e.arch), {
-              method: "PUT",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ signature: e.signature }),
-            });
-          } catch (err) { lines.push(`${platform}: ${err.message}`); continue; }
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) { lines.push(`${platform}: ${body.error || `HTTP ${res.status}`}`); continue; }
-          const stored = (body.entries || []).find((x) => x.os === e.os && x.arch === e.arch);
-          lines.push(`${platform}: recorded — ${stored ? stored.signature_state : "stored"}`);
-        }
-        $("set-sig-result").textContent = `${key}\n${lines.join("\n")}`;
-        $("set-sig-file").value = "";
-        await refreshPackages();
-      });
 
       // Add entry: stores what the editor holds into the current set, now — one request per
       // entry, so a five-platform release is five adds on one set rather than five saves. The

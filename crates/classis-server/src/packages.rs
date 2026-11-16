@@ -570,9 +570,8 @@ impl PackageStore {
     }
 
     /// Offers every stored signature that verifies, and withholds the rest (ADR-0063 clause 10)
-    /// — one stored before ADR-0063, 64 raw bytes, or one whose Package Signer has expired —
-    /// naming each. The store keeps a withheld one: only this Server's view of the entry turns
-    /// unsigned. Run when the store is armed at load.
+    /// — one whose Package Signer has expired among them — naming each. The store keeps a
+    /// withheld one: only this Server's view of the entry turns unsigned. Run when the store is armed at load.
     fn drop_unverified(&self) {
         let mut sets = self.sets.write().expect("sets lock");
         for set in sets.values_mut() {
@@ -1692,7 +1691,7 @@ mod tests {
 
     /// The Server holds only a signature that verifies up to its Package Roots (ADR-0063 clause
     /// 10): a Package Signer of another Root is refused on write, and a stored signature that does
-    /// not verify — 64 raw bytes from before ADR-0063 — is set aside when the store is loaded: the
+    /// not verify — 64 bytes here — is set aside when the store is loaded: the
     /// entry is offered to nobody, and the store keeps the signature, through later writes too. A
     /// store no verifier armed offers no stored signature at all.
     /// Verifies: ADR-0063
@@ -2527,7 +2526,8 @@ mod tests {
         );
     }
 
-    /// A stored signature is held to the length a write is held to: one that is not 64 bytes fails
+    /// A stored signature is held to the length a write is held to: one that is empty or longer
+    /// than a `PackageSignature` can be fails
     /// the open naming the file, rather than being offered for every Client to refuse.
     /// Verifies: ADR-0033
     #[test]

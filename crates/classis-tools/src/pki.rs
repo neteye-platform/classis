@@ -329,7 +329,7 @@ pub fn init(options: &InitOptions) -> Result<Vec<String>, String> {
         options.server_days,
     )?;
     // The package signing key stays with the server CA's (ADR-0028 clause 3).
-    let (signing_key, verification_key) = crate::package::signing_key()?;
+    let (signing_key, public_key) = crate::package::signing_key()?;
 
     let server_path = destination(&options.server_dir, options.server_path.as_deref())?;
     let host_path = destination(&options.offline_dir, options.host_path.as_deref())?;
@@ -346,15 +346,12 @@ pub fn init(options: &InitOptions) -> Result<Vec<String>, String> {
         quoted(&server_path, "bootstrap-ca-key.pem"),
     );
     // The bootstrap certificate is the Server's to issue, as a PKCS#12 file `pki p12-extract`
-    // takes the pair out of; the fragment names where a host keeps the pair, and
-    // the key a package it installs must be signed with.
+    // takes the pair out of; the fragment names where a host keeps the pair (ADR-0063 clause 15).
     let supervisor_toml = format!(
-        "[tls]\nca_file = {}\ncert_file = {}\nkey_file = {}\n\n\
-         [packages]\nverification_key = {}\n",
+        "[tls]\nca_file = {}\ncert_file = {}\nkey_file = {}\n",
         quoted(&host_path, "server-ca.pem"),
         quoted(&host_path, "bootstrap.pem"),
         quoted(&host_path, "bootstrap-key.pem"),
-        toml::Value::String(verification_key.clone()),
     );
 
     let targets = [
@@ -380,7 +377,7 @@ pub fn init(options: &InitOptions) -> Result<Vec<String>, String> {
                     contents: signing_key,
                     key: true,
                 },
-                cert("package-signing-key.pub", &format!("{verification_key}\n")),
+                cert("package-signing-key.pub", &format!("{public_key}\n")),
                 cert("supervisor.toml.fragment", &supervisor_toml),
             ],
         },
@@ -396,8 +393,7 @@ pub fn init(options: &InitOptions) -> Result<Vec<String>, String> {
             "{}: keep offline — the server CA's key and the package signing key; give every new \
              host server-ca.pem, and the bootstrap.p12 the Server issues (POST \
              /api/v1/bootstrap-certificates), or its pair as bootstrap.pem and \
-             bootstrap-key.pem (pki p12-extract), as supervisor.toml.fragment names them with \
-             the package verification key",
+             bootstrap-key.pem (pki p12-extract), as supervisor.toml.fragment names them",
             options.offline_dir.display()
         ),
     ];
@@ -1103,12 +1099,12 @@ mod tests {
             .any(|l| l.starts_with("notice: both directories")));
     }
 
-    /// The package signing key lands offline, and what it signs passes the Client's check under
-    /// the `verification_key` the fragment names (ADR-0028 clause 3).
-    // Verifies: ADR-0028
+    /// The package signing key lands offline with its public half, and the fragment names no key:
+    /// the Client verifies packages up to its compiled-in Package Roots (ADR-0063 clause 15).
+    // Verifies: ADR-0028, ADR-0063
     #[test]
-    fn init_makes_the_package_signing_key_offline_and_names_its_public_half() {
-        use ring::signature::{Ed25519KeyPair, KeyPair as _, UnparsedPublicKey, ED25519};
+    fn init_makes_the_package_signing_key_offline_and_the_fragment_names_no_key() {
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
         let root = tempfile::tempdir().expect("tempdir");
         init(&options(root.path())).expect("init");
         let offline = root.path().join("offline");
@@ -1124,14 +1120,10 @@ mod tests {
                 .expect("read")
                 .parse()
                 .expect("toml");
-        let named = fragment["packages"]["verification_key"]
-            .as_str()
-            .expect("verification_key");
-        assert_eq!(named, public);
-        let signature = keypair.sign(b"an artifact");
-        UnparsedPublicKey::new(&ED25519, hex::decode(named).expect("hex"))
-            .verify(b"an artifact", signature.as_ref())
-            .expect("the Client's check accepts it");
+        assert!(
+            !fragment.contains_key("packages"),
+            "the fragment names no package key: {fragment:?}"
+        );
         assert!(
             files(&root.path().join("server"))
                 .iter()

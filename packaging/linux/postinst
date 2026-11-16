@@ -86,7 +86,7 @@ certificate refuses to start. Two steps remain:
   systemctl start classis
 
 The first asks for the endpoint, the Server's CA, a bootstrap certificate and its key (or a
-bootstrap.p12 and its password), and the package verification key, writes supervisor.toml, and
+bootstrap.p12 and its password), writes supervisor.toml, and
 enrols this host with the Server: open the enrolment window first and approve the request it waits
 for. `classis service config` asks again later.
 

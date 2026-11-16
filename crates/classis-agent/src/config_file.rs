@@ -314,7 +314,7 @@ mod tests {
     fn redaction_masks_credential_values_and_keeps_everything_else() {
         let text = "# the fleet endpoint\nendpoint = \"wss://fleet:4320/v1/opamp\"\n\n\
                     [auth]\n  bearer_token = \"s3cret\"\n\
-                    [packages]\narchive_key = \"p4ss\"\nverification_key = \"aabb\"\n";
+                    [packages]\narchive_key = \"p4ss\"\nself_update = false\n";
         let redacted = redact_secrets(text);
         assert!(!redacted.contains("s3cret"), "{redacted}");
         assert!(!redacted.contains("p4ss"), "{redacted}");
@@ -329,8 +329,8 @@ mod tests {
             "{redacted}"
         );
         assert!(
-            redacted.contains("verification_key = \"aabb\""),
-            "the public half of the signing pair is no secret: {redacted}"
+            redacted.contains("self_update = false"),
+            "a value that is no secret stays: {redacted}"
         );
 
         // An inline table hides a credential no better than a line of its own.
@@ -377,12 +377,12 @@ mod tests {
             );
         }
 
-        let text = "# head\n[packages]\nverification_key = \"\"\"\naabb\"\"\" # public\n\
-                    archive_key = '''\nsecret\n'''\nself_update = false\n";
+        let text = "# head\n[tls]\nca_file = \"\"\"\n/etc/ca.pem\"\"\" # public\n\
+                    [packages]\narchive_key = '''\nsecret\n'''\nself_update = false\n";
         assert_eq!(
             redact_secrets(text),
-            "# head\n[packages]\nverification_key = \"\"\"\naabb\"\"\" # public\n\
-             archive_key = \"***\"\nself_update = false\n"
+            "# head\n[tls]\nca_file = \"\"\"\n/etc/ca.pem\"\"\" # public\n\
+             [packages]\narchive_key = \"***\"\nself_update = false\n"
         );
         assert_eq!(
             redact_secrets("packages = { self_update = false, archive_key = '''\nsecret''' }\n"),

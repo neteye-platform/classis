@@ -226,7 +226,7 @@ fn der_len(len: usize) -> Option<Vec<u8>> {
 }
 
 /// Writes a `PackageSignature` from a Package Signer's DER certificate and its signature — what
-/// the release run's `sign` job writes in hex (ADR-0063 clause 13).
+/// the release run's `sign` job writes in hex (ADR-0062 clause 6).
 ///
 /// ```
 /// use classis_core::package::{encode_signature, parse_signature};

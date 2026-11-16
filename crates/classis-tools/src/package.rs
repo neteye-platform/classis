@@ -1,30 +1,23 @@
 //! `classisctl package` — fetching, building, hashing and signing Classis packages
 //! (ADR-0026, ADR-0028).
 //!
-//! Package signatures are **raw Ed25519** over a statement of what the artifact is — its Agent
-//! type, its version and its SHA-256 (`classis_core::package::statement`, ADR-0026) — verified by
-//! the Client with the `ring` provider. A signature therefore holds only for the type and version
-//! it was made for. This tool produces exactly that format — a
-//! `keygen`/`sign` counterpart to the Client's verify. `pack` is the same idea one step earlier:
-//! it writes container formats [`classis_agent::archive`] can open, with the member named the way the
+//! `sign` makes a **raw Ed25519** signature over a statement of what the artifact is — its Agent
+//! type, its version and its SHA-256 (`classis_core::package::statement`, ADR-0026). The Client
+//! and the Server no longer accept one: a Package's signature carries a Package Signer
+//! certificate that a compiled-in Package Root issued (ADR-0063), as a release's `.sig` holds it.
+//! `pack` builds the artifact: it writes container formats [`classis_agent::archive`] can open, with the member named the way the
 //! Supervisor will look for it, and its tests open what it wrote with that same module.
 //!
 //! It is part of the operator tool, which lives in its own crate for that reason (ADR-0010,
 //! ADR-0028): nothing the Server or Client runtime does depends on it, and a managed host never
 //! runs it. `fetch` is [`crate::fetch`]; the rest is here.
 //!
-//! Typical use — build an artifact, upload it, sign its entry (ADR-0033):
+//! Typical use — build an artifact and upload it as an entry (ADR-0033):
 //!
 //! ```text
-//! classisctl package keygen --out fleet-signing.pk8   # prints the public key (hex) to stdout
-//! # put that hex in the Client's `[packages] verification_key` (and, optionally, the Server's)
 //! sha=$(classisctl package pack --out promtail-3.0.0.tar.gz ./promtail)
-//! sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --version 3.0.0 \
-//!       promtail-3.0.0.tar.gz)
 //! curl -X PUT "https://<server>:4321/api/v1/packages/promtail/3.0.0/entries/linux/amd64" \
 //!      --data-binary @promtail-3.0.0.tar.gz
-//! curl -X PUT "https://<server>:4321/api/v1/packages/promtail/3.0.0/entries/linux/amd64/signature" \
-//!      -H 'content-type: application/json' --data "{\"signature\": \"$sig\"}"
 //! ```
 //!
 //! Script-friendly: the hex output (public key, signature, or SHA-256) goes to stdout alone;
@@ -44,15 +37,16 @@ pub enum Command {
     /// upload it to a Server with its default configuration.
     Fetch(crate::fetch::Args),
     /// Generate an Ed25519 signing key, write the private key to a file, and print the public key
-    /// (hex) — the value for the Client's `[packages] verification_key`.
+    /// (hex).
     Keygen {
         /// Where to write the PKCS#8 private key. Keep it secret; ideally off the Server host.
         #[arg(long, default_value = "package-signing-key.pk8")]
         out: PathBuf,
     },
     /// Sign an artifact and print the signature (hex) — the value of that Package entry's signature
-    /// (ADR-0033). Or, with --signing-info, sign every entry of a Package's signing file from the
-    /// UI and write the signatures into it (ADR-0027).
+    /// (ADR-0033). Or, with --signing-info, sign every entry of a Package's signing file and write
+    /// the signatures into it (ADR-0027). The Client and the Server refuse what it signs
+    /// (ADR-0063).
     Sign {
         /// The PKCS#8 private key from `keygen`.
         #[arg(long)]
@@ -68,7 +62,7 @@ pub enum Command {
         /// The package artifact to sign (the exact bytes uploaded to the Server).
         #[arg(required_unless_present = "signing_info")]
         artifact: Option<PathBuf>,
-        /// A Package's signing file, as the UI's "Signing info" downloads it. Every entry is signed
+        /// A Package's signing file (`classis-signing-v1`). Every entry is signed
         /// from the hash the file states — **compare those hashes with upstream's checksums or
         /// with `package sha256` over the files first**: the tool checks them against nothing.
         #[arg(long, value_name = "FILE", conflicts_with_all = ["agent_type", "version", "artifact"])]
@@ -162,7 +156,7 @@ pub fn run(command: Command) -> Result<(), String> {
                 "wrote the private key to {} (keep it secret)",
                 out.display()
             );
-            eprintln!("public key (hex) — set this as the Client's [packages] verification_key:");
+            eprintln!("public key (hex):");
             println!("{public_key}");
             Ok(())
         }
@@ -179,9 +173,9 @@ pub fn run(command: Command) -> Result<(), String> {
             let out = out.unwrap_or(path);
             file.write(&out)?;
             eprintln!(
-                "wrote the signatures to {} — import it on the Packages tab. These hashes were \
-                 signed as the file states them; they are only as right as your comparison with \
-                 upstream's checksums or the files.",
+                "wrote the signatures to {} — the Client and the Server refuse them (ADR-0063). \
+                 These hashes were signed as the file states them; they are only as right as \
+                 your comparison with upstream's checksums or the files.",
                 out.display()
             );
             Ok(())
@@ -388,7 +382,7 @@ pub(crate) fn sha256_file(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// A new package signing key (ADR-0026): the private key as PKCS#8 DER, and its public half in
-/// hex, the form `[packages] verification_key` takes. `keygen` and `pki init` make it alike. The
+/// hex. `keygen` and `pki init` make it alike. The
 /// private key is wiped when it is dropped; the `ring` document it is copied from is not
 /// (ADR-0057).
 ///

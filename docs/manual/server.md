@@ -296,17 +296,6 @@ Removed
 The section is refused at startup, naming it: the proxy in front of the Operator
 plane serves the UI's certificate.
 
-### `[packages]`
-
-Nothing to configure. The Server checks every entry's signature up to the
-Package Roots compiled into it, the same ones every Client carries, and refuses
-one that does not verify
-([Packages and Deployments](#packages-and-deployments-distributing-software)).
-
-`verification_key`, the key this section used to hold, is no longer read. A
-`server.toml` that still holds it loads, whatever the key holds, and the Server
-says once at startup that it is ignored: remove it.
-
 ### `[blobs]`
 
 Optional. Where the artifacts' bytes are kept: one file per artifact under
@@ -1549,8 +1538,8 @@ included, cannot be signed yet.
 
 Each entry reports its `signature_state`: `valid` or `missing`. At startup the
 Server checks every stored signature again and sets aside one that does not
-verify — a signature stored before the Package Roots, or one whose Package
-Signer has expired — with a warning in its log naming the entry and the step.
+verify, one whose Package Signer has expired among them, with a warning in its
+log naming the entry and the step.
 That entry is offered to nobody and reported `missing` while the Server runs;
 the signature stays in the store, so a Server started with a wrong clock loses
 nothing: once the clock is right, restart the Server to offer the entry again,
