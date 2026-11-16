@@ -293,11 +293,11 @@ $ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --
 
 | `package` command                                                      | What it prints                            | Use it for                                                                                                                                                                                                                    |
 | ---------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `keygen --out <file>`                                                  | the **public** key (hex)                  | a key whose signatures no Client or Server accepts; `[packages] verification_key` is no longer read                                                                                                                           |
+| `keygen --out <file>`                                                  | the **public** key (hex)                  | a key whose signatures no Client or Server accepts                                                                                                                                                                            |
 | `pack <program> --out <file>`                                          | the artifact's SHA-256 (hex)              | building a one-file artifact; `--format tar.gz\|7z`, `--program-name <name>`, `--archive-key <key>`                                                                                                                           |
 | `sign --key <file> --agent-type <type> --version <version> <artifact>` | the signature (hex)                       | the body of the entry's signature route, `PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature`. It covers the type, the version and the artifact's SHA-256 together, so it holds for that Package alone |
 | `public-key --key <file>`                                              | the public key (hex)                      | recovering it from an existing private key                                                                                                                                                                                    |
-| `sign --key <file> --signing-info <file> [--out <file>]`               | the signing file, with every entry signed | a Package's **Signing info** from the Packages tab, signed whole and imported there — see [Signing a whole Package at once](#signing-a-whole-package-at-once)                                                                 |
+| `sign --key <file> --signing-info <file> [--out <file>]`               | the signing file, with every entry signed | every entry of a signing file signed whole — see [Signing a whole Package at once](#signing-a-whole-package-at-once)                                                                                                          |
 | `sha256 <artifact>`                                                    | the SHA-256 (hex)                         | comparing a file you hold with the `content_hash` the Server shows for its entry, before you sign                                                                                                                             |
 
 Both forms of `sign` sign only a SemVer 2.0.0 version. A `--version`, or a
@@ -317,58 +317,33 @@ Package with an unsigned entry. Nothing is configured for it on either side.
 
 ### Signing a whole Package at once
 
-A Package of five platforms is five signatures. The Packages tab lists every
-entry of the Package with its own signature field; instead of signing each
-artifact and typing each signature there, carry them in one file. The signatures
-this makes come from your own key, so today the Server refuses each one on
-import:
+`sign --signing-info` signs every entry a signing file names, one Package of
+several platforms at once. The Client and the Server refuse what it makes, as
+they refuse every signature of a key of your own, and the Packages tab neither
+offers nor imports a signing file. The file is JSON:
 
-1. In the **Packages** tab, select the Package and press **Signing info**. It
-   downloads `<agent type>_<version>_signing.json`:
+```json
+{
+  "format": "classis-signing-v1",
+  "agent_type": "supervisor",
+  "version": "1.2.3",
+  "entries": [
+    { "os": "linux", "arch": "amd64", "sha256": "127f9a48…" },
+    { "os": "windows", "arch": "amd64", "sha256": "90cbb340…" }
+  ]
+}
+```
 
-   ```json
-   {
-     "format": "classis-signing-v1",
-     "agent_type": "supervisor",
-     "version": "1.2.3",
-     "entries": [
-       { "os": "linux", "arch": "amd64", "sha256": "127f9a48…" },
-       { "os": "windows", "arch": "amd64", "sha256": "90cbb340…" }
-     ]
-   }
-   ```
+```console
+$ classisctl package sign --key fleet-signing.pk8 --signing-info supervisor_1.2.3_signing.json
+  signing supervisor@1.2.3 linux/amd64  127f9a48…
+  signing supervisor@1.2.3 windows/amd64  90cbb340…
+```
 
-2. **Compare every `sha256` with an independent source before you sign.** For an
-   artifact `package fetch` uploaded as published, that is the checksums file of
-   the upstream release; for any artifact, it is `classisctl package sha256`
-   over the file you hold. The tool signs the hashes as the file states them and
-   checks them against nothing — a hash you did not compare is one you are
-   taking the Server's word for, and a Client accepts whatever a valid signature
-   covers.
-
-3. On the machine that holds the key:
-
-   ```console
-   $ classisctl package sign --key fleet-signing.pk8 --signing-info supervisor_1.2.3_signing.json
-     signing supervisor@1.2.3 linux/amd64  127f9a48…
-     signing supervisor@1.2.3 windows/amd64  90cbb340…
-   ```
-
-   Every entry gains its `signature`, written back into the file (or to
-   `--out <file>`). The file is checked whole first: another `format`, a hash
-   that is not 64 lowercase hex characters, a platform named twice or a field
-   the format does not define signs nothing. Signing a file again with the same
-   key gives the same signatures.
-
-4. In the **Packages** tab, select any Package, choose the signed file and press
-   **Import signing file**. Each signature goes to the entry of the Package the
-   file names with its platform and SHA-256, one request each; one whose hash is
-   not that entry's is skipped. Each platform's answer is listed: its
-   `signature_state` (`valid`), or the `400` that names why the Server refused
-   the signature.
-
-One import serves every Deployment that holds the Package: the signature is the
-entry's, and it covers the type, the version and the hash, not a Deployment.
+Every entry gains its `signature`, written back into the file (or to
+`--out <file>`). The file is checked whole first: another `format`, a hash that
+is not 64 lowercase hex characters, a platform named twice or a field the format
+does not define signs nothing.
 
 ## `pki`
 

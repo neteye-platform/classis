@@ -101,7 +101,7 @@ Five crates in one workspace
 - **`classis-agent`** — the Client in all its modes, the program `supervisor`.
 - **`classis-tools`** — the operator tool, the one program `classisctl`: its
   `package` commands fetch, pack, hash and sign package artifacts — or sign a
-  Package's signing file from the UI (ADR-0027) — its `pki` commands make the
+  Package's signing file (ADR-0027) — its `pki` commands make the
   fleet's certificates (ADR-0028).
 
 Inside the Server and the Client the code is ports and adapters

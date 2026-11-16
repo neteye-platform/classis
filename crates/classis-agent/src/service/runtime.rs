@@ -351,10 +351,6 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
             probation,
         ));
     }
-    // ADR-0063 clause 11: a key an old file still holds is named once, as ignored.
-    if let Some(warning) = config.ignored_key_warning() {
-        tracing::warn!("{warning}");
-    }
     if let Some(path) = classis_core::package::chain::debug_root() {
         // ADR-0063 clause 1: a debug build only.
         tracing::warn!(

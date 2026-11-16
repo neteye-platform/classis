@@ -12,8 +12,7 @@
 #   offline/       what stays with the operator: the server CA with its key, the package signing
 #                  key (package-signing-key.pk8, its public half in package-signing-key.pub), and
 #                  supervisor.toml.fragment naming where the Client keeps the bootstrap pair
-#                  extracted from the bootstrap.p12 the Server issues, and the package
-#                  verification key
+#                  extracted from the bootstrap.p12 the Server issues
 #   server.toml / supervisor.toml
 #                  a Server and a Client configuration that use the set, every other key at its
 #                  default but one: server.toml serves the Agent plane on every interface, so

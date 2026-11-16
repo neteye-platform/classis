@@ -92,9 +92,8 @@ ways:
 - **Interactively**, once you have
   [opened the enrolment window](#3-enrol-the-host):
   `sudo classis service install --interactive` asks for the Server's address,
-  the host's name, the three files and a package verification key, which it
-  writes but the Client ignores (leave it empty), writes the configuration, and
-  enrols the host on the spot. It waits for your approval and
+  the host's name and the three files, writes the configuration, and enrols the
+  host on the spot. It waits for your approval and
   shows the key fingerprint to approve. On Windows, run it in an elevated shell.
 - **From a script**, which suits configuration management: after the package,
   run
@@ -224,9 +223,7 @@ new, greater version and roll that out.
 2. Still there, give each entry its signature in its field: for the Client's
    own Package, the content of the release's `.sig` of the same name. The
    Server refuses a signature that does not verify, naming why, and stores
-   nothing. **Signing info** and **Import signing file** still exist, but a
-   signing file signed with `classisctl package sign` carries signatures of a
-   key of your own, and each of them is refused.
+   nothing.
 
 3. **Deployments** tab: select the channel, add the Package (it replaces the
    older version of that agent type), and press **OK**.
@@ -244,8 +241,7 @@ Try a release on a few hosts first: give them a channel of their own
 (`channel = canary`), roll out there, then give the stable channel the same
 version.
 
-Details: [Rollout walkthrough](rollout.md),
-[Signing a whole Package at once](tools.md#signing-a-whole-package-at-once) and
+Details: [Rollout walkthrough](rollout.md) and
 [Package updates](client.md#package-updates).
 
 ### The Client updates itself the same way
@@ -253,9 +249,7 @@ Details: [Rollout walkthrough](rollout.md),
 The Client is always an Agent of its own, of the agent type `supervisor`. A
 Package of that type, made from the release archives
 `supervisor_<version>_<os>_<arch>.tar.gz` as they are published, each entry
-signed with the `.sig` beside its archive, updates the Client itself. A Client
-released before the Package Roots cannot take such a Package: upgrade it once by
-hand, and it updates itself from then on.
+signed with the `.sig` beside its archive, updates the Client itself.
 
 On the host, the new version is staged beside the running one and checked before
 anything switches: it must start on this host and report the version offered.

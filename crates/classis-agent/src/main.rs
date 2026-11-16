@@ -460,8 +460,8 @@ fn install(
     } else if let Some(endpoint) = &args.endpoint {
         // The same file, from an answer given rather than asked for (ADR-0019): this is the branch
         // the MSI's custom action and a `%post` script take. The self-update consent travels with
-        // it — standing unless this install was told to withdraw it (ADR-0018) — and so do the CA
-        // and the verification key beside the program (ADR-0020 clause 3).
+        // it — standing unless this install was told to withdraw it (ADR-0018) — and so does the
+        // CA beside the program (ADR-0063 clause 14).
         let self_update = !args.no_self_update;
         written.copies =
             config_init::run_with_endpoint(&config_path, endpoint, self_update, &beside)?;

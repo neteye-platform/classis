@@ -94,8 +94,8 @@ nothing else:
 | `--offline-dir` | `server-ca.pem`                            | every Client (`[tls] ca_file`), and your browser                                                                                                                                                                                                                                           | no      |
 |                 | `server-ca-key.pem`                        | nowhere: keep it offline, to sign the next server certificate                                                                                                                                                                                                                              | **yes** |
 |                 | `package-signing-key.pk8`                  | nowhere: no Client or Server accepts what it signs any more ([step 3](#3-package-signatures))                                                                                                                                                                                              | **yes** |
-|                 | `package-signing-key.pub`                  | nowhere: `[packages] verification_key` is no longer read                                                                                                                                                                                                                                   | no      |
-|                 | `supervisor.toml.fragment`                 | every new Client's `supervisor.toml`, merged in; it names `bootstrap.pem` and `bootstrap-key.pem`, the pair `pki p12-extract` takes out of the `bootstrap.p12` the Server issues ([step 4](#4-configure-and-install-a-client)), and the package verification key, which the Client ignores | no      |
+|                 | `package-signing-key.pub`                  | nowhere: the public half of the key above                                                                                                                                                                                                                                                  | no      |
+|                 | `supervisor.toml.fragment`                 | every new Client's `supervisor.toml`, merged in; it names `bootstrap.pem` and `bootstrap-key.pem`, the pair `pki p12-extract` takes out of the `bootstrap.p12` the Server issues ([step 4](#4-configure-and-install-a-client))                                                             | no      |
 
 The directories are created `0700` and every key `0600`. `pki init` refuses to
 write over a file that exists, and writes nothing at all then. Run on the Server
@@ -286,12 +286,10 @@ Each release publishes the signature of every Client archive as a `.sig` beside
 it, and that is what you upload with the archive
 ([Updating the Client itself](client.md#updating-the-client-itself)).
 
-`pki init` still writes `package-signing-key.pk8` and `package-signing-key.pub`,
-and `supervisor.toml.fragment` still names the public half as
-`[packages] verification_key`. Neither is used: the Client and the Server no
-longer read the key, and say so at startup, and both refuse a signature made
-with it. Today the release's own Package Signer is the only one, so only the
-Client's own Package can be delivered.
+`pki init` still writes `package-signing-key.pk8` and its public half,
+`package-signing-key.pub`. Neither is used: the Client and the Server refuse a
+signature made with it. Today the release's own Package Signer is the only one,
+so only the Client's own Package can be delivered.
 
 ## 4. Configure and install a Client
 
@@ -366,7 +364,6 @@ This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/server-ca.pem
 Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
 Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
-Package verification key (ignored: the compiled-in Package Roots decide; leave empty):
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 enrolling with wss://fleet.example.com:4320/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
@@ -375,16 +372,12 @@ enrolled: the issued certificate is in /var/lib/classis/state
 installed classis
 ```
 
-Leave the package verification key empty. The question is older than the Package
-Roots: the Client no longer reads the key, and it takes packages whatever the
-answer.
-
 With the files beside the program, each of the three path questions offers the
 file there, and Enter takes it. Answering a `bootstrap.p12` asks its password
 instead of a key, with input hidden. Without a terminal,
 `service install --endpoint <URL>` run from that directory — or naming it with
-`--fleet-files <dir>`, as a host installed from a package needs — takes the CA
-(and a verification key, which is written and ignored), enrols with the
+`--fleet-files <dir>`, as a host installed from a package needs — takes the CA,
+enrols with the
 bootstrap pair or `bootstrap.p12` (its password from
 `--bootstrap-password-file <file>`) and waits for the same approval.
 
