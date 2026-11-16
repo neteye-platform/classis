@@ -350,20 +350,20 @@ $ curl -X PUT -H 'Content-Type: application/json' \
        -d '{"service_name": "otelcol", "body": "rules: []", "role": "supplementary"}' \
        http://127.0.0.1:4321/api/v1/configurations/ruleset
 
-# A package defines a Set (ADR-0026), identified by name, Agent type, and version, with one entry
-# per platform (ADR-0026); each Agent is offered the entry that fits it. Saving stages a draft —
-# nothing reaches the fleet until the Set is published (ADR-0025).
-$ curl -X PUT -H 'Content-Type: application/json' -d '{}' \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0
-$ curl -X PUT --data-binary @otelcol-linux-amd64.tar.gz \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0/entries/linux/amd64
-$ curl -X PUT -H 'Content-Type: application/json' -d '{"published": true}' \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0/publication
-
-# Rolling back is a publication move (ADR-0026): retract the newest version, and the fleet falls
-# back to the newest one still published under the same name.
-$ curl -X PUT -H 'Content-Type: application/json' -d '{"published": false}' \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0/publication
+# A Package is identified by its Agent type and version, with one entry per platform (ADR-0026);
+# each Agent is offered the entry that fits it. An entry is offered only with a signature that
+# verifies up to the Package Roots compiled into the Server and the Client — the `.sig` a release
+# publishes beside each archive (ADR-0063). Only the Client's own Package, `supervisor`, is signed
+# today; no other Package can be delivered yet. Saving stages it: nothing reaches the fleet until
+# a Deployment holding it is rolled out (ADR-0025).
+$ curl -X PUT http://127.0.0.1:4321/api/v1/packages/supervisor/0.8.0
+$ curl -X PUT --data-binary @supervisor_0.8.0_linux_amd64.tar.gz \
+       http://127.0.0.1:4321/api/v1/packages/supervisor/0.8.0/entries/linux/amd64
+$ curl -X PUT -H 'Content-Type: application/json' \
+       -d "{\"signature\": \"$(cat supervisor_0.8.0_linux_amd64.tar.gz.sig)\"}" \
+       http://127.0.0.1:4321/api/v1/packages/supervisor/0.8.0/entries/linux/amd64/signature
+$ curl -X PUT http://127.0.0.1:4321/api/v1/deployments/linux/packages/supervisor/0.8.0
+$ curl -X POST http://127.0.0.1:4321/api/v1/deployments/linux/rollout
 ```
 
 For TLS, give the Server a certificate (`[tls]` in `server.toml`) and the Client

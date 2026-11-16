@@ -1250,14 +1250,13 @@ struct PackageEntryView {
     /// sync, and the Server stops re-offering while the two agree — so a rollout that seems not to
     /// travel is answered here rather than by reading logs.
     package_hash: String,
-    /// The operator's Ed25519 signature over this entry, hex, as `classisctl package sign`
-    /// prints it (ADR-0033); absent while the entry is unsigned. An unsigned entry is offered to
-    /// nobody.
+    /// The entry's `PackageSignature`, hex, as a release's `.sig` holds it (ADR-0063); absent
+    /// while the entry carries none. Only a signature that verified up to the Package Roots is
+    /// held, and an entry without one is offered to nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
-    /// What the Server found when it checked that signature against `[packages] verification_key`
-    /// (ADR-0033). Feedback only: an `invalid` one is stored and offered, and the Agent's own check
-    /// decides.
+    /// Whether the entry carries a signature that verified up to the Package Roots (ADR-0063
+    /// clause 10): `valid` or `missing`.
     signature_state: SignatureStateView,
 }
 
@@ -1644,14 +1643,13 @@ async fn delete_package_entry(
     }
 }
 
-/// Writes the operator's Ed25519 signature onto one entry of a Package (ADR-0033), as
-/// `classisctl package sign` prints it. One signature serves every Deployment that holds the
-/// Package; an entry without one is offered to nobody.
+/// Writes a `PackageSignature` onto one entry of a Package, in hex, as a release's `.sig` holds
+/// it (ADR-0063). One signature serves every Deployment that holds the Package; an entry without
+/// one is offered to nobody.
 ///
-/// With `[packages] verification_key` set the Server checks it and answers the entry's
-/// `signature_state`. An `invalid` signature is stored all the same: the Server only reports, and
-/// the Agent's own verification decides. Refused while the Package is assigned to an Agent, like
-/// any other write to its entries (ADR-0025).
+/// The Server verifies it up to the Package Roots compiled into it. One that does not verify is
+/// refused with `400` and not stored, and the entry keeps what it had. Refused while the Package
+/// is assigned to an Agent, like any other write to its entries (ADR-0025).
 #[utoipa::path(
     put,
     path = "/api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature",

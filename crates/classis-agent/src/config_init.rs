@@ -215,12 +215,11 @@ pub struct Answers {
     /// The questionnaire always asks for it there; `None` for a loopback `ws://` / `http://`
     /// endpoint, or where no question was put — a packaged install.
     pub ca_file: Option<PathBuf>,
-    /// The hex Ed25519 key packages are verified against (ADR-0026); `None` takes no package until
-    /// one is set.
+    /// `[packages] verification_key`, written when answered and ignored by the Client: the
+    /// compiled-in Package Roots verify every package (ADR-0063 clause 11).
     pub verification_key: Option<String>,
     /// `[packages] self_update` (ADR-0018): whether the Server may replace this Client's own
-    /// binary. The questionnaire does not ask — a new file says `true`, and the verification key
-    /// decides whether that takes effect; only `--no-self-update` and the MSI's checkbox write
+    /// binary. The questionnaire does not ask — a new file says `true`; only `--no-self-update` and the MSI's checkbox write
     /// `false`. A new file says which of the two it is; an edited file keeps what it says.
     pub self_update: bool,
 }
@@ -612,24 +611,21 @@ pub fn ask(
         )?)
     };
 
-    // Without it nothing is installed, the Client's own updates included (ADR-0026); an empty
-    // answer is allowed and said so. A key the file holds is the default, so Enter keeps it and a
-    // single `-` is how it is removed.
+    // The answer is written and decides nothing: the compiled-in Package Roots verify every
+    // package (ADR-0063 clause 11), and the question stays until a later cleanup removes it. A key
+    // the file holds is the default, so Enter keeps it and a single `-` is how it is removed.
     let mut prompt = Input::<String>::new().allow_empty(true);
     prompt = match defaults.verification_key {
         Some(key) => prompt
-            .with_prompt("Package verification key (hex Ed25519 public key; - removes it)")
+            .with_prompt("Package verification key (ignored: the compiled-in Package Roots decide; - removes it)")
             .default(key),
         None => prompt.with_prompt(
-            "Package verification key (hex Ed25519 public key; empty takes no packages)",
+            "Package verification key (ignored: the compiled-in Package Roots decide; leave empty)",
         ),
     };
     let key_hex = prompt.interact_text().map_err(prompt_failed)?;
     let key_hex = key_hex.trim();
     let verification_key = (!key_hex.is_empty() && key_hex != "-").then(|| key_hex.to_string());
-    if verification_key.is_none() {
-        println!("no verification key: this Client installs no package until one is set");
-    }
 
     Ok((
         Answers {
@@ -637,8 +633,8 @@ pub fn ask(
             name: name.trim().to_string(),
             ca_file,
             verification_key,
-            // Not asked (ADR-0018): the key above decides whether the consent takes effect, and an
-            // edited file keeps the consent it states.
+            // Not asked (ADR-0063 clause 16): a new file writes the consent, and an edited file keeps
+            // the consent it states.
             self_update: current.self_update_package().is_some(),
         },
         bootstrap,
@@ -830,21 +826,25 @@ pub fn render(answers: &Answers) -> String {
     out.push_str(if answers.self_update {
         "\n# self_update: consent for the Server to replace this Client's own binary, with\n\
          # the package named after its Agent type alone. Write `false` to withdraw it.\n\
-         # Every package, this Client's own included, is verified against\n\
-         # verification_key; without the key nothing is installed.\n\
+         # Every package, this Client's own included, is verified up to the Package\n\
+         # Roots compiled into this Client; there is no key to configure.\n\
          [packages]\n\
          self_update = true\n"
     } else {
         "\n# The Server may NOT replace this Client's own binary. Written out because the\n\
          # consent otherwise stands by default: this Client is then the one program in the\n\
          # fleet that has to be updated by hand on this host. Every package is verified\n\
-         # against verification_key; without the key nothing is installed.\n\
+         # up to the Package Roots compiled into this Client; there is no key to configure.\n\
          [packages]\n\
          self_update = false\n"
     });
-    match &answers.verification_key {
-        Some(key) => out.push_str(&format!("verification_key = {}\n", toml_string(key))),
-        None => out.push_str("# verification_key = \"<hex-encoded Ed25519 public key>\"\n"),
+    // Still written when answered, and ignored by the Client (ADR-0063 clause 11): the
+    // questionnaire's key question stays until a later cleanup removes it.
+    if let Some(key) = &answers.verification_key {
+        out.push_str(&format!(
+            "# Ignored: the compiled-in Package Roots decide.\nverification_key = {}\n",
+            toml_string(key)
+        ));
     }
 
     out.push_str(
