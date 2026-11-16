@@ -81,7 +81,7 @@ issued, is `packaging/package-signer.der`, and every `.sig` carries it
 ([ADR-0063](adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
 Replacing the key is a new key, a new certificate from the same Root, a new
 secret and a reviewed change to that file; no installation changes. It is a
-secret of the GitHub environment `signing`, not
+secret of the GitHub environment `Package Signing`, not
 of the repository. Only the `sign` job names that environment, and it receives
 the key only on the push of a `version/*` tag and after a second person with
 write access approves the run. The job checks out no code and builds nothing,

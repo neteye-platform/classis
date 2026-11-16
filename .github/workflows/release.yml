@@ -11,7 +11,7 @@ name: Release
 # A run started by hand is a dry run and nothing else (ADR-0062 clause 5).
 #
 # The `sign` job signs every entry of the Client's own Package — the `supervisor_*.tar.gz` archives —
-# with the key of the GitHub environment `signing`, which a second person with write access releases
+# with the key of the GitHub environment `Package Signing`, which a second person with write access releases
 # by approving the job (ADR-0062 clauses 2 and 6). That key is a Package Signer's, whose certificate
 # a Package Root issued and is tracked as packaging/package-signer.der; each `.sig` is a
 # PackageSignature, the certificate and the signature together, which the Client and the Server
@@ -170,7 +170,7 @@ jobs:
           echo "$tag is free"
       # ADR-0062 clause 4: a release tag names a commit of `main`. This guards against a mistake
       # only — the workflow that runs is the tagged commit's, and a changed one can drop the check —
-      # which is why the reviewer of the environment `signing` checks it too (clause 2).
+      # which is why the reviewer of the environment `Package Signing` checks it too (clause 2).
       - name: The tag is on main
         if: steps.read.outputs.publish == 'true'
         run: |
@@ -660,7 +660,7 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   # ADR-0062 clauses 2 and 7, ADR-0063 clause 13: signs every entry of the Client's own Package. The
-  # only job that names the environment `signing`, whose secret it receives once a second person with
+  # only job that names the environment `Package Signing`, whose secret it receives once a second person with
   # write access approves it. It checks out no code and builds nothing: it downloads the archives'
   # checksums and the tracked certificate, writes the statement each entry's signature covers, signs
   # it with the runner's OpenSSL, and writes the PackageSignature that carries both.
@@ -670,7 +670,7 @@ jobs:
     if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
     needs: [version, build]
     runs-on: ubuntu-latest
-    environment: signing
+    environment: Package Signing
     permissions:
       contents: read
     steps:
@@ -689,7 +689,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$PACKAGE_SIGNING_KEY" ]; then
-            echo "::error::the environment signing holds no PACKAGE_SIGNING_KEY (ADR-0062 clause 1)"
+            echo "::error::the environment Package Signing holds no PACKAGE_SIGNING_KEY (ADR-0062 clause 1)"
             exit 1
           fi
           umask 077
