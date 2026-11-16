@@ -201,12 +201,11 @@ pub fn version_dir_name(full_version: &str) -> String {
 ///
 /// `std::env::current_exe` is documented to differ exactly here: started through a symbolic link,
 /// "some platforms will return the path of the symbolic link and other platforms will return the
-/// path of the symbolic link's target". Linux reads `/proc/self/exe` and returns the target; macOS
-/// returns the link. The service is registered against `<root>/current/supervisor` — the whole
-/// point of the pointer — so on the platforms that return the link, the path is
-/// `<root>/current/supervisor`, whose grandparent is not `versions`, and [`Layout::enclosing`] finds
-/// no layout at all. What depends on that: the self-update (ADR-0018) and the torn-pointer repair,
-/// neither of which would ever run.
+/// path of the symbolic link's target". Linux reads `/proc/self/exe` and returns the target. The
+/// service is registered against `<root>/current/supervisor` — the whole point of the pointer — so
+/// on a platform that returns the link, the path is `<root>/current/supervisor`, whose grandparent
+/// is not `versions`, and [`Layout::enclosing`] finds no layout at all. What depends on that: the
+/// self-update (ADR-0018) and the torn-pointer repair, neither of which would ever run.
 ///
 /// The resolution is what makes the two platforms agree. On Windows the pointer is a junction and
 /// the same difference applies, but `canonicalize` answers in the `\\?\` verbatim form there, which
@@ -452,8 +451,8 @@ mod tests {
     #[test]
     fn set_current_points_and_repoints() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // Canonicalize up front: macOS tempdirs live under /var → /private/var, so a resolved
-        // pointer would otherwise never equal the raw path.
+        // Canonicalize up front: a tempdir may lie beneath a symbolic link, so a resolved pointer
+        // would otherwise never equal the raw path.
         let layout = Layout::new(dir.path().canonicalize().expect("canonical tempdir"));
         let a = layout.version_dir("supervisor-1.0.0-aaaaaaa");
         let b = layout.version_dir("supervisor-2.0.0-bbbbbbb");
@@ -664,10 +663,10 @@ mod tests {
         assert!(Layout::enclosing(Path::new("supervisor")).is_none());
     }
 
-    /// What the service actually runs is `<root>/current/supervisor`, and on macOS that is the
-    /// path `current_exe` hands back — the pointer, not the version directory behind it. The
-    /// layout is invisible from there, so the resolution has to happen before anything looks for
-    /// it. Provoked here with a symbolic link, which is what the pointer is on this platform anyway.
+    /// What the service actually runs is `<root>/current/supervisor`, and where `current_exe`
+    /// hands that path back — the pointer, not the version directory behind it — the layout is
+    /// invisible from there, so the resolution has to happen before anything looks for it.
+    /// Provoked here with a symbolic link, which is what the pointer is on this platform anyway.
     /// Verifies: ADR-0019
     #[cfg(unix)]
     #[test]
@@ -679,7 +678,7 @@ mod tests {
         std::fs::write(version_dir.join(BINARY_FILENAME), b"the-client").expect("write the binary");
         layout.set_current(&version_dir).expect("point current");
 
-        // The macOS shape, unresolved: two directories up is the root, not `versions`.
+        // The pointer, unresolved: two directories up is the root, not `versions`.
         let through_pointer = layout.current_binary();
         assert!(
             Layout::enclosing(&through_pointer).is_none(),

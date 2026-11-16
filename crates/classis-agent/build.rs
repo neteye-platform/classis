@@ -10,7 +10,7 @@
 // correctly for the next variant, so it is a second variable rather than a transformation.
 //
 // The grammar is the one ADR-0019 set for instance names, for the same reason: the value must be
-// simultaneously a systemd unit name, a launchd label, an SCM service name and a directory name on
+// simultaneously a systemd unit name, an SCM service name and a directory name on
 // every platform. Breaking it fails *this build* — the class of failure ADR-0019 clause 2 moves
 // from a runtime parse of operator input to a compile-time check, so an illegal name cannot reach
 // a service manager at all.

@@ -19,9 +19,9 @@
 //! version directory and swung the `current` junction at it, and only *then* failed at `sc create`
 //! — leaving half an install behind and a UAC path in `windows_config` that was never reached.
 //!
-//! A no-op on Unix, where there is nothing to probe short of doing it: systemd and launchd refuse
-//! at the unit write, and the install roots (`/opt`, `/var/lib`, `/Library/Application Support`)
-//! are not writable without root either, so the failure is already both early and plain.
+//! A no-op on Unix, where there is nothing to probe short of doing it: systemd refuses at the
+//! unit write, and the install roots (`/opt`, `/var/lib`) are not writable without root either,
+//! so the failure is already both early and plain.
 
 use super::ServiceLevel;
 

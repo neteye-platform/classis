@@ -1,5 +1,5 @@
 //! Regression test for ADR-0019's graceful shutdown: a service manager stops the Client with
-//! `SIGTERM` (systemd, launchd) — the process must exit cleanly (code 0, goodbye path) instead of
+//! `SIGTERM` (systemd) — the process must exit cleanly (code 0, goodbye path) instead of
 //! dying on the default signal disposition.
 
 #![cfg(unix)]
