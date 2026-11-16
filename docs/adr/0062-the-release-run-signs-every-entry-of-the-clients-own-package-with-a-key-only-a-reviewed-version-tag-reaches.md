@@ -140,11 +140,11 @@ each signature, and the key's public half, beside the archives.
    - **What it signs.**
      - It downloads only the `.sha256` files of the Client's archives.
      - For each one it writes the statement `classis_core::package::statement`
-       makes to a file: `opamp-fleet-package-v1`, `supervisor`, the release
+       makes to a file: `classis-package-v1`, `supervisor`, the release
        number, and the SHA-256 in lowercase hex, each line ended by a newline.
-       The prefix keeps the spelling
-       [ADR-0061](0061-the-product-is-named-classis-and-the-strings-signatures-cover-keep-their-old-spelling.md)
-       keeps.
+       The prefix is the one
+       [ADR-0061](0061-the-product-is-named-classis.md)
+       names.
      - It signs that file with the runner's
        `openssl pkeyutl -sign -rawin -keyform DER -inkey <key> -in <statement>`.
        OpenSSL takes Ed25519 only with `-rawin` and from a file. The step

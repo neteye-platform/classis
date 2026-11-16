@@ -147,7 +147,7 @@ and that signer's Ed25519 signature over the Package's statement verifies;
      an unverified archive is never parsed beyond its hash and signature.
    - There is no unsigned posture, and nothing to configure.
    - The signature covers a statement of what the artifact is, not its bytes:
-     `opamp-fleet-package-v1`, the Agent type (the offered package's name), the
+     `classis-package-v1`, the Agent type (the offered package's name), the
      version and the artifact's SHA-256 in lowercase hex, one per line, each
      ended by a newline (`classis_core::package::statement`). Since the hash is
      in the statement and checked against the streamed bytes first, the
@@ -292,11 +292,11 @@ and that signer's Ed25519 signature over the Package's statement verifies;
       - It downloads only the `.sha256` files of the Client's archives, and the
         tracked certificate.
       - For each archive it writes the statement `classis_core::package::statement`
-        makes to a file: `opamp-fleet-package-v1`, `supervisor`, the release
+        makes to a file: `classis-package-v1`, `supervisor`, the release
         number, and the SHA-256 in lowercase hex, each line ended by a newline.
-        The prefix keeps the spelling
-        [ADR-0061](0061-the-product-is-named-classis-and-the-strings-signatures-cover-keep-their-old-spelling.md)
-        keeps.
+        The prefix is the one
+        [ADR-0061](0061-the-product-is-named-classis.md)
+        names.
       - It signs that file with the runner's
         `openssl pkeyutl -sign -rawin -keyform DER -inkey <key> -in <statement>`.
         OpenSSL takes Ed25519 only with `-rawin` and from a file. The step
