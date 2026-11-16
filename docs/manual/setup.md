@@ -594,8 +594,9 @@ set up next.
 **You are told before anything ends.** At startup and once a day, the Server
 reads when its own certificate, the client CA and the bootstrap CA end. Thirty
 days before — or in the last third of the life of a certificate that lives less
-than 90 days — it logs a warning naming the file and the date, and records
-`pki.expiring` in the audit; once one has ended, an error and `pki.expired`. It
+than 90 days — it logs a warning naming the file and the date, as the event
+`pki.expiring`; once one has ended, an error, as `pki.expired`
+([Security decisions in the log](server.md#security-decisions-in-the-log)). It
 keeps serving either way. `server pki status --config <server.toml>` says the
 same on demand for the Server host's certificates, and
 `opamp-fleetctl pki status --offline-dir <dir>` for the offline directory's.

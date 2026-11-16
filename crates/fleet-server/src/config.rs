@@ -114,9 +114,6 @@ pub struct ServerConfig {
     /// How repeated admission failures from one peer address are throttled (ADR-0021 clause 24).
     #[serde(default)]
     pub admission_throttle: AdmissionThrottleConfig,
-    /// How large the audit record grows and how much of it is kept (ADR-0022).
-    #[serde(default)]
-    pub audit: AuditConfig,
     /// How often an admitted peer may be heard on the Agent plane (ADR-0013).
     #[serde(default)]
     pub agent_rate_limit: AgentRateLimitConfig,
@@ -185,36 +182,6 @@ const AGENTS_PER_HOST: u64 = 256;
 
 /// The heartbeat the Baseline uses when none is offered.
 const BASELINE_HEARTBEAT_SECS: u64 = 30;
-
-/// The `[audit]` section (ADR-0022 clause 4).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct AuditConfig {
-    /// A file reaching this size is closed and a new one started.
-    pub max_file_bytes: u64,
-    /// How many files are kept; the oldest past this is deleted.
-    pub keep_files: usize,
-}
-
-impl Default for AuditConfig {
-    fn default() -> Self {
-        let limits = crate::audit_log::Limits::default();
-        AuditConfig {
-            max_file_bytes: limits.max_file_bytes,
-            keep_files: limits.keep_files,
-        }
-    }
-}
-
-impl AuditConfig {
-    #[must_use]
-    pub fn limits(&self) -> crate::audit_log::Limits {
-        crate::audit_log::Limits {
-            max_file_bytes: self.max_file_bytes,
-            keep_files: self.keep_files,
-        }
-    }
-}
 
 /// The `[packages]` section (ADR-0033): the operator's public key, against which the Server checks
 /// every entry's signature — as feedback only. The Agent's own check decides what is installed.
@@ -1025,7 +992,6 @@ impl Default for ServerConfig {
             max_connections: default_agent_max_connections(),
             enrolment: None,
             admission_throttle: AdmissionThrottleConfig::default(),
-            audit: AuditConfig::default(),
             agent_rate_limit: AgentRateLimitConfig::default(),
         }
     }
@@ -1311,13 +1277,6 @@ impl ServerConfig {
                     enrolment.max_pending_per_bootstrap
                 ));
             }
-        }
-        if self.audit.max_file_bytes == 0 || self.audit.keep_files == 0 {
-            return Err(
-                "[audit] max_file_bytes and keep_files must be greater than 0 — the record is \
-                 never switched off"
-                    .to_string(),
-            );
         }
         let throttle = &self.admission_throttle;
         if throttle.max_failures == 0 || throttle.window_secs == 0 || throttle.backoff_secs == 0 {
@@ -1882,10 +1841,13 @@ mod tests {
         assert!(err.contains("at least one"), "{err}");
     }
 
-    /// Verifies: ADR-0010
+    /// A typo fails, and so does a section this Server no longer reads, such as the `[audit]` of
+    /// an older one.
+    /// Verifies: ADR-0010, ADR-0022
     #[test]
     fn rejects_unknown_keys() {
         assert!(toml::from_str::<ServerConfig>("listne = \"0.0.0.0:1\"").is_err());
+        assert!(toml::from_str::<ServerConfig>("[audit]\nkeep_files = 16\n").is_err());
     }
 
     /// No credential in `server.toml` authenticates on its own: an operator's password in clear is

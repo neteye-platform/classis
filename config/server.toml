@@ -55,7 +55,6 @@ max_connections = 10000
 #   bootstrap/<issuer>-<serial>.json      a bootstrap certificate the Server issued, and its
 #                                         PKCS#12 file beside it as .p12
 #   enrolment.json                        the enrolment window and its pending requests
-#   audit/audit-<first seq>.jsonl         the audit record
 #
 # Back it up as one directory, with the Server stopped. A Server before 0.5.5 kept its state under
 # config_dir and packages_dir instead; those keys stop this Server at startup, and
@@ -171,14 +170,14 @@ max_package_size_bytes = 1073741824
 # secret_access_key_file = "/run/secrets/s3-secret-access-key"
 
 # Where the records are kept. Optional; the default, "fs", keeps one file per record under data_dir
-# as listed above. "postgres" keeps them in one PostgreSQL database instead; data_dir then holds the
-# audit record and, with the filesystem blob store, the artifacts, and nothing else. The Server
-# creates no database and no role: the role needs the right to create tables, and the Server applies
-# its own schema at startup. One Server per database. The connection is TLS 1.3 with the database's
-# certificate and host name verified, against the public roots or ca_file; tls = false is accepted
-# for host = "127.0.0.1" or "::1" alone. The password comes from password_file, readable by its
-# owner and at most its group; no PG* variable changes the connection. An existing data_dir is copied
-# into the database once, while the Server is stopped, by
+# as listed above. "postgres" keeps them in one PostgreSQL database instead; data_dir then holds,
+# with the filesystem blob store, the artifacts, and nothing else. The Server creates no database
+# and no role: the role needs the right to create tables, and the Server applies its own schema at
+# startup. One Server per database. The connection is TLS 1.3 with the database's certificate and
+# host name verified, against the public roots or ca_file; tls = false is accepted for host =
+# "127.0.0.1" or "::1" alone. The password comes from password_file, readable by its owner and at
+# most its group; no PG* variable changes the connection. An existing data_dir is copied into the
+# database once, while the Server is stopped, by
 #   server migrate-to-postgres --from <data_dir> --data-dir <new>
 # [database]
 # store = "postgres"
@@ -264,15 +263,6 @@ client_ca_file = "client-ca.pem"
 # burst = 300
 # gateway_messages_per_sec = 500
 # gateway_burst = 10000
-
-# The audit record: one JSON line per security decision — admissions and refusals,
-# enrolment, issuance, revocation, operator acts, package outcomes — in
-# <data_dir>/audit/, each line carrying the SHA-256 of the one before. Check it with
-#   server audit-verify <data_dir>/audit
-# A Server that cannot write it admits no one until it can. Bounded by size, never switched off.
-# [audit]
-# max_file_bytes = 67108864   # a file this large is closed and the next one started
-# keep_files = 16             # the oldest past this is deleted, its last hash recorded first
 
 # Optional connection settings offered to the fleet: every Agent declaring
 # AcceptsOpAMPConnectionSettings is offered these, verifies them by actually connecting, and

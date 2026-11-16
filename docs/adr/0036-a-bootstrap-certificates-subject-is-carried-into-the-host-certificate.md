@@ -3,7 +3,7 @@
 - **Status:** 🟢 accepted · clause 3 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the bootstrap-certificate routes and the subject they take in
   `crates/fleet-server/src/api.rs` and `crates/fleet-server/src/bootstrap.rs`,
   the signing of host certificates in `crates/fleet-server/src/ca.rs` and the
@@ -247,7 +247,7 @@ which a private fleet PKI does not need.
   needs a Private Enterprise Number, and nothing outside this project reads it.
 - **`serialNumber` (2.5.4.5), `street`, `postalCode`, `title`, `description`,
   personal names or an e-mail address.** Each is either per host, unstable, free
-  text, or personal data that would land in every certificate and audit line.
+  text, or personal data that would land in every certificate and log line.
 - **Copy the values from the CSR.** The host chooses them, so a host could name
   any customer.
 - **Store the values on the Host only, not in the certificate.** This is simpler

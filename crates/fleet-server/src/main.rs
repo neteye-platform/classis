@@ -14,57 +14,17 @@ use fleet_server::config::{Layered, ServerConfig};
 use fleet_server::fleet::AppState;
 use fleet_server::listen;
 use opamp::server::listen::Handle;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 fn usage() -> ! {
     eprintln!(
         "Usage: server [--config <server.toml>] [--version]\n       \
          server hash-credential --basic   (reads the password from standard input)\n       \
-         server audit-verify <data_dir>/audit\n       \
          server pki status [--config <server.toml>]\n       \
          server migrate --config-dir <old> --packages-dir <old> --data-dir <new>\n       \
          server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]"
     );
     std::process::exit(2);
-}
-
-/// `server audit-verify <dir>` (ADR-0022 clause 3): walks the audit record's files in order and
-/// names the first entry whose `prev` does not match the entry before it.
-fn audit_verify(dir: Option<String>) -> ! {
-    let Some(dir) = dir else { usage() };
-    let files = match fleet_server::fs::audit_files(std::path::Path::new(&dir)) {
-        Ok(files) => files,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    let mut texts = Vec::new();
-    for file in &files {
-        match std::fs::read_to_string(file) {
-            Ok(text) => texts.push((file.display().to_string(), text)),
-            Err(e) => {
-                eprintln!("cannot read {}: {e}", file.display());
-                std::process::exit(1);
-            }
-        }
-    }
-    let lines = texts.iter().flat_map(|(name, text)| {
-        text.lines()
-            .enumerate()
-            .filter(|(_, line)| !line.trim().is_empty())
-            .map(move |(index, line)| (format!("{name}:{}", index + 1), line))
-    });
-    match fleet_server::audit_log::verify(lines) {
-        Ok(count) => {
-            println!("{count} entries in {} files, the chain holds", files.len());
-            std::process::exit(0);
-        }
-        Err(e) => {
-            eprintln!("the chain breaks at {e}");
-            std::process::exit(1);
-        }
-    }
 }
 
 /// The configuration every command that reads one reads (ADR-0051 clause 2): the file `--config`
@@ -185,8 +145,8 @@ fn migrate(mut args: impl Iterator<Item = String>) -> ! {
 
 /// `server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]`
 /// (ADR-0050 clause 15): copies the records of `data_dir` into the database the configuration
-/// names, and its audit record and filesystem blobs into a new, empty `data_dir`, leaving the old
-/// one as the backup. It is run while the Server is stopped; it takes the database's lock, so a
+/// names, and its filesystem blobs into a new, empty `data_dir`, leaving the old one as the
+/// backup. It is run while the Server is stopped; it takes the database's lock, so a
 /// Server still running against it stops the copy. Prints what it copied, and exits non-zero when
 /// it could not copy all of it, leaving the database without the Server's tables.
 fn migrate_to_postgres(mut args: impl Iterator<Item = String>) -> ! {
@@ -348,7 +308,6 @@ fn parse_args() -> Option<PathBuf> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "hash-credential" => hash_credential(args.next()),
-            "audit-verify" => audit_verify(args.next()),
             "pki" => pki(args),
             "migrate" => migrate(args),
             "migrate-to-postgres" => migrate_to_postgres(args),
@@ -562,44 +521,15 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // The audit record (ADR-0022), opened before anything is decided.
-    let audit_log = match fleet_server::fs::FsAuditStore::open(&config.data_dir).and_then(|store| {
-        fleet_server::audit_log::AuditLog::start(
-            Box::new(store),
-            config.audit.limits(),
-            clock.clone(),
-        )
-    }) {
-        Ok(audit) => Arc::new(audit),
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    let audit: Arc<dyn fleet_server::audit::Audit> = audit_log.clone();
-    if let Some(enrolment) = &enrolment {
-        enrolment.set_audit(audit.clone());
-    }
     // Before a certificate the Server depends on ends, say so: at startup and once a day
     // (ADR-0028 clause 11). Nothing stops; the hosts decide for themselves.
-    fleet_server::pki::warn_endings(
-        &watched,
-        Some(audit.as_ref()),
-        time::OffsetDateTime::now_utc(),
-    );
-    tokio::spawn({
-        let audit = audit.clone();
-        async move {
-            let mut daily = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+    fleet_server::pki::warn_endings(&watched, time::OffsetDateTime::now_utc());
+    tokio::spawn(async move {
+        let mut daily = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+        daily.tick().await;
+        loop {
             daily.tick().await;
-            loop {
-                daily.tick().await;
-                fleet_server::pki::warn_endings(
-                    &watched,
-                    Some(audit.as_ref()),
-                    time::OffsetDateTime::now_utc(),
-                );
-            }
+            fleet_server::pki::warn_endings(&watched, time::OffsetDateTime::now_utc());
         }
     });
     if let Some(warning) = config.rate_limit_warning() {
@@ -620,7 +550,6 @@ async fn main() {
                 .with_enrolment(enrolment.clone())
                 .with_bootstrap(bootstrap)
                 .with_revocations(Some(revocations.clone()))
-                .with_audit(Some(audit.clone()))
                 .with_telemetry_offer(telemetry_offer)
                 .with_packages(packages)
                 .with_max_message_size(config.max_message_size_bytes)
@@ -645,7 +574,6 @@ async fn main() {
         fleet_server::transport::Admission::new(true)
             .with_enrolment(issuers, enrolment)
             .with_revocations(Some(revocations))
-            .with_audit(Some(audit.clone()))
             .with_throttle(Arc::new(fleet_server::throttle::Throttle::new(
                 limits,
                 clock.clone(),
@@ -659,9 +587,10 @@ async fn main() {
         .transpose()
     {
         Ok(auth) => auth.map(|auth| {
-            auth.with_audit(Some(audit.clone())).with_throttle(Arc::new(
-                fleet_server::throttle::Throttle::new(limits, clock.clone()),
-            ))
+            auth.with_throttle(Arc::new(fleet_server::throttle::Throttle::new(
+                limits,
+                clock.clone(),
+            )))
         }),
         Err(e) => {
             eprintln!("{origin}: {e}");
@@ -713,13 +642,6 @@ async fn main() {
     // The graceful-shutdown flush (ADR-0024): every record's current timestamp and sequence
     // number, so the ordinary restart restores a fleet without gaps or false silence.
     state.flush_agents();
-    // What is still queued for the audit record is written before the process, and the writer
-    // thread with it, ends (ADR-0022).
-    if !audit_log.drain(std::time::Duration::from_secs(5)) {
-        error!(
-            "the audit record could not be written out before shutdown; its last entries are lost"
-        );
-    }
 }
 
 /// The shutdown signal: `SIGTERM`, which a service manager sends on stop, or `SIGINT` from a

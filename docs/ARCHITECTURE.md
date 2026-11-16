@@ -26,7 +26,7 @@ true.
                                                          │  Server (Linux)
  Client ──── OpAMP, mTLS ──────────────▶ Agent plane :4320 ─┘   │
    │  ▲                                                          └─▶ data_dir: fleet state,
-   │  └── Gateway (a Client) ◀── OpAMP, mTLS ── other Clients        register, audit record,
+   │  └── Gateway (a Client) ◀── OpAMP, mTLS ── other Clients        register,
    │                                                                 artifacts by SHA-256
    ├── Supervisor Endpoint (loopback) ◀── a Collector's opampextension
    ├── Managed Processes: Collector, any command — where a process account is registered, under
@@ -125,10 +125,10 @@ module has no role.
   ([ADR-0049](adr/0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md));
   `BootstrapStore` under the `BootstrapCertificates` in `bootstrap`;
   `EnrolmentStore` under the `Enrolment` in `enrolment`; `LedgerStore` in
-  `revocation`; `AuditStore` in `audit_log`. The filesystem adapters are in
-  `fs`, which also opens the data directory and refuses anything its layout does
-  not name. With `[database] store = "postgres"` every port but the blob and the
-  audit port has its PostgreSQL adapter in `postgres` instead
+  `revocation`. The filesystem adapters are in `fs`, which also opens the data
+  directory and refuses anything its layout does not name. With
+  `[database] store = "postgres"` every port but the blob port has its
+  PostgreSQL adapter in `postgres` instead
   (`postgres::agents`, `configs`, `deployments`, `packages`, `ledger`,
   `bootstrap`, `enrolment`), each call one transaction; `postgres` holds the
   connection they share — TLS 1.3 on _ring_, a pool on a `bridge` runtime of its
@@ -174,10 +174,12 @@ module has no role.
   `transport` takes a token for each message before the handler does anything
   else and for each download in the guard
   ([ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
-- **Audit record** — `audit` is the port every security decision is recorded
-  through; `audit_log` chains the entries by hash and `fs::FsAuditStore` keeps
-  them under `data_dir/audit/`
-  ([ADR-0022](adr/0022-an-append-only-audit-record-chained-by-hash.md)).
+- **Security decisions** — each admission and refusal, enrolment, issuance,
+  revocation, operator act and package outcome is a `tracing` event on the
+  Server's log, which goes to standard error; its `event` field names it
+  (`admission.refused`), and what a peer can repeat at will is logged at
+  `debug`. The Server keeps no audit record and no port for one
+  ([ADR-0022](adr/0022-security-decisions-are-structured-log-events.md)).
 - **Server ports beyond storage** — `fleet` owns `CertificateSigner`, which the
   local CA in `ca` implements for the CSR flow and the renewal proof (ADR-0021),
   and `Clock`, which `clock::SystemClock` implements. The `[connection_offer]`
@@ -401,11 +403,11 @@ one directory per domain and owner-only: `configurations/`, `deployments/`,
 `packages/` (metadata) and `blobs/` (the artifacts, named by SHA-256, unless a
 bucket keeps them), `agents/` (each Agent's record, its labels inside),
 `hosts/`, `certificates/` (the register), `revocations.json`, `bootstrap/`,
-`enrolment.json` (the window and its queue) and `audit/`
+and `enrolment.json` (the window and its queue)
 ([ADR-0037](adr/0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)).
 With `[database] store = "postgres"` the records are rows of one PostgreSQL
-database instead, and `data_dir` keeps `audit/` and, with the filesystem blob
-store, `blobs/`
+database instead, and `data_dir` keeps only `blobs/`, with the filesystem blob
+store
 ([ADR-0050](adr/0050-the-servers-records-may-live-in-postgresql.md)); the Server
 still loads every record at startup and answers from memory. A restart restores
 the fleet from them and shows each Agent disconnected until it reports; an

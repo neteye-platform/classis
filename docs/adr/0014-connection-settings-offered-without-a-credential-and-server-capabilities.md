@@ -3,7 +3,7 @@
 - **Status:** 🟢 accepted · clauses 1, 5 and 9 superseded by
   [ADR-0040](0040-a-connection-settings-offer-never-moves-the-client-to-plaintext.md)
 - **Date:** 2026-10-06
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the `[connection_offer]` section of `server.toml`, the offer
   composition and capability declaration in `crates/fleet-server/src/fleet.rs`,
   the Client's offer handling in `crates/fleet-agent/src/connection.rs`,
@@ -251,7 +251,7 @@ sends, and pessimistic only where a message would be an error.
 **Out of scope:** how the Agent plane admits and how it treats a Client of an
 older version that still sends `Authorization`
 ([ADR-0021](0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md));
-the audit entries an offer leaves; `AcceptsOtherConnectionSettings`; what own
+the log events an offer leaves; `AcceptsOtherConnectionSettings`; what own
 telemetry is and how its destinations and their headers fold
 ([ADR-0016](0016-what-an-agent-reports-about-itself.md));
 `connection_settings_status` in the fleet view and the REST API; an audit of the

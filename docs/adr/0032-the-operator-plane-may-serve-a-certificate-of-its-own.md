@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-10-17
-- **Deciders:** Markus Brigl
+- **Deciders:** Davide Zeni
 - **Applies to:** the `[rest.tls]` section of `server.toml` and its parsing and
   startup checks in `crates/fleet-server/src/config.rs`, the TLS material of
   both planes in `crates/fleet-server/src/tls.rs` and
@@ -111,7 +111,7 @@ an optional `[rest.tls]` section, which the Operator plane serves in place of
   Client accepts as the Server to whatever that PKI signs.
 - **A reverse proxy in front of the Operator plane that terminates TLS with the
   PKI's certificate.** This needs no change to the Server, but adds a component
-  to run and harden. Unless the Server trusts a forwarded header, the audit and
+  to run and harden. Unless the Server trusts a forwarded header, the log and
   the throttling see the proxy's address in place of the operator's. An operator
   may still run one. This decision makes it unnecessary for the certificate
   alone.
