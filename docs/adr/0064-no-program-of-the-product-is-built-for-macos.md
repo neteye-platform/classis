@@ -1,8 +1,8 @@
 # ADR-0064: No program of the product is built for macOS
 
-- **Status:** 🟡 proposed
+- **Status:** 🟢 accepted
 - **Date:** 2026-11-16
-- **Deciders:** Markus Brigl, Davide Zeni
+- **Deciders:** Davide Zeni
 - **Applies to:** the platforms every program of the product is built, tested
   and released for: the build matrices of `.github/workflows/ci.yml`,
   `.github/workflows/service-smoke.yml` and `.github/workflows/release.yml`,
