@@ -237,7 +237,7 @@ tag on the commit of `main` that carries it, and the run fails when the tag and
 the file disagree or the commit is not on `main`
 ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
 Its `sign` job waits until a second person with write
-access approves it in the environment `signing`, then signs every Client
+access approves it in the environment `Package Signing`, then signs every Client
 archive with the key that environment holds. A release publishes one archive per
 platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
 on the architectures each ships on, a `.sig` beside each Client archive, which
@@ -589,7 +589,7 @@ repository move or transfer:
 - a **ruleset on tags** that blocks updates, deletions and force pushes and
   requires signatures. It leaves creating a tag to everyone with write access,
   who may release;
-- the **environment `signing`**
+- the **environment `Package Signing`**
   ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
   clauses 1 and 2). Its deployment rule admits the tags
   `version/*` and no branch. It has one required reviewer, from a team of the

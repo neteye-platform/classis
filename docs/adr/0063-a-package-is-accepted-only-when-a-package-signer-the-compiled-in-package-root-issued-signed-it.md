@@ -269,8 +269,8 @@ and that signer's Ed25519 signature over the Package's statement verifies;
       sends a request for it to the Root's custodian, who issues the certificate
       (clause 2).
     - The admin stores the base64 of the key in PKCS#8 DER as the secret
-      `PACKAGE_SIGNING_KEY` of the environment `signing`, then deletes the key.
-      No copy is kept.
+      `PACKAGE_SIGNING_KEY` of the environment `Package Signing`, then deletes
+      the key. No copy is kept.
     - The certificate is committed as `packaging/package-signer.der` by a
       reviewed pull request.
     - The `version` job, which checks out the tag, uploads that tracked file as
@@ -286,7 +286,7 @@ and that signer's Ed25519 signature over the Package's statement verifies;
       (`github.event_name == 'push'`). The event is checked because
       `workflow_dispatch` can run on a tag ref too. It runs after `version` and
       `build`, on `ubuntu-latest` and never on a self-hosted runner.
-    - **What it may do.** It names the environment `signing` and holds
+    - **What it may do.** It names the environment `Package Signing` and holds
       `contents: read` alone. It checks out no code and builds nothing. The only
       actions it runs are `actions/download-artifact` and
       `actions/upload-artifact`, pinned to a commit SHA

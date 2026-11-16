@@ -1064,7 +1064,7 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
         1,
         "one environment"
     );
-    assert!(sign.contains("    environment: signing\n"), "{sign}");
+    assert!(sign.contains("    environment: Package Signing\n"), "{sign}");
     assert_eq!(workflow.matches("secrets.").count(), 1, "one secret");
     assert!(
         sign.contains("${{ secrets.PACKAGE_SIGNING_KEY }}"),

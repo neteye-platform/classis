@@ -7,9 +7,10 @@
 - **Deciders:** Davide Zeni
 - **Applies to:** the triggers and the `version`, `sign` and `publish` jobs of
   `.github/workflows/release.yml`, `packaging/package-signing-key.pub`, the
-  GitHub environment `signing`, the repository's rulesets for `main`, for every
-  branch and for tags, `crates/classis-tools/tests/release_workflow.rs`, the
-  section _Repository settings_ of `README.md`, and every document that tells an
+  GitHub environment `Package Signing`, the repository's rulesets for `main`,
+  for every branch and for tags,
+  `crates/classis-tools/tests/release_workflow.rs`, the section _Repository
+  settings_ of `README.md`, and every document that tells an
   operator how to upload or verify the Client's release
 - **Supersedes:**
   [ADR-0012](0012-versions-resolved-in-the-internal-crate.md) clauses 6 and 8;
@@ -72,16 +73,16 @@ The forces:
 
 We will sign every entry of the Client's own Package in a `sign` job of the
 release run. The key is one Ed25519 key, a secret of the GitHub environment
-`signing`. Only a run started by a hand-pushed `version/*` tag reaches that job,
-and only after a second person with write access approves. The release publishes
-each signature, and the key's public half, beside the archives.
+`Package Signing`. Only a run started by a hand-pushed `version/*` tag reaches
+that job, and only after a second person with write access approves. The release
+publishes each signature, and the key's public half, beside the archives.
 
 1. **One Ed25519 key, made once, outside the release run.**
    - A repository admin makes it with `classisctl package keygen` on a machine
      of their own.
    - They store the base64 of the `package-signing-key.pk8` it writes as the
-     secret `PACKAGE_SIGNING_KEY` of the environment `signing`, then delete the
-     file. No copy is kept.
+     secret `PACKAGE_SIGNING_KEY` of the environment `Package Signing`, then
+     delete the file. No copy is kept.
    - The public half `keygen` prints is committed as
      `packaging/package-signing-key.pub` by a reviewed pull request. It is 64
      hexadecimal digits and a newline, the form ADR-0029 clause 6 takes.
@@ -91,7 +92,7 @@ each signature, and the key's public half, beside the archives.
    - A lost or exposed key is replaced the same way: a new key, a new secret,
      and a new public half under review.
 
-2. **The environment `signing` holds the key, and a second person releases
+2. **The environment `Package Signing` holds the key, and a second person releases
    it.**
    - Its deployment rule admits the tags `version/*` and no branch.
    - It requires one reviewer, taken from a team of the people with write
@@ -124,14 +125,14 @@ each signature, and the key's public half, beside the archives.
    by hand is a dry run, and nothing else.** `workflow_dispatch` takes no
    input. A run started by hand builds and packs every target and stops. It
    neither tags, signs nor publishes, and it never reaches the environment
-   `signing`. A `-dev` version is expected there and only there.
+   `Package Signing`. A `-dev` version is expected there and only there.
 
 6. **The `sign` job signs, and does nothing else.**
    - **When it runs.** Only in a run started by the push of a `version/*` tag
      (`github.event_name == 'push'`). The event is checked because
      `workflow_dispatch` can run on a tag ref too. It runs after `version` and
      `build`, on `ubuntu-latest` and never on a self-hosted runner.
-   - **What it may do.** It names the environment `signing` and holds
+   - **What it may do.** It names the environment `Package Signing` and holds
      `contents: read` alone. It checks out no code and builds nothing. The only
      actions it runs are `actions/download-artifact` and
      `actions/upload-artifact`, pinned to a commit SHA
@@ -245,7 +246,7 @@ each signature, and the key's public half, beside the archives.
       - signatures required;
       - anyone with write access may create one, since they are authorised to
         release.
-    - **The environment `signing`:** as clause 2 states.
+    - **The environment `Package Signing`:** as clause 2 states.
 
 **Out of scope:**
 
@@ -396,13 +397,13 @@ Tests in `crates/classis-tools/tests/release_workflow.rs`, each marked
   - The `version` job holds `contents: read`.
   - The `version` job refuses a tagged commit not reachable from `origin/main`.
 - **Only `sign` names the environment (clauses 2, 6 and 7).**
-  - `sign` names `signing`, runs only on a push event, needs `version` and
+  - `sign` names `Package Signing`, runs only on a push event, needs `version` and
     `build`, and holds `contents: read` alone.
   - It has no checkout and no step that builds.
   - Its only actions are `download-artifact` and `upload-artifact`, pinned.
   - It downloads only `supervisor_*.tar.gz.sha256`.
   - Its key-removal step runs `if: always()`.
-  - No other job names `signing`.
+  - No other job names `Package Signing`.
 - **The signed statement is the one the Client verifies (clause 6).**
   - The test takes the signing step's script out of the workflow, unchanged,
     and runs it with a test key from `ring` and the system's `openssl`.
