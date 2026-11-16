@@ -113,34 +113,6 @@ fn parse_os_release(text: &str) -> OsInfo {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn read_os_info() -> OsInfo {
-    // `sw_vers` prints ProductName/ProductVersion/BuildVersion lines, e.g. "macOS" / "15.5".
-    let Ok(output) = std::process::Command::new("sw_vers").output() else {
-        return OsInfo::default();
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let field = |name: &str| {
-        text.lines()
-            .find_map(|line| line.strip_prefix(name))
-            .map(|value| value.trim_start_matches(':').trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let name = field("ProductName");
-    let version = field("ProductVersion");
-    let description = match (&name, &version) {
-        (Some(name), Some(version)) => Some(format!("{name} {version}")),
-        (Some(name), None) => Some(name.clone()),
-        _ => None,
-    };
-    OsInfo {
-        description,
-        name,
-        version,
-        build_id: field("BuildVersion"),
-    }
-}
-
 #[cfg(windows)]
 fn read_os_info() -> OsInfo {
     // `cmd /c ver` prints e.g. "Microsoft Windows [Version 10.0.26100.2033]".
@@ -178,7 +150,7 @@ fn read_os_info() -> OsInfo {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn read_os_info() -> OsInfo {
     OsInfo::default()
 }
@@ -211,9 +183,8 @@ pub(crate) fn host_name() -> Option<&'static str> {
 
 #[cfg(unix)]
 fn read_host_name() -> Option<String> {
-    // HOST_NAME_MAX is 64 on Linux and 255 on macOS; 256 holds either. A name that had to be
-    // truncated is not required to be terminated, which is why the end is scanned for rather
-    // than assumed.
+    // HOST_NAME_MAX is 64 on Linux; 256 holds it. A name that had to be truncated is not
+    // required to be terminated, which is why the end is scanned for rather than assumed.
     let mut buffer = vec![0u8; 256];
     // SAFETY: `buffer` is writable for `buffer.len()` bytes and outlives the call.
     if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
@@ -258,25 +229,6 @@ fn read_host_id() -> Option<String> {
         })
 }
 
-#[cfg(target_os = "macos")]
-fn read_host_id() -> Option<String> {
-    // ioreg prints `"IOPlatformUUID" = "…"` among the platform device's properties.
-    let output = std::process::Command::new("ioreg")
-        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let value = text
-        .lines()
-        .find(|line| line.contains("IOPlatformUUID"))?
-        .split_once('=')?
-        .1
-        .trim()
-        .trim_matches('"')
-        .to_string();
-    (!value.is_empty()).then_some(value)
-}
-
 #[cfg(windows)]
 fn read_host_id() -> Option<String> {
     // The MachineGuid the installer writes. `reg query` prints
@@ -300,7 +252,7 @@ fn read_host_id() -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn read_host_id() -> Option<String> {
     None
 }

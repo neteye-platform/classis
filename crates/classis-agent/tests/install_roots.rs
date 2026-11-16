@@ -3,9 +3,8 @@
 //! if it comes before the install has created, restricted or handed over a thing.
 //!
 //! Linux only: the command is run at `--user` scope with every per-user location in a temporary
-//! directory, so that it can never register anything on the host running the test. On macOS a
-//! user-scope install would load a job into the real user session, and Windows has no user-scope
-//! service at all.
+//! directory, so that it can never register anything on the host running the test. Windows has
+//! no user-scope service at all.
 #![cfg(target_os = "linux")]
 
 use std::path::Path;

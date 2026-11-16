@@ -255,8 +255,8 @@ fn upsert_attr(attrs: &mut Vec<KeyValue>, attr: &KeyValue) {
     }
 }
 
-/// OpenTelemetry semantic-convention value for `os.type` (Rust says "macos", the convention
-/// "darwin").
+/// OpenTelemetry semantic-convention value for `os.type`, read through the table the Server
+/// matches it against (ADR-0026); Rust's own `linux` and `windows` already are the convention's.
 pub(super) fn os_type() -> &'static str {
     classis_core::platform::canonical_os(std::env::consts::OS)
 }

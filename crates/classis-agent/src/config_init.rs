@@ -24,8 +24,8 @@ use dialoguer::{Input, Password};
 use crate::config::ClientConfig;
 
 /// The file name written inside the install root when the operator named no `--config` path
-/// (ADR-0019): one rule for systemd, launchd, and the SCM instead of an `/etc` vs `/Library` vs
-/// `%ProgramData%` policy per platform.
+/// (ADR-0019): one rule for systemd and the SCM instead of an `/etc` vs `%ProgramData%` policy per
+/// platform.
 pub const FILE_NAME: &str = "supervisor.toml";
 
 /// The name the questionnaire copies the answered Server CA to, beside [`FILE_NAME`] (ADR-0019),

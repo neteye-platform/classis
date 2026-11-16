@@ -1,5 +1,5 @@
-//! The Client under the machine's **real** service manager — systemd, launchd, or the SCM
-//! (ADR-0019, ADR-0018).
+//! The Client under the machine's **real** service manager — systemd or the SCM (ADR-0019,
+//! ADR-0018).
 //!
 //! Every other test in this project stands in for the service manager: the self-update end-to-end
 //! test restarts the Client itself, "exactly as systemd would". That is what makes the update loop
@@ -106,8 +106,8 @@ fn agent(state: &AppState) -> Option<AgentView> {
 /// The service's process id, asked of the platform's own manager. `None` when nothing is running
 /// under that name — which is itself an answer the assertions below use.
 fn service_pid() -> Option<u32> {
-    // One name on every platform (ADR-0019 clause 3), so this is what systemd, launchd, and the SCM
-    // are each asked about.
+    // One name on every platform (ADR-0019 clause 3), so this is what systemd and the SCM are each
+    // asked about.
     let qualified = service_name();
     #[cfg(windows)]
     {
@@ -127,16 +127,6 @@ fn service_pid() -> Option<u32> {
             .expect("run systemctl show");
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
         parse_after(&text, "MainPID")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // `launchctl list <label>` prints a plist; `"PID" = 1234;` is there while it runs.
-        let out = Command::new("launchctl")
-            .args(["list", qualified])
-            .output()
-            .expect("run launchctl list");
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        parse_after(&text, "\"PID\"")
     }
 }
 
@@ -232,8 +222,8 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
     .expect("install the service");
     let _registered = Registered;
 
-    // launchd does not auto-start after an install (a known ADR-0019 gap), so every platform is
-    // started explicitly — which is also what the README's checklist tells an operator to do.
+    // Every platform is started explicitly, which is also what the README's checklist tells an
+    // operator to do.
     client(&["service", "start"], &config).expect("start the service");
     wait_for(
         "the service to report running",
@@ -241,7 +231,7 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
         || (service().state().ok()? == ServiceState::Running).then_some(()),
     );
 
-    // The proof that the unit, plist or SCM entry starts a *working* Client: it reaches the Server
+    // The proof that the unit or SCM entry starts a *working* Client: it reaches the Server
     // and appears in the fleet. A malformed program path or working directory dies here.
     wait_for(
         "the Agent to appear in the fleet",
@@ -331,87 +321,9 @@ impl Drop for TemporaryAccount {
     }
 }
 
-/// A temporary role account with a group of its own, made with the lines the refusal of a
-/// missing process account shows on macOS: `dseditgroup` creates the group, and `sysadminctl
-/// -roleAccount` the account, with that group as its primary one. Removed however the test ends.
-#[cfg(target_os = "macos")]
-struct TemporaryAccount(&'static str);
-
-#[cfg(target_os = "macos")]
-impl TemporaryAccount {
-    fn create(name: &'static str) -> Self {
-        // A role account's uid lies in a range `sysadminctl` names, which macOS releases have
-        // moved: the first free id of each range is tried, and the account looked up after.
-        for range in [450..500, 300..400] {
-            let Some(id) = range.into_iter().find(|id| id_is_free(*id)) else {
-                continue;
-            };
-            let id = id.to_string();
-            let group = Command::new("dseditgroup")
-                .args(["-o", "create", "-i", &id, name])
-                .status()
-                .expect("run dseditgroup");
-            assert!(group.success(), "cannot create the group {name}");
-            let account = Self(name);
-            let _ = Command::new("sysadminctl")
-                .args(["-addUser", name, "-UID", &id, "-GID", &id, "-roleAccount"])
-                .status()
-                .expect("run sysadminctl");
-            // `sysadminctl`'s exit status is not taken on faith: the account is looked up.
-            let found = classis_agent::service::run_as::account_of(id.parse().expect("an id"))
-                .expect("the password database");
-            if found
-                .as_ref()
-                .is_some_and(|found| found.name == name && found.gid.to_string() == id)
-            {
-                return account;
-            }
-            drop(account);
-        }
-        panic!("sysadminctl created no role account {name} with a group of its own");
-    }
-}
-
-/// Whether neither an account nor a group holds `id`.
-#[cfg(target_os = "macos")]
-fn id_is_free(id: u32) -> bool {
-    // SAFETY: a lookup by id; the entry it may return is not read.
-    let group = unsafe { libc::getgrgid(id) };
-    group.is_null()
-        && classis_agent::service::run_as::account_of(id)
-            .expect("the password database")
-            .is_none()
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for TemporaryAccount {
-    fn drop(&mut self) {
-        let _ = Command::new("dscl")
-            .args([".", "-delete", &format!("/Users/{}", self.0)])
-            .status();
-        let _ = Command::new("dseditgroup")
-            .args(["-o", "delete", self.0])
-            .status();
-    }
-}
-
-/// The accounts the process account's smoke test creates: on macOS a role account's name begins
-/// with `_`.
+/// The accounts the process account's smoke test creates.
 #[cfg(target_os = "linux")]
 const SMOKE_ACCOUNTS: (&str, &str) = ("classis-smoke", "classis-smoke-agents");
-#[cfg(target_os = "macos")]
-const SMOKE_ACCOUNTS: (&str, &str) = ("_classis-smoke", "_classis-smoke-agents");
-
-/// A temporary directory both accounts reach: under `/tmp` on Linux, and under `/private/tmp` on
-/// macOS, where the default one lies in the invoking user's own `0700` directory and `/tmp` is a
-/// link.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn shared_tempdir() -> tempfile::TempDir {
-    #[cfg(target_os = "macos")]
-    return tempfile::tempdir_in("/private/tmp").expect("tempdir");
-    #[cfg(target_os = "linux")]
-    tempfile::tempdir().expect("tempdir")
-}
 
 /// Install under an account, then re-install without `--run-as`, as every package upgrade does:
 /// the service still runs as the account, and the unit the Client wrote leaves it the privileges
@@ -538,18 +450,9 @@ fn add_to_group(member: &str, group: &str) {
     assert!(status.success(), "cannot add {member} to {group}");
 }
 
-#[cfg(target_os = "macos")]
-fn add_to_group(member: &str, group: &str) {
-    let status = Command::new("dseditgroup")
-        .args(["-o", "edit", "-a", member, "-t", "user", group])
-        .status()
-        .expect("run dseditgroup");
-    assert!(status.success(), "cannot add {member} to {group}");
-}
-
 /// What the Managed Process below found out about itself, once it has written it: its pid, its
 /// account, and what it could and could not reach.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn reported(result: &Path, other_than: Option<u32>) -> std::collections::BTreeMap<String, String> {
     wait_for(
         "the Managed Process to report",
@@ -569,7 +472,7 @@ fn reported(result: &Path, other_than: Option<u32>) -> std::collections::BTreeMa
 
 /// The account a running process runs as: its uid asked of `ps`, its name of the password
 /// database, which no column width shortens.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn user_of(pid: &str) -> String {
     let out = Command::new("ps")
         .args(["-o", "uid=", "-p", pid])
@@ -585,7 +488,7 @@ fn user_of(pid: &str) -> String {
 }
 
 /// The uid and primary gid of `account`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn ids_of(account: &str) -> (u32, u32) {
     let id = |flag: &str| -> u32 {
         let out = Command::new("id")
@@ -601,7 +504,7 @@ fn ids_of(account: &str) -> (u32, u32) {
 }
 
 /// The owner, group and mode of `path`, set-ID bits included.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn owner_and_mode(path: &Path) -> (u32, u32, u32) {
     use std::os::unix::fs::MetadataExt as _;
     let meta = std::fs::symlink_metadata(path).expect("metadata");
@@ -617,10 +520,9 @@ fn owner_and_mode(path: &Path) -> (u32, u32, u32) {
 /// accounts and leaves the program its data: what it wrote is still its own, and it writes there
 /// again. `--no-process-account` returns the program to the Client's account. The in-process tests stand in for the second
 /// service under the test's own uid; this is the one place the shipped binary starts a program
-/// over the socket under another account. On Linux under systemd, and on macOS under launchd with
-/// role accounts made as the refusal of a missing account says.
+/// over the socket under another account. On Linux under systemd.
 /// Verifies: ADR-0059
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "installs a real system service; run with --ignored in the service-smoke job"]
 fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_runs() {
@@ -635,7 +537,7 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     let process_account = TemporaryAccount::create(SMOKE_ACCOUNTS.1);
     add_to_group(client_account.0, process_account.0);
 
-    let dir = shared_tempdir();
+    let dir = tempfile::tempdir().expect("tempdir");
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
         .expect("chmod the temporary directory");
     let root = dir.path().join("install");
@@ -758,11 +660,6 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
         .args(["restart", &format!("{agents}.service")])
         .status()
         .expect("run systemctl restart");
-    #[cfg(target_os = "macos")]
-    let restarted = Command::new("launchctl")
-        .args(["kickstart", "-k", &format!("system/{agents}")])
-        .status()
-        .expect("run launchctl kickstart");
     assert!(restarted.success(), "cannot restart the second service");
     let again = reported(&result, Some(first_pid));
     assert_eq!(user_of(&again["pid"]), process_account.0, "{again:?}");
@@ -821,10 +718,10 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
 }
 
 /// Kills the process it names, however the test ends.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 struct Killed(u32);
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 impl Drop for Killed {
     fn drop(&mut self) {
         let _ = Command::new("kill")
@@ -874,18 +771,13 @@ fn diagnosis(pid: u32, service: &str) -> String {
 }
 
 /// Restarts the service named `name` through the service manager.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn restart(name: &str) {
     #[cfg(target_os = "linux")]
     let restarted = Command::new("systemctl")
         .args(["restart", &format!("{name}.service")])
         .status()
         .expect("run systemctl restart");
-    #[cfg(target_os = "macos")]
-    let restarted = Command::new("launchctl")
-        .args(["kickstart", "-k", &format!("system/{name}")])
-        .status()
-        .expect("run launchctl kickstart");
     assert!(restarted.success(), "cannot restart {name}");
 }
 
@@ -896,7 +788,7 @@ fn restart(name: &str) {
 /// the second service is restarted and serves the socket again. On Linux the second service is not
 /// dumpable, and the program it starts is.
 /// Verifies: ADR-0059
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "installs a real system service; run with --ignored in the service-smoke job"]
 fn a_managed_process_in_the_second_services_place_is_refused() {
@@ -911,7 +803,7 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     let process_account = TemporaryAccount::create(SMOKE_ACCOUNTS.1);
     add_to_group(client_account.0, process_account.0);
 
-    let dir = shared_tempdir();
+    let dir = tempfile::tempdir().expect("tempdir");
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
         .expect("chmod the temporary directory");
     let root = dir.path().join("install");

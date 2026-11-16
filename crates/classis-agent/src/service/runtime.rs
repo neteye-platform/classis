@@ -1,7 +1,7 @@
 //! The daemon body (ADR-0019): the same loop whether started standalone in the foreground or
 //! under a service manager, stopping cleanly on a shutdown request instead of running forever.
 //!
-//! systemd and launchd stop a service with `SIGTERM`; the Windows SCM delivers a Stop control.
+//! systemd stops a service with `SIGTERM`; the Windows SCM delivers a Stop control.
 //! Both funnel into one [`Shutdown`] handle the transports select on, so the clean-shutdown
 //! `agent_disconnect` goodbye (the Baseline's final message) fires on every stop path, not only
 //! on Ctrl-C.
@@ -127,9 +127,9 @@ pub fn run_foreground(spec: RunSpec) -> Result<(), String> {
         on_a_worker(run_until_shutdown(spec, shutdown)).await
     })?;
     if exit == Exit::RestartForUpdate {
-        // Not an error, but it has to look like one: systemd's `Restart=on-failure` and launchd's
-        // `KeepAlive{SuccessfulExit:false}` are the only "bring it back" either offers, and a
-        // clean exit is precisely what tells them not to (ADR-0019, ADR-0018).
+        // Not an error, but it has to look like one: systemd's `Restart=on-failure` is the only
+        // "bring it back" it offers, and a clean exit is precisely what tells it not to (ADR-0019,
+        // ADR-0018).
         tracing::info!("exiting so the service manager starts the newly installed version");
         std::process::exit(crate::update::EXIT_RESTART_FOR_UPDATE);
     }
@@ -628,8 +628,8 @@ fn or_left_behind(
     run
 }
 
-/// Resolve to the platform shutdown signal: `SIGTERM` or `SIGINT` on Unix (what systemd and
-/// launchd send on stop), Ctrl-C on Windows (a console run; the SCM path never comes through
+/// Resolve to the platform shutdown signal: `SIGTERM` or `SIGINT` on Unix (what systemd sends
+/// on stop), Ctrl-C on Windows (a console run; the SCM path never comes through
 /// here).
 async fn shutdown_signal() {
     #[cfg(unix)]
