@@ -233,7 +233,7 @@ and macOS and the Server for Linux.
 [ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)): the
 version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). A
 release starts when a person with write access pushes the `v<version>` tag,
-`v0.8.0` say, on the commit of `main` that carries it, and the run fails when
+`v0.0.1` say, on the commit of `main` that carries it, and the run fails when
 the tag and the file disagree or the commit is not on `main`
 ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
 Its `sign` job waits until a second person with write
@@ -364,13 +364,13 @@ $ curl -X PUT -H 'Content-Type: application/json' \
 # publishes beside each archive (ADR-0063). Only the Client's own Package, `supervisor`, is signed
 # today; no other Package can be delivered yet. Saving stages it: nothing reaches the fleet until
 # a Deployment holding it is rolled out (ADR-0025).
-$ curl -X PUT http://127.0.0.1:4321/api/v1/packages/supervisor/0.8.0
-$ curl -X PUT --data-binary @supervisor_0.8.0_linux_amd64.tar.gz \
-       http://127.0.0.1:4321/api/v1/packages/supervisor/0.8.0/entries/linux/amd64
+$ curl -X PUT http://127.0.0.1:4321/api/v1/packages/supervisor/0.0.1
+$ curl -X PUT --data-binary @supervisor_0.0.1_linux_amd64.tar.gz \
+       http://127.0.0.1:4321/api/v1/packages/supervisor/0.0.1/entries/linux/amd64
 $ curl -X PUT -H 'Content-Type: application/json' \
-       -d "{\"signature\": \"$(cat supervisor_0.8.0_linux_amd64.tar.gz.sig)\"}" \
-       http://127.0.0.1:4321/api/v1/packages/supervisor/0.8.0/entries/linux/amd64/signature
-$ curl -X PUT http://127.0.0.1:4321/api/v1/deployments/linux/packages/supervisor/0.8.0
+       -d "{\"signature\": \"$(cat supervisor_0.0.1_linux_amd64.tar.gz.sig)\"}" \
+       http://127.0.0.1:4321/api/v1/packages/supervisor/0.0.1/entries/linux/amd64/signature
+$ curl -X PUT http://127.0.0.1:4321/api/v1/deployments/linux/packages/supervisor/0.0.1
 $ curl -X POST http://127.0.0.1:4321/api/v1/deployments/linux/rollout
 ```
 

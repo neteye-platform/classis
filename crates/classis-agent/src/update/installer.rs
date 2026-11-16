@@ -652,7 +652,7 @@ mod tests {
 
     /// A Server offering an older release than the one running is refused before it can be staged,
     /// even though it may be validly signed — the refusal happens ahead of the layout check, so it
-    /// holds regardless of where this test binary runs from. `0.0.1` is below any release this
+    /// holds regardless of where this test binary runs from. `0.0.0` is below any release this
     /// project builds.
     /// Verifies: ADR-0018, ADR-0043
     #[test]
@@ -661,7 +661,7 @@ mod tests {
         let artifact = dir.path().join("artifact");
         std::fs::write(&artifact, b"payload").expect("write the artifact");
 
-        let err = install(dir.path(), &artifact, "0.0.1", b"\x00", None)
+        let err = install(dir.path(), &artifact, "0.0.0", b"\x00", None)
             .expect_err("an older release must be refused");
         assert!(
             err.contains("refusing to downgrade"),
