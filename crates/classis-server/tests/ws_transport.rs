@@ -419,8 +419,6 @@ async fn an_oversized_frame_closes_the_connection_with_1009() {
 const SMALL: classis_server::agent_rate::Limits = classis_server::agent_rate::Limits {
     messages_per_sec: 1,
     burst: 3,
-    gateway_messages_per_sec: 1,
-    gateway_burst: 3,
 };
 
 /// A member past its burst is answered `Unavailable` with a `retry_info` of exactly 30 s, addressed
@@ -488,8 +486,7 @@ async fn a_shutdown_closes_the_websocket_sessions_before_serve_returns() {
         classis_server::fleet::AppState::new(dir.path().join("fleet-configs"))
             .expect("open the configuration store"),
     );
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = classis_server::agent_app(state.clone());
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local addr");
     let handle = opamp::server::listen::Handle::new();

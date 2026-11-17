@@ -45,14 +45,11 @@ pub struct ServerConfig {
     /// (ADR-0013, ADR-0032). Required: a Server without it is refused at startup. It is an
     /// `Option` only so that its absence can be named.
     pub tls: Option<TlsConfig>,
-    /// Refused at startup: the Agent plane admits by client certificate alone and has no credential
-    /// of its own (ADR-0021 clause 1). Read only so that a leftover section can be named.
+    /// Refused at startup: the Agent plane has no credential of its own. Read only so that a
+    /// leftover section can be named.
     pub auth: Option<IgnoredAny>,
     /// Optional connection settings offered to the fleet (ADR-0014); absent means none.
     pub connection_offer: Option<ConnectionOfferConfig>,
-    /// Optional certificate authority for signing Agent CSRs (ADR-0021); absent means the Server
-    /// issues nothing and does not declare `AcceptsConnectionSettingsRequest`.
-    pub client_ca: Option<ClientCaConfig>,
     /// Optional destinations for the Agents' own telemetry (ADR-0016); absent means none is
     /// offered and no Agent reports any.
     pub telemetry_offer: Option<TelemetryOfferConfig>,
@@ -96,11 +93,9 @@ pub struct ServerConfig {
     #[serde(default = "default_stale_after_secs")]
     pub stale_after_secs: u64,
     /// The most Agent records the fleet holds at once. A report bearing a new `instance_uid` past
-    /// this ceiling is refused `Unavailable`, so a peer minting fresh self-asserted UIDs (ADR-0021)
-    /// cannot exhaust memory or disk; existing Agents keep reporting. The real defence against an
-    /// anonymous flood is admission by client certificate (ADR-0021) — this is the backstop behind
-    /// it. `0` is refused at load: a fleet that can hold no Agent is a misconfiguration, not a
-    /// limit.
+    /// this ceiling is refused `Unavailable`, so a peer minting fresh self-asserted UIDs cannot
+    /// exhaust memory or disk; existing Agents keep reporting. `0` is refused at load: a fleet that
+    /// can hold no Agent is a misconfiguration, not a limit.
     #[serde(default = "default_max_agents")]
     pub max_agents: usize,
     /// The connections the Agent plane holds at once (ADR-0013). Past it a connection is closed on
@@ -108,9 +103,6 @@ pub struct ServerConfig {
     /// with the process's file-descriptor limit. `0` is refused at load.
     #[serde(default = "default_agent_max_connections")]
     pub max_connections: usize,
-    /// The bootstrap CA a host enrols with (ADR-0021 clause 19); absent means no host enrols, and
-    /// an operator provisions every certificate.
-    pub enrolment: Option<EnrolmentConfig>,
     /// How repeated admission failures from one peer address are throttled (ADR-0021 clause 24).
     #[serde(default)]
     pub admission_throttle: AdmissionThrottleConfig,
@@ -124,14 +116,10 @@ pub struct ServerConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AgentRateLimitConfig {
-    /// Tokens a host's or an Agent's bucket gains per second.
+    /// Tokens a host's bucket gains per second.
     pub messages_per_sec: u32,
     /// That bucket's capacity; a new bucket starts full.
     pub burst: u32,
-    /// Tokens the aggregate bucket of a host marked as a Gateway gains per second.
-    pub gateway_messages_per_sec: u32,
-    /// The aggregate bucket's capacity.
-    pub gateway_burst: u32,
 }
 
 impl Default for AgentRateLimitConfig {
@@ -140,8 +128,6 @@ impl Default for AgentRateLimitConfig {
         AgentRateLimitConfig {
             messages_per_sec: limits.messages_per_sec,
             burst: limits.burst,
-            gateway_messages_per_sec: limits.gateway_messages_per_sec,
-            gateway_burst: limits.gateway_burst,
         }
     }
 }
@@ -153,8 +139,6 @@ impl AgentRateLimitConfig {
         crate::agent_rate::Limits {
             messages_per_sec: self.messages_per_sec,
             burst: self.burst,
-            gateway_messages_per_sec: self.gateway_messages_per_sec,
-            gateway_burst: self.gateway_burst,
         }
     }
 
@@ -162,8 +146,6 @@ impl AgentRateLimitConfig {
         for (key, value) in [
             ("messages_per_sec", self.messages_per_sec),
             ("burst", self.burst),
-            ("gateway_messages_per_sec", self.gateway_messages_per_sec),
-            ("gateway_burst", self.gateway_burst),
         ] {
             if value == 0 {
                 return Err(format!(
@@ -585,28 +567,6 @@ impl crate::packages::SignatureVerifier for Ed25519Verifier {
     }
 }
 
-/// The `[enrolment]` section (ADR-0021 clause 19).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnrolmentConfig {
-    /// PEM certificate of the CA that issues bootstrap certificates. A certificate from it can
-    /// only enrol: it needs an open enrolment window and an operator's approval.
-    pub bootstrap_ca_file: PathBuf,
-    /// PEM PKCS#8 key of that CA. With it the Server issues bootstrap certificates on an
-    /// operator's request; without it enrolment works with bootstrap certificates made elsewhere
-    /// (ADR-0021 clause 19).
-    #[serde(default)]
-    pub bootstrap_ca_key_file: Option<PathBuf>,
-    /// The most requests of one bootstrap certificate the pending queue holds at once, 1 to
-    /// [`MAX_PENDING`](crate::enrolment::MAX_PENDING) (ADR-0046).
-    #[serde(default = "default_max_pending_per_bootstrap")]
-    pub max_pending_per_bootstrap: usize,
-}
-
-fn default_max_pending_per_bootstrap() -> usize {
-    crate::enrolment::DEFAULT_MAX_PENDING_PER_BOOTSTRAP
-}
-
 /// The `[admission_throttle]` section (ADR-0021 clause 24).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -744,8 +704,7 @@ impl RestAuthConfig {
 
 /// The `[connection_offer]` section (ADR-0014 clause 1): what every Agent declaring
 /// `AcceptsOpAMPConnectionSettings` is offered — a heartbeat interval, an endpoint. Either or both,
-/// but never neither. It carries no credential: the Agent plane admits by client certificate alone
-/// (ADR-0021), so an offered credential would be one nothing reads.
+/// but never neither. It carries no credential: an offered credential would be one nothing reads.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionOfferConfig {
@@ -775,8 +734,8 @@ impl ConnectionOfferConfig {
         ] {
             if value.is_some() {
                 return Err(format!(
-                    "[connection_offer] {key} is refused — the Agent plane admits by client \
-                     certificate alone, so no credential is offered; remove the key"
+                    "[connection_offer] {key} is refused — no credential is offered; remove the \
+                     key"
                 ));
             }
         }
@@ -866,48 +825,6 @@ pub struct TlsConfig {
     pub cert_file: PathBuf,
     /// PEM private key.
     pub key_file: PathBuf,
-    /// PEM bundle of the certificate authorities a **client** certificate must chain to, required
-    /// (ADR-0021). The Agent plane asks for the certificate in the TLS handshake, so a peer without
-    /// one, or with one this bundle (or the bootstrap CA of `[enrolment]`) does not verify, never
-    /// reaches a route — the package download included. An `Option` only so its absence can be
-    /// named at startup.
-    pub client_ca_file: Option<PathBuf>,
-}
-
-/// The `[client_ca]` section (ADR-0021): the certificate authority this Server signs Agent CSRs
-/// with. Present is what arms the CSR flow — `AcceptsConnectionSettingsRequest` is declared only
-/// while it is, the same "declare what is actually armed" rule `[connection_offer]` follows.
-///
-/// It is deliberately *not* the listener's own certificate and key. The Baseline's own schema warns
-/// against storing a CA's private key where the server certificate lives, because compromising the
-/// Server would then mint fleet members at will.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClientCaConfig {
-    /// PEM certificate of the issuing CA.
-    pub cert_file: PathBuf,
-    /// PEM private key of the issuing CA.
-    pub key_file: PathBuf,
-    /// How long an issued certificate is valid. Short is the point: validity plus renewal bounds a
-    /// certificate nobody noticed was stolen, and revocation ends one that was (ADR-0021).
-    #[serde(default = "default_validity_days")]
-    pub validity_days: u32,
-}
-
-impl ClientCaConfig {
-    /// Loud validation (ADR-0010): a CA that cannot sign, or one whose certificates expire before
-    /// the Client would renew them, is a configuration error rather than a runtime surprise.
-    fn check(&self) -> Result<(), String> {
-        if self.validity_days == 0 {
-            return Err("[client_ca] validity_days must be greater than zero".to_string());
-        }
-        for path in [&self.cert_file, &self.key_file] {
-            if !path.exists() {
-                return Err(format!("[client_ca] {} does not exist", path.display()));
-            }
-        }
-        Ok(())
-    }
 }
 
 fn default_agent_max_connections() -> usize {
@@ -936,18 +853,10 @@ fn default_max_message_size() -> usize {
     opamp::frame::DEFAULT_MAX_MESSAGE_SIZE
 }
 
-/// Long enough that a host offline over a holiday still comes back on a valid certificate, short
-/// enough that a certificate is not a permanent grant (ADR-0021).
 /// Three times the Baseline's own default heartbeat of 30 seconds (ADR-0024): one missed beat is a
 /// lost packet, and a fleet view that flickers is one nobody trusts.
 fn default_stale_after_secs() -> u64 {
     90
-}
-
-/// A month: short enough that a certificate stolen unnoticed is good for weeks, not a quarter;
-/// long enough that a host offline for a fortnight still renews on its own (ADR-0021 clause 9).
-fn default_validity_days() -> u32 {
-    30
 }
 
 /// Roomy enough for the real thing: an `otelcol-contrib` binary is a few hundred megabytes.
@@ -977,7 +886,6 @@ impl Default for ServerConfig {
             tls: None,
             auth: None,
             connection_offer: None,
-            client_ca: None,
             telemetry_offer: None,
             packages_dir: None,
             packages: PackagesConfig::default(),
@@ -990,7 +898,6 @@ impl Default for ServerConfig {
             stale_after_secs: default_stale_after_secs(),
             max_agents: default_max_agents(),
             max_connections: default_agent_max_connections(),
-            enrolment: None,
             admission_throttle: AdmissionThrottleConfig::default(),
             agent_rate_limit: AgentRateLimitConfig::default(),
         }
@@ -1112,13 +1019,13 @@ impl ServerConfig {
 
     /// The startup checks every layered document passes, its source aside.
     fn check(&self) -> Result<(), String> {
-        // The Agent plane has no credential of its own (ADR-0021 clause 1). A leftover section is
+        // The Agent plane has no credential of its own. A leftover section is
         // refused rather than ignored: an operator is present at a Server upgrade, and a section
         // that silently did nothing would tell them the fleet still needs it.
         if self.auth.is_some() {
             return Err(
-                "[auth] is refused — the Agent plane admits by client certificate alone; \
-                 remove the section"
+                "[auth] is refused — the Agent plane has no credential of its own; remove the \
+                 section"
                     .to_string(),
             );
         }
@@ -1149,9 +1056,6 @@ impl ServerConfig {
         if let Some(offer) = &self.connection_offer {
             offer.check()?;
         }
-        if let Some(client_ca) = &self.client_ca {
-            client_ca.check()?;
-        }
         if let Some(telemetry) = &self.telemetry_offer {
             telemetry.check()?;
         }
@@ -1171,16 +1075,6 @@ impl ServerConfig {
                  plane and the Operator plane are separate listeners",
                 self.listen, self.rest.listen
             ));
-        }
-        // Mutual TLS needs a TLS listener to happen on: `client_ca_file` lives inside `[tls]`, so
-        // this can only be a `[client_ca]` without one — issuing certificates for a channel that
-        // will never ask for them (ADR-0021).
-        if self.client_ca.is_some() && self.tls.is_none() {
-            return Err(
-                "[client_ca] issues client certificates, which only a TLS listener can ask \
-                 for — add a [tls] section, or remove [client_ca]"
-                    .to_string(),
-            );
         }
         // A limit of zero would refuse every message, and the Baseline knows no "unlimited": the
         // limit is mandatory, so a value that cannot carry a message fails startup.
@@ -1249,34 +1143,12 @@ impl ServerConfig {
     /// The transport rules of the specification's Q-1 (ADR-0013): the Agent plane always serves
     /// TLS, and the Operator plane off the loopback requires authentication.
     fn check_secure(&self) -> Result<(), String> {
-        let Some(tls) = &self.tls else {
+        if self.tls.is_none() {
             return Err(
                 "[tls] is required — the Agent plane always serves TLS 1.3; set cert_file and \
                  key_file (`classisctl pki init` makes a set, scripts/dev-pki.sh a development one)"
                     .to_string(),
             );
-        };
-        // The certificate is the whole of admission (ADR-0021 clauses 5, 6).
-        if tls.client_ca_file.is_none() {
-            return Err(
-                "[tls] client_ca_file is required — every Agent presents a client certificate in \
-                 the handshake"
-                    .to_string(),
-            );
-        }
-        if self.enrolment.is_some() && self.client_ca.is_none() {
-            return Err(
-                "[enrolment] needs [client_ca]: an approved request is signed by it".to_string(),
-            );
-        }
-        if let Some(enrolment) = &self.enrolment {
-            let max = crate::enrolment::MAX_PENDING;
-            if !(1..=max).contains(&enrolment.max_pending_per_bootstrap) {
-                return Err(format!(
-                    "[enrolment] max_pending_per_bootstrap must be between 1 and {max}, not {}",
-                    enrolment.max_pending_per_bootstrap
-                ));
-            }
         }
         let throttle = &self.admission_throttle;
         if throttle.max_failures == 0 || throttle.window_secs == 0 || throttle.backoff_secs == 0 {
@@ -1585,9 +1457,8 @@ impl TelemetryOffer {
 mod tests {
     use super::*;
 
-    /// A `[tls]` section with everything admission needs.
-    const TLS: &str =
-        "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\nclient_ca_file = \"ca.pem\"\n";
+    /// A `[tls]` section.
+    const TLS: &str = "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\n";
 
     #[test]
     fn parses_a_full_config() {
@@ -1880,7 +1751,7 @@ mod tests {
     }
 
     /// The Agent plane has no credential of its own: a leftover `[auth]` is refused at startup,
-    /// named, with the reason, whatever it holds (ADR-0021 clause 1).
+    /// named, with the reason, whatever it holds.
     /// Verifies: ADR-0021
     #[test]
     fn an_auth_section_is_refused_at_startup() {
@@ -1895,7 +1766,7 @@ mod tests {
             let err = ServerConfig::load(&path).expect_err(auth);
             assert!(err.contains("[auth]"), "names the section: {err}");
             assert!(
-                err.contains("admits by client certificate alone"),
+                err.contains("has no credential of its own"),
                 "says why: {err}"
             );
             assert!(!err.contains("plain-"), "never echoes a value: {err}");
@@ -2050,75 +1921,18 @@ mod tests {
         assert!(offer.check().is_err());
     }
 
-    /// The certificate is the whole of admission: a Server without the client CA does not start,
-    /// and neither does an `[enrolment]` without a CA to sign what it approves.
-    /// Verifies: ADR-0021, Q-1
+    /// A Server without `[tls]` does not start: the Agent plane always serves TLS.
+    /// Verifies: Q-1
     #[test]
-    fn the_client_ca_is_required_at_startup() {
+    fn tls_is_required_at_startup() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("server.toml");
-        std::fs::write(
-            &path,
-            "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\n",
-        )
-        .expect("write");
-        let err = ServerConfig::load(&path).expect_err("no client CA");
-        assert!(err.contains("client_ca_file is required"), "{err}");
+        std::fs::write(&path, "").expect("write");
+        let err = ServerConfig::load(&path).expect_err("no [tls]");
+        assert!(err.contains("[tls] is required"), "{err}");
 
         std::fs::write(&path, TLS).expect("write");
-        ServerConfig::load(&path).expect("the client CA is all admission needs");
-
-        std::fs::write(
-            &path,
-            format!("{TLS}[enrolment]\nbootstrap_ca_file = \"boot.pem\"\n"),
-        )
-        .expect("write");
-        let err = ServerConfig::load(&path).expect_err("enrolment without a CA");
-        assert!(err.contains("[enrolment] needs [client_ca]"), "{err}");
-    }
-
-    /// The share of the enrolment queue one bootstrap certificate may hold runs from 1 to 1024,
-    /// 256 by default; anything else fails startup naming the key.
-    /// Verifies: ADR-0046
-    #[test]
-    fn max_pending_per_bootstrap_runs_from_1_to_1024() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("server.toml");
-        // `[enrolment]` needs a `[client_ca]` whose files exist; their content is not read here.
-        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
-        std::fs::write(&cert, "").expect("write");
-        std::fs::write(&key, "").expect("write");
-        let with = |line: &str| {
-            format!(
-                "{TLS}[client_ca]\ncert_file = {:?}\nkey_file = {:?}\n\
-                 [enrolment]\nbootstrap_ca_file = \"boot.pem\"\n{line}",
-                cert.display().to_string(),
-                key.display().to_string(),
-            )
-        };
-        std::fs::write(&path, with("")).expect("write");
-        let config = ServerConfig::load(&path).expect("the default");
-        assert_eq!(
-            config
-                .enrolment
-                .expect("enrolment")
-                .max_pending_per_bootstrap,
-            256
-        );
-        for ok in [1, 1024] {
-            std::fs::write(&path, with(&format!("max_pending_per_bootstrap = {ok}\n")))
-                .expect("write");
-            ServerConfig::load(&path).expect("within bounds");
-        }
-        for bad in [0, 1025] {
-            std::fs::write(&path, with(&format!("max_pending_per_bootstrap = {bad}\n")))
-                .expect("write");
-            let err = ServerConfig::load(&path).expect_err("out of bounds");
-            assert!(
-                err.contains("[enrolment] max_pending_per_bootstrap"),
-                "{bad}: {err}"
-            );
-        }
+        ServerConfig::load(&path).expect("[tls] is all the Agent plane needs");
     }
 
     /// Verifies: ADR-0013
@@ -2145,18 +1959,11 @@ mod tests {
             crate::agent_rate::Limits {
                 messages_per_sec: 10,
                 burst: 300,
-                gateway_messages_per_sec: 500,
-                gateway_burst: 10_000,
             }
         );
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("server.toml");
-        for key in [
-            "messages_per_sec",
-            "burst",
-            "gateway_messages_per_sec",
-            "gateway_burst",
-        ] {
+        for key in ["messages_per_sec", "burst"] {
             std::fs::write(&path, format!("{TLS}[agent_rate_limit]\n{key} = 0\n")).expect("write");
             let err = ServerConfig::load(&path).expect_err("zero must fail startup");
             assert!(err.contains(&format!("[agent_rate_limit] {key}")), "{err}");
@@ -2254,10 +2061,9 @@ mod tests {
     }
 
     /// The `[tls]` section as variables, for a configuration that comes from the environment alone.
-    const TLS_VARIABLES: [(&str, &str); 3] = [
+    const TLS_VARIABLES: [(&str, &str); 2] = [
         ("CLASSIS_SERVER__TLS__CERT_FILE", "c.pem"),
         ("CLASSIS_SERVER__TLS__KEY_FILE", "k.pem"),
-        ("CLASSIS_SERVER__TLS__CLIENT_CA_FILE", "ca.pem"),
     ];
 
     /// A mistake in the file is named with its line, also when the environment sets other keys
@@ -2488,14 +2294,6 @@ mod tests {
 
         let mut pairs = TLS_VARIABLES.to_vec();
         pairs.push(("CLASSIS_SERVER__DATA_DIR", "\"1234\""));
-        pairs.push((
-            "CLASSIS_SERVER__ENROLMENT__BOOTSTRAP_CA_FILE",
-            "/run/secrets/pg",
-        ));
-        let err = ServerConfig::load_layered(None, variables(&pairs))
-            .expect_err("[enrolment] without [client_ca]");
-        assert!(err.contains("[enrolment] needs [client_ca]"), "{err}");
-        pairs.pop();
         let config = ServerConfig::load_layered(None, variables(&pairs))
             .expect("a quoted number is a string")
             .config;
@@ -2653,12 +2451,7 @@ mod tests {
         pairs.push(("CLASSIS_SERVER__DATA_DIR", "/var/lib/secret-place"));
         let layered = ServerConfig::load_layered(None, variables(&pairs)).expect("loads");
         let notice = layered.environment_notice().expect("a notice");
-        for key in [
-            "tls.cert_file",
-            "tls.key_file",
-            "tls.client_ca_file",
-            "data_dir",
-        ] {
+        for key in ["tls.cert_file", "tls.key_file", "data_dir"] {
             assert!(notice.contains(key), "{notice}");
         }
         for (_, value) in pairs {

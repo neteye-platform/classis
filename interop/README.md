@@ -48,10 +48,9 @@ loopback with an open admission, except the runs on the endpoint as it ships:
 - identity: a Server-assigned `AgentIdentification` is adopted, our Client
   persists it, and our Server keeps no record under the requested identity;
 - the endpoint as it ships: both directions over `wss://` and `https://` with
-  TLS 1.3 alone and a required client certificate from a PKI the test generates,
-  carrying connect and report and a configuration round trip; a certificate
-  another CA issued is refused by both ends, and our Server refuses a peer that
-  offers none;
+  TLS 1.3 alone, from a PKI the test generates, carrying connect and report and
+  a configuration round trip; a peer that trusts another CA than the one that
+  issued the far end's certificate does not get past the handshake;
 - `agent_disconnect` on a graceful stop of our Client. The other direction is
   not decided: `opamp-go`'s plain-HTTP Client sends no `agent_disconnect` (an
   oracle gap), and over WebSocket the goodbye and the closing socket mark the

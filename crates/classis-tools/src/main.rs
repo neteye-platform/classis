@@ -36,8 +36,8 @@ enum Tree {
     /// Fetch, pack, hash and sign package artifacts, and make the package signing key.
     #[command(subcommand)]
     Package(package::Command),
-    /// Make the fleet's certificate authorities, server and bootstrap certificates, and say when
-    /// they end.
+    /// Make the server certificate authority, server certificates and the package signing key,
+    /// and say when they end.
     #[command(subcommand)]
     Pki(pki::Command),
 }
@@ -71,7 +71,7 @@ mod tests {
             .collect()
     }
 
-    // Verifies: ADR-0028, ADR-0031
+    // Verifies: ADR-0028
     #[test]
     fn the_program_has_two_trees_holding_the_operator_commands() {
         let cli = Cli::command();
@@ -82,20 +82,7 @@ mod tests {
             subcommands(tree("package")),
             ["fetch", "keygen", "sign", "public-key", "pack", "sha256"]
         );
-        assert_eq!(
-            subcommands(tree("pki")),
-            [
-                "init",
-                "server-cert",
-                "bootstrap-ca",
-                "status",
-                "p12-extract"
-            ]
-        );
-        assert!(
-            Cli::try_parse_from(["classisctl", "pki", "bootstrap-cert", "--out", "b"]).is_err(),
-            "the Server issues bootstrap certificates (ADR-0028)"
-        );
+        assert_eq!(subcommands(tree("pki")), ["init", "server-cert", "status"]);
     }
 
     // Verifies: ADR-0028

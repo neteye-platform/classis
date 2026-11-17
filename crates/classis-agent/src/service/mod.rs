@@ -1,12 +1,11 @@
 //! Everything that makes the Client an OS service (ADR-0019) lives in this module: the daemon
-//! runtime with graceful shutdown ([`runtime`]), the versioned install layout ([`layout`]), and
-//! the cross-platform service lifecycle ([`manager`]), and the questionnaire's enrolment
-//! ([`enrol`]). The Windows SCM runtime shim joins as a `cfg(windows)` submodule.
+//! runtime with graceful shutdown ([`runtime`]), the versioned install layout ([`layout`]),
+//! and the cross-platform service lifecycle ([`manager`]). The Windows SCM runtime shim joins as a
+//! `cfg(windows)` submodule.
 //!
 //! The [`ServiceControl`] trait is the deliberate seam: a future self-update stops, switches, and
 //! starts the service through these three calls only, never through service internals.
 
-pub mod enrol;
 pub mod layout;
 pub mod manager;
 pub mod run_as;

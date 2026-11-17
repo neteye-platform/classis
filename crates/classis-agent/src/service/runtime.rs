@@ -57,25 +57,6 @@ pub enum Exit {
     RestartForUpdate,
 }
 
-/// Starts Gateway Mode when `[gateway]` arms it (ADR-0015), or nothing when it does not.
-///
-/// It runs as its own task rather than inside the transport loop: the downstream endpoint's
-/// lifetime is the process's, not one upstream connection's, and an Agent behind the Gateway must
-/// not lose its endpoint because this Client's own connection dropped.
-fn spawn_gateway(
-    config: &ClientConfig,
-    shutdown: &Shutdown,
-) -> Option<tokio::task::JoinHandle<()>> {
-    config.gateway.as_ref()?;
-    let config = std::sync::Arc::new(config.clone());
-    let shutdown = shutdown.clone();
-    Some(tokio::spawn(async move {
-        if let Err(e) = crate::gateway::run(config, shutdown).await {
-            tracing::error!(error = %e, "gateway mode stopped");
-        }
-    }))
-}
-
 /// The stack of every thread the daemon runs on: the 8 MiB a Linux main thread has, where the
 /// daemon has always run. Windows gives its main thread 1 MiB and the thread the SCM starts a
 /// service on no more, and the daemon's future overflowed that the moment it applied offered
@@ -186,12 +167,11 @@ fn start_log_file(config: &crate::config::ClientConfig) {
 /// situation that file exists for. The rest of the line is what an operator otherwise has to
 /// reconstruct from the command line of a service they did not start.
 ///
-/// **The second line is the trust and the identity in force**, resolved through the same two
-/// accessors the transports build their TLS from (ADR-0013, ADR-0021) rather than read off the
-/// configuration — so it states what *will* be presented, including a Server-issued certificate
-/// that no `supervisor.toml` mentions. Without it, a handshake that fails because the identity is
-/// not the one anybody assumed is diagnosed from the peer's error message, which is written by the
-/// end that knows least about it.
+/// **The second line is the trust in force**, resolved through the same accessor the transports
+/// build their TLS from (ADR-0013) rather than read off the configuration — so it states what
+/// *will* be trusted. Without it, a handshake that fails because the trust is not the one anybody
+/// assumed is diagnosed from the peer's error message, which is written by the end that knows
+/// least about it.
 fn announce(config: &ClientConfig, config_path: &std::path::Path) {
     // A missing file is not an error — `ClientConfig::load` runs on defaults, deliberately, so a
     // Client can start before anything is written. It is worth a word all the same: a mistyped
@@ -212,27 +192,15 @@ fn announce(config: &ClientConfig, config_path: &std::path::Path) {
         supervisors = config.supervisors.len(),
         "client starting"
     );
-    let (trust, identity) = tls_posture(config);
-    tracing::info!(trust = %trust, client_certificate = %identity, "outbound tls");
+    tracing::info!(trust = %tls_posture(config), "outbound tls");
 }
 
-/// What the transports will trust, and what they will present — as the two strings the line above
-/// reports.
-///
-/// Its own function because it makes a claim worth a test: the certificate named here is whichever
-/// [`ClientConfig::client_identity`] resolves to, which prefers the **Server-issued** one in the
-/// state directory over anything `[tls]` names (ADR-0021). A line that reported the configured
-/// certificate while the connection presented the issued one would be worse than no line at all.
-fn tls_posture(config: &ClientConfig) -> (String, String) {
-    let trust = config.ca_file().map_or_else(
+/// What the transports will trust — as the string the line above reports.
+fn tls_posture(config: &ClientConfig) -> String {
+    config.ca_file().map_or_else(
         || "the built-in roots".to_string(),
         |ca| ca.display().to_string(),
-    );
-    let identity = config.client_identity().map_or_else(
-        || "none".to_string(),
-        |(cert, _)| cert.display().to_string(),
-    );
-    (trust, identity)
+    )
 }
 
 /// What a run does when its configuration cannot be read: resolve the update in flight anyway, so
@@ -301,13 +269,6 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
     if let Some(agents) = &spec.agents {
         config.process_account_group = Some(process_account_group(&agents.process)?);
     }
-    // A certificate swap a crash cut short is completed before the identity in force is read.
-    crate::csr::recover(&config.state_dir)?;
-    // Without a client certificate the Server refuses this Client; it says so and stops rather
-    // than retrying for ever (ADR-0021).
-    config
-        .check_admission()
-        .map_err(|e| format!("{}: {e}", spec.config_path.display()))?;
     if spec.service {
         start_log_file(&config);
     }
@@ -379,10 +340,6 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
     let mut system = sysinfo::System::new();
     let sampling = engine.sampling_handle();
 
-    // Gateway Mode (ADR-0015), if armed: a downstream endpoint and an upstream pool, running
-    // beside everything else. It is restarted when a verified offer moves this Client's endpoint,
-    // since the pool dials that endpoint and would otherwise keep reaching for the old one.
-    let mut gateway = spawn_gateway(&config, &shutdown);
     if let Some(stored) = connection::load(&config.state_dir) {
         // A restarted Client reports the persisted settings APPLIED, so the Server does not
         // re-offer what it already runs (ADR-0014).
@@ -435,7 +392,7 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
                 return Ok(Exit::RestartForUpdate);
             }
             // Verified connection settings took effect (ADR-0014): re-resolve the effective
-            // configuration — endpoint, certificate, intervals, possibly the other transport —
+            // configuration — endpoint, intervals, possibly the other transport —
             // and reconnect. The Engine (and its Managed Processes) carries on.
             RunOutcome::Reconfigured => {
                 config = load_effective_config(&spec)?;
@@ -444,13 +401,6 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
                 // reconnect, and it composes the one acknowledgement that names anything refused.
                 // Re-applying here would be a no-op through `in_force` whose only visible effect
                 // was a `warn!` with no acknowledgement attached — which was the bug.
-                if let Some(handle) = gateway.take() {
-                    handle.abort();
-                    // The listener is only released once the task has unwound; binding the new
-                    // one before that races an "address already in use" that nothing retries.
-                    let _ = handle.await;
-                }
-                gateway = spawn_gateway(&config, &shutdown);
                 if config.heartbeat_interval_secs > 0 {
                     // An offered interval may enable what the file had disabled; the capability
                     // follows (the reverse never happens — 0 means "not offered").
@@ -859,8 +809,8 @@ mod tests {
         );
     }
 
-    /// With nothing configured, the line says so in both halves rather than leaving an operator to
-    /// read an absent field as "unknown".
+    /// With nothing configured, the line says so rather than leaving an operator to read an absent
+    /// field as "unknown".
     #[test]
     fn the_tls_line_reports_the_defaults_as_defaults() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -868,39 +818,18 @@ mod tests {
             state_dir: dir.path().to_path_buf(),
             ..ClientConfig::default()
         };
-        let (trust, identity) = tls_posture(&config);
-        assert_eq!(trust, "the built-in roots");
-        assert_eq!(identity, "none");
+        assert_eq!(tls_posture(&config), "the built-in roots");
     }
 
-    /// And it reports what will actually be presented: a Server-issued pair in the state directory
-    /// outranks the configured one (ADR-0021), so the line has to name the issued one — that is the
-    /// whole reason it resolves the identity instead of printing `[tls] cert_file`.
+    /// And a configured CA is the trust the line names.
     #[test]
-    fn the_tls_line_names_the_issued_certificate_over_the_configured_one() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let configured = dir.path().join("operator-cert.pem");
-        std::fs::write(&configured, b"cert").expect("write");
-        std::fs::write(dir.path().join("operator-key.pem"), b"key").expect("write");
+    fn the_tls_line_names_the_configured_ca() {
         let config = ClientConfig {
-            state_dir: dir.path().to_path_buf(),
             tls: Some(crate::config::TlsConfig {
-                ca_file: None,
-                cert_file: Some(configured.clone()),
-                key_file: Some(dir.path().join("operator-key.pem")),
+                ca_file: Some(PathBuf::from("/etc/fleet/ca.pem")),
             }),
             ..ClientConfig::default()
         };
-
-        // With no issued pair on disk, the operator's is what gets presented.
-        let (_, identity) = tls_posture(&config);
-        assert_eq!(identity, configured.display().to_string());
-
-        // Once the Server has issued one, that is the pair — and the line must follow.
-        let issued = dir.path().join(crate::tls::ISSUED_CERT_FILE);
-        std::fs::write(&issued, b"cert").expect("write");
-        std::fs::write(dir.path().join(crate::tls::ISSUED_KEY_FILE), b"key").expect("write");
-        let (_, identity) = tls_posture(&config);
-        assert_eq!(identity, issued.display().to_string());
+        assert_eq!(tls_posture(&config), "/etc/fleet/ca.pem");
     }
 }

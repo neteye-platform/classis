@@ -139,8 +139,7 @@ async fn spawn_server(store: PackageStore) -> (std::net::SocketAddr, Arc<AppStat
     );
     // The configuration directory only has to outlive the Server, which outlives the test.
     std::mem::forget(dir);
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = classis_server::agent_app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -506,11 +505,7 @@ async fn the_client_installs_a_version_of_itself_and_reports_it_installed() {
     let program = install_layout(&root, &client);
     let state_dir = dir.path().join("client-state");
     let config = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path()),
-    )
-    .expect("write config");
+    std::fs::write(&config, config_toml(addr, &state_dir)).expect("write config");
 
     let mut service = Supervised::start(&program, &config);
 
@@ -645,7 +640,7 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
             key = signing_key().1,
             stub = stub,
             marker = marker.to_string_lossy(),
-        ) + &common::client_identity(dir.path()),
+        ),
     )
     .expect("write config");
 
@@ -741,11 +736,7 @@ async fn a_set_at_the_running_version_reaches_nobody() {
     let program = install_layout(&root, &client);
     let state_dir = dir.path().join("client-state");
     let config = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path()),
-    )
-    .expect("write config");
+    std::fs::write(&config, config_toml(addr, &state_dir)).expect("write config");
 
     // A Client installed the way a package manager installs one: a layout, a binary, and no record
     // of any package ever having been installed over it.
@@ -828,11 +819,7 @@ async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client
     let previous = std::fs::canonicalize(root.join("current")).expect("current resolves");
     let state_dir = dir.path().join("client-state");
     let config = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path()),
-    )
-    .expect("write config");
+    std::fs::write(&config, config_toml(addr, &state_dir)).expect("write config");
 
     let mut service = Supervised::start(&program, &config);
 

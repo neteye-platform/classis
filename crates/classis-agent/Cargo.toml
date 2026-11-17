@@ -24,7 +24,7 @@ default = []
 
 [dependencies]
 clap.workspace = true
-# The Client is an Agent upstream and a server for the Gateway and the Supervisor Endpoint.
+# The Client is an Agent upstream and a server for the Supervisor Endpoint.
 opamp = { workspace = true, features = ["client", "server"] }
 classis-core.workspace = true
 # ADR-0019: service lifecycle and the content hash in the install layout's manifest.
@@ -48,13 +48,7 @@ tracing-appender.workspace = true
 hex.workspace = true
 tokio-tungstenite.workspace = true
 reqwest.workspace = true
-base64.workspace = true
 ring.workspace = true
-rcgen.workspace = true
-time.workspace = true
-# `verify`: a Gateway with a bootstrap CA tells a member from an enrolling peer by whether a CA of
-# its client CA file signed the certificate, as the Server does (ADR-0039).
-x509-parser = { workspace = true, features = ["verify"] }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
@@ -66,9 +60,9 @@ async-trait.workspace = true
 # `network` on top of the workspace's `system`: the interface enumeration behind `host.ip` and
 # `host.mac` (ADR-0016).
 sysinfo = { workspace = true, features = ["network"] }
-# The downstream OpAMP endpoint of Gateway Mode (ADR-0015) is `opamp::server`'s, an axum router;
-# its WebSocket upgrade is `opamp`'s own (ADR-0010). The HTTP engine under it — hyper, tower,
-# http-body — is already linked through reqwest; this adds the routing layer.
+# The Supervisor Endpoint (ADR-0017) is `opamp::server`'s, an axum router; its WebSocket upgrade is
+# `opamp`'s own (ADR-0010). The HTTP engine under it — hyper, tower, http-body — is already linked
+# through reqwest; this adds the routing layer.
 axum.workspace = true
 # ADR-0026: a package artifact may be a `.tar.gz` or a `.7z`; the Agent unpacks it, and opens an
 # encrypted `.7z` with the key from `[packages] archive_key`.
@@ -76,9 +70,8 @@ flate2.workspace = true
 tar.workspace = true
 sevenz-rust2.workspace = true
 zip.workspace = true
-# ADR-0057: the Client's keys, the password and bytes of a `bootstrap.p12` and the Supervisor
-# Endpoint token are held in buffers wiped on drop. No TLS or crypto backend comes with it
-# (ADR-0013).
+# ADR-0057: the Supervisor Endpoint token and `[packages] archive_key` are held in buffers wiped on
+# drop. No TLS or crypto backend comes with it (ADR-0013).
 zeroize.workspace = true
 
 # ADR-0017: the graceful SIGTERM → wait → kill stop of Managed Processes. Not compiled on Windows,
@@ -164,12 +157,11 @@ tempfile = "3"
 # ADR-0059: a test reads the process account back from a plist as `service-manager` writes it,
 # through the crate it writes with.
 plist = "1"
-# A test holds a TLS connection open mid-headers on the Gateway (H18), below what a client library
-# would let it do.
-rustls.workspace = true
 # Tests build the `.7z` fixtures they then open; the daemon itself only ever decompresses. The
 # encoder rides here alone, since `pack` lives in its own crate (ADR-0010) — a dev-dependency
 # reaches the tests and no shipped binary.
 sevenz-rust2 = { workspace = true, features = ["compress"] }
+# The interop test makes the CA and the Server certificate it serves TLS with.
+rcgen.workspace = true
 # ADR-0017: the end-to-end test runs the real Server in-process against the real Client binary.
 classis-server = { path = "../classis-server" }

@@ -84,8 +84,7 @@ async fn spawn_full(
             .with_max_message_size(limit)
             .with_stale_after(stale_after),
     );
-    let (addr, rest_addr) =
-        serve(state.clone(), classis_server::transport::Admission::open()).await;
+    let (addr, rest_addr) = serve(state.clone()).await;
     TestServer {
         addr,
         rest_addr,
@@ -97,22 +96,38 @@ async fn spawn_full(
 /// Serves the two planes on ephemeral ports, exactly as the binary serves them (ADR-0013), and
 /// answers with the address of each. The Operator plane is open, as it is without `[rest.auth]`.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
-pub async fn serve(
-    state: Arc<AppState>,
-    admission: classis_server::transport::Admission,
-) -> (SocketAddr, SocketAddr) {
-    serve_guarded(state, admission, None).await
+pub async fn serve(state: Arc<AppState>) -> (SocketAddr, SocketAddr) {
+    serve_guarded(state, None).await
 }
 
 /// The same two planes, with the Operator plane's credential check active (ADR-0021).
 #[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
 pub async fn serve_guarded(
     state: Arc<AppState>,
-    admission: classis_server::transport::Admission,
     operator_auth: Option<classis_server::api::OperatorAuth>,
 ) -> (SocketAddr, SocketAddr) {
-    let agents = classis_server::agent_app(state.clone(), admission);
+    let agents = classis_server::agent_app(state.clone());
     let operators = classis_server::operator_app(state, operator_auth);
+    serve_planes(agents, operators).await
+}
+
+/// The same two planes, with every request on the Agent plane admitted as `host`: what the Agent
+/// plane's admission will hand a request once it names one (ADR-0064), which no request can yet
+/// make happen over the wire.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
+pub async fn serve_admitted_as(
+    state: Arc<AppState>,
+    host: Option<&str>,
+) -> (SocketAddr, SocketAddr) {
+    let proofs = classis_server::transport::Proofs {
+        host: host.map(str::to_string),
+    };
+    let agents = classis_server::agent_app(state.clone()).layer(axum::Extension(proofs));
+    let operators = classis_server::operator_app(state, None);
+    serve_planes(agents, operators).await
+}
+
+async fn serve_planes(agents: axum::Router, operators: axum::Router) -> (SocketAddr, SocketAddr) {
     let agent_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Agent plane");
     let operator_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Operator plane");
@@ -323,10 +338,9 @@ pub async fn spawn_with_agent_rate(
     let clock = ManualClock::new();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(state_on(dir.path()).with_agent_rate(Some(Arc::new(
-        classis_server::agent_rate::AgentRate::new(limits, 100, clock.clone()),
+        classis_server::agent_rate::AgentRate::new(limits, clock.clone()),
     ))));
-    let (addr, rest_addr) =
-        serve(state.clone(), classis_server::transport::Admission::open()).await;
+    let (addr, rest_addr) = serve(state.clone()).await;
     (
         TestServer {
             addr,
@@ -344,8 +358,7 @@ pub async fn spawn_with_telemetry(offer: classis_server::fleet::TelemetryOffer) 
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(state_on(dir.path()).with_telemetry_offer(offer));
-    let (addr, rest_addr) =
-        serve(state.clone(), classis_server::transport::Admission::open()).await;
+    let (addr, rest_addr) = serve(state.clone()).await;
     TestServer {
         addr,
         rest_addr,

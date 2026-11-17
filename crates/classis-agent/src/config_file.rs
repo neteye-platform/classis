@@ -112,52 +112,6 @@ impl ClientConfig {
             ),
         }
     }
-
-    /// What this Client must hold before it connects (ADR-0021, ADR-0019): a client certificate —
-    /// the one the Server issued, or the one `[tls]` names, a bootstrap certificate included. It is
-    /// the one proof the Server admits a peer by, so without it the Client refuses to start, naming
-    /// what is missing.
-    ///
-    /// # Errors
-    /// Returns a sentence naming the missing setting.
-    pub fn check_admission(&self) -> Result<(), String> {
-        if self.client_identity().is_none() {
-            return Err(
-                "[tls] cert_file and key_file are required — the Server admits no Agent without \
-                 a client certificate; enrol this host with `supervisor service config`, or name \
-                 a bootstrap certificate there"
-                    .to_string(),
-            );
-        }
-        Ok(())
-    }
-
-    /// Whether the state directory holds a certificate the Server issued, with its key — what
-    /// makes this Client a member of the fleet rather than a host still to enrol (ADR-0021). The
-    /// questionnaire asks for a bootstrap pair only while this is `false` (ADR-0019 clause 17).
-    #[must_use]
-    pub fn is_enrolled(&self) -> bool {
-        self.state_dir.join(crate::tls::ISSUED_CERT_FILE).exists()
-            && self.state_dir.join(crate::tls::ISSUED_KEY_FILE).exists()
-    }
-
-    /// The client certificate and key this Client presents on both transports (ADR-0021), or
-    /// `None` when it has no identity to present.
-    ///
-    /// A pair the Server issued outranks the configured one, the same precedence persisted
-    /// connection settings have over `supervisor.toml` (ADR-0014): the file stays what the operator
-    /// wrote, and deleting the stored pair reverts to it. That is also what retires a bootstrap
-    /// certificate — it keeps standing in `supervisor.toml`, unused, once a real one has been issued.
-    pub fn client_identity(&self) -> Option<(PathBuf, PathBuf)> {
-        if self.is_enrolled() {
-            return Some((
-                self.state_dir.join(crate::tls::ISSUED_CERT_FILE),
-                self.state_dir.join(crate::tls::ISSUED_KEY_FILE),
-            ));
-        }
-        let tls = self.tls.as_ref()?;
-        Some((tls.cert_file.clone()?, tls.key_file.clone()?))
-    }
 }
 
 /// Where an installed Client's state directory comes from (ADR-0053 clause 3).
@@ -397,46 +351,6 @@ mod tests {
         let redacted = redact_secrets("archive_key = \"\"\"\nleak\nnot = closed\n");
         assert!(!redacted.contains("leak"), "{redacted}");
         assert!(!redacted.contains("closed"), "{redacted}");
-    }
-
-    /// The client identity is all a Client needs to start: a file naming one passes with no
-    /// `[auth]`, and a file without one is refused, naming `[tls] cert_file` and `key_file` — the
-    /// Server would refuse it in the handshake anyway.
-    /// Verifies: ADR-0021, ADR-0019, Q-1
-    #[test]
-    fn admission_needs_a_client_identity_and_nothing_else() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cert = dir.path().join("c.pem");
-        let key = dir.path().join("k.pem");
-        std::fs::write(&cert, "cert").expect("write");
-        std::fs::write(&key, "key").expect("write");
-        let state = dir.path().join("state").display().to_string();
-
-        let bare: ClientConfig =
-            toml::from_str(&format!("state_dir = {state:?}\n")).expect("parse");
-        let err = bare.check_admission().expect_err("no certificate");
-        assert!(err.contains("cert_file and key_file are required"), "{err}");
-
-        let complete: ClientConfig = toml::from_str(&format!(
-            "state_dir = {state:?}\n[tls]\ncert_file = {:?}\nkey_file = {:?}\n",
-            cert.display().to_string(),
-            key.display().to_string()
-        ))
-        .expect("parse");
-        complete
-            .check_admission()
-            .expect("a certificate and nothing else");
-
-        // A leftover [auth] is no reason to refuse, or to warn at install: it is ignored.
-        let leftover: ClientConfig = toml::from_str(&format!(
-            "state_dir = {state:?}\n[auth]\nbearer_token = \"t\"\n[tls]\ncert_file = {:?}\nkey_file = {:?}\n",
-            cert.display().to_string(),
-            key.display().to_string()
-        ))
-        .expect("parse");
-        leftover
-            .check_admission()
-            .expect("a leftover [auth] beside a certificate");
     }
 
     use crate::service::layout::Roots;

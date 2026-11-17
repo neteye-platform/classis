@@ -1,8 +1,8 @@
 //! Server-offered packages (ADR-0026): resolving a download URL, downloading the artifact from this
 //! Client's own Server origin over TLS 1.3 (ADR-0033), and **verifying it before it is applied** —
 //! the content hash and the Ed25519 signature, both always. What protects an installed binary is
-//! verification; what the origin rule protects is what a download exposes — the offered headers and
-//! this Client's certificate — and that a host never reaches past its Server for software.
+//! verification; what the origin rule protects is what a download exposes — the offered headers —
+//! and that a host never reaches past its Server for software.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -120,9 +120,8 @@ pub async fn download_and_verify_patiently(
     let key = signature_policy(&package.signature, config.package_key())?;
     let url = resolve_url(&package.download_url, &config.endpoint)?;
     let origin = ServerOrigin::new(config)?;
-    // Every request goes to this Client's own Server origin (ADR-0033), which is where its
-    // certificate belongs: the download route sits behind the Agent plane's handshake.
-    let identified = download_client(crate::tls::client_tls(config)?)?;
+    // Every request goes to this Client's own Server origin (ADR-0033).
+    let client = download_client(crate::tls::trust(config)?)?;
     // A count, never a key and never a value — and the source without whatever authorises reaching
     // it. This line goes to the log file, and through the bridge to the destination the Server named
     // (ADR-0016), which is the same reason the span below carries the redacted form: a pre-signed
@@ -130,7 +129,7 @@ pub async fn download_and_verify_patiently(
     let source = source_of(&url);
     info!(package = %package.name, url = %source, headers = package.headers.len(), "downloading package");
     let download = tracing::info_span!("download", source = %source);
-    let mut response = send_patiently(&origin, &identified, &url, &package.headers, patience)
+    let mut response = send_patiently(&origin, &client, &url, &package.headers, patience)
         .instrument(download.clone())
         .await?;
     if !response.status().is_success() {
@@ -197,7 +196,7 @@ pub(crate) fn download_client(tls: opamp::client::ClientTls) -> Result<reqwest::
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(60));
-    tls.apply(builder)?
+    tls.trust(builder)?
         .build()
         .map_err(|e| format!("cannot build the download client: {e}"))
 }
@@ -250,7 +249,7 @@ fn origin_label(url: &reqwest::Url) -> String {
 /// Each hop is checked against [`ServerOrigin`] before it is requested, so nothing — not the offer,
 /// not a redirect — takes the download to another host or onto plaintext, and nothing is fetched
 /// from a refused one. Every hop is therefore the Server's own origin, the one the offered headers
-/// and this Client's certificate (the `client`) are for.
+/// are for.
 pub(crate) async fn send_download(
     origin: &ServerOrigin,
     client: &reqwest::Client,
@@ -283,9 +282,8 @@ pub(crate) async fn send_download(
 }
 
 /// [`send_download`], waiting out a `429` or `503` with `Retry-After` in seconds from the Server's
-/// own origin — a Gateway behind one, whose cache is still fetching, or the Server's rate limit —
-/// within `patience` (ADR-0026 clause 49). Anything else is returned as it came, for the caller to
-/// fail on.
+/// own origin — the Server's rate limit, for one — within `patience` (ADR-0026 clause 49). Anything
+/// else is returned as it came, for the caller to fail on.
 pub(crate) async fn send_patiently(
     origin: &ServerOrigin,
     client: &reqwest::Client,

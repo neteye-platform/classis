@@ -59,8 +59,8 @@ pub fn load(state_dir: &Path) -> Option<ConnectionSettingsOffers> {
 /// Persists the settings now in force as the Baseline's own protobuf.
 ///
 /// The file outranks `supervisor.toml` (ADR-0014 clause 9) — it decides where this Client connects
-/// and which certificate it presents — so it is written no wider than its owner, and the state
-/// directory holding it no wider than `0700`. On Windows the directory ACL under `%ProgramData%`
+/// — so it is written no wider than its owner, and the state directory holding it no wider than
+/// `0700`. On Windows the directory ACL under `%ProgramData%`
 /// protects it (ADR-0019); there is no mode to set.
 ///
 /// `group` is the process account's group where a process account is registered: the state
@@ -70,7 +70,7 @@ pub fn store(
     group: Option<crate::storage::ProcessAccountGroup>,
     settings: &ConnectionSettingsOffers,
 ) -> std::io::Result<()> {
-    // Never through a link at the directory's name or the file's: an install enrols as root in a
+    // Never through a link at the directory's name or the file's: an install writes as root in a
     // directory that belongs to the service's account (ADR-0054).
     crate::storage::create_shared_dir(
         state_dir,
@@ -104,7 +104,7 @@ pub fn merge(
     // The own-telemetry destinations do not fold per signal (ADR-0016). An offer that names any of
     // the three states all three: a signal it leaves out is *stopped*, and a signal whose endpoint
     // it offers empty is withdrawn. An offer that names none of them says nothing about telemetry
-    // — an OpAMP endpoint move, a heartbeat, a certificate — and leaves all three alone.
+    // — an OpAMP endpoint move, a heartbeat — and leaves all three alone.
     //
     // The line is between messages, not between fields, and that is what keeps it compatible with
     // the schema's per-field "if this field is not set … the settings are unchanged": unchanged
@@ -145,10 +145,6 @@ pub fn merge(
             destination_endpoint: pick(|s| !s.destination_endpoint.is_empty())
                 .map(|s| s.destination_endpoint)
                 .unwrap_or_default(),
-            // The issued client identity (ADR-0021). Folded like every other field: a later offer
-            // that says nothing about the certificate leaves the one in force alone, which is what
-            // makes an endpoint move safe for a fleet already on mutual TLS.
-            certificate: pick(|s| s.certificate.is_some()).and_then(|s| s.certificate),
             heartbeat_interval_seconds: pick(|s| s.heartbeat_interval_seconds != 0)
                 .map(|s| s.heartbeat_interval_seconds)
                 .unwrap_or_default(),
@@ -169,10 +165,9 @@ pub fn merge(
 /// None of the three is honoured, on purpose. `TLSConnectionSettings` is mostly a way to weaken
 /// verification — `insecure_skip_verify` would let a Server switch off the check that proves it is
 /// the Server — and trust here is an operator's file (ADR-0013). `ProxyConnectionSettings` has
-/// nothing on this Client to configure. Offered `headers` have no reader on the Agent plane, which
-/// admits by client certificate alone (ADR-0021): an applied one would be a value the Server plants
-/// on every connection of the fleet. They are named by their keys, never their values — the
-/// message travels to the Server and into the log file.
+/// nothing on this Client to configure. Offered `headers` have no reader on this Client: an
+/// applied one would be a value the Server plants on every connection of the fleet. They are named
+/// by their keys, never their values — the message travels to the Server and into the log file.
 pub fn unhonoured(settings: &OpAmpConnectionSettings) -> Result<(), String> {
     let mut dropped = Vec::new();
     if settings.tls.is_some() {
@@ -255,16 +250,7 @@ pub async fn verify(
              ca_file, so that only a server certificate from the fleet's own CA is trusted"
         ));
     }
-    // An offered client certificate is proved the same way the endpoint is: by connecting with it
-    // (ADR-0014 clause 5). Until that succeeds the one in force stays in force, so a
-    // certificate that cannot authenticate costs nothing.
-    let candidate_cert = settings
-        .certificate
-        .as_ref()
-        .map(|certificate| certificate.cert.as_slice())
-        .filter(|cert| !cert.is_empty());
-
-    let tls = crate::tls::client_tls_for(config, candidate_cert)?;
+    let tls = crate::tls::trust(config)?;
     let mut candidate = crate::transport::connection_with(config, tls);
     candidate.endpoint = endpoint;
     opamp::client::connection::probe(&candidate, probe_report).await
@@ -273,33 +259,18 @@ pub async fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opamp::proto::{Header, Headers, TlsCertificate};
+    use opamp::proto::{Header, Headers};
 
-    fn offer_with(
-        hash: &[u8],
-        endpoint: &str,
-        certificate: Option<&str>,
-        heartbeat: u64,
-    ) -> ConnectionSettingsOffers {
+    fn offer_with(hash: &[u8], endpoint: &str, heartbeat: u64) -> ConnectionSettingsOffers {
         ConnectionSettingsOffers {
             hash: hash.to_vec(),
             opamp: Some(OpAmpConnectionSettings {
                 destination_endpoint: endpoint.to_string(),
-                certificate: certificate.map(|pem| TlsCertificate {
-                    cert: pem.as_bytes().to_vec(),
-                    ..Default::default()
-                }),
                 heartbeat_interval_seconds: heartbeat,
                 ..Default::default()
             }),
             ..Default::default()
         }
-    }
-
-    /// The certificate an OpAMP settings block carries, as text.
-    fn certificate_of(settings: &OpAmpConnectionSettings) -> Option<String> {
-        let certificate = settings.certificate.as_ref()?;
-        Some(String::from_utf8_lossy(&certificate.cert).into_owned())
     }
 
     /// Offered headers: an `Authorization` the Server plants, and one more.
@@ -369,8 +340,8 @@ mod tests {
         );
     }
 
-    /// Rule 2: an offer that names none of the three says nothing about telemetry. An issued
-    /// certificate must not take the exporters down with it — that is what keeps the classes of
+    /// Rule 2: an offer that names none of the three says nothing about telemetry. A heartbeat
+    /// must not take the exporters down with it — that is what keeps the classes of
     /// ADR-0014 independent, and it is the schema's own "not set means unchanged", held at the
     /// level it still holds at.
     /// Verifies: ADR-0016
@@ -382,7 +353,7 @@ mod tests {
             ..Default::default()
         });
 
-        let merged = merge(Some(&stored), &offer_with(b"h2", "", Some("issued"), 0));
+        let merged = merge(Some(&stored), &offer_with(b"h2", "", 5));
 
         assert_eq!(
             merged.own_metrics.expect("metrics").destination_endpoint,
@@ -411,11 +382,11 @@ mod tests {
     }
 
     /// And the fold still works the other way: a telemetry-only offer arriving over settings
-    /// already in force leaves the OpAMP endpoint, heartbeat and certificate exactly where they were.
+    /// already in force leaves the OpAMP endpoint and heartbeat exactly where they were.
     /// Verifies: ADR-0014
     #[test]
     fn merge_of_a_telemetry_only_offer_carries_the_opamp_settings_in_force_forward() {
-        let stored = offer_with(b"h1", "wss://server/v1/opamp", Some("issued"), 20);
+        let stored = offer_with(b"h1", "wss://server/v1/opamp", 20);
         let merged = merge(
             Some(&stored),
             &telemetry_only(b"t2", "https://x/v1/metrics"),
@@ -424,7 +395,6 @@ mod tests {
         let opamp = merged.opamp.expect("the settings in force survive");
         assert_eq!(opamp.destination_endpoint, "wss://server/v1/opamp");
         assert_eq!(opamp.heartbeat_interval_seconds, 20);
-        assert_eq!(certificate_of(&opamp).as_deref(), Some("issued"));
         assert!(merged.own_metrics.is_some());
         assert_eq!(merged.hash, b"t2", "the new offer's hash is acknowledged");
     }
@@ -434,7 +404,7 @@ mod tests {
     fn load_store_round_trips() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(load(dir.path()).is_none(), "fresh state dir holds nothing");
-        let settings = offer_with(b"h1", "wss://x/v1/opamp", Some("issued"), 20);
+        let settings = offer_with(b"h1", "wss://x/v1/opamp", 20);
         store(dir.path(), None, &settings).expect("store");
         let restored = load(dir.path()).expect("restored");
         assert_eq!(restored.hash, b"h1");
@@ -454,12 +424,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let state_dir = dir.path().join("state");
-        store(
-            &state_dir,
-            None,
-            &offer_with(b"h1", "wss://x/v1/opamp", Some("issued"), 20),
-        )
-        .expect("store");
+        store(&state_dir, None, &offer_with(b"h1", "wss://x/v1/opamp", 20)).expect("store");
 
         let file_mode = state_dir
             .join(SETTINGS_FILE)
@@ -479,17 +444,21 @@ mod tests {
     /// Verifies: ADR-0014
     #[test]
     fn merge_keeps_unchanged_fields_from_the_previous_settings() {
-        let stored = offer_with(b"h1", "wss://old/v1/opamp", Some("old"), 30);
-        // A certificate-only offer: a new certificate, no endpoint, no heartbeat.
-        let offer = offer_with(b"h2", "", Some("new"), 0);
-        let merged = merge(Some(&stored), &offer);
+        let stored = offer_with(b"h1", "wss://old/v1/opamp", 30);
+        // A heartbeat-only offer: no endpoint.
+        let merged = merge(Some(&stored), &offer_with(b"h2", "", 45));
         let settings = merged.opamp.expect("opamp");
         assert_eq!(merged.hash, b"h2", "the merged hash is the new offer's");
         assert_eq!(
             settings.destination_endpoint, "wss://old/v1/opamp",
             "the endpoint carries over"
         );
-        assert_eq!(certificate_of(&settings).as_deref(), Some("new"));
+        assert_eq!(settings.heartbeat_interval_seconds, 45);
+
+        // An endpoint-only offer: no heartbeat.
+        let merged = merge(Some(&stored), &offer_with(b"h3", "wss://new/v1/opamp", 0));
+        let settings = merged.opamp.expect("opamp");
+        assert_eq!(settings.destination_endpoint, "wss://new/v1/opamp");
         assert_eq!(
             settings.heartbeat_interval_seconds, 30,
             "the heartbeat carries over"
@@ -505,7 +474,7 @@ mod tests {
             poll_interval_secs: 30,
             ..ClientConfig::default()
         };
-        let stored = offer_with(b"h1", "wss://server/v1/opamp", Some("issued"), 12);
+        let stored = offer_with(b"h1", "wss://server/v1/opamp", 12);
         apply(&mut config, &stored);
         assert_eq!(config.endpoint, "wss://server/v1/opamp");
         // On plain HTTP the offered interval is the polling interval too (the Baseline's MUST).
@@ -522,7 +491,7 @@ mod tests {
             ..ClientConfig::default()
         };
         // Endpoint-only offer: the heartbeat and polling intervals stay whatever the file said.
-        let stored = offer_with(b"h1", "wss://server/v1/opamp", None, 0);
+        let stored = offer_with(b"h1", "wss://server/v1/opamp", 0);
         apply(&mut config, &stored);
         assert_eq!(config.endpoint, "wss://server/v1/opamp");
         assert_eq!(config.heartbeat_interval_secs, 30);
@@ -536,7 +505,7 @@ mod tests {
     #[test]
     fn offered_tls_and_proxy_are_neither_stored_nor_claimed() {
         use opamp::proto::{ProxyConnectionSettings, TlsConnectionSettings};
-        let mut offer = offer_with(b"h1", "wss://server.example/v1/opamp", None, 0);
+        let mut offer = offer_with(b"h1", "wss://server.example/v1/opamp", 0);
         if let Some(settings) = offer.opamp.as_mut() {
             settings.tls = Some(TlsConnectionSettings {
                 insecure_skip_verify: true,
@@ -571,7 +540,7 @@ mod tests {
     /// Verifies: ADR-0014
     #[test]
     fn offered_headers_are_neither_stored_nor_claimed() {
-        let mut offer = offer_with(b"h1", "wss://server.example/v1/opamp", Some("issued"), 15);
+        let mut offer = offer_with(b"h1", "wss://server.example/v1/opamp", 15);
         if let Some(settings) = offer.opamp.as_mut() {
             settings.headers = Some(planted_headers());
         }
@@ -582,7 +551,6 @@ mod tests {
             settings.destination_endpoint,
             "wss://server.example/v1/opamp"
         );
-        assert_eq!(certificate_of(settings).as_deref(), Some("issued"));
         assert_eq!(settings.heartbeat_interval_seconds, 15);
 
         let reported = unhonoured(offer.opamp.as_ref().expect("offer")).expect_err("named");
@@ -600,7 +568,7 @@ mod tests {
     #[test]
     fn a_persisted_authorization_header_is_dropped_on_load() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut earlier = offer_with(b"h1", "wss://x/v1/opamp", None, 20);
+        let mut earlier = offer_with(b"h1", "wss://x/v1/opamp", 20);
         if let Some(settings) = earlier.opamp.as_mut() {
             settings.headers = Some(planted_headers());
         }
@@ -791,7 +759,7 @@ mod tests {
         let mut config = configured("wss://fleet.example/v1/opamp");
         apply(
             &mut config,
-            &offer_with(b"h1", "ws://127.0.0.1:4999/v1/opamp", None, 12),
+            &offer_with(b"h1", "ws://127.0.0.1:4999/v1/opamp", 12),
         );
         assert_eq!(config.endpoint, "wss://fleet.example/v1/opamp");
         assert_eq!(config.heartbeat_interval_secs, 12, "the rest still applies");
@@ -799,14 +767,14 @@ mod tests {
         let mut config = configured("ws://127.0.0.1:4320/v1/opamp");
         apply(
             &mut config,
-            &offer_with(b"h1", "ws://127.0.0.1:4320/v1/opamp", None, 0),
+            &offer_with(b"h1", "ws://127.0.0.1:4320/v1/opamp", 0),
         );
         assert_eq!(config.endpoint, "ws://127.0.0.1:4320/v1/opamp");
 
         let mut config = configured("ws://127.0.0.1:4320/v1/opamp");
         apply(
             &mut config,
-            &offer_with(b"h1", "wss://fleet.example/v1/opamp", None, 0),
+            &offer_with(b"h1", "wss://fleet.example/v1/opamp", 0),
         );
         assert_eq!(config.endpoint, "wss://fleet.example/v1/opamp");
     }
@@ -837,80 +805,5 @@ mod tests {
         let dialled =
             tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept()).await;
         assert!(dialled.is_err(), "the refused endpoint was dialled");
-    }
-
-    /// The verification connect presents the client certificate in force: a listener that
-    /// requires one admits the probe with it and refuses the same probe without it.
-    /// Verifies: ADR-0014
-    #[tokio::test]
-    async fn verify_presents_the_client_certificate_in_force() {
-        use opamp::server::listen::{ClientAuth, Handle, Listener, ServerTls};
-        use opamp::tls::Identity;
-        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
-
-        opamp::tls::install_ring_provider();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let ca_key = KeyPair::generate().expect("ca key");
-        let mut params = CertificateParams::new(vec!["test-ca".to_string()]).expect("params");
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca = params.self_signed(&ca_key).expect("ca");
-        let issuer = Issuer::from_ca_cert_pem(&ca.pem(), ca_key).expect("issuer");
-        let issue = |name: &str| {
-            let key = KeyPair::generate().expect("key");
-            let cert = CertificateParams::new(vec![name.to_string()])
-                .expect("params")
-                .signed_by(&key, &issuer)
-                .expect("signed");
-            (cert.pem(), key.serialize_pem())
-        };
-
-        let (server_cert, server_key) = issue("localhost");
-        let tls = ServerTls {
-            identity: Identity {
-                cert_pem: server_cert.into_bytes(),
-                key_pem: server_key.into_bytes(),
-            },
-            client_auth: ClientAuth::Required {
-                ca_pem: ca.pem().into_bytes(),
-            },
-        }
-        .rustls_config()
-        .expect("server config");
-        let router = axum::Router::new().route("/v1/opamp", axum::routing::post(|| async { "" }));
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("addr").port();
-        tokio::spawn(
-            Listener::new(listener, Handle::new())
-                .with_tls(tls)
-                .serve(router),
-        );
-
-        let (client_cert, client_key) = issue("agent");
-        let ca_file = dir.path().join("ca.pem");
-        let cert_file = dir.path().join("cert.pem");
-        let key_file = dir.path().join("key.pem");
-        std::fs::write(&ca_file, ca.pem()).expect("ca");
-        std::fs::write(&cert_file, client_cert).expect("cert");
-        std::fs::write(&key_file, client_key).expect("key");
-        let with_identity = |identity: bool| ClientConfig {
-            endpoint: format!("https://localhost:{port}/v1/opamp"),
-            state_dir: dir.path().join("state"),
-            tls: Some(crate::config::TlsConfig {
-                ca_file: Some(ca_file.clone()),
-                cert_file: identity.then(|| cert_file.clone()),
-                key_file: identity.then(|| key_file.clone()),
-            }),
-            ..ClientConfig::default()
-        };
-        let report = || Some(AgentToServer::default());
-        let keep = OpAmpConnectionSettings::default();
-
-        verify(&keep, &with_identity(true), report)
-            .await
-            .expect("the certificate in force is presented");
-        assert!(
-            verify(&keep, &with_identity(false), report).await.is_err(),
-            "a listener requiring a certificate admitted a probe without one"
-        );
     }
 }

@@ -9,15 +9,12 @@ pub mod agent_rate;
 pub mod agent_store;
 pub mod api;
 pub mod blobs;
-pub mod bootstrap;
 pub mod bridge;
-pub mod ca;
 pub mod clock;
 pub mod config;
 pub mod configs;
 pub mod credentials;
 pub mod deployments;
-pub mod enrolment;
 pub mod fleet;
 pub mod fs;
 pub mod labels;
@@ -26,7 +23,6 @@ pub mod migrate;
 pub mod packages;
 pub mod pki;
 pub mod postgres;
-pub mod revocation;
 pub mod s3;
 pub mod throttle;
 pub mod tls;
@@ -115,41 +111,6 @@ impl Records {
             Records::Postgres(db) => {
                 Box::new(postgres::packages::PgPackageBackend::new(db.clone()))
             }
-        })
-    }
-
-    /// The bootstrap certificates the Server issued.
-    ///
-    /// # Errors
-    /// As [`agents`](Self::agents).
-    pub fn bootstrap(&self) -> Result<Box<dyn bootstrap::BootstrapStore>, String> {
-        Ok(match self {
-            Records::Files(dir) => Box::new(fs::FsBootstrapStore::open(dir)?),
-            Records::Postgres(db) => {
-                Box::new(postgres::bootstrap::PgBootstrapStore::new(db.clone()))
-            }
-        })
-    }
-
-    /// The enrolment window and its queue.
-    #[must_use]
-    pub fn enrolment(&self) -> Box<dyn enrolment::EnrolmentStore> {
-        match self {
-            Records::Files(dir) => Box::new(fs::FsEnrolmentStore::open(dir)),
-            Records::Postgres(db) => {
-                Box::new(postgres::enrolment::PgEnrolmentStore::new(db.clone()))
-            }
-        }
-    }
-
-    /// The register, the revocation list and the Hosts.
-    ///
-    /// # Errors
-    /// As [`agents`](Self::agents).
-    pub fn ledger(&self) -> Result<Box<dyn revocation::LedgerStore>, String> {
-        Ok(match self {
-            Records::Files(dir) => Box::new(fs::FsLedgerStore::open(dir)?),
-            Records::Postgres(db) => Box::new(postgres::ledger::PgLedgerStore::new(db.clone())),
         })
     }
 }
@@ -272,53 +233,17 @@ impl PackageOffering {
     }
 }
 
-/// The default wiring of the bootstrap record to its filesystem adapter (ADR-0006, ADR-0028).
-impl bootstrap::BootstrapCertificates {
-    /// Opens the record in the data directory `data_dir`, one file per certificate under
-    /// `bootstrap/` (ADR-0037), forgetting what has ended.
-    ///
-    /// # Errors
-    /// Returns an error when the directory cannot be opened or a file in it cannot be read.
-    pub fn on_disk(
-        signer: Option<Box<dyn bootstrap::BootstrapSigner>>,
-        data_dir: &std::path::Path,
-        clock: Arc<dyn fleet::Clock>,
-    ) -> Result<Self, String> {
-        Self::open(
-            signer,
-            Box::new(fs::FsBootstrapStore::open(data_dir)?),
-            clock,
-        )
-    }
-
-    /// Opens the record in `records` (ADR-0050), forgetting what has ended.
-    ///
-    /// # Errors
-    /// Returns an error when the store cannot be opened or read.
-    pub fn on(
-        signer: Option<Box<dyn bootstrap::BootstrapSigner>>,
-        records: &Records,
-        clock: Arc<dyn fleet::Clock>,
-    ) -> Result<Self, String> {
-        Self::open(signer, records.bootstrap()?, clock)
-    }
-}
-
-/// The **Agent plane** (ADR-0013): the OpAMP endpoint, guarded by Admission (ADR-0021), and the
-/// package download route beside it — behind the same handshake, and reached only with a
-/// certificate of the fleet (ADR-0021 clause 23).
+/// The **Agent plane** (ADR-0013): the OpAMP endpoint and the package download route beside it.
 ///
 /// The download lives here rather than with the rest of `/api/v1` because the split between the
 /// two planes is by *audience*, not by path: this route is the one an Agent calls, and its
 /// `download_url` is resolved against the Agent's own endpoint.
-pub fn agent_app(state: Arc<AppState>, admission: transport::Admission) -> Router {
-    let guard = admission
-        .download_guard()
-        .with_agent_rate(state.agent_rate().cloned());
-    transport::router(state.clone(), admission).merge(transport::guard_download(
-        api::download_router(state),
-        guard,
-    ))
+pub fn agent_app(state: Arc<AppState>) -> Router {
+    let downloads = transport::limit_downloads(
+        api::download_router(state.clone()),
+        state.agent_rate().cloned(),
+    );
+    transport::router(state).merge(downloads)
 }
 
 /// The **Operator plane** (ADR-0013): the REST API, its OpenAPI document and docs page, and the

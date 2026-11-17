@@ -57,15 +57,13 @@ fn the_post_install_prints_no_endpoint_the_client_refuses_at_startup() {
     }
 }
 
-/// The first step the post-install prints is the questionnaire, which asks for the client identity;
-/// an endpoint alone is never offered as a complete step, since a Client with nothing more refuses
-/// to start. The `--endpoint` it does print is the scripted form, with `--fleet-files`, where the
-/// install finds the bootstrap identity it enrols with. The manual alternative names the identity,
-/// `[tls] cert_file` and `key_file`, and nothing the Client does not read; a password it names is
-/// a `bootstrap.p12`'s, never a credential (ADR-0029 clause 13, which restates ADR-0019 clause 37).
+/// The first step the post-install prints is the questionnaire. The `--endpoint` it does print is
+/// the scripted form, with `--fleet-files`, where the install finds the fleet's files. It names
+/// nothing the Client does not read, and never a credential (ADR-0029 clause 13, which restates
+/// ADR-0019 clause 37).
 /// Verifies: ADR-0029
 #[test]
-fn the_post_install_steps_ask_for_the_client_identity() {
+fn the_post_install_steps_write_the_configuration() {
     let script = post_install();
     let printed = printed(&script);
     let first_step = printed
@@ -87,24 +85,11 @@ fn the_post_install_steps_ask_for_the_client_identity() {
             "an endpoint-only install is not offered as a step: {line}"
         );
     }
-    assert!(
-        text.contains("[tls]") && text.contains("cert_file") && text.contains("key_file"),
-        "{text}"
-    );
     let lower = text.to_lowercase();
     for absent in ["[auth]", "credential", "bearer_token"] {
         assert!(
             !lower.contains(absent),
             "the post-install names {absent}: {text}"
-        );
-    }
-    for line in printed
-        .iter()
-        .filter(|l| l.to_lowercase().contains("password"))
-    {
-        assert!(
-            line.contains("bootstrap"),
-            "a password the post-install names is a bootstrap.p12's: {line}"
         );
     }
 }

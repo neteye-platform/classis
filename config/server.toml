@@ -49,12 +49,6 @@ max_connections = 10000
 #   packages/<agent type>@<version>.json  a Package: its identity and entries, no bytes
 #   blobs/<sha256>                        an artifact, named by its SHA-256, stored once
 #   agents/<instance_uid>.json            an Agent: what it reported, its assignment, its labels
-#   hosts/<host>.json                     a Host
-#   certificates/<issuer>-<serial>.json   a certificate the client CA signed (the register)
-#   revocations.json                      the revocation list
-#   bootstrap/<issuer>-<serial>.json      a bootstrap certificate the Server issued, and its
-#                                         PKCS#12 file beside it as .p12
-#   enrolment.json                        the enrolment window and its pending requests
 #
 # Back it up as one directory, with the Server stopped. A Server before 0.5.5 kept its state under
 # config_dir and packages_dir instead; those keys stop this Server at startup, and
@@ -131,8 +125,7 @@ stale_after_secs = 90
 # or a Deployment — can be deleted: roll those Agents out through a Deployment without it first. Taking a bad version back is not a rollout: the fleet only
 # moves forward, and what reverses a release is the host's own health-gated rollback.
 #
-# The download endpoint sits on the Agent plane, behind the same handshake as /v1/opamp: only an
-# Agent holding a certificate of the fleet reaches it. The content hash and the
+# The download endpoint sits on the Agent plane beside /v1/opamp. The content hash and the
 # signature are what protect an installed binary, and an unsigned entry is offered to nobody.
 max_package_size_bytes = 1073741824
 
@@ -194,55 +187,11 @@ max_package_size_bytes = 1073741824
 # only, and so does the Operator plane unless [rest.tls] below names its own. Without the
 # section the Server refuses to start, naming it.
 #
-# client_ca_file is REQUIRED too: the Agent plane asks every peer for a client
-# certificate IN THE HANDSHAKE, and one that chains to neither this CA nor the bootstrap CA of
-# [enrolment] never reaches the Server — the package download included. That certificate is the
-# whole of admission: the Agent plane has no credential, and an [auth] section is refused at
-# startup. The Operator plane asks
-# for none; a browser reaches it with the password of [rest.auth].
+# The Agent plane asks no peer for a certificate, and an [auth] section is refused at startup. The
+# Operator plane asks for none either; a browser reaches it with the password of [rest.auth].
 [tls]
 cert_file = "cert.pem"
 key_file = "key.pem"
-client_ca_file = "client-ca.pem"
-
-# The certificate authority that signs Agent CSRs. Present is what arms the CSR flow:
-# the Server declares AcceptsConnectionSettingsRequest, and an Agent that holds one of its
-# certificates renews it automatically once it is two thirds through its life — generating a key
-# that never leaves its host, and receiving the certificate as an ordinary connection-settings
-# offer. Point client_ca_file above at this CA's certificate.
-#
-# This is deliberately NOT the listener's own certificate and key: a CA private key sitting where
-# the server certificate lives means compromising the Server mints fleet members at will. A
-# certificate can be revoked through the REST API; validity_days bounds what one stolen
-# unnoticed is good for, and a Client renews at two thirds of it.
-# [client_ca]
-# cert_file = "client-ca.pem"
-# key_file = "client-ca-key.pem"
-# validity_days = 30
-
-# ENROLMENT: how a fresh host gets its first certificate. It connects with a BOOTSTRAP
-# certificate from a CA of its own — never the client CA. That opens
-# nothing by itself: the connection is admitted only while an operator holds the enrolment window
-# open, it may only send a certificate signing request, and the request waits until an operator
-# approves it:
-#   POST /api/v1/enrolment/window  {"open_for_secs": 3600}   opens it (1 s to 24 h); closed by default
-#   GET  /api/v1/enrolments                                  lists the pending requests
-#   POST /api/v1/enrolments/<id>/approve | /reject           decides one
-# The Client logs its request's key fingerprint, which is the id listed, so an approval can be
-# matched to a host. Needs [client_ca], which signs the approved request. Without [enrolment] no
-# host enrols, and an operator issues every certificate.
-# With bootstrap_ca_key_file the Server also issues the bootstrap certificates, each with a subject
-# the operator names (country, state, locality, organization, organizational_unit,
-# organization_identifier), which every host certificate issued from it carries, and hands out the
-# key in that one answer:
-#   POST /api/v1/bootstrap-certificates  {"subject": {"organization": "…"}, "validity_days": 10}
-#   GET  /api/v1/bootstrap-certificates  lists the valid ones, each revocable by its serial
-# The pending queue holds at most 1024 requests; those of one bootstrap certificate at most
-# max_pending_per_bootstrap of them (1 to 1024), a quarter by default.
-# [enrolment]
-# bootstrap_ca_file = "bootstrap-ca.pem"
-# bootstrap_ca_key_file = "bootstrap-ca-key.pem"
-# max_pending_per_bootstrap = 256
 
 # Repeated admission failures from one peer address: past max_failures 401s within
 # window_secs, the address is answered 429 with Retry-After for backoff_secs, before anything else
@@ -252,17 +201,14 @@ client_ca_file = "client-ca.pem"
 # window_secs = 60
 # backoff_secs = 300
 
-# How often an admitted peer is heard on the Agent plane. Every OpAMP message and every
-# package download takes a token from the bucket of the host its certificate names — of the Agent
-# it names and of the aggregate, for a host marked as a Gateway. A message past the limit is
-# answered Unavailable with a 30 s retry_info, a download 429 with Retry-After: 30. 0 is refused;
-# the Server warns at startup when messages_per_sec times the heartbeat carries fewer than 256
-# Agents per host.
+# How often a peer is heard on the Agent plane. Every OpAMP message and every package download
+# takes a token from the bucket of the host it arrived over, or of its peer address where no host
+# is named. A message past the limit is answered Unavailable with a 30 s retry_info, a download
+# 429 with Retry-After: 30. 0 is refused; the Server warns at startup when messages_per_sec times
+# the heartbeat carries fewer than 256 Agents per host.
 # [agent_rate_limit]
 # messages_per_sec = 10
 # burst = 300
-# gateway_messages_per_sec = 500
-# gateway_burst = 10000
 
 # Optional connection settings offered to the fleet: every Agent declaring
 # AcceptsOpAMPConnectionSettings is offered these, verifies them by actually connecting, and

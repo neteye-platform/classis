@@ -1,7 +1,7 @@
 //! No secret reaches the Server's log (ADR-0022 clause 2): the `server` binary, logging at `trace`,
-//! is sent an `Authorization` header by an Agent, a wrong password on the Operator plane, and
-//! issues a bootstrap certificate whose PKCS#12 file is downloaded — and none of the values, nor a
-//! hash of them, is in what it wrote to standard error.
+//! is sent an `Authorization` header by an Agent, a wrong password on the Operator plane, and the
+//! right one for an act — and none of the values, nor a hash of them, is in what it wrote to
+//! standard error.
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader};
@@ -55,22 +55,18 @@ fn issue(ca: &(String, String), names: &[&str]) -> (String, String) {
     (cert.pem(), key.serialize_pem())
 }
 
-fn client(ca_pem: &str, identity: Option<&(String, String)>) -> reqwest::Client {
+fn client(ca_pem: &str) -> reqwest::Client {
     opamp::tls::install_ring_provider();
-    let mut builder = reqwest::Client::builder()
+    reqwest::Client::builder()
         .use_rustls_tls()
         .tls_certs_only([reqwest::Certificate::from_pem(ca_pem.as_bytes()).expect("ca")])
         // The certificate is for `localhost`, the listeners are on 127.0.0.1.
         .resolve(
             "localhost",
             "127.0.0.1:0".parse::<std::net::SocketAddr>().expect("addr"),
-        );
-    if let Some((cert, key)) = identity {
-        let mut pem = key.as_bytes().to_vec();
-        pem.extend_from_slice(cert.as_bytes());
-        builder = builder.identity(reqwest::Identity::from_pem(&pem).expect("identity"));
-    }
-    builder.build().expect("client")
+        )
+        .build()
+        .expect("client")
 }
 
 /// Two free ports, distinct: both listeners are held until both ports are read.
@@ -92,13 +88,11 @@ fn path(dir: &Path, name: &str, contents: &str) -> String {
 async fn no_secret_reaches_the_log() {
     const OPERATOR_PASSWORD: &str = "the operator's own password";
     const WRONG_PASSWORD: &str = "a guess that does not sign in";
-    const BOOTSTRAP_PASSWORD: &str = "the bootstrap file's password";
     let token = "an-old-fleet-token-of-32-characters";
     let authorization = format!("Bearer {token}");
 
     let dir = tempfile::tempdir().expect("tempdir");
     let fleet_ca = ca("classis test CA");
-    let bootstrap_ca = ca("classis test bootstrap CA");
     let server = issue(&fleet_ca, &["localhost"]);
     let (agent_port, operator_port) = free_ports();
     let config = dir.path().join("server.toml");
@@ -106,19 +100,12 @@ async fn no_secret_reaches_the_log() {
         &config,
         format!(
             "listen = \"127.0.0.1:{agent_port}\"\ndata_dir = {}\n\n\
-             [tls]\ncert_file = {}\nkey_file = {}\nclient_ca_file = {}\n\n\
-             [client_ca]\ncert_file = {}\nkey_file = {}\n\n\
-             [enrolment]\nbootstrap_ca_file = {}\nbootstrap_ca_key_file = {}\n\n\
+             [tls]\ncert_file = {}\nkey_file = {}\n\n\
              [rest]\nlisten = \"127.0.0.1:{operator_port}\"\n\n\
              [rest.auth.basic_users]\nops = {:?}\n",
             toml::Value::String(dir.path().join("data").display().to_string()),
             path(dir.path(), "server.pem", &server.0),
             path(dir.path(), "server-key.pem", &server.1),
-            path(dir.path(), "client-ca.pem", &fleet_ca.0),
-            path(dir.path(), "client-ca.pem", &fleet_ca.0),
-            path(dir.path(), "client-ca-key.pem", &fleet_ca.1),
-            path(dir.path(), "bootstrap-ca.pem", &bootstrap_ca.0),
-            path(dir.path(), "bootstrap-ca-key.pem", &bootstrap_ca.1),
             classis_server::credentials::hash_basic(OPERATOR_PASSWORD).expect("hash"),
         ),
     )
@@ -157,7 +144,7 @@ async fn no_secret_reaches_the_log() {
     }
 
     // An Agent of an older version sends a token the Agent plane does not read.
-    let agent = client(&fleet_ca.0, Some(&issue(&fleet_ca, &["edge-01"])));
+    let agent = client(&fleet_ca.0);
     let report = AgentToServer {
         instance_uid: InstanceUid::default().as_bytes().to_vec(),
         sequence_num: 1,
@@ -174,7 +161,7 @@ async fn no_secret_reaches_the_log() {
     assert!(response.status().is_success(), "{:?}", response.status());
 
     // A wrong password on the Operator plane, and the right one for every act after it.
-    let operator = client(&fleet_ca.0, None);
+    let operator = client(&fleet_ca.0);
     let url = |path: &str| format!("https://localhost:{operator_port}{path}");
     let refused = operator
         .get(url("/api/v1/agents"))
@@ -184,31 +171,15 @@ async fn no_secret_reaches_the_log() {
         .expect("refused sign-in");
     assert_eq!(refused.status(), reqwest::StatusCode::UNAUTHORIZED);
 
-    // A bootstrap certificate issued under a password, and its PKCS#12 file downloaded.
-    let issued = operator
-        .post(url("/api/v1/bootstrap-certificates"))
+    // An act under the right password.
+    let acted = operator
+        .put(url("/api/v1/configurations/base"))
         .basic_auth("ops", Some(OPERATOR_PASSWORD))
-        .json(&serde_json::json!({
-            "subject": { "organization": "Kunde GmbH", "organizational_unit": "Werk Nord" },
-            "password": BOOTSTRAP_PASSWORD
-        }))
+        .json(&serde_json::json!({ "body": "receivers: {}\n", "service_name": "otelcol" }))
         .send()
         .await
-        .expect("issue");
-    assert_eq!(issued.status(), reqwest::StatusCode::CREATED);
-    let issued: serde_json::Value = issued.json().await.expect("json");
-    let serial = issued["serial"].as_str().expect("serial");
-    let file = operator
-        .get(url(&format!("/api/v1/bootstrap-certificates/{serial}/p12")))
-        .basic_auth("ops", Some(OPERATOR_PASSWORD))
-        .send()
-        .await
-        .expect("download");
-    assert_eq!(file.status(), reqwest::StatusCode::OK);
-    let file = file.bytes().await.expect("body");
-    let key_der = classis_core::pkcs12::file::open(&file, BOOTSTRAP_PASSWORD)
-        .expect("opens")
-        .private_key_der;
+        .expect("act");
+    assert_eq!(acted.status(), reqwest::StatusCode::OK);
 
     // What it logged meanwhile: the events of the download are written by the time its answer is
     // read, and whatever follows within a moment is read too.
@@ -218,13 +189,7 @@ async fn no_secret_reaches_the_log() {
     drop(running);
     let log = log.join("\n");
     // Every event of the run is there, the `debug` ones too, so the absence below means something.
-    for event in [
-        "admission.admitted",
-        "operator.refused",
-        "enrolment.bootstrap_issued",
-        "enrolment.bootstrap_p12_downloaded",
-        "operator.act",
-    ] {
+    for event in ["operator.refused", "operator.act"] {
         assert!(log.contains(event), "no {event} in the log: {log}");
     }
     // An act names the operator who made it.
@@ -237,7 +202,6 @@ async fn no_secret_reaches_the_log() {
     let basic = |password: &str| {
         base64::engine::general_purpose::STANDARD.encode(format!("ops:{password}"))
     };
-    let key_base64 = base64::engine::general_purpose::STANDARD.encode(&key_der);
     let secrets = [
         ("the Agent's token", token.to_string()),
         (
@@ -252,14 +216,6 @@ async fn no_secret_reaches_the_log() {
         ("the wrong Basic credential", basic(WRONG_PASSWORD)),
         ("the operator's password", OPERATOR_PASSWORD.to_string()),
         ("the operator's Basic credential", basic(OPERATOR_PASSWORD)),
-        ("the bootstrap password", BOOTSTRAP_PASSWORD.to_string()),
-        ("the bootstrap key, hex", hex::encode(&key_der)),
-        // A PEM line of the key is 64 characters of its base64.
-        ("the bootstrap key, base64", key_base64[..64].to_string()),
-        (
-            "the bootstrap key's last bytes",
-            key_base64[key_base64.len() - 64..].to_string(),
-        ),
     ];
     for (what, secret) in secrets {
         assert!(!log.contains(&secret), "{what} is in the log");

@@ -52,36 +52,30 @@ fn ca(
     (pem, key_pem, rcgen::Issuer::new(params, key))
 }
 
-/// The Server host's files of a fleet, made here rather than by the operator tool the Server does
-/// not depend on (ADR-0028): a server certificate for `localhost`, a client CA that ends in
-/// `client_ca_left` days, and a bootstrap CA. Answers `server.toml`'s `[tls]`, `[client_ca]` and
-/// `[enrolment]` sections naming them.
-fn server_host_files(dir: &Path, client_ca_left: i64) -> String {
+/// The Server host's files, made here rather than by the operator tool the Server does not depend
+/// on (ADR-0028): a server certificate for `localhost` that ends in `server_left` days. Answers
+/// `server.toml`'s `[tls]` section naming it and its key.
+fn server_host_files(dir: &Path, server_left: i64) -> String {
     let (_, _, server_ca) = ca("classis server CA", 1, 3000);
     let server_key = rcgen::KeyPair::generate().expect("key");
     let mut params =
         rcgen::CertificateParams::new(vec!["localhost".to_string()]).expect("server params");
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    let now = time::OffsetDateTime::now_utc();
+    params.not_before = now - time::Duration::days(3600);
+    params.not_after = now + time::Duration::days(server_left);
     let server = params
         .signed_by(&server_key, &server_ca)
         .expect("server certificate");
-    let (client_ca, client_ca_key, _) = ca("classis client CA", 3600, client_ca_left);
-    let (bootstrap_ca, _, _) = ca("classis bootstrap CA", 1, 3000);
     let file = |name: &str, contents: &str| {
         let path = dir.join(name);
         std::fs::write(&path, contents).expect("write");
         toml::Value::String(path.display().to_string()).to_string()
     };
     format!(
-        "[tls]\ncert_file = {}\nkey_file = {}\nclient_ca_file = {}\n\n\
-         [client_ca]\ncert_file = {}\nkey_file = {}\n\n\
-         [enrolment]\nbootstrap_ca_file = {}\n",
+        "[tls]\ncert_file = {}\nkey_file = {}\n",
         file("server.pem", &server.pem()),
         file("server-key.pem", &server_key.serialize_pem()),
-        file("client-ca.pem", &client_ca),
-        file("client-ca.pem", &client_ca),
-        file("client-ca-key.pem", &client_ca_key),
-        file("bootstrap-ca.pem", &bootstrap_ca),
     )
 }
 
@@ -96,9 +90,10 @@ fn status_reads_the_server_hosts_certificates_and_the_server_makes_none() {
     let fine = server(&["pki", "status", "--config", &config], dir.path());
     assert_eq!(fine.status.code(), Some(0), "{}", text(&fine.stderr));
     let listed = text(&fine.stdout);
-    for file in ["server.pem", "client-ca.pem", "bootstrap-ca.pem"] {
-        assert!(listed.contains(file), "{file} is not listed: {listed}");
-    }
+    assert!(
+        listed.contains("server.pem"),
+        "server.pem is not listed: {listed}"
+    );
 
     let other = tempfile::tempdir().expect("tempdir");
     let config = other.path().join("server.toml");
@@ -149,7 +144,7 @@ fn status_reads_the_server_hosts_certificates_and_the_server_makes_none() {
 
 // Verifies: ADR-0028
 #[test]
-fn the_server_warns_at_startup_about_a_ca_that_is_ending_and_serves_on() {
+fn the_server_warns_at_startup_about_a_certificate_that_is_ending_and_serves_on() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sections = server_host_files(dir.path(), 10);
 
@@ -193,7 +188,7 @@ fn the_server_warns_at_startup_about_a_ca_that_is_ending_and_serves_on() {
         match logged.recv_timeout(Duration::from_secs(30)) {
             Ok(line)
                 if line.contains("ends soon")
-                    && line.contains("client-ca.pem")
+                    && line.contains("server.pem")
                     && line.contains("pki.expiring") =>
             {
                 warned = true;
@@ -205,7 +200,7 @@ fn the_server_warns_at_startup_about_a_ca_that_is_ending_and_serves_on() {
     }
     assert!(
         warned,
-        "the ending client CA was not warned about before serving"
+        "the ending server certificate was not warned about before serving"
     );
 }
 
@@ -229,7 +224,7 @@ fn status_reads_its_configuration_without_config_from_the_variable_or_the_enviro
         .expect("run");
     assert_eq!(named.status.code(), Some(0), "{}", text(&named.stderr));
     assert!(
-        text(&named.stdout).contains("client-ca.pem"),
+        text(&named.stdout).contains("server.pem"),
         "{}",
         text(&named.stdout)
     );
@@ -276,7 +271,7 @@ fn status_reads_its_configuration_without_config_from_the_variable_or_the_enviro
         "{}",
         text(&from_environment.stderr)
     );
-    assert!(text(&from_environment.stdout).contains("client-ca.pem"));
+    assert!(text(&from_environment.stdout).contains("server.pem"));
     let log = text(&from_environment.stderr);
     assert!(
         log.lines()

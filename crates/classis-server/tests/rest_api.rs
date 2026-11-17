@@ -1846,10 +1846,6 @@ async fn the_forms_mark_every_field_required_or_optional() {
         "entry-file",
         "dep-name",
         "dep-selector",
-        "boot-org",
-        "boot-unit",
-        "boot-pass",
-        "boot-pass2",
     ] {
         let caption = caption(id);
         assert!(caption.contains(">required<"), "{id}: {caption}");
@@ -1863,11 +1859,6 @@ async fn the_forms_mark_every_field_required_or_optional() {
         "set-sig-file",
         "dep-package-pick",
         "dep-config-pick",
-        "boot-country",
-        "boot-state",
-        "boot-locality",
-        "boot-org-id",
-        "boot-days",
     ] {
         assert!(caption(id).contains(">optional<"), "{id}: {}", caption(id));
     }
@@ -1876,38 +1867,11 @@ async fn the_forms_mark_every_field_required_or_optional() {
     ));
 }
 
-/// The bundled UI asks for a bootstrap password of 8 to 128 characters, as the Server takes.
-/// Verifies: ADR-0048
-#[tokio::test]
-async fn the_ui_asks_for_a_bootstrap_password_of_8_to_128_characters() {
-    let server = spawn().await;
-    let html = reqwest::Client::new()
-        .get(url(server.rest_addr, "/"))
-        .send()
-        .await
-        .expect("get the UI")
-        .text()
-        .await
-        .expect("html");
-    let at = html.find("id=\"boot-pass\"").expect("the password field");
-    let field = &html[at..at + html[at..].find("/>").expect("its end")];
-    assert!(
-        field.contains(&format!(
-            "minlength=\"{}\" maxlength=\"{}\"",
-            classis_core::pkcs12::MIN_PASSWORD_CHARS,
-            classis_core::pkcs12::MAX_PASSWORD_CHARS
-        )),
-        "{field}"
-    );
-    assert!(field.contains("8 to 128 characters"), "{field}");
-}
-
-/// The bundled UI's Hosts tab reads what `GET /api/v1/hosts` serves and acts on a row through the
-/// Gateway and revocation routes, and the Agents tab marks inherited labels — the fields the page
-/// reads are the ones the API documents.
+/// The bundled UI's Agents tab marks inherited labels — the fields the page reads are the ones the
+/// API documents.
 /// Verifies: ADR-0035
 #[tokio::test]
-async fn the_ui_lists_hosts_and_marks_inherited_labels() {
+async fn the_ui_marks_inherited_labels() {
     let server = spawn().await;
     let client = reqwest::Client::new();
     let html = client
@@ -1918,17 +1882,7 @@ async fn the_ui_lists_hosts_and_marks_inherited_labels() {
         .text()
         .await
         .expect("html");
-    for needle in [
-        "data-tab=\"hosts\"",
-        "fetch(\"/api/v1/hosts\")",
-        "/api/v1/hosts/${encodeURIComponent(mark.dataset.host)}/gateway",
-        "certificate: { authority: \"client\", serial }",
-        "h.subject[field]",
-        "a.client_agent",
-        "a.inherited_labels",
-        "a.ignored_attributes",
-        "a.host_attributes",
-    ] {
+    for needle in ["a.inherited_labels", "a.ambiguous", "a.ignored_attributes"] {
         assert!(
             html.contains(needle),
             "the UI no longer contains {needle:?}"
@@ -1943,21 +1897,15 @@ async fn the_ui_lists_hosts_and_marks_inherited_labels() {
         .await
         .expect("json");
     let schemas = &document["components"]["schemas"];
-    for (schema, field) in [
-        ("HostView", "name"),
-        ("HostView", "subject"),
-        ("HostView", "agents"),
-        ("HostSubject", "organizational_unit"),
-        ("HostAgent", "client_agent"),
-        ("HostAgent", "machine"),
-        ("HostAgent", "ambiguous"),
-        ("AgentView", "inherited_labels"),
-        ("AgentView", "host_attributes"),
-        ("AgentView", "ignored_attributes"),
+    for field in [
+        "inherited_labels",
+        "client_agent",
+        "ambiguous",
+        "ignored_attributes",
     ] {
         assert!(
-            schemas[schema]["properties"][field].is_object(),
-            "{schema} no longer serves {field}"
+            schemas["AgentView"]["properties"][field].is_object(),
+            "AgentView no longer serves {field}"
         );
     }
 }
@@ -2022,195 +1970,6 @@ async fn the_ui_shows_the_sha256_and_carries_the_signing_file_the_api_serves() {
         assert!(
             schemas[schema]["properties"][field].is_object(),
             "{schema} no longer carries {field}"
-        );
-    }
-}
-
-/// The bundled UI is a client of the REST API and nothing more (ADR-0023 clause 13), so its
-/// Enrolments tab depends on the names the enrolment routes share with it: the routes it calls and
-/// the fields it shows and sends, the requested key's fingerprint above all — what ADR-0021 clause 22 lists
-/// so an operator can match a request to the Client's log. The page asks for them, and the OpenAPI
-/// document describes them; a rename on one side breaks here rather than in an empty column. What
-/// the page does with them is not tested in the repository: it is one embedded page with no
-/// frontend toolchain to run it in. The queue lists the bootstrap certificate's subject values and
-/// not the request's own subject, the issue form sends all six attributes and the password, and
-/// the page never handles a private key: every certificate offers its PKCS#12 file (ADR-0036).
-/// Verifies: ADR-0023, ADR-0028, ADR-0036
-#[tokio::test]
-async fn the_ui_and_the_enrolment_api_share_their_names() {
-    let server = spawn().await;
-    let client = reqwest::Client::new();
-    let html = client
-        .get(url(server.rest_addr, "/"))
-        .send()
-        .await
-        .expect("get the UI")
-        .text()
-        .await
-        .expect("html");
-    for needle in [
-        "\"/api/v1/enrolment/window\"",
-        "\"/api/v1/enrolments\"",
-        "/api/v1/enrolments/${",
-        ".key_fingerprint",
-        ".bootstrap_subject",
-        ".bootstrap_fingerprint",
-        ".bootstrap_serial",
-        "\"/api/v1/bootstrap-certificates\"",
-        "\"/api/v1/revocations\"",
-        "authority: \"bootstrap\"",
-        "[\"country\", \"boot-country\"]",
-        "[\"state\", \"boot-state\"]",
-        "[\"locality\", \"boot-locality\"]",
-        "[\"organization\", \"boot-org\"]",
-        "[\"organizational_unit\", \"boot-unit\"]",
-        "[\"organization_identifier\", \"boot-org-id\"]",
-        "e.bootstrap_subject[field]",
-        "e.subject_refusal",
-        "validity_days:",
-        "password };",
-        "/p12`",
-        "download = \"bootstrap.p12\"",
-        ".issued_ms",
-        ".not_after_ms",
-        ".revoked",
-        ".arrived_ms",
-        ".until_ms",
-        "open_for_secs:",
-    ] {
-        assert!(
-            html.contains(needle),
-            "the UI no longer contains {needle:?}"
-        );
-    }
-    for gone in ["private_key_pem", "bootstrap-key.pem", "beforeunload"] {
-        assert!(
-            !html.contains(gone),
-            "the page handles no private key, yet contains {gone:?}"
-        );
-    }
-
-    let document: serde_json::Value = client
-        .get(url(server.rest_addr, "/api/v1/openapi.json"))
-        .send()
-        .await
-        .expect("get the document")
-        .json()
-        .await
-        .expect("json");
-    let schemas = &document["components"]["schemas"];
-    for (schema, fields) in [
-        (
-            "PendingEnrolment",
-            &[
-                "id",
-                "arrived_ms",
-                "peer",
-                "key_fingerprint",
-                "bootstrap_subject",
-                "subject_refusal",
-                "bootstrap_fingerprint",
-                "bootstrap_serial",
-            ][..],
-        ),
-        ("EnrolmentWindow", &["open", "until_ms"][..]),
-        (
-            "BootstrapSubject",
-            &[
-                "country",
-                "state",
-                "locality",
-                "organization",
-                "organizational_unit",
-                "organization_identifier",
-            ][..],
-        ),
-        (
-            "BootstrapView",
-            &["serial", "subject", "issued_ms", "not_after_ms", "revoked"][..],
-        ),
-        (
-            "IssuedBootstrap",
-            &["serial", "subject", "not_after_ms", "certificate_pem"][..],
-        ),
-    ] {
-        for field in fields {
-            assert!(
-                schemas[schema]["properties"].get(field).is_some(),
-                "{schema} no longer has {field}"
-            );
-        }
-    }
-    assert!(
-        schemas["IssuedBootstrap"]["properties"]
-            .get("private_key_pem")
-            .is_none(),
-        "an issue never answers a private key"
-    );
-    for (schema, field) in [
-        ("IssueBootstrapRequest", "subject"),
-        ("IssueBootstrapRequest", "password"),
-        ("BootstrapSubject", "organization"),
-        ("BootstrapSubject", "organizational_unit"),
-    ] {
-        assert!(
-            schemas[schema]["required"]
-                .as_array()
-                .is_some_and(|required| required.iter().any(|f| f == field)),
-            "{schema} marks {field} required"
-        );
-    }
-    assert!(
-        schemas["PendingEnrolment"]["properties"]
-            .get("subject")
-            .is_none(),
-        "a pending request lists no subject of its own"
-    );
-    assert!(
-        // Optional, so the reference sits beside `null` in a `oneOf`.
-        schemas["PendingEnrolment"]["properties"]["bootstrap_subject"]
-            .to_string()
-            .contains("\"#/components/schemas/HostSubject\""),
-        "the bootstrap certificate's subject is listed by its values"
-    );
-    for path in [
-        "/api/v1/enrolment/window",
-        "/api/v1/enrolments",
-        "/api/v1/enrolments/{id}/approve",
-        "/api/v1/enrolments/{id}/reject",
-    ] {
-        assert!(document["paths"].get(path).is_some(), "no route {path}");
-    }
-}
-
-/// Approving an enrolment admits a host to the fleet, and the bundled UI now offers it as a press
-/// in the browser — so a cross-site page must not be able to fire it. Both enrolment decisions are
-/// body-less `POST`s behind the same Fetch Metadata guard as `restart`, which answers before the
-/// handler, whether or not enrolment is configured.
-/// Verifies: ADR-0021
-#[tokio::test]
-async fn a_cross_site_enrolment_decision_is_refused() {
-    let server = spawn().await;
-    let client = reqwest::Client::new();
-    for act in ["approve", "reject"] {
-        let path = format!("/api/v1/enrolments/{}/{act}", "ab".repeat(32));
-        let cross = client
-            .post(url(server.rest_addr, &path))
-            .header("sec-fetch-site", "cross-site")
-            .send()
-            .await
-            .expect("decide");
-        assert_eq!(cross.status(), 403, "a cross-site {act} is refused");
-        let same_origin = client
-            .post(url(server.rest_addr, &path))
-            .header("sec-fetch-site", "same-origin")
-            .send()
-            .await
-            .expect("decide");
-        assert_ne!(
-            same_origin.status(),
-            403,
-            "a same-origin {act} is not a CSRF"
         );
     }
 }

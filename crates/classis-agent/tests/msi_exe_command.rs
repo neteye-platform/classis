@@ -378,13 +378,12 @@ fn the_msi_stops_and_unregisters_only_on_a_real_removal() {
     }
 }
 
-/// The endpoint dialog asks for no client identity and names where it goes instead: the client
-/// certificate and its key, as `cert_file` and `key_file`, in the configuration under
-/// `%ProgramData%` — not in the installation folder, which holds only the payload. It mentions no
-/// credential, since the Client reads none.
+/// The endpoint dialog names where the configuration lives: under `%ProgramData%` — not in the
+/// installation folder, which holds only the payload. It mentions no credential, since the Client
+/// reads none.
 /// Verifies: ADR-0019
 #[test]
-fn the_endpoint_dialog_names_the_identity_and_no_credential() {
+fn the_endpoint_dialog_names_the_configuration_and_no_credential() {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/windows/EndpointDlg.wxs");
     let source = std::fs::read_to_string(&path)
@@ -395,17 +394,10 @@ fn the_endpoint_dialog_names_the_identity_and_no_credential() {
         .filter_map(|block| attribute(&block[..block.find('>')?], "Text"))
         .collect();
     let shown = texts.join("\n");
-    for named in [
-        "client certificate",
-        "cert_file",
-        "key_file",
-        "%ProgramData%",
-    ] {
-        assert!(
-            shown.contains(named),
-            "the dialog does not name {named}: {shown}"
-        );
-    }
+    assert!(
+        shown.contains("%ProgramData%"),
+        "the dialog does not name %ProgramData%: {shown}"
+    );
     assert!(
         !shown.contains("installation folder"),
         "the configuration is not in the installation folder: {shown}"

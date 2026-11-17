@@ -79,30 +79,22 @@ fi
 
 cat <<'EOF'
 
-The service is registered and stopped. Not starting it is deliberate: a Client without a client
-certificate refuses to start. Two steps remain:
+The service is registered and stopped. Not starting it is deliberate: it has no configuration
+yet. Two steps remain:
 
   classis service install --interactive
   systemctl start classis
 
-The first asks for the endpoint, the Server's CA, a bootstrap certificate and its key (or a
-bootstrap.p12 and its password), and the package verification key, writes supervisor.toml, and
-enrols this host with the Server: open the enrolment window first and approve the request it waits
-for. `classis service config` asks again later.
+The first asks for the endpoint, the Server's CA and the package verification key, and writes
+supervisor.toml. `classis service config` asks again later.
 
-Without a terminal, put the fleet's files in a directory and name it. A bootstrap.p12 also needs
-the file holding its password (--bootstrap-password-file). This waits for the same approval:
+Without a terminal, put the fleet's files in a directory and name it:
 
-  classis service install --endpoint wss://<server>/v1/opamp \
-    --fleet-files /root/fleet --bootstrap-password-file /root/fleet/bootstrap.pass
+  classis service install --endpoint wss://<server>/v1/opamp --fleet-files /root/fleet
 
-To write the file yourself instead, give it at least the endpoint and the client identity, and the
-service enrols when it starts:
+To write the file yourself instead, give it at least the endpoint:
 
   endpoint = "wss://<server>/v1/opamp"
-  [tls]
-  cert_file = "<client or bootstrap certificate>"
-  key_file = "<its key>"
 
 The configuration lets the Server update this Client itself, from signed packages only
 — the fleet then patches its own agent like any other program. Write `self_update = false` under

@@ -10,8 +10,6 @@
 
 #![cfg(unix)]
 
-mod common;
-
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -25,9 +23,8 @@ fn spawn(dir: &Path, args: &[&str]) -> Child {
         &config,
         // Port 1 answers nothing, so this Client stays in its reconnect loop for the whole test.
         format!(
-            "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {:?}\n{}",
+            "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {:?}\n",
             dir.join("state").to_string_lossy(),
-            common::client_identity(dir)
         ),
     )
     .expect("write config");

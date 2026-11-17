@@ -8,21 +8,15 @@
 
 mod agents;
 mod blobs;
-mod bootstrap;
 mod configs;
 mod deployments;
-mod enrolment;
 mod packages;
-mod revocation;
 
 pub use agents::FsAgentStore;
 pub use blobs::FsBlobStore;
-pub use bootstrap::FsBootstrapStore;
 pub use configs::FsConfigBackend;
 pub use deployments::FsDeploymentBackend;
-pub use enrolment::FsEnrolmentStore;
 pub use packages::FsPackageBackend;
-pub use revocation::FsLedgerStore;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -37,28 +31,8 @@ pub const PACKAGES: &str = "packages";
 pub const BLOBS: &str = "blobs";
 /// One Agent record per file.
 pub const AGENTS: &str = "agents";
-/// One Host per file.
-pub const HOSTS: &str = "hosts";
-/// The certificate register: one file per certificate the Server signed.
-pub const CERTIFICATES: &str = "certificates";
-/// The bootstrap certificates the Server issued, with their PKCS#12 files.
-pub const BOOTSTRAP: &str = "bootstrap";
-/// The revocation list.
-pub const REVOCATIONS: &str = "revocations.json";
-/// The enrolment window and its pending requests.
-pub const ENROLMENT: &str = "enrolment.json";
-
 /// Every directory the layout names, in the order the table of ADR-0037 clause 2 lists them.
-pub const DIRECTORIES: [&str; 8] = [
-    CONFIGURATIONS,
-    DEPLOYMENTS,
-    PACKAGES,
-    BLOBS,
-    AGENTS,
-    HOSTS,
-    CERTIFICATES,
-    BOOTSTRAP,
-];
+pub const DIRECTORIES: [&str; 5] = [CONFIGURATIONS, DEPLOYMENTS, PACKAGES, BLOBS, AGENTS];
 
 /// Opens the data directory (ADR-0037): creates it and every directory of the layout owner-only —
 /// `blobs/` only with the filesystem blob store, `filesystem_blobs`: beside a bucket it is the
@@ -87,12 +61,7 @@ pub fn open_data_dir(root: &Path, filesystem_blobs: bool) -> Result<(), String> 
 /// Returns an error naming the path of the first entry the layout does not name.
 pub fn check_layout(root: &Path) -> Result<(), String> {
     for (name, path) in entries(root)? {
-        let known = if DIRECTORIES.contains(&name.as_str()) {
-            path.is_dir()
-        } else {
-            (name == REVOCATIONS || name == ENROLMENT) && path.is_file()
-        };
-        if !known {
+        if !(DIRECTORIES.contains(&name.as_str()) && path.is_dir()) {
             return Err(unknown(&path));
         }
     }
@@ -121,7 +90,7 @@ pub fn open_data_dir_beside_database(root: &Path, filesystem_blobs: bool) -> Res
         if name == BLOBS && path.is_dir() {
             continue;
         }
-        if DIRECTORIES.contains(&name.as_str()) || name == REVOCATIONS || name == ENROLMENT {
+        if DIRECTORIES.contains(&name.as_str()) {
             return Err(format!(
                 "{} is a record of the filesystem store, and [database] store = \"postgres\" — \
                  copy the records into the database with `server migrate-to-postgres --from \
@@ -351,15 +320,20 @@ mod tests {
         std::fs::create_dir(bucket.join(BLOBS)).expect("an older Server's blobs/");
         open_data_dir(&bucket, false).expect("blobs/ is part of the layout, there to copy from");
 
-        std::fs::write(root.join(REVOCATIONS), "[]").expect("list");
-        std::fs::write(root.join("enrolment.json.tmp"), "{").expect("leftover");
-        open_data_dir(&root, true).expect("the named files are part of the layout");
+        std::fs::write(root.join("agents.json.tmp"), "{").expect("leftover");
+        open_data_dir(&root, true).expect("a leftover temporary file is not a stray entry");
         assert!(
-            !root.join("enrolment.json.tmp").exists(),
+            !root.join("agents.json.tmp").exists(),
             "the leftover is removed"
         );
 
-        for stray in ["base.json", "labels", "revocation", "fleet-packages"] {
+        for stray in [
+            "base.json",
+            "labels",
+            "revocation",
+            "fleet-packages",
+            "hosts",
+        ] {
             let path = root.join(stray);
             if stray.ends_with(".json") {
                 std::fs::write(&path, "{}").expect("write");
@@ -411,7 +385,7 @@ mod tests {
             "no data directory with a database and a bucket"
         );
 
-        for record in [AGENTS, CONFIGURATIONS, CERTIFICATES, REVOCATIONS, ENROLMENT] {
+        for record in [AGENTS, CONFIGURATIONS, DEPLOYMENTS, PACKAGES] {
             let path = root.join(record);
             if record.ends_with(".json") {
                 std::fs::write(&path, "{}").expect("write");
@@ -450,7 +424,7 @@ mod tests {
     #[test]
     fn replace_owner_only_replaces_the_document() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("revocations.json");
+        let path = dir.path().join("record.json");
         replace_owner_only(&path, b"old").expect("first write");
         replace_owner_only(&path, b"new").expect("replace");
         assert_eq!(std::fs::read(&path).expect("read"), b"new");

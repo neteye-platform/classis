@@ -1,7 +1,8 @@
 //! Connection-settings rotation end to end (ADR-0014): the real Server armed with an offer, the
 //! real Client binary as a single self-Agent. The Client verifies the offer by actually
 //! connecting, persists it, reconnects, and reports `APPLIED`; the Server, seeing the reported
-//! hash match, stops offering. A restarted Client is not re-offered what it already runs.
+//! hash match, stops offering. A restarted Client is not re-offered what it already runs. The
+//! Supervisors of a Client live straight through the reconnection an offer causes.
 
 mod common;
 
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use classis_server::config::ConnectionOfferConfig;
-use classis_server::fleet::{AppState, ConnectionOffer};
+use classis_server::fleet::{AgentView, AppState, ConnectionOffer};
 
 struct ClientUnderTest(Child);
 
@@ -44,8 +45,7 @@ async fn spawn_armed_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile:
             .expect("open the configuration store")
             .with_connection_offer(Some(ConnectionOffer::from_config(&offer_config))),
     );
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = classis_server::agent_app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -79,8 +79,7 @@ async fn an_offer_is_verified_persisted_and_reported_applied() {
         state_dir = state_dir.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let client = spawn_client(&config_path);
 
@@ -115,4 +114,90 @@ async fn an_offer_is_verified_persisted_and_reported_applied() {
         state_dir.join("connection-settings.pb").exists(),
         "the persisted settings survive a restart"
     );
+}
+
+/// An Agent by the operator's name for it (`service.instance.name`, ADR-0016).
+fn view<'a>(agents: &'a [AgentView], name: &str) -> Option<&'a AgentView> {
+    agents.iter().find(|a| a.service_instance_name == name)
+}
+
+/// Places the stub where a Managed Process must live (ADR-0017): inside the Supervisor's own
+/// `program/` directory, under a bare name the configuration can spell. Copied rather than
+/// symlinked so the file is one this Client owns in fact as well as by rule — which is what an
+/// installed package would leave behind.
+fn install_stub(state_dir: &Path, supervisor: &str) -> String {
+    let name = if cfg!(windows) {
+        "stub-agent.exe"
+    } else {
+        "stub-agent"
+    };
+    let program_dir = state_dir
+        .join("supervisors")
+        .join(supervisor)
+        .join("program");
+    std::fs::create_dir_all(&program_dir).expect("create the supervisor's program directory");
+    let target = program_dir.join(name);
+    std::fs::copy(env!("CARGO_BIN_EXE_stub_agent"), &target).expect("place the stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stub executable");
+    }
+    name.to_string()
+}
+
+/// A verified connection-settings offer ends the transport run and the Client reconnects with the
+/// settings (ADR-0014). The Supervisors must live straight through it: the Agent of the one
+/// process this Client supervises is still the Server's, and its process was never restarted.
+/// Verifies: ADR-0014
+#[tokio::test]
+async fn a_verified_offer_leaves_the_supervisors_running() {
+    let (addr, state, dir) = spawn_armed_server().await;
+    let marker = dir.path().join("stub-marker");
+    let state_dir = dir.path().join("client-state");
+    let toml = format!(
+        concat!(
+            "endpoint = \"ws://{addr}/v1/opamp\"\n",
+            "name = \"edge-host\"\n",
+            "state_dir = {state:?}\n",
+            "[[supervisor]]\n",
+            "type = \"command\"\n",
+            "name = \"local-agent\"\n",
+            "command = {stub:?}\n",
+            "args = [\"--touch\", {marker:?}]\n",
+        ),
+        addr = addr,
+        state = state_dir.to_string_lossy(),
+        stub = install_stub(&state_dir, "local-agent"),
+        marker = marker.to_string_lossy(),
+    );
+    let config_path = dir.path().join("supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
+    let _client = spawn_client(&config_path);
+
+    // The file configures no heartbeat, so the default is 30 s and this Agent would report only on
+    // change. The offer sets 2 s. A `sequence_num` climbing on its own is therefore the offered
+    // interval in force — which only happens after the Client verified the offer by connecting and
+    // the run restarted. Without this the test would pass whether or not the switch happened.
+    wait_until("the offered heartbeat in force", || {
+        state
+            .snapshot()
+            .iter()
+            .find(|a| a.service_instance_name == "edge-host")
+            .filter(|a| a.sequence_num >= 4)
+            .map(|_| ())
+    })
+    .await;
+
+    let agents = wait_until("both local agents", || {
+        let snapshot = state.snapshot();
+        (snapshot.len() == 2).then_some(snapshot)
+    })
+    .await;
+    assert!(
+        view(&agents, "local-agent").is_some(),
+        "the Supervisor lived straight through the reconnection"
+    );
+    assert!(marker.exists(), "and its process was never restarted");
 }

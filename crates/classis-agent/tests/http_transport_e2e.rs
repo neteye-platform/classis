@@ -125,8 +125,7 @@ fn spawn_client(config_path: &Path) -> ClientUnderTest {
 async fn a_configuration_rollout_reaches_a_polling_client() {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = classis_server::agent_app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -154,7 +153,7 @@ async fn a_configuration_rollout_reaches_a_polling_client() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path())).expect("write");
+    std::fs::write(&config_path, toml).expect("write");
     stage_owned_program(&state_dir, "otelcol", &program);
 
     let _client = spawn_client(&config_path);
@@ -220,8 +219,7 @@ async fn a_package_rollout_reaches_a_polling_client() {
                 PackageOffering::new(store_dir.path(), store).expect("deployments"),
             )),
     );
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = classis_server::agent_app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -260,8 +258,7 @@ async fn a_package_rollout_reaches_a_polling_client() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let _client = spawn_client(&config_path);
 

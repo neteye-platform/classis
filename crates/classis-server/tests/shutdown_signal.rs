@@ -42,7 +42,6 @@ fn sigterm_shuts_the_server_down_gracefully() {
                 "[tls]\n",
                 "cert_file = {cert:?}\n",
                 "key_file = {key:?}\n",
-                "client_ca_file = {cert:?}\n",
                 "[rest]\n",
                 "listen = \"127.0.0.1:{operator}\"\n",
             ),
@@ -132,11 +131,8 @@ fn sigterm_shuts_the_server_down_gracefully() {
         [
             "agents",
             "blobs",
-            "bootstrap",
-            "certificates",
             "configurations",
             "deployments",
-            "hosts",
             "packages"
         ]
     );

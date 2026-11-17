@@ -272,7 +272,7 @@ pub enum ServiceAction {
     Install(InstallArgs),
     // ADR-0019 clauses 15–17.
     /// Ask the questionnaire of `install --interactive` again, offering what the configuration
-    /// holds as the defaults, and enrol with the Server if this Client holds no certificate yet.
+    /// holds as the defaults.
     ///
     /// Registers nothing. Restart the service afterwards to apply what changed.
     Config(ConfigArgs),
@@ -311,8 +311,8 @@ pub struct InstallArgs {
     #[arg(long)]
     pub data_root: Option<PathBuf>,
     // ADR-0019.
-    /// Ask for the settings a fresh host cannot guess, write the configuration file, and enrol
-    /// this host with the Server if it holds no certificate yet, before registering the service.
+    /// Ask for the settings a fresh host cannot guess and write the configuration file, before
+    /// registering the service.
     ///
     /// Off by default, because `install` is the command a provisioning run invokes and it must
     /// never block on a question. An existing file is edited in place, each question offering what
@@ -327,9 +327,7 @@ pub struct InstallArgs {
     /// the MSI's endpoint dialog and a `.deb`/`.rpm` post-install both have an answer and no
     /// terminal. An existing file is kept, never overwritten.
     ///
-    /// Only the endpoint. The client identity comes from an enrolment, with the bootstrap identity
-    /// beside the program or in `--fleet-files`; or name a bootstrap certificate and its key in the
-    /// file afterwards as `[tls] cert_file` and `key_file`, or run `service config`.
+    /// Only the endpoint; `service config` asks for the rest.
     #[arg(long, value_name = "URL", conflicts_with = "interactive")]
     pub endpoint: Option<String>,
     // ADR-0018.
@@ -348,22 +346,12 @@ pub struct InstallArgs {
     pub no_self_update: bool,
     // ADR-0029.
     /// Look for the fleet's files in this directory instead of beside the program:
-    /// `server-ca.pem`, `package-signing-key.pub`, and the bootstrap identity — `bootstrap.pem` with
-    /// `bootstrap-key.pem`, or `bootstrap.p12`.
+    /// `server-ca.pem` and `package-signing-key.pub`.
     ///
     /// What a host installed from a `.deb` or `.rpm` needs: its program lies where nobody puts
     /// these files. The install never looks in both places.
     #[arg(long, value_name = "DIR")]
     pub fleet_files: Option<PathBuf>,
-    // ADR-0029.
-    /// Read the password of a `bootstrap.p12` from the first line of this file, instead of asking
-    /// for it.
-    ///
-    /// Required when an install without `--interactive` enrols with a `bootstrap.p12`. The file is
-    /// read once and left as it is; the password is never written anywhere and never sent. There
-    /// is no way to give it on the command line or in the environment.
-    #[arg(long, value_name = "PATH")]
-    pub bootstrap_password_file: Option<PathBuf>,
     // ADR-0019, ADR-0042.
     /// Run the service as this account, and hand this installation's files — both roots — over
     /// to it.

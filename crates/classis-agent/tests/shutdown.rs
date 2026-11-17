@@ -4,8 +4,6 @@
 
 #![cfg(unix)]
 
-mod common;
-
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -19,9 +17,8 @@ fn sigterm_shuts_the_client_down_cleanly() {
     std::fs::write(
         &config,
         format!(
-            "endpoint = \"http://127.0.0.1:9\"\nstate_dir = \"{}\"\n{}",
+            "endpoint = \"http://127.0.0.1:9\"\nstate_dir = \"{}\"\n",
             dir.path().join("state").display(),
-            common::client_identity(dir.path())
         ),
     )
     .expect("write the config");
