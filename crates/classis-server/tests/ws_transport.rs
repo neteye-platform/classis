@@ -494,7 +494,7 @@ async fn a_shutdown_closes_the_websocket_sessions_before_serve_returns() {
     let addr = listener.local_addr().expect("local addr");
     let handle = opamp::server::listen::Handle::new();
     let serving =
-        tokio::spawn(classis_server::listen::plane(listener, None, 64, handle.clone()).serve(app));
+        tokio::spawn(classis_server::listen::plain_plane(listener, 64, handle.clone()).serve(app));
 
     let mut socket = connect(addr).await;
     let uid = InstanceUid::default();

@@ -32,7 +32,7 @@ async fn spawn() -> (std::net::SocketAddr, tempfile::TempDir) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Agent plane");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(
-        classis_server::listen::plane(listener, None, 64, Handle::new())
+        classis_server::listen::plain_plane(listener, 64, Handle::new())
             .with_header_read_timeout(HEADER_READ_TIMEOUT)
             .serve(app),
     );

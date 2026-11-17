@@ -372,7 +372,6 @@ async fn main() {
     }
     // What Agents enrol with, and what the Server signs for them, is NEAG-34's (ADR-0064): nothing
     // here issues a certificate.
-    let watched = classis_server::pki::loaded(&classis_server::pki::depended_on(&config));
     let telemetry_offer = config
         .telemetry_offer
         .as_ref()
@@ -426,17 +425,6 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // Before a certificate the Server depends on ends, say so: at startup and once a day
-    // (ADR-0028 clause 11). Nothing stops; the hosts decide for themselves.
-    classis_server::pki::warn_endings(&watched, time::OffsetDateTime::now_utc());
-    tokio::spawn(async move {
-        let mut daily = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
-        daily.tick().await;
-        loop {
-            daily.tick().await;
-            classis_server::pki::warn_endings(&watched, time::OffsetDateTime::now_utc());
-        }
-    });
     if let Some(warning) = config.rate_limit_warning() {
         // ADR-0013 clause 20.
         warn!("{warning}");

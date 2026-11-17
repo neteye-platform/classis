@@ -25,7 +25,6 @@ pub mod labels;
 pub mod listen;
 pub mod migrate;
 pub mod packages;
-pub mod pki;
 pub mod postgres;
 pub mod revocation;
 pub mod s3;

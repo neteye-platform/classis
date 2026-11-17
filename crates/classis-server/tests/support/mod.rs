@@ -118,14 +118,14 @@ pub async fn serve_guarded(
         std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Operator plane");
     let addr = agent_listener.local_addr().expect("local addr");
     let rest_addr = operator_listener.local_addr().expect("local addr");
-    // Through `listen::plane`, as the binary serves them (ADR-0013), so the whole suite runs
+    // Through `listen::plain_plane`, as the binary serves them (ADR-0013, ADR-0064), so the whole suite runs
     // against a Server whose connection setup is bounded the way a real one's is.
     let handle = opamp::server::listen::Handle::new();
     tokio::spawn(
-        classis_server::listen::plane(agent_listener, None, 1024, handle.clone()).serve(agents),
+        classis_server::listen::plain_plane(agent_listener, 1024, handle.clone()).serve(agents),
     );
     tokio::spawn(
-        classis_server::listen::plane(operator_listener, None, 1024, handle).serve(operators),
+        classis_server::listen::plain_plane(operator_listener, 1024, handle).serve(operators),
     );
     (addr, rest_addr)
 }

@@ -199,9 +199,9 @@ $ docker buildx build --platform linux/amd64 --load -t classis-server:dev \
 ## Configuration reference
 
 The full annotated example is [`config/server.toml`](../../config/server.toml).
-Every key is shown below with its default. `[tls]` with its `client_ca_file` is
-required; every other key is optional. An unknown key fails startup rather than
-being ignored.
+Every key is shown below with its default. Every key is optional; the Server
+speaks plain HTTP behind a reverse proxy, so no TLS section is needed. An unknown
+key fails startup rather than being ignored.
 
 ### Configuration from the environment
 
@@ -2002,8 +2002,8 @@ $argon2id$v=19$m=19456,t=2,p=1$…
 `--basic` is the one scheme; it reads the password from standard input, without
 showing it on a terminal, and prints the hash to paste.
 
-The package download route sits outside `[rest.auth]`: it is guarded by the
-client certificate the handshake requires, and its content hash and signature
+The package download route sits outside `[rest.auth]`: it is on the Agent plane, which the Server
+authenticates no more than the OpAMP endpoint (ADR-0064), and its content hash and signature
 protect what it serves.
 
 ### Repeated failures are throttled

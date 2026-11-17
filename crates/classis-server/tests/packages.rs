@@ -42,17 +42,29 @@ async fn spawn_with_packages() -> (TestServer, tempfile::TempDir) {
     )
 }
 
-/// A host of the fleet on an Agent plane that requires a client certificate, as the binary serves
-/// it: its client presents a certificate naming the host (ADR-0021 clause 7), so a download is
-/// tested for an offer (ADR-0026).
+/// A host of the fleet on an Agent plane whose authenticator names the host (ADR-0064): the
+/// authentication of Agents is the proxy's, and what it hands the Server is the host the request
+/// speaks for, so a download is tested for an offer (ADR-0026 clause 37).
 struct Member {
     client: reqwest::Client,
-    /// `https://localhost:<port>` — the Agent plane.
+    /// `http://127.0.0.1:<port>` — the Agent plane.
     base: String,
+    /// The host register, in which the host an authenticator names is bound to the Agents it speaks
+    /// for: certificate admission did that at a first report, and nothing does it for an
+    /// authenticator yet (NEAG-34).
+    revocations: Arc<classis_server::revocation::Revocations>,
 }
 
 impl Member {
     async fn exchange(&self, msg: &AgentToServer) -> ServerToAgent {
+        self.revocations
+            .check_report(
+                "edge-01",
+                &classis_server::revocation::SubjectValues::default(),
+                u64::MAX,
+                &msg.instance_uid,
+            )
+            .expect("bind the host");
         let response = self
             .client
             .post(format!("{}/v1/opamp", self.base))
@@ -74,53 +86,30 @@ impl Member {
     }
 }
 
-/// A Server with package delivery armed and a host register, its Agent plane over mutual TLS and
-/// its Operator plane open, plus one member host.
+/// Names the host a request speaks for from the `x-test-host` header, as the authenticating proxy
+/// of ADR-0064 would; a request without it is refused.
+struct HostFromHeader;
+
+impl classis_server::agent_auth::AgentAuthenticator for HostFromHeader {
+    fn authenticate(
+        &self,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<classis_server::agent_auth::Admitted, classis_server::agent_auth::Refusal> {
+        headers
+            .get("x-test-host")
+            .and_then(|host| host.to_str().ok())
+            .map(|host| classis_server::agent_auth::Admitted {
+                host: Some(host.to_string()),
+            })
+            .ok_or(classis_server::agent_auth::Refusal { check: "host" })
+    }
+}
+
+/// A Server with package delivery armed and a host register, its Agent plane admitting by a
+/// [`HostFromHeader`] authenticator and its Operator plane open, plus one member host.
 async fn spawn_with_packages_for_a_host() -> (TestServer, Member) {
-    use rcgen::{CertificateParams, IsCa, Issuer, KeyPair, SanType};
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let ca_key = KeyPair::generate().expect("ca key");
-    let mut ca = CertificateParams::new(Vec::<String>::new()).expect("ca params");
-    ca.distinguished_name
-        .push(rcgen::DnType::CommonName, "packages-test-ca");
-    ca.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    let ca_pem = ca.self_signed(&ca_key).expect("ca").pem();
-    let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).expect("issuer");
-    let leaf = |params: CertificateParams| {
-        let key = KeyPair::generate().expect("key");
-        let cert = params.signed_by(&key, &issuer).expect("signed");
-        (cert.pem(), key.serialize_pem())
-    };
-    let (server_cert, server_key) =
-        leaf(CertificateParams::new(vec!["localhost".to_string()]).expect("params"));
-    let mut host = CertificateParams::new(Vec::<String>::new()).expect("params");
-    host.subject_alt_names.push(SanType::URI(
-        format!("{}edge-01", classis_server::ca::HOST_URI_PREFIX)
-            .try_into()
-            .expect("uri"),
-    ));
-    let (host_cert, host_key) = leaf(host);
-
-    let files = dir.path().join("tls");
-    std::fs::create_dir_all(&files).expect("tls dir");
-    for (name, pem) in [
-        ("cert.pem", &server_cert),
-        ("key.pem", &server_key),
-        ("ca.pem", &ca_pem),
-    ] {
-        std::fs::write(files.join(name), pem).expect("write");
-    }
-    let tls = toml::from_str::<classis_server::config::TlsConfig>(&format!(
-        "cert_file = {:?}\nkey_file = {:?}\nclient_ca_file = {:?}\n",
-        files.join("cert.pem").display().to_string(),
-        files.join("key.pem").display().to_string(),
-        files.join("ca.pem").display().to_string(),
-    ))
-    .expect("tls config");
-    let planes = classis_server::tls::server_tls(&tls, None, None).expect("server material");
-    let agent_tls = planes.agent.rustls_config().expect("agent plane config");
-
     let revocations = Arc::new(
         classis_server::revocation::Revocations::open(
             Box::new(
@@ -141,32 +130,14 @@ async fn spawn_with_packages_for_a_host() -> (TestServer, Member) {
                 PackageOffering::new(&dir.path().join("packages"), store).expect("deployments"),
             )),
     );
-    let admission = classis_server::transport::Admission::new(true)
-        .with_enrolment(planes.issuers, None)
-        .with_revocations(Some(revocations));
-    let handle = opamp::server::listen::Handle::new();
-    let agent_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let operator_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let (addr, rest_addr) = (
-        agent_listener.local_addr().expect("addr"),
-        operator_listener.local_addr().expect("addr"),
-    );
-    tokio::spawn(
-        classis_server::listen::plane(agent_listener, Some(agent_tls), 64, handle.clone())
-            .serve(classis_server::agent_app(state.clone(), admission)),
-    );
-    tokio::spawn(
-        classis_server::listen::plane(operator_listener, None, 64, handle)
-            .serve(classis_server::operator_app(state.clone(), None)),
-    );
-
-    let mut identity = host_key.into_bytes();
-    identity.extend_from_slice(host_cert.as_bytes());
+    let admission = classis_server::transport::Admission::open()
+        .with_authenticator(Arc::new(HostFromHeader))
+        .with_revocations(Some(revocations.clone()));
+    let (addr, rest_addr) = support::serve(state.clone(), admission).await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-test-host", "edge-01".parse().expect("header"));
     let client = reqwest::Client::builder()
-        .use_rustls_tls()
-        .tls_certs_only([reqwest::Certificate::from_pem(ca_pem.as_bytes()).expect("ca")])
-        .resolve("localhost", addr)
-        .identity(reqwest::Identity::from_pem(&identity).expect("identity"))
+        .default_headers(headers)
         .build()
         .expect("client");
     (
@@ -178,7 +149,8 @@ async fn spawn_with_packages_for_a_host() -> (TestServer, Member) {
         },
         Member {
             client,
-            base: format!("https://localhost:{}", addr.port()),
+            base: format!("http://{addr}"),
+            revocations,
         },
     )
 }
@@ -503,7 +475,7 @@ async fn an_uploaded_set_is_offered_downloaded_and_gated() {
     );
     assert_eq!(file.content_hash, sha256(b"the-new-binary"));
 
-    // The artifact downloads byte-for-byte, over the certificate of the host whose Agent it
+    // The artifact downloads byte-for-byte, as the host whose Agent it
     // is offered to.
     let downloaded = member
         .download(&file.download_url)
