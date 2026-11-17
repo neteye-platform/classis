@@ -4,6 +4,11 @@
 > going, and the vocabulary everyone (humans and agents) must use. This document
 > is the **constitution** — every Architecture Decision Record in [`adr/`](adr/)
 > derives from it and must not contradict it.
+>
+> **Draft enrolment amendment — awaiting human review.** This working copy
+> reflects proposed [ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md).
+> No approval or ADR supersession is implied. The affected accepted decisions
+> are named under [Enrolment amendment impact](#enrolment-amendment-impact-draft).
 
 ## Problem
 
@@ -53,15 +58,13 @@ plugins, so the whole fleet's real state is observable rather than assumed, and
 a rejected configuration or a failed update is a reported event, not a silent
 outage.
 
-One Client binary covers the shapes a real deployment needs. It **supervises**
-local processes — and because every supervisor also listens on loopback for
-OpAMP, a Collector carrying its own OpAMP client reports _to its own supervisor_
-rather than being watched from the outside. Independently of that, the same
-binary can stand at a network boundary as a **gateway**, folding many clients'
-connections onto a small pool of upstream ones; a machine may do both at once.
-Whichever shape it takes, the Server sees only Agents distinguished by their
-identity, never by the connection that carried them — so a fleet can grow past
-the point where one connection per agent is affordable.
+One Client binary **supervises** local processes — and because every supervisor
+also listens on loopback for OpAMP, a Collector carrying its own OpAMP client
+reports _to its own supervisor_ rather than being watched from the outside.
+Each Client connects directly to the Server; relaying other Clients through a
+Gateway is deferred. The Server sees only Agents distinguished by their
+identity, never by the connection that carried them, so several Agents can
+share an upstream connection without sharing their configuration or identity.
 
 The Server exposes a stable, OpenAPI-described REST API and carries only a
 rudimentary user interface of its own, so any external portal can integrate it
@@ -93,19 +96,17 @@ closes the loop and widens only as the protocol and its agents actually allow.
   the fleet through it. The Server bundles only a rudimentary UI for basic
   operation; a richer UI lives wherever the operator wants it — a standalone app
   or an existing portal — and is expected to be built outside this project.
-- **One Client, two modes that compose.** The client side is a single deployable
-  with two **Client Modes**: **Supervisor Mode** manages local processes,
-  **Gateway Mode** multiplexes other clients' connections upstream. They are
-  independent — a Client may run either, or both at once. Serving a Collector
-  that carries its own OpAMP client is not a third mode but an intrinsic part of
-  Supervisor Mode: a Supervisor always exposes a **Supervisor Endpoint** on
-  loopback, whether or not anything connects to it. One binary covers every
-  shape, so an operator learns and deploys one thing.
+- **One Client, many Supervisors.** The client side is a single deployable in
+  **Supervisor Mode**, managing local processes and connecting directly to the
+  Server. Serving a Collector that carries its own OpAMP client is intrinsic
+  to supervision: a Supervisor always exposes a **Supervisor Endpoint** on
+  loopback, whether or not anything connects to it. Gateway Mode is deferred,
+  not a second role the current Client can enable.
 - **Hexagonal core, plugins at the edge.** The supervision domain sits at the
   centre; **Ports** abstract the Server-facing side and the managed-process
   side; **Plugins** are the adapters that implement concrete process types. A
   Collector Supervisor and a Custom Supervisor are two plugins behind the same
-  ports, and a mode is a composition of ports rather than a fork of the core.
+  ports, composed around one core rather than forks of it.
 - **Route by `instance_uid`, not by connection.** The protocol states that
   multiple Agents may be multiplexed onto one connection and distinguished by
   `instance_uid`. Both ends honour that: the Server never assumes one connection
@@ -126,17 +127,18 @@ closes the loop and widens only as the protocol and its agents actually allow.
   at once. Where security and convenience conflict, security wins, and the
   operator meets a refusal that says what to fix, not a warning. Every
   connection that leaves the host is TLS 1.3; plaintext is accepted on the
-  loopback alone. An Agent proves fleet membership with a client certificate in
-  the TLS handshake, issued to its host, and it obtains that certificate in a
-  separate enrolment that is time-limited and approved. This is done with the
-  protocol's own means — client certificates, the CSR flow, and the
-  `ConnectionSettings` offers that let the Server renew a Client's certificate —
-  never through a private side channel. Software is installed only when it is
-  signed with a key the operator holds and fetched from the fleet itself — the
-  Server, or a Gateway relaying it. No vulnerability can be ruled out, so the
-  project shrinks the chance of one and the damage it can do: every input from
-  the network is bounded before it is parsed, the parsers are fuzzed, and the
-  dependencies are checked before they are merged.
+  loopback alone, and the Client verifies the Server's certificate. A host enrols
+  with its Space's reusable enrolment key through OAuth 2.0 dynamic client
+  registration (RFC 7591), without an approval window or individual operator
+  approval. Its client credentials obtain an opaque access token through the
+  client-credentials grant (RFC 6749), and its Agents authenticate with that
+  token using OpAMP's HTTP authorization header (RFC 6750). Fleet admission
+  uses no client certificates or CSR flow. Software is installed only when it
+  is signed with a key the operator holds and fetched from the Server. No
+  vulnerability can be ruled out, so the project shrinks the chance of one and
+  the damage it can do: every input from the network is bounded before it is
+  parsed, the parsers are fuzzed, and the dependencies are checked before they
+  are merged.
 - **Close the loop before widening it.** A working control loop — configure,
   apply, report back — for one managed process comes first. Targeting a subset
   of the fleet and updating an agent's software are core goals, built on top of
@@ -192,50 +194,33 @@ Use these exact words in code, comments, documentation, and ADRs.
   REST API, and it ships only a rudimentary UI, so any external portal can
   integrate it. The Server runs on Linux only.
 - **Client** — this project's client deployable: the process an operator
-  installs on a machine to place it under management. One Client process runs in
-  one or more **Client Modes** and may present itself to the Server as several
+  installs on a machine to place it under management. One Client process runs
+  in **Supervisor Mode** and may present itself to the Server as several
   **Agents**. It is the OpAMP Client in the protocol's sense.
 - **Agent** — one `instance_uid` as the Server sees it: an independently
-  identified, independently configured participant in the fleet. The Server does
-  not distinguish an Agent backed by a Supervisor from one backed by a
-  Collector's own OpAMP client, nor one reaching it directly from one arriving
-  through a Gateway.
-- **Host** — what a client certificate the Server issued identifies: one Client
-  installation that connects to the Server directly, a Gateway included. It is
-  named by the host id its certificate carries and described by the subject
-  values — country, state, locality, organization, organizational unit,
-  organization identifier — carried over from the bootstrap certificate it
-  enrolled with. Every Agent reaching the Server over that certificate belongs
-  to it, the Agents behind a Gateway to the Gateway's Host: the Server does not
-  see the hosts behind a Gateway. Trust and revocation act on a Host; a
-  Deployment aims at Agents.
+  identified, independently configured participant in the fleet. An Agent is
+  distinct from the Host whose credential it uses; several Agents may belong
+  to one Host and share its connections without losing their own identities.
+- **Host** — one Client installation registered with the Server as an OAuth
+  client. Its identity is the `client_id`, also called its Device ID, not an
+  Agent's `instance_uid`. A Host belongs to exactly one Space. Its Client Agent
+  and Supervisor Agents share its access token, and each Agent is bound to
+  that Host. Replacing the token preserves the Host's identity and its Agent
+  bindings; a Deployment still aims at Agents, not Hosts. Certificate subject
+  values are not part of a Host's identity or description.
 - **REST API** — the Server's stable HTTP interface for reading fleet state and
   reading and changing configuration, described by an **OpenAPI** specification
   so clients and portals can be generated from it rather than hand-written. It
   is the integration contract any UI or portal builds on.
 - **Fleet** — all Agents managed by the Server.
 
-### Client Modes
+### Client supervision
 
-- **Client Mode** — the role a Client process takes, selected at startup. There
-  are exactly **two**, and they are independent: a Client may run **Supervisor
-  Mode**, **Gateway Mode**, or both at once. Neither implies the other.
 - **Supervisor Mode** — the Client runs **Supervisor** instances that manage
-  local processes. This is the mode that closes the control loop for a machine's
-  own agents. Every Supervisor also exposes a **Supervisor Endpoint** — that is
-  part of what a Supervisor _is_, not a separate mode to enable.
-- **Gateway Mode** — the Client accepts OpAMP connections from other Clients and
-  forwards their messages upstream over a **Connection Pool**, so a large number
-  of agents reaches the Server over a small number of connections. A Gateway
-  forwards messages unchanged and holds **no authentication policy of its own**:
-  it admits a connecting Client by a client certificate from the fleet's client
-  CA in its handshake, as the Server would, and the one admission refusal it
-  makes beyond that is the Server's — a certificate the Server has revoked. It
-  forwards a Client's reports only for the Agents its host first reported, and
-  passes on a package it holds for the Agents behind it only to the host whose
-  Agent the Server offered it to through the Gateway. Where the operator gives
-  it the bootstrap CA, it also relays a host's enrolment, which the Server
-  decides as any other. Agents behind a Gateway remain distinct Agents.
+  local processes and reports their Agents directly to the Server. Every
+  Supervisor also exposes a **Supervisor Endpoint** — that is part of what a
+  Supervisor _is_, not a separate mode to enable. Gateway Mode is not available
+  in the current enrolment model.
 - **Supervisor Endpoint** — the OpAMP endpoint a Supervisor exposes on the
   loopback interface so that a Managed Process carrying an OpAMP client of its
   own can report to it. It exists because such a client — notably the
@@ -248,10 +233,10 @@ Use these exact words in code, comments, documentation, and ADRs.
   being observed from the outside. It is **always present** while a Supervisor
   runs; for a Foreign Agent, which speaks no OpAMP, simply nothing ever connects
   to it. It is not addressable from outside the machine and never carries fleet
-  traffic — that is the Server's role, and the Gateway's. Despite speaking the
-  Server side of the protocol, it is not a **Server** in this vocabulary's
-  sense: it manages no fleet, holds no configuration of its own, and serves
-  exactly one Managed Process.
+  traffic — that is the Server's role. Despite speaking the Server side of the
+  protocol, it is not a **Server** in this vocabulary's sense: it manages no
+  fleet, holds no configuration of its own, and serves exactly one Managed
+  Process.
 
 ### Connections
 
@@ -319,15 +304,16 @@ Use these exact words in code, comments, documentation, and ADRs.
   in local configuration, or have rejected the remote one).
 - **Health** — an Agent's self-reported liveness and status.
 - **Selector** — the rule by which the Server addresses a **subset** of the
-  fleet: equality pairs over an Agent's effective description, which is what the
-  Agent reports, the Labels an operator set, and its Host's subject values. It
-  aims a Deployment, so a change reaches the matching Agents and leaves the rest
+  fleet: equality pairs over an Agent's effective description, which combines
+  what the Agent reports with its own Labels and its Client Agent's Labels.
+  Certificate-derived `fleet.host.*` subject values are not supplied. It aims
+  a Deployment, so a change reaches the matching Agents and leaves the rest
   running what they already run, and it chooses which blocks of a Configuration
   an Agent receives. One mechanism, not two.
 - **Label** — a key and value an operator sets on an Agent, part of its
   effective description. The Labels set on a Client's own Agent hold for every
   Agent of that Client unless an Agent sets the key itself. A Label never
-  overrides what an Agent reports or what its Host's certificate says.
+  overrides what an Agent reports.
 - **Configuration** — a named piece of an agent's own configuration language,
   written for one Agent type, with the parameters it declares. It is content
   only: it reaches Agents through the Deployments that hold it.
@@ -412,15 +398,10 @@ Use these exact words in code, comments, documentation, and ADRs.
     one connection to the Server or spread across several, as configured; the
     Server tells them apart solely by `instance_uid` and behaves identically
     either way.
-15. **G-15** — **A Gateway scales connections, not identities.** Many Clients
-    reaching the Server through a Client in Gateway Mode appear as their own
-    Agents, fully manageable, while sharing a small Connection Pool — and the
-    Gateway makes no authentication decision of its own: it admits a Client by a
-    certificate from the fleet's client CA, as the Server does, refuses what the
-    Server has revoked, admits no one while it cannot learn what that is,
-    forwards a Client's reports only for its own host's Agents, and passes on a
-    package the Server offered through it only to the host it was offered to. A
-    host that only a Gateway connects enrols through it.
+15. **G-15** — **Deferred: Gateway Mode.** Relaying other Clients' connections,
+    enrolment and package downloads is not a current success criterion.
+    This identifier is retained for the deferred Gateway requirement, not
+    reassigned to a different goal. Direct multiplexing remains G-14.
 16. **G-16** — **A Collector reports through its own OpAMP client.** A Collector
     carrying the `opampextension` connects to its Supervisor's Supervisor
     Endpoint, which relays the Collector's statement of what it is (its
@@ -428,9 +409,13 @@ Use these exact words in code, comments, documentation, and ADRs.
     upstream — so the Collector's own reporting, rather than external
     observation, is what makes it visible in the fleet. What the host is stays
     the Supervisor's and the operator's to state.
-17. **G-17** — **The connection is secured and the Agent is identified.**
-    Client-to-Server traffic is TLS-protected on both ends, mutual TLS is
-    required, and the Server accepts only authenticated Agent identities.
+17. **G-17** — **The connection is secured and the Host is identified.** A Host
+    enrols with its Space's valid enrolment key, obtains client credentials
+    and an opaque bearer access token, and authenticates its Client-to-Server
+    requests with that token over TLS 1.3. The Server verifies the token at
+    admission and identifies the Host by its `client_id`; each Agent retains
+    its own `instance_uid`. Replacing the token invalidates the previous one
+    and ends sessions admitted with it without changing the Host's identity.
 18. **G-18** — **One Configuration serves many hosts.** A Configuration declares
     parameters and blocks. The Server fills in its Server-side parameters per
     Agent and validates every value against its declared type, so a value that
@@ -447,9 +432,10 @@ Use these exact words in code, comments, documentation, and ADRs.
 
 1. **Q-1** — **Secure by default.** Whatever its configuration, neither end
    sends a credential, a configuration or a package unencrypted beyond the
-   loopback, admits an Agent onto the Server or a Gateway without a client
-   certificate, or installs a package without a valid signature. A configuration
-   that would do any of these is refused at startup, naming the setting.
+   loopback. The Server admits an Agent only under its Host's active,
+   unexpired access token, and an Agent installs no package without a valid
+   signature. A configuration that would violate these bounds is refused at
+   startup, naming the setting.
 2. **Q-2** — **Untrusted input is bounded and fuzzed.** Every parser that reads
    bytes from the network or from a downloaded artifact enforces its size limit
    before it allocates, and has a fuzz target that runs in CI.
@@ -474,10 +460,77 @@ Use these exact words in code, comments, documentation, and ADRs.
 - **Shipping a production UI.** The Server provides the OpenAPI REST API and
   only a rudimentary UI for basic operation; a production-grade user interface
   is external and out of scope for this project to build.
+- **Gateway Mode.** Relaying other Clients' connections, enrolment or package
+  downloads is deferred until a Gateway is designed for bearer authentication.
 - **Authorization and multi-tenancy.** The Server authenticates _that_ a peer
-  belongs to the fleet (goal 17), but does not distinguish _which_ operator may
-  do _what_, nor separate one operator's fleet from another's. Roles,
-  permissions, and tenancy are real needs deferred rather than half-built. On
-  the Agent plane one bound holds: a host receives from the Server, directly or
-  through a Gateway, only the configurations and packages released to an Agent
-  it speaks for.
+  belongs to the fleet and identifies its Host (goal 17), but does not
+  distinguish _which_ operator may do _what_, nor separate one operator's fleet
+  from another's. Spaces group Hosts for enrolment; they do not introduce
+  tenant isolation or operator permissions. Roles, permissions, and tenancy
+  are real needs deferred rather than half-built. On the Agent plane one bound
+  holds: a Host receives only the configurations and packages released to an
+  Agent it speaks for. Authenticating another Host never grants that access.
+
+## Enrolment amendment impact (draft)
+
+This draft changes the basis of the accepted decisions below. The inventory
+and the resolution of each affected provision are for human review; no ADR
+status or accepted body is changed here. Affected provisions are not a reason
+to discard the unrelated guarantees in the same record.
+
+- **Admission and connection offers:**
+  [ADR-0021](adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md),
+  [ADR-0014](adr/0014-connection-settings-offered-without-a-credential-and-server-capabilities.md)
+  and [ADR-0040](adr/0040-a-connection-settings-offer-never-moves-the-client-to-plaintext.md).
+  Certificate-only admission, CSR issuance and renewal, certificate revocation,
+  and connection probes that send no authorization need reconciliation with
+  bearer admission. Operator authentication, secure endpoint verification and
+  the prohibition on offered plaintext moves remain requirements.
+- **Client modes and Gateways:**
+  [ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md),
+  [ADR-0039](adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
+  and [ADR-0058](adr/0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md).
+  Two composable modes, downstream certificate admission, relayed enrolment
+  and certificate-bound Gateway state lose their current basis. Direct G-14
+  multiplexing and the Supervisor Endpoint's local process authentication stay.
+- **Host identity, attributes and lifecycle:**
+  [ADR-0035](adr/0035-a-host-is-what-a-client-certificate-names-and-its-agents-inherit-from-it.md),
+  [ADR-0036](adr/0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md)
+  and [ADR-0047](adr/0047-a-host-and-its-bindings-end-with-its-last-valid-certificate.md).
+  Host identity and lifetime no longer derive from certificates, and trusted
+  subject attributes disappear. Host-to-Agent ownership, protection against
+  cross-host claims, ownership through Agent re-keying, forgetting an Agent,
+  and Client Agent label inheritance remain boundaries to preserve.
+- **Enrolment, PKI and installation:**
+  [ADR-0020](adr/0020-the-client-install-takes-the-fleet-files-it-finds-beside-its-program.md),
+  [ADR-0028](adr/0028-one-operator-program-that-makes-the-fleets-certificates.md),
+  [ADR-0029](adr/0029-a-bootstrap-certificate-as-a-password-protected-pkcs12-file-the-server-keeps.md),
+  [ADR-0031](adr/0031-classisctl-extracts-a-bootstrap-pkcs12-file-into-pem.md),
+  [ADR-0046](adr/0046-one-bootstrap-certificate-holds-at-most-a-quarter-of-the-enrolment-queue.md)
+  and [ADR-0048](adr/0048-a-bootstrap-pkcs12-password-of-8-to-128-characters.md).
+  Bootstrap credentials, approval windows and queues, PKCS#12 distribution,
+  and installation that requires a client certificate need replacement.
+  Server certificate verification and package-signing keys are not removed.
+- **Package authorization and delivery:**
+  [ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
+  and [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md).
+  Certificate-derived host authorization and Gateway caching change, not the
+  offered-only download boundary, indistinguishable refusals, same-origin
+  downloads, signature checks or rollback.
+- **Persisted enrolment and credential records:**
+  [ADR-0050](adr/0050-the-servers-records-may-live-in-postgresql.md), especially
+  its clauses 9–12, restates the removed enrolment window, certificate
+  register, revocation list and retained bootstrap PKCS#12 files. Those
+  provisions need reconsideration; PostgreSQL and transaction discipline do
+  not lose their basis.
+
+Related integration work also touches
+[ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md),
+[ADR-0011](adr/0011-the-protocol-is-pinned-and-checked-against-opamp-go-on-the-endpoint-as-it-ships.md),
+[ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md),
+[ADR-0019](adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)
+and [ADR-0037](adr/0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md):
+crate boundaries, protocol conformance, TLS and listener bounds, installation,
+and storage adapters need alignment with the new credential model, not blanket
+removal of those decisions. This draft changes no implementation, operator CLI,
+ADR status, or architecture overview of the system as it currently runs.
