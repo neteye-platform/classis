@@ -487,6 +487,38 @@ enrolment is reimplemented.
 Removed, and with it the enrolment window, the bootstrap certificates and the
 pending queue. The section is refused at startup (`[enrolment] is removed`).
 
+### `[packages]`
+
+Optional; absent means no Package Signer is revoked.
+
+```toml
+[packages]
+revoked_signers = [
+  "9f2b…64 lowercase hex digits…",
+]
+```
+
+`revoked_signers` lists the Package Signers this Server refuses, each as the
+SHA-256 of its DER certificate in 64 lowercase hex digits, at most 64. Use it
+when a Package Signer's key may be exposed: a Package Signer is valid for 10
+years and nothing else ends it earlier.
+
+- **The Server refuses a listed signer's signature** with `400` on a write, and
+  at startup it sets aside every stored signature of that signer, with a
+  warning naming the entry. The entry is offered to nobody and its signature
+  stays in the store, as for a signer that has expired.
+- **A change takes effect when the Server restarts.** With several Servers, they
+  differ until the last one has restarted.
+- **A malformed list stops the start**, naming the setting: an item that is not
+  64 lowercase hex digits, one named twice, or more than 64.
+- **Clients are not told.** The list is the Server's alone, so a Package a
+  Client already accepted stays installed. Every version the revoked signer
+  signed stays unoffered until it is signed again by another Package Signer.
+
+`openssl x509 -inform DER -in <certificate> -outform DER | sha256sum` gives the
+fingerprint of a certificate; the release's certificate is
+`packaging/package-signer.der`.
+
 ### `[admission_throttle]`
 
 Optional; absent means the defaults shown. See

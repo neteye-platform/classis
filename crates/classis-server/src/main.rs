@@ -399,10 +399,26 @@ async fn main() {
         roots = roots.len(),
         "checking package signatures up to the compiled-in Package Roots"
     );
+    // The configuration check refuses a malformed list at load, so this is the same list.
+    let revoked = match config.packages.revoked_signers() {
+        Ok(revoked) => revoked,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if !revoked.is_empty() {
+        warn!(
+            revoked = revoked.len(),
+            "refusing the Package Signers named in [packages] revoked_signers"
+        );
+    }
     let packages =
         classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
             .map(|store| {
-                store.with_verifier(Box::new(classis_server::config::RootsVerifier::new(roots)))
+                store.with_verifier(Box::new(
+                    classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
+                ))
             })
             .and_then(|store| {
                 if !store.is_empty() {

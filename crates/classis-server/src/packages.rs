@@ -1763,6 +1763,59 @@ mod tests {
             .is_none());
     }
 
+    /// A Package Signer named in `[packages] revoked_signers` is refused on a write, and an entry it
+    /// signed is withheld at load as an expired one is: offered to nobody, its signature kept, and
+    /// offered again once the signer is no longer listed.
+    #[test]
+    fn a_revoked_package_signer_is_refused_on_a_write_and_withheld_at_load() {
+        use crate::config::{RevokedSigners, RootsVerifier};
+        use sha2::{Digest, Sha256};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let set = id("otelcol", "1.0.0");
+        let signature = signed(&set, b"linux-bytes");
+        {
+            let store = open_store(dir.path()).expect("open");
+            store.create(&set).expect("create");
+            store
+                .put_entry(&set, &linux(), b"linux-bytes".to_vec())
+                .expect("entry");
+            assert_eq!(
+                store.put_signature(&set, &linux(), signature.clone()),
+                Ok(SignatureState::Valid)
+            );
+        }
+
+        let revoked = RevokedSigners::parse(&[hex::encode(Sha256::digest(&test_root().1.der))])
+            .expect("one fingerprint");
+        let revoking = PackageStore::open(dir.path().to_path_buf())
+            .map(|store| {
+                store.with_verifier(Box::new(
+                    RootsVerifier::new(test_root().0.roots()).with_revoked(revoked),
+                ))
+            })
+            .expect("reopen with the signer revoked");
+        let state =
+            |store: &PackageStore| store.summary(&set).expect("summary").entries[0].signature_state;
+        assert_eq!(state(&revoking), SignatureState::Missing);
+        assert!(revoking
+            .offer_for_assigned(Some(&set), Some(&agent("linux", "amd64", &[])))
+            .is_none());
+        assert_eq!(
+            revoking.stored_signature(&set, &linux()),
+            Some(signature.clone()),
+            "the store keeps what it withholds"
+        );
+        let refused = revoking
+            .put_signature(&set, &linux(), signature)
+            .expect_err("a write of a revoked signer's signature");
+        assert!(refused.contains("revoked"), "{refused}");
+        drop(revoking);
+
+        let restored = open_store(dir.path()).expect("reopen with nobody revoked");
+        assert_eq!(state(&restored), SignatureState::Valid);
+    }
+
     /// The gate an explicit rollout act runs: the Package must hold entries and fit the
     /// Agent's type and platform. **Aim is not among them** — whom a Package reaches is its
     /// Deployment's, and the act names the channel. The version *ranking* stays out too: an Agent
