@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use opamp::proto::{Header, Headers, OpAmpConnectionSettings, TelemetryConnectionSettings};
 use serde::de::IgnoredAny;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::fleet::{ConnectionOffer, TelemetryOffer};
 
@@ -114,6 +115,9 @@ pub struct ServerConfig {
     /// How often an admitted peer may be heard on the Agent plane (ADR-0013).
     #[serde(default)]
     pub agent_rate_limit: AgentRateLimitConfig,
+    /// The Package Signers the Server refuses (ADR-0064).
+    #[serde(default)]
+    pub packages: PackagesConfig,
 }
 
 /// The `[agent_rate_limit]` section (ADR-0013 clause 19). Every key has a default, and none is `0`:
@@ -526,24 +530,139 @@ pub fn read_secret_file(key: &str, file: &Path) -> Result<zeroize::Zeroizing<Str
     Ok(zeroize::Zeroizing::new(secret.to_string()))
 }
 
+/// The most Package Signers `[packages] revoked_signers` names (ADR-0064 clause 1).
+pub const MAX_REVOKED_SIGNERS: usize = 64;
+
+/// The Package Signers this Server no longer trusts, each by the SHA-256 of its DER certificate
+/// (ADR-0064 clause 1). Empty unless `[packages] revoked_signers` names some.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RevokedSigners(std::collections::BTreeSet<[u8; 32]>);
+
+impl RevokedSigners {
+    /// The signers `items` name, each as 64 lowercase hex digits.
+    ///
+    /// # Errors
+    ///
+    /// More than [`MAX_REVOKED_SIGNERS`] items, an item that is not 64 lowercase hex digits, or an
+    /// item named twice, each naming the setting and the item.
+    pub fn parse(items: &[String]) -> Result<Self, String> {
+        if items.len() > MAX_REVOKED_SIGNERS {
+            return Err(format!(
+                "[packages] revoked_signers names {} Package Signers, at most {MAX_REVOKED_SIGNERS} \
+                 are allowed",
+                items.len()
+            ));
+        }
+        let mut fingerprints = std::collections::BTreeSet::new();
+        for item in items {
+            let mut fingerprint = [0u8; 32];
+            let lowercase_hex = item.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if !lowercase_hex || hex::decode_to_slice(item, &mut fingerprint).is_err() {
+                return Err(format!(
+                    "[packages] revoked_signers item {item:?} is not the SHA-256 of a certificate \
+                     — 64 lowercase hex digits"
+                ));
+            }
+            if !fingerprints.insert(fingerprint) {
+                return Err(format!(
+                    "[packages] revoked_signers names {item:?} twice — remove the duplicate"
+                ));
+            }
+        }
+        Ok(RevokedSigners(fingerprints))
+    }
+
+    /// How many Package Signers are revoked.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no Package Signer is revoked.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether the Package Signer whose DER certificate is `certificate` is revoked.
+    #[must_use]
+    pub fn contains(&self, certificate: &[u8]) -> bool {
+        self.0
+            .contains(&<[u8; 32]>::from(Sha256::digest(certificate)))
+    }
+}
+
+/// The `[packages]` section (ADR-0064).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackagesConfig {
+    /// The Package Signers the Server refuses, each the SHA-256 of its DER certificate as 64
+    /// lowercase hex digits. A signature of a listed signer is refused on a write and withheld at
+    /// load, as an expired one is. Read at start (ADR-0064 clause 5).
+    #[serde(default)]
+    pub revoked_signers: Vec<String>,
+}
+
+impl PackagesConfig {
+    /// The revoked signers the section names.
+    ///
+    /// # Errors
+    ///
+    /// The reasons of [`RevokedSigners::parse`].
+    pub fn revoked_signers(&self) -> Result<RevokedSigners, String> {
+        RevokedSigners::parse(&self.revoked_signers)
+    }
+
+    fn check(&self) -> Result<(), String> {
+        self.revoked_signers().map(|_| ())
+    }
+}
+
 /// The adapter behind [`SignatureVerifier`](crate::packages::SignatureVerifier):
 /// `classis_core::package::chain::verify_now` up to a set of Package Roots, at the current time —
-/// the check the Client makes (ADR-0063 clause 4).
+/// the check the Client makes (ADR-0063 clause 4) — and then a refusal of a revoked Package Signer
+/// (ADR-0064 clause 3).
 #[derive(Debug, Clone)]
-pub struct RootsVerifier(classis_core::package::Roots);
+pub struct RootsVerifier {
+    roots: classis_core::package::Roots,
+    revoked: RevokedSigners,
+}
 
 impl RootsVerifier {
-    /// Up to `roots`.
+    /// Up to `roots`, with no signer revoked.
     #[must_use]
     pub fn new(roots: classis_core::package::Roots) -> Self {
-        RootsVerifier(roots)
+        RootsVerifier {
+            roots,
+            revoked: RevokedSigners::default(),
+        }
+    }
+
+    /// Refusing `revoked` as well.
+    #[must_use]
+    pub fn with_revoked(mut self, revoked: RevokedSigners) -> Self {
+        self.revoked = revoked;
+        self
     }
 }
 
 impl crate::packages::SignatureVerifier for RootsVerifier {
     fn verify(&self, statement: &[u8], signature: &[u8]) -> Result<(), String> {
-        classis_core::package::chain::verify_now(statement, signature, &self.0)
-            .map_err(|e| e.to_string())
+        classis_core::package::chain::verify_now(statement, signature, &self.roots)
+            .map_err(|e| e.to_string())?;
+        if self.revoked.is_empty() {
+            return Ok(());
+        }
+        let parsed =
+            classis_core::package::parse_signature(signature).map_err(|e| e.to_string())?;
+        if self.revoked.contains(parsed.signer) {
+            return Err(
+                "the signature's Package Signer is revoked on this Server — \
+                        [packages] revoked_signers names it"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -954,6 +1073,7 @@ impl Default for ServerConfig {
             enrolment: None,
             admission_throttle: AdmissionThrottleConfig::default(),
             agent_rate_limit: AgentRateLimitConfig::default(),
+            packages: PackagesConfig::default(),
         }
     }
 }
@@ -1121,6 +1241,7 @@ impl ServerConfig {
         }
         self.blobs.check()?;
         self.database.check()?;
+        self.packages.check()?;
         // The two planes are two listeners (ADR-0013). Addresses that collide would surface as the
         // second bind failing with "address already in use" — a message about sockets for what is
         // really a configuration mistake, so it is refused here, by name.
@@ -1807,6 +1928,101 @@ mod tests {
             );
             assert!(!err.contains("plain-"), "never echoes the value: {err}");
         }
+    }
+
+    /// What `[packages] revoked_signers` admits: SHA-256 fingerprints as lowercase hex, once each,
+    /// at most [`MAX_REVOKED_SIGNERS`] of them, and nothing by default (ADR-0064 clauses 1, 2).
+    /// Verifies: ADR-0064
+    #[test]
+    fn revoked_signers_are_lowercase_sha256_fingerprints_named_once() {
+        let section = |body: &str| {
+            toml::from_str::<PackagesConfig>(body)
+                .expect("parse")
+                .revoked_signers()
+        };
+        let one = "ab".repeat(32);
+        let two = "cd".repeat(32);
+
+        assert!(section("").expect("default").is_empty());
+        let listed = section(&format!("revoked_signers = [\"{one}\", \"{two}\"]")).expect("two");
+        assert_eq!(listed.len(), 2);
+
+        for (why, item) in [
+            ("uppercase", "AB".repeat(32)),
+            ("too short", "ab".repeat(31)),
+            ("too long", "ab".repeat(33)),
+            ("not hex", "zz".repeat(32)),
+            ("empty", String::new()),
+        ] {
+            let err = section(&format!("revoked_signers = [\"{item}\"]")).expect_err(why);
+            assert!(err.contains("revoked_signers"), "{why}: {err}");
+        }
+
+        let err =
+            section(&format!("revoked_signers = [\"{one}\", \"{one}\"]")).expect_err("a duplicate");
+        assert!(err.contains("twice"), "{err}");
+
+        let many: Vec<String> = (0..=MAX_REVOKED_SIGNERS)
+            .map(|n| format!("{n:064x}"))
+            .collect();
+        let err = RevokedSigners::parse(&many).expect_err("over the limit");
+        assert!(err.contains("at most"), "{err}");
+        assert!(RevokedSigners::parse(&many[..MAX_REVOKED_SIGNERS]).is_ok());
+    }
+
+    /// A malformed list stops the Server at load, naming the setting, and the key ADR-0063 removed
+    /// stays refused (ADR-0064 clause 2).
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_malformed_revoked_signers_list_fails_the_configuration_check() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("server.toml");
+
+        std::fs::write(
+            &path,
+            "[packages]\nrevoked_signers = [\"not-a-fingerprint\"]\n",
+        )
+        .expect("write");
+        let err = ServerConfig::load(&path).expect_err("a malformed item must fail startup");
+        assert!(err.contains("revoked_signers"), "{err}");
+
+        std::fs::write(&path, "[packages]\nverification_key = \"x\"\n").expect("write");
+        assert!(
+            ServerConfig::load(&path).is_err(),
+            "the key ADR-0063 removed stays refused"
+        );
+    }
+
+    /// A signature whose Package Signer is listed is refused after the chain verifies, and any
+    /// other signer's is not (ADR-0064 clause 3).
+    /// Verifies: ADR-0064
+    #[test]
+    fn the_verifier_refuses_a_listed_package_signer_and_only_that_one() {
+        use crate::packages::SignatureVerifier;
+        use classis_core::package::testing::TestRoot;
+
+        let root = TestRoot::new();
+        let listed = root.signer();
+        let other = root.signer();
+        let statement = b"statement";
+        let fingerprint = hex::encode(Sha256::digest(&listed.der));
+        let revoked = RevokedSigners::parse(&[fingerprint]).expect("one fingerprint");
+        let verifier = RootsVerifier::new(root.roots()).with_revoked(revoked);
+
+        let err = verifier
+            .verify(statement, &listed.sign(statement))
+            .expect_err("the listed signer");
+        assert!(err.contains("revoked"), "{err}");
+        assert!(
+            verifier.verify(statement, &other.sign(statement)).is_ok(),
+            "a signer that is not listed"
+        );
+        assert!(
+            RootsVerifier::new(root.roots())
+                .verify(statement, &listed.sign(statement))
+                .is_ok(),
+            "with nobody revoked"
+        );
     }
 
     /// The Agent plane has no credential of its own: a leftover `[auth]` is refused at startup,
