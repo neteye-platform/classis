@@ -6,6 +6,8 @@
   [ADR-0033](0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)
   · clause 22 superseded by
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
+  · clauses 5, 7, 12 and 15 superseded by
+  [ADR-0064](0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)
 - **Date:** 2026-10-04
 - **Deciders:** Davide Zeni
 - **Applies to:** the OpAMP endpoint and both transports in

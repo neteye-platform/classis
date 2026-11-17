@@ -12,17 +12,29 @@ foreground process — unlike the Client, it does not install itself as a servic
 - [Configuration reference](#configuration-reference)
 - [Where the Server keeps its state](#where-the-server-keeps-its-state)
 - [Upgrading to one data directory](#upgrading-to-one-data-directory)
-- [Mutual TLS: proving who is on the connection](#mutual-tls-proving-who-is-on-the-connection)
+- [Mutual TLS: proving who is on the connection (disabled)](#mutual-tls-proving-who-is-on-the-connection)
 - [Enrolment: a new host, approved by an operator](#enrolment-a-new-host-approved-by-an-operator)
 - [Configurations: what the fleet runs](#configurations-what-the-fleet-runs)
 - [Packages and Deployments: distributing software](#packages-and-deployments-distributing-software)
 - [The REST API](#the-rest-api)
 - [Authentication](#authentication)
-- [Upgrading to admission by certificate alone](#upgrading-to-admission-by-certificate-alone)
-- [TLS](#tls)
+- [Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)
 - [The fleet's own telemetry](#the-fleets-own-telemetry)
 - [Moving the fleet: connection settings](#moving-the-fleet-connection-settings)
 - [What the Server does not do](#what-the-server-does-not-do)
+
+> **Plain HTTP behind a reverse proxy, and no authentication of Agents in the Server
+> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).**
+> The Server terminates no TLS: both planes speak plain HTTP, on any address, and a reverse proxy
+> in front of it ends TLS. The Server **authenticates no Agent**: the proxy admits them, and the
+> Agent port must be reachable only through it. `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]`
+> and `[agents.auth]` are **refused at startup**, naming the section, and `server pki` is removed. The
+> sections below on mutual TLS, certificates, enrolment and revocation describe machinery that is
+> **disabled** in this mode — kept until the reimplementation of enrolment replaces it — and are
+> marked so. The proxy is where TLS lives and the only thing that should reach the Server's ports:
+> the operator's Basic password and every package cross the hop between them in the clear, any peer
+> that reaches the Agent port may claim any identity, and the peer's address is the one the proxy writes in `X-Forwarded-For`
+> ([Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)).
 
 ## What the Server does
 
@@ -43,12 +55,12 @@ foreground process — unlike the Client, it does not install itself as a servic
 - **Offers new connection settings**: a heartbeat interval or an entirely
   different endpoint, which each Agent verifies by connecting before it
   switches.
-- **Admits an Agent on one proof**: a client certificate in the TLS handshake.
-  It signs Agent certificates as a local CA, and enrols a new host only on an
-  operator's approval.
-- **Serves two listeners over TLS 1.3**: OpAMP over both transports and the
-  package download on one, the REST API, the OpenAPI document and its docs page,
-  and a rudimentary UI on the other.
+- **Admits every request of the Agent plane**: it authenticates no Agent, and an
+  `Authorization` header that is sent is ignored. What admits an Agent is the
+  proxy in front, through the seam `AgentAuthenticator`.
+- **Serves two listeners over plain HTTP**, behind a proxy that terminates TLS:
+  OpAMP over both transports and the package download on one, the REST API, the
+  OpenAPI document and its docs page, and a rudimentary UI on the other.
 
 ## Running it
 
@@ -57,35 +69,28 @@ server --config /etc/opamp/server.toml
 server --version
 ```
 
-| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--config <path>` | The TOML configuration file. Without it, the file `CLASSIS_SERVER_CONFIG` names; without both, `server.toml` in the working directory when it exists, and otherwise none — the Server then starts from its defaults and its environment ([Configuration from the environment](#configuration-from-the-environment)). A file named by `--config` or `CLASSIS_SERVER_CONFIG` that does not exist fails startup, naming the path. The defaults hold no `[tls]`, so a Server configured by nothing refuses to start and names `[tls]`. |
-| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                                                               |
+| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--config <path>` | The TOML configuration file. Without it, the file `CLASSIS_SERVER_CONFIG` names; without both, `server.toml` in the working directory when it exists, and otherwise none — the Server then starts from its defaults and its environment ([Configuration from the environment](#configuration-from-the-environment)). A file named by `--config` or `CLASSIS_SERVER_CONFIG` that does not exist fails startup, naming the path. A Server configured by nothing listens on the loopback. |
+| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Any other argument prints usage and exits with status 2. Logging goes to stderr
-and is controlled by the `RUST_LOG` environment variable (default `info`);
+and its level is controlled by the `RUST_LOG` environment variable (default
+`info`); its form by [`[log] format`](#log);
 everything else is in the configuration file and the `CLASSIS_SERVER__…` variables
-over it. `server pki status` reads the same configuration, from the same places.
+over it. `server pki` is removed: the Server holds no certificate.
 
 Stopping the Server is `SIGTERM`/`Ctrl-C`. Configurations and packages are
 persisted to disk, so a restart resumes with the same fleet state; Agents
 reconnect on their own.
 
-The Server refuses to start without `[tls]` and `[tls] client_ca_file`, and the
-refusal names what is missing. It also refuses an `[auth]` section, and a
-credential key in `[connection_offer]`: the Agent plane admits by client
-certificate alone (see
-[Upgrading to admission by certificate alone](#upgrading-to-admission-by-certificate-alone)).
-For a fleet, `classisctl pki init` makes every certificate the Server and a
-new host need ([Setting up a fleet](setup.md#1-make-the-certificates)); for a
-first run on one machine, [`scripts/dev-pki.sh`](../../scripts/dev-pki.sh) makes
-a development set with it, and a `server.toml` that uses it; the
-[quick start](README.md#quick-start-a-closed-loop-on-one-machine) walks through
-it.
+The Server refuses to start with `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]`,
+`[agents.auth]`, an `[auth]` section, or a credential key in `[connection_offer]`, and the
+refusal names the section: the Server speaks plain HTTP and authenticates no Agent
+([Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)).
 
 There are **two listeners, split by audience**: the one the fleet talks to, and
-the one you talk to. Both serve TLS 1.3 and nothing older, with the same
-certificate.
+the one you talk to. Both speak plain HTTP; the proxy in front of them ends TLS.
 
 **The Agent plane** — `listen`, `127.0.0.1:4320` by default. Serving the fleet
 is one deliberate line, `listen = "0.0.0.0:4320"`.
@@ -93,11 +98,11 @@ is one deliberate line, `listen = "0.0.0.0:4320"`.
 | Path                                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/v1/opamp`                                    | The OpAMP endpoint. `GET` upgrades to WebSocket, `POST` is the plain-HTTP exchange — the same path serves both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `/api/v1/packages/{agent_type}/{version}/file` | An artifact's bytes: the one `/api/v1` route that belongs to the Agents, because the `download_url` in a package offer is a path the Client resolves against _its own_ endpoint. It sits outside the Operator plane's `[rest.auth]` and behind the same TLS handshake as `/v1/opamp`, so a downloading Client presents its client certificate. A certificate from the client CA is required; a bootstrap certificate is answered `401`. A host is served only the artifact offered to one of its own Agents, and every other request is answered `404` ([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)). |
+| `/api/v1/packages/{agent_type}/{version}/file` | An artifact's bytes: the one `/api/v1` route that belongs to the Agents, because the `download_url` in a package offer is a path the Client resolves against _its own_ endpoint. It sits outside the Operator plane's `[rest.auth]` and asks nothing, as `/v1/opamp` asks nothing. A host is served only the artifact offered to one of its own Agents, and every other request is answered `404` ([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)). |
 
-The Agent plane asks every peer for a client certificate in the TLS handshake. A
-peer without one fails the handshake and reaches no route (see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection)).
+The Agent plane asks no credential: the Server admits every request, and the proxy in
+front of it is what authenticates an Agent. Reach the Agent port through the proxy
+alone, because any peer that reaches it may claim any identity.
 
 **The Operator plane** — `[rest] listen`, `127.0.0.1:4321` by default:
 
@@ -120,7 +125,7 @@ and a Server without it is refused at startup with a message naming both keys.
 
 Each plane holds a bounded number of connections: `max_connections` for the
 Agent plane and `[rest] max_connections` for the Operator plane. A connection
-past the cap is closed on accept, before the TLS handshake, and the connections
+past the cap is closed on accept, and the connections
 already held keep working. See
 [Bounds on every listener](#bounds-on-every-listener).
 
@@ -154,14 +159,14 @@ base's own packages are not in it and are named by the
 | Working directory                          | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                          |
 | Ports                                      | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                  |
 | Environment it sets                        | `CLASSIS_SERVER__DATA_DIR=/var/lib/classis`, `CLASSIS_SERVER__LISTEN=0.0.0.0:4320`, `CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
-| Configuration, certificates, keys, secrets | none; you mount them as files                                                                                                                     |
+| Configuration, keys, secrets               | none; you mount them as files                                                                                                                     |
 
 Because both planes listen off the loopback inside the container, the Server
-requires `[tls]` and `[rest.auth]` there. The image carries neither, so started
-with nothing mounted it names the missing key and stops — it never serves in the
-clear or without authentication. Mount the certificates, the keys and every
-password or credential file read-only, and name their paths in the
-configuration. The image works with a read-only root filesystem; the Server
+requires `[rest.auth]` there. The image carries none, so
+started with nothing mounted it names the missing key and stops — it never serves the
+Operator plane without authentication. Put the image behind the reverse proxy that terminates
+TLS and authenticates the Agents. Mount every password or credential file
+read-only, and name their paths in the configuration. The image works with a read-only root filesystem; the Server
 writes under its data directory alone.
 
 ```console
@@ -174,8 +179,10 @@ $ docker run -d --name classis-server --read-only \
 ```
 
 A bind mount for the data directory must be writable by UID `65532`. There is no
-`HEALTHCHECK` — the image has no shell to run one and the Server has no health
-endpoint — so probe a TCP connection to `4320` for liveness and readiness. The
+`HEALTHCHECK` — the image has no shell to run one. An orchestrator probes over
+HTTP on the Operator plane: `GET /livez` and `GET /readyz` on `4321`, which
+answer without a credential ([Liveness and readiness](#liveness-and-readiness)).
+A TCP connection to `4320` only shows that the port is open. The
 `debug` variant of the base, which has a shell, is for inspecting a problem
 locally; it is not published.
 
@@ -238,7 +245,7 @@ other variable configures the Server.
 | ------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `listen`                  | `"127.0.0.1:4320"`     | The **Agent plane**, as `address:port`: the OpAMP endpoint and the package downloads. `4320` is the protocol's default port. Serve the fleet with `"0.0.0.0:4320"`.                                                                                                                                                                                                                                                                               |
 | `max_connections`         | `10000`                | The connections the Agent plane holds at once. A connection past it is closed on accept. Raise it together with the process's file-descriptor limit for a larger fleet. `0` is refused at startup.                                                                                                                                                                                                                                                |
-| `data_dir`                | `"fleet-data"`         | Where the Server keeps **all** of its state, one directory per domain: see [Where the Server keeps its state](#where-the-server-keeps-its-state). Created owner-only when missing. `config_dir` and `packages_dir` are gone: a file naming either fails startup and names `server migrate` ([Upgrading to one data directory](#upgrading-to-one-data-directory)).                                                                                 |
+| `data_dir`                | `"fleet-data"`         | Where the Server keeps **all** of its state, one directory per domain: see [Where the Server keeps its state](#where-the-server-keeps-its-state). Created owner-only when missing — except with `[database] store = "postgres"` and `[blobs] store = "s3"`, where the Server keeps nothing on the filesystem and creates nothing. `config_dir` and `packages_dir` are gone: a file naming either fails startup and names `server migrate` ([Upgrading to one data directory](#upgrading-to-one-data-directory)).                                                                                 |
 | `max_message_size_bytes`  | `67108864` (64 MiB)    | The largest OpAMP message accepted or sent, in either direction and on either transport. The protocol requires a limit and recommends this value; a fleet of status reports needs far less. An oversized HTTP request is answered `413`, an oversized WebSocket message closes the connection with `1009`. A request or message that has begun and delivers less than 64 KiB in a minute is answered `408`, or closes its connection with `1008`. |
 | `max_package_size_bytes`  | `1073741824` (1 GiB)   | The largest artifact the package-upload route accepts. A package is a program, not a message — an `otelcol-contrib` binary is a few hundred megabytes — so this bound is far larger, and it applies to that one route. The upload has no deadline, but like every request body it must deliver 64 KiB in each minute once it has begun, or it is answered `408`.                                                                                  |
 | `max_total_package_bytes` | `17179869184` (16 GiB) | The total size of all stored artifacts before a new upload is refused `507`. Where `max_package_size_bytes` bounds one artifact, this bounds the whole store, so no caller fills the disk by uploading many artifacts under distinct names. Identical bytes are stored once and counted once. `0` is refused at startup.                                                                                                                          |
@@ -257,7 +264,7 @@ max_connections = 256
 
 | Key               | Default            | Meaning                                                                                                                                                                                                                                                                                                                               |
 | ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `listen`          | `"127.0.0.1:4321"` | Where the REST API, the API docs, and the UI are served, over the TLS of `[rest.tls]`, or of `[tls]` without it. It must differ from `listen` above — two equal addresses are refused at startup by name, rather than surfacing later as _address already in use_. An address other than `127.0.0.1` or `::1` requires `[rest.auth]`. |
+| `listen`          | `"127.0.0.1:4321"` | Where the REST API, the API docs, and the UI are served, in plain HTTP. It must differ from `listen` above — two equal addresses are refused at startup by name, rather than surfacing later as _address already in use_. An address other than `127.0.0.1` or `::1` requires `[rest.auth]`. |
 | `max_connections` | `256`              | The connections the Operator plane holds at once. `0` is refused at startup.                                                                                                                                                                                                                                                          |
 
 #### `[rest.auth]`
@@ -278,26 +285,9 @@ fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
 
 #### `[rest.tls]`
 
-Optional. The certificate and key that plane serves in place of `[tls]`'s,
-typically from your organization's PKI so that its browsers trust the UI as they
-are — see [The UI's own certificate](setup.md#the-uis-own-certificate). The
-Agent plane keeps `[tls]`'s.
-
-```toml
-[rest.tls]
-cert_file = "ui.pem"
-key_file = "ui-key.pem"
-```
-
-| Key         | Default | Meaning                                                                                                                |
-| ----------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `cert_file` | —       | Required. PEM chain, the leaf first and any intermediates after it.                                                    |
-| `key_file`  | —       | Required. PEM private key of the leaf. A key that does not match the certificate refuses the start, naming both files. |
-
-Nothing else belongs in the section — a `client_ca_file` is refused, since this
-plane asks for no client certificate. A new pair takes effect when the Server
-restarts; `server pki status` lists it, and the running Server warns before it
-ends.
+Removed ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
+The section is refused at startup, naming it: the proxy in front of the Operator plane serves the
+UI's certificate.
 
 ### `[packages]`
 
@@ -337,7 +327,7 @@ secret_access_key_file = "/run/secrets/s3-secret-access-key"
 | --------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `store`                     | `"fs"`  | `"fs"` or `"s3"`. Any other value fails startup naming the key; so do `"s3"` without a `[blobs.s3]` section and a `[blobs.s3]` section beside `"fs"`.                                                                                                                                                                                     |
 | `s3.endpoint`               | —       | Required with `"s3"`. The store's URL, `https://`. `http://` is accepted to `127.0.0.1` or `::1` alone; any other fails startup naming the key.                                                                                                                                                                                           |
-| `s3.bucket`                 | —       | Required with `"s3"`. The bucket. The Server does not create it: one that does not exist or cannot be listed fails startup, naming it and the error.                                                                                                                                                                                      |
+| `s3.bucket`                 | —       | Required with `"s3"`. The bucket. The Server does not create it: one that does not exist, or that refuses the credentials, fails startup at once, naming it and the error; a store that does not answer yet — the name not resolving, the connection refused, a timeout, a server error — is asked again every five seconds for up to 180 seconds, logging each wait at `warn`.                                                                                                                                                                                      |
 | `s3.region`                 | —       | Required with `"s3"`. The region the requests are signed for; a store without regions takes any, such as `us-east-1`.                                                                                                                                                                                                                     |
 | `s3.prefix`                 | empty   | Where in the bucket the Server's keys live: empty, or ending in `/`. Artifacts are kept at `<prefix>blobs/<sha256>`, an upload in progress at `<prefix>staging/<random>`. Letters, digits, space and `- _ . / ! ' ( ) & $ @ = ; : + ,` only: any other character, which the S3 client would percent-encode, fails startup naming the key. |
 | `s3.ca_file`                | unset   | One PEM root for a store whose certificate no public root signs.                                                                                                                                                                                                                                                                          |
@@ -435,14 +425,25 @@ versions, and is left unchanged. The Server creates tables and indexes, and
 nothing else: the database, the role, its rights and extensions, replication and
 backups are the operator's.
 
+At startup the Server waits for the database: a database that does not answer yet —
+the name not resolving, the connection refused or reset, the database starting up,
+shutting down or out of connections, as during a failover — is asked again every five
+seconds for up to 180 seconds, logging each wait at `warn` with the reason and the time
+left, and then the Server stops, naming the database. A refusal that asking again would
+not change stops it at once: a rejected password, a certificate that does not verify, a
+database that does not exist, a schema that needs a newer Server. Size an orchestrator's
+startup probe to allow the wait.
+
 One Server per database schema: the Server holds a lock on the schema it works
 in — its role's default — while it runs, and a second one started against the
-same database and schema stops, naming the database. The lock lives on a
+same database and schema waits for it, asking again every five seconds within the same
+180 seconds so that a Server an orchestrator replaces can take over once the old
+one has stopped, and then stops, naming the database. The lock lives on a
 connection of its own; when that connection ends while the Server runs — the
 database restarted, the session was ended, the host is gone — the lock is gone
-with it, and the Server logs an error naming the database and refuses every
-write from then on, so it never writes beside a second Server. Restart it once
-the database answers.
+with it, and the Server logs an error naming the database and exits with status
+1, so it never writes beside a second Server. An orchestrator restarts it; it
+then waits for the lock as above.
 
 With `"postgres"`, `data_dir` holds the artifacts (`blobs/`) with the filesystem
 blob store, and nothing else. A record of
@@ -451,21 +452,18 @@ the filesystem store found there — `agents/`, `configurations/`,
 `server migrate-to-postgres`. A backup takes the database and `data_dir`
 together.
 
+### `[agents.auth]`
+
+Removed. The Server authenticates no Agent: the reverse proxy in front of it does, and a
+library there checks the credential an Agent presents. The section is refused at startup with
+`[agents.auth] is removed`, and so is a bare `[agents]`. The Agent plane admits every request;
+the seam an authenticator plugs into later is `AgentAuthenticator`
+(`crates/classis-server/src/agent_auth.rs`).
+
 ### `[tls]`
 
-Required. The Agent plane serves HTTPS and WSS in TLS 1.3 with this certificate
-and key, and so does the Operator plane unless [`[rest.tls]`](#resttls) names
-its own. A Server without the section is refused at startup with a message
-naming it. `client_ca_file` is required too. It belongs to the Agent plane
-alone, which asks every peer for a client certificate in the handshake (see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection)).
-
-```toml
-[tls]
-cert_file = "cert.pem"
-key_file = "key.pem"
-client_ca_file = "client-ca.pem"   # the CA every Agent's certificate chains to
-```
+Removed. The Server terminates no TLS: a reverse proxy in front of it does. The section is refused at
+startup with `[tls] is removed`, as are `[rest.tls]`, `[client_ca]` and `[enrolment]`.
 
 ### `[telemetry_offer]`
 
@@ -487,47 +485,14 @@ startup, naming both. It is the one way the environment names the headers.
 
 ### `[client_ca]`
 
-Optional. Present makes the Server a local CA that signs Agent certificate
-requests — see [Issuing certificates](#issuing-certificates-the-csr-flow).
-
-```toml
-[client_ca]
-cert_file = "client-ca.pem"
-key_file = "client-ca-key.pem"
-validity_days = 30
-```
-
-Without it, every host holds a certificate an operator provisioned, and such a
-certificate is served an uploaded artifact only when it names its host as a URI
-SAN, `urn:classis:host:<id>`. A certificate that names no host fetches
-nothing from the download route. A Server started without `[client_ca]` says so
-once at startup.
+Removed, and with it the CSR flow. The section is refused at startup (`[client_ca] is removed`): the
+Server signs no certificate and authenticates no Agent. Everything the manual says about issuing
+certificates is disabled until enrolment is reimplemented.
 
 ### `[enrolment]`
 
-Optional. Present lets a new host enrol with a bootstrap certificate from this
-CA — see [Enrolment](#enrolment-a-new-host-approved-by-an-operator). It needs
-`[client_ca]`, which signs the approved request.
-
-```toml
-[enrolment]
-bootstrap_ca_file = "bootstrap-ca.pem"
-bootstrap_ca_key_file = "bootstrap-ca-key.pem"   # optional: the Server issues bootstrap certificates
-max_pending_per_bootstrap = 256                  # optional: requests of one bootstrap certificate
-```
-
-`bootstrap_ca_key_file` is the CA's key, PKCS#8 PEM. With it the Server issues
-bootstrap certificates on request
-([Bootstrap certificates](#bootstrap-certificates-issued-by-the-server));
-without it, hosts enrol with bootstrap certificates made elsewhere from the same
-CA. A key that is not the CA's, or that is the client CA's, is refused at
-startup.
-
-`max_pending_per_bootstrap` is the most requests of one bootstrap certificate,
-by its issuer and serial, the pending queue holds at once: 256 by default, a
-quarter of the queue, from 1 to 1024. Anything else fails startup naming the
-key. Raise it when one bootstrap certificate enrols more than 256 hosts in one
-window and you would rather not approve them in batches.
+Removed, and with it the enrolment window, the bootstrap certificates and the pending queue. The
+section is refused at startup (`[enrolment] is removed`).
 
 ### `[admission_throttle]`
 
@@ -553,6 +518,33 @@ burst = 300
 gateway_messages_per_sec = 500
 gateway_burst = 10000
 ```
+
+### `[log]`
+
+Optional; absent means the default shown.
+
+```toml
+[log]
+format = "text"
+```
+
+`format` is `"text"` (one human-readable line per event) or `"json"` (one JSON
+object per line, for a log collector). Anything else fails startup. The
+environment variable is `CLASSIS_SERVER__LOG__FORMAT`. The level is `RUST_LOG`'s.
+
+### Liveness and readiness
+
+The Operator plane answers two routes beside its guard, with no credential, to
+`GET` and `HEAD`:
+
+| Route      | Answer                                                                                                                                                                                                                                 |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/livez`   | `200 ok` while the process serves requests.                                                                                                                                                                                            |
+| `/readyz`  | `200 ok` when the Server holds its database lock, the database answers a query and the blob store answers; `503` with the body `database` or `blobs`, naming the check that failed and nothing else. |
+
+Every other route of the plane still answers `401` without a credential, and
+neither route counts toward the [admission throttle](#repeated-failures-are-throttled).
+Point an orchestrator's HTTP probe at `4321`. The Agent plane has no such route.
 
 ### `[connection_offer]`
 
@@ -707,6 +699,11 @@ reads neither: a `server.toml` naming either key stops it at startup.
    directories until you are satisfied, then delete them.
 
 ## Mutual TLS: proving who is on the connection
+
+> **Disabled.** The Server speaks plain HTTP and authenticates no Agent
+> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs until enrolment is
+> reimplemented. It describes the machinery that stays in the code.
 
 `[tls] client_ca_file` is required, and the Agent plane asks every peer for a
 client certificate **in the TLS handshake**:
@@ -877,6 +874,11 @@ locks a host out: a Client switched off longer than its validity enrols again
 with a bootstrap certificate, or is given a new certificate by an operator.
 
 ## Enrolment: a new host, approved by an operator
+
+> **Disabled.** The Server speaks plain HTTP and authenticates no Agent
+> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs until enrolment is
+> reimplemented. It describes the machinery that stays in the code.
 
 Enrolment is how a fresh host obtains its first certificate without an operator
 signing one by hand. It is armed by `[enrolment]`, and it needs `[client_ca]`,
@@ -1166,6 +1168,11 @@ what that costs (see
 [How often a member may be heard](#how-often-a-member-may-be-heard)).
 
 ## Revocation: withdrawing a certificate
+
+> **Disabled.** The Server speaks plain HTTP and authenticates no Agent
+> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs until enrolment is
+> reimplemented. It describes the machinery that stays in the code.
 
 A certificate stays valid until it expires. To shut a host out sooner, revoke
 its certificate. The Server refuses it from then on, on both transports and on
@@ -1965,15 +1972,15 @@ timeout, so a row stays until someone forgets it.
 
 ## Authentication
 
-The Agent plane admits by **client certificate alone**; see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection). It has no credential
-of its own, and `server.toml` has no `[auth]` section: one that is present is
-refused at startup, naming `[auth]`. `/v1/opamp` and the download route read no
-`Authorization` header and send no `WWW-Authenticate` challenge. A refusal
-behind the handshake — a revoked certificate, or a bootstrap certificate on the
-download route — is answered `401`.
+The Server **authenticates no Agent**: the Agent plane admits every request on `/v1/opamp`, over
+both transports, and on the package download route, with or without an `Authorization` header,
+which it ignores. What admits an Agent — a random string it presents, checked by a library — lives
+in the reverse proxy in front of the Server ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
+**Any peer that reaches the Agent port is admitted and may claim any identity**: an Agent is what
+the `instance_uid` of its OpAMP message says it is. The port must be reachable only through the
+proxy. A top-level `[auth]` section and `[agents.auth]` are refused at startup.
 
-The Operator plane is the one with a credential,
+The Operator plane is the one with a password,
 [`[rest.auth]`](#the-operator-plane-restauth) below. It never reaches an Agent's
 host.
 
@@ -2127,52 +2134,24 @@ Server still manages one fleet. And Basic sends a reusable password on **every**
 request. The plane always serves TLS 1.3, so the password never crosses the
 network in cleartext, and `server.toml` holds only its Argon2id hash.
 
-## Upgrading to admission by certificate alone
+## Plain HTTP behind a reverse proxy
 
-The Agent plane admits a Client by its client certificate alone and reads no
-`Authorization` header: a Client or Gateway that sends one is admitted on its
-certificate, and the header is ignored. A Client sends no credential, so a
-Server that still demands one answers it `401`. **Upgrade the Server first, then
-its Clients and Gateways.**
+Both listeners speak plain HTTP, on whatever address `listen` and `[rest] listen` name. There is no
+TLS to configure on the Server, no certificate to mount and none to renew: a reverse proxy in front
+of it terminates TLS and forwards the request, and what protects the hop between them is the
+network they share — a NetworkPolicy that lets only the proxy reach the Server's ports.
 
-1. **Delete the credential from `server.toml`.** Remove the `[auth]` section,
-   and the credential keys `bearer_token_file`, `username`, `password_file`,
-   `bearer_token` and `password` from `[connection_offer]`; a
-   `[connection_offer]` left with neither `heartbeat_interval_secs` nor
-   `endpoint` goes whole. The Server refuses to start while either remains, and
-   says which:
+- **The operator's password crosses that hop in the clear.** So does every package.
+- **The peer is the address in `X-Forwarded-For`.** The left-most entry that parses as an address
+  (`203.0.113.7`, `203.0.113.7:51000` or `[2001:db8::1]`) is the peer the admission throttle counts;
+  without the header, the connection's address. **The header is trusted from any source**:
+  whoever can reach the port can write it, name any address, and so keep their own failures from
+  filling the throttle or put another host's address in back-off. Keep the Server's ports closed to
+  everything but the proxy.
+- **Outbound connections stay TLS 1.3**: to PostgreSQL and to S3.
 
-   ```text
-   server.toml: [auth] is refused — the Agent plane admits by client certificate alone; remove the section
-   server.toml: [connection_offer] bearer_token_file is refused — the Agent plane admits by client certificate alone, so no credential is offered; remove the key
-   ```
-
-   A file the offered credential was read from can be deleted. `[rest.auth]`
-   stays as it is.
-
-2. **Start the Server.** Every Client that holds a valid certificate keeps
-   connecting. A credential revocation in the persisted list is dropped when it
-   is loaded, with one log line, and the list is written back without it.
-3. **Upgrade the Clients**, through the self-update or by package. A Client
-   sends no credential, ignores a leftover `[auth]` in `supervisor.toml` with a
-   notice at startup, and drops an `Authorization` header a credential rotation
-   left in its persisted connection settings, rewriting the file without it (see
-   [the Client](client.md#a-leftover-auth)). A Gateway forwards no
-   `Authorization` and shares its upstream connections among every Agent it
-   carries.
-
-## TLS
-
-`[tls]` is required, and it turns **both listeners** into HTTPS/WSS listeners:
-with its certificate and key, or on the Operator plane with those of
-[`[rest.tls]`](#resttls) when that section is set. There is no plaintext port
-beside either of them. Every connection speaks TLS 1.3 alone, with the three TLS
-1.3 suites of the `ring` provider; a peer that speaks only TLS 1.2 cannot
-connect. Clients use `wss://` or `https://` endpoints, and Clients trusting a
-private CA set `ca_file` in their own `[tls]` section.
-
-The same section names the CA a **client certificate** must chain to: see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection).
+An Agent or Gateway that still presents a client certificate is not refused for it: the certificate
+is not read.
 
 ### Bounds on every listener
 
@@ -2180,10 +2159,9 @@ Each plane is bounded before a request is parsed:
 
 - **A connection cap per plane**: `max_connections` (default 10 000) for the
   Agent plane and `[rest] max_connections` (default 256) for the Operator plane.
-  A connection past the cap is closed on accept, before the TLS handshake, while
-  the ones already held keep working.
-- **The TLS handshake** must complete within 10 seconds, and a peer has 30
-  seconds to send its HTTP/1 request headers.
+  A connection past the cap is closed on accept, while the ones already held
+  keep working.
+- **A peer has 30 seconds** to send its HTTP/1 request headers.
 - **HTTP/2** allows 100 concurrent streams per connection. A keep-alive ping
   goes out every 30 seconds, and a peer that leaves one unanswered for 20
   seconds is dropped.

@@ -1,6 +1,7 @@
 # ADR-0032: The Operator plane may serve a certificate of its own, from `[rest.tls]`, and serves `[tls]`'s without it
 
-- **Status:** 🟢 accepted
+- **Status:** ⚪ superseded by
+  [ADR-0064](0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)
 - **Date:** 2026-10-17
 - **Deciders:** Davide Zeni
 - **Applies to:** the `[rest.tls]` section of `server.toml` and its parsing and
