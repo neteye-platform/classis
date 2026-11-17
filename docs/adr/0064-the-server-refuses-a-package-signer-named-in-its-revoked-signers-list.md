@@ -1,6 +1,6 @@
 # ADR-0064: The Server refuses a Package Signer named in its revoked-signers list
 
-- **Status:** 🟡 proposed
+- **Status:** 🟢 accepted
 - **Date:** 2026-11-17
 - **Deciders:** Davide Zeni
 - **Applies to:** the `[packages]` section of `server.toml`, the Package
@@ -132,9 +132,13 @@ digest; a shorter life for Package Signer certificates.
 
 ## Enforcement
 
-A test in `crates/classis-server/tests/packages.rs` cites this ADR with a
-`Verifies:` marker and checks four things with a test Root and a test Package
-Signer: a signature of a listed signer is refused with `400` on a write; an
-entry stored with it loads as `missing` and keeps its signature; an unlisted
-signer's entry is offered as before; a malformed list stops the configuration
-check. The configuration check of `config.rs` carries the fourth.
+Four tests cite this ADR with a `Verifies:` marker, with a test Root and a test
+Package Signer:
+
+- in `crates/classis-server/src/config.rs`, the list admits only lowercase
+  SHA-256 fingerprints, each once, at most 64, and a malformed list fails the
+  configuration check;
+- in the same file, the verifier refuses a listed signer and no other;
+- in `crates/classis-server/src/packages.rs`, a write of a listed signer's
+  signature is refused, an entry stored with it loads as `missing` and keeps its
+  signature, and it is offered again once the signer is no longer listed.

@@ -390,3 +390,10 @@ max_connections = 256
 # [rest.tls]
 # cert_file = "ui.pem"
 # key_file = "ui-key.pem"
+
+# Package Signers this Server refuses, OPTIONAL: each the SHA-256 of the signer's DER certificate,
+# 64 lowercase hex digits, at most 64. Use it when a signer's key may be exposed. A signature of a
+# listed signer is refused on upload, and the entries it signed are offered to nobody until they are
+# signed again by another signer. Clients are not told; a change takes effect on restart.
+# [packages]
+# revoked_signers = ["0000000000000000000000000000000000000000000000000000000000000000"]
