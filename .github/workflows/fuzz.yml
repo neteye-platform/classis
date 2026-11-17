@@ -32,6 +32,9 @@ jobs:
           - archive_tree
           - supervisor_set
           - archive_member
+          - token_request
+          - bearer_challenge
+          - registration_request
     env:
       SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '900' || '60' }}
     steps:

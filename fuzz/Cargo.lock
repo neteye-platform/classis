@@ -455,6 +455,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -685,7 +694,10 @@ name = "fleet-fuzz"
 version = "0.0.0"
 dependencies = [
  "classis-agent",
+ "http",
  "libfuzzer-sys",
+ "oauth-registration",
+ "oauth-token",
  "opamp",
  "prost",
  "tempfile",
@@ -1458,6 +1470,36 @@ name = "num-conv"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
+
+[[package]]
+name = "oauth-registration"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http",
+ "oauth-token",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "oauth-token"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "constant_time_eq",
+ "form_urlencoded",
+ "http",
+ "percent-encoding",
+ "ring",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "zeroize",
+]
 
 [[package]]
 name = "objc2-core-foundation"
@@ -2434,7 +2476,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",

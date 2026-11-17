@@ -16,6 +16,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 opamp = { path = "../crates/opamp", features = ["client", "server"] }
 classis-agent = { path = "../crates/classis-agent" }
+oauth-token = { path = "../crates/oauth-token", features = ["server"] }
+oauth-registration = { path = "../crates/oauth-registration", features = ["server"] }
+http = "1"
 prost = "0.14"
 tempfile = "3"
 toml = "1"
@@ -71,6 +74,27 @@ bench = false
 [[bin]]
 name = "archive_member"
 path = "fuzz_targets/archive_member.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token_request"
+path = "fuzz_targets/token_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bearer_challenge"
+path = "fuzz_targets/bearer_challenge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registration_request"
+path = "fuzz_targets/registration_request.rs"
 test = false
 doc = false
 bench = false

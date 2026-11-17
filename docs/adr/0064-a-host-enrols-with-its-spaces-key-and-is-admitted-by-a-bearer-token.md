@@ -124,7 +124,8 @@ built on them.
    does not understand is ignored, not rejected (§2).
 
    On success it answers `201 Created`, `Content-Type: application/json`, with
-   `client_id`, `client_secret` (256 random bits, encoded as in clause 1),
+   `client_id` (a UUID version 7, RFC 9562),
+   `client_secret` (256 random bits, encoded as in clause 1),
    `client_id_issued_at`, `client_secret_expires_at: 0`, and all registered
    metadata (§3.2.1), including `grant_types: ["client_credentials"]` and
    `token_endpoint_auth_method: "client_secret_basic"`. Classis adds the
@@ -251,7 +252,10 @@ built on them.
    tokens, no registration management (RFC 7592). Their clients ignore
    unrecognized response fields; the token client accepts the `token_type`
    value case-insensitively (RFC 6749 §5.1). Their request parsers bound the
-   body before they parse it and have fuzz targets.
+   body at 8 KiB before they parse it, answer a larger one with a plain `413`,
+   and have fuzz targets. The parsing of RFC 6750 credentials and challenges
+   lives once, in `oauth-token`: `oauth-registration` reads its initial access
+   token with it, and Classis admission uses it too.
 9. **Removed, as if it never existed.** Client certificates, the client and
    bootstrap CAs, CSRs and the CSR flow in OpAMP connection settings, the
    renewal and bootstrap proofs, PKCS#12, the enrolment window and operator
@@ -262,7 +266,9 @@ built on them.
    client-certificate and CSR support: the client's TLS identity, the server's
    client-certificate verification and peer certificate, and the CSR in
    reports. That breaks its public interface, which the project accepts while
-   it is in development. Nothing is migrated and no old file, key or section
+   it is in development. A TLS client certificate or private key that a
+   connection-settings offer carries is ignored, and the rest of the offer
+   applies. Nothing is migrated and no old file, key or section
    is still read. The PostgreSQL schema keeps no table for them: its first
    migration is rewritten in place, since no installation exists to upgrade.
    Package signing and its keys stay.
@@ -369,6 +375,8 @@ prefix like the key.
   tokens in URLs).
 - [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648.html), Base Encodings: §5
   (the URL- and filename-safe alphabet) and §3.2 (omitting padding).
+- [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562.html), Universally Unique
+  IDentifiers: §5.7 (UUID version 7).
 - [RFC 6819](https://www.rfc-editor.org/rfc/rfc6819.html), OAuth 2.0 Threat
   Model: §4.3.2 ("Store access token hashes only") and §5.1.4.1.3 (no cleartext
   storage; a salt for low-entropy credentials).

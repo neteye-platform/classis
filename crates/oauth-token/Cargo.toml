@@ -1,0 +1,43 @@
+[package]
+name = "oauth-token"
+description = "OAuth 2.0 client-credentials grant (RFC 6749 section 4.4) and bearer token usage (RFC 6750): a token endpoint over a storage trait, and the one request a client makes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Neither side is on by default: without features this is RFC 6750's header handling and the
+# secret helpers alone, and a program that wants only those pulls no web framework or HTTP client.
+[features]
+server = ["dep:axum", "dep:tokio", "dep:serde_json", "dep:percent-encoding"]
+client = ["dep:reqwest", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+http.workspace = true
+form_urlencoded.workspace = true
+sha2.workspace = true
+ring.workspace = true
+base64.workspace = true
+constant_time_eq.workspace = true
+zeroize.workspace = true
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+percent-encoding = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true
+rustls.workspace = true
+tower.workspace = true
+
+[[test]]
+name = "server"
+required-features = ["server"]
+
+[[test]]
+name = "client"
+required-features = ["client"]
