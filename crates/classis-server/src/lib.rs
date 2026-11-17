@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod agent_auth;
 pub mod agent_rate;
 pub mod agent_store;
 pub mod api;

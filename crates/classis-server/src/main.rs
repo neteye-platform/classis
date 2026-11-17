@@ -1,10 +1,9 @@
 //! Entry point: load the configuration from `server.toml` and the environment (ADR-0051), bind the
-//! two listeners (plain or TLS) — the Agent plane and the Operator plane (ADR-0013) — and serve
-//! both until interrupted.
+//! two listeners — the Agent plane and the Operator plane (ADR-0013) — and serve both until
+//! interrupted.
 //!
-//! Both planes are served the same way whether or not TLS is configured, so that what bounds a
-//! connection before it becomes a request holds on all four surfaces (ADR-0013). Only the acceptor
-//! differs.
+//! Both planes speak plain HTTP: a reverse proxy in front of the Server terminates TLS (ADR-0064).
+//! What bounds a connection before it becomes a request is `opamp`'s listener (ADR-0013).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,7 +19,6 @@ fn usage() -> ! {
     eprintln!(
         "Usage: server [--config <server.toml>] [--version]\n       \
          server hash-credential --basic   (reads the password from standard input)\n       \
-         server pki status [--config <server.toml>]\n       \
          server migrate --config-dir <old> --packages-dir <old> --data-dir <new>\n       \
          server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]"
     );
@@ -45,50 +43,39 @@ fn load_config(named: Option<PathBuf>) -> Layered {
         eprintln!("{e}");
         std::process::exit(1);
     });
-    if let Some(notice) = layered.environment_notice() {
-        // ADR-0051 clause 7.
-        info!("{notice}");
-    }
     layered
 }
 
-/// `server pki status [--config <server.toml>]` (ADR-0028 clause 12): when each certificate the
-/// Server host depends on ends. The commands that make certificates are the operator tool's
-/// (ADR-0028); the Server binary makes none.
-fn pki(mut args: impl Iterator<Item = String>) -> ! {
-    use classis_server::pki;
-    let named = match (
-        args.next().as_deref(),
-        args.next().as_deref(),
-        args.next(),
-        args.next(),
-    ) {
-        (Some("status"), None, None, None) => None,
-        (Some("status"), Some("--config"), Some(path), None) => Some(PathBuf::from(path)),
-        _ => usage(),
-    };
-    let config = load_config(named).config;
-    let endings = pki::status(&config).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
-    let now = time::OffsetDateTime::now_utc();
-    for ending in &endings {
-        let standing = match ending.standing(now) {
-            classis_core::ending::Standing::Fine => "ok",
-            classis_core::ending::Standing::Ending => "ENDS SOON",
-            classis_core::ending::Standing::Ended => "ENDED",
-        };
-        println!(
-            "{standing:9} {} days  {}  serial {}  {}  ({})",
-            ending.days_left(now),
-            ending.not_after.date(),
-            ending.serial,
-            ending.subject,
-            ending.file.display()
-        );
+/// Logs the keys the environment set, by name (ADR-0051 clause 7), once the log is set up.
+fn announce_environment(layered: &Layered) {
+    if let Some(notice) = layered.environment_notice() {
+        info!("{notice}");
     }
-    std::process::exit(pki::exit_code(&endings, now));
+}
+
+/// Sets up the log on standard error, so that stdout carries only what a command prints as its
+/// result: `RUST_LOG` chooses the level (default `info`), `[log] format` the form of a line.
+fn init_logging(format: classis_server::config::LogFormat) {
+    let builder = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        );
+    match format {
+        classis_server::config::LogFormat::Text => builder.init(),
+        classis_server::config::LogFormat::Json => builder.json().init(),
+    }
+}
+
+/// `server pki` is gone (ADR-0064): the Server holds no certificate, so there is no ending to
+/// report. Said by name, so a script that still calls it is not left guessing.
+fn pki(_args: impl Iterator<Item = String>) -> ! {
+    eprintln!(
+        "server pki is removed — the Server speaks plain HTTP behind a reverse proxy and holds no \
+         certificate (ADR-0064)"
+    );
+    std::process::exit(2);
 }
 
 /// `server migrate --config-dir <old> --packages-dir <old> --data-dir <new>` (ADR-0037 clause 14):
@@ -98,6 +85,7 @@ fn pki(mut args: impl Iterator<Item = String>) -> ! {
 /// operator's to ensure: the older Server takes no lock this could test. Prints what it carried,
 /// dropped and listed, and exits non-zero when trust data could not be carried.
 fn migrate(mut args: impl Iterator<Item = String>) -> ! {
+    init_logging(classis_server::config::LogFormat::Text);
     let (mut config_dir, mut packages_dir, mut data_dir) = (None, None, None);
     while let Some(flag) = args.next() {
         let slot = match flag.as_str() {
@@ -166,7 +154,10 @@ fn migrate_to_postgres(mut args: impl Iterator<Item = String>) -> ! {
     let (Some(from), Some(data_dir)) = (from, data_dir) else {
         usage()
     };
-    let config = load_config(config).config;
+    let layered = load_config(config);
+    init_logging(layered.config.log.format);
+    announce_environment(&layered);
+    let config = layered.config;
     let Some(database) = config.database.postgres() else {
         eprintln!(
             "the configuration names no database — set [database] store = \"postgres\" and \
@@ -346,44 +337,15 @@ fn bind(address: SocketAddr, plane: &str) -> std::net::TcpListener {
 
 #[tokio::main]
 async fn main() {
-    // The log goes to stderr, so that stdout carries only what a command prints as its result.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    // One TLS provider for the whole process (ADR-0013): ring, never a system library.
+    // One TLS provider for the whole process (ADR-0013): ring, never a system library. The Server
+    // terminates no TLS (ADR-0064), but its outbound connections — PostgreSQL, S3 — still use it.
     opamp::tls::install_ring_provider();
 
-    let Layered { config, origin, .. } = load_config(parse_args());
+    let layered = load_config(parse_args());
+    init_logging(layered.config.log.format);
+    announce_environment(&layered);
+    let Layered { config, origin, .. } = layered;
 
-    // The TLS material first: a Server that cannot serve it does not start, and admission needs
-    // to know which CA issued what (ADR-0013, ADR-0021).
-    let planes = match config
-        .tls
-        .as_ref()
-        .ok_or_else(|| "[tls] is required".to_string())
-        .and_then(|tls| {
-            classis_server::tls::server_tls(
-                tls,
-                config.rest.tls.as_ref(),
-                config.enrolment.as_ref(),
-            )
-        })
-        .and_then(|planes| {
-            let agent = planes.agent.rustls_config()?;
-            let operator = planes.operator.rustls_config()?;
-            Ok((agent, operator, planes.issuers, planes.authorities))
-        }) {
-        Ok(planes) => planes,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
     // Where the records live (ADR-0050): the data directory, its layout created owner-only and
     // checked before any store opens (ADR-0037), and with PostgreSQL the database, its lock taken
     // and its schema applied.
@@ -398,21 +360,6 @@ async fn main() {
         info!(database = %database.name(), "keeping the records in PostgreSQL");
     }
     let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
-    // ADR-0021: closed until an operator opens it; the window and its queue survive a restart
-    // (ADR-0037 clause 9).
-    let enrolment = match config.enrolment.as_ref().map(|section| {
-        info!("hosts with a bootstrap certificate may enrol while an operator opens the window");
-        classis_server::enrolment::Enrolment::open_on(clock.clone(), records.enrolment()).map(
-            |enrolment| enrolment.with_max_pending_per_bootstrap(section.max_pending_per_bootstrap),
-        )
-    }) {
-        None => None,
-        Some(Ok(enrolment)) => Some(Arc::new(enrolment)),
-        Some(Err(e)) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
     let limits = config.admission_throttle.limits();
 
     let connection_offer = config
@@ -423,59 +370,9 @@ async fn main() {
         // ADR-0014.
         info!("offering connection settings to the fleet");
     }
-    let client_ca = match config
-        .client_ca
-        .as_ref()
-        .map(classis_server::ca::ClientCa::from_config)
-        .transpose()
-    {
-        Ok(ca) => {
-            if let Some(ca) = &ca {
-                // ADR-0021.
-                info!(
-                    validity_days = ca.validity_days(),
-                    "signing client certificates for Agents that ask"
-                );
-            }
-            ca
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    // The bootstrap CA's key, when the Server issues bootstrap certificates (ADR-0028).
-    let bootstrap = match config.enrolment.as_ref().map(|enrolment| {
-        classis_server::ca::BootstrapCa::from_config(enrolment, config.client_ca.as_ref()).and_then(
-            |signer| {
-                if signer.is_some() {
-                    info!("issuing bootstrap certificates on an operator's request");
-                }
-                classis_server::bootstrap::BootstrapCertificates::on(
-                    signer.map(|ca| {
-                        Box::new(ca) as Box<dyn classis_server::bootstrap::BootstrapSigner>
-                    }),
-                    &records,
-                    clock.clone(),
-                )
-            },
-        )
-    }) {
-        None => None,
-        Some(Ok(record)) => Some(Arc::new(record)),
-        Some(Err(e)) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    // What the Server serves, trusts and signs with until it restarts, read right after the files
-    // above were: the warnings below judge these, not whatever the files hold later
-    // (ADR-0028 clause 11).
+    // What Agents enrol with, and what the Server signs for them, is NEAG-34's (ADR-0064): nothing
+    // here issues a certificate.
     let watched = classis_server::pki::loaded(&classis_server::pki::depended_on(&config));
-    if let Some(notice) = uploaded_artifacts_notice(client_ca.is_some()) {
-        // ADR-0026 clause 37.
-        info!("{notice}");
-    }
     let telemetry_offer = config
         .telemetry_offer
         .as_ref()
@@ -521,7 +418,7 @@ async fn main() {
     };
     // What the client CA signed and what is revoked (ADR-0021), kept beside the fleet's records.
     let revocations = match records.ledger().and_then(|store| {
-        classis_server::revocation::Revocations::open(store, clock.clone(), planes.3.clone())
+        classis_server::revocation::Revocations::open(store, clock.clone(), Vec::new())
     }) {
         Ok(revocations) => Arc::new(revocations),
         Err(e) => {
@@ -549,14 +446,19 @@ async fn main() {
         config.max_agents,
         clock.clone(),
     ));
+    let records_ready: Option<classis_server::fleet::RecordsReady> = match &records {
+        classis_server::Records::Postgres(database) => {
+            let database = database.clone();
+            Some(Arc::new(move || database.ready()))
+        }
+        classis_server::Records::Files(_) => None,
+    };
     let state = match AppState::on(&records) {
         Ok(state) => Arc::new(
             state
+                .with_records_ready(records_ready)
                 .with_agent_rate(Some(agent_rate))
                 .with_connection_offer(connection_offer)
-                .with_client_ca(client_ca)
-                .with_enrolment(enrolment.clone())
-                .with_bootstrap(bootstrap)
                 .with_revocations(Some(revocations.clone()))
                 .with_telemetry_offer(telemetry_offer)
                 .with_packages(packages)
@@ -571,16 +473,16 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // The certificate is the whole of admission (ADR-0021): the configuration was refused at load
-    // without the client CA.
-    info!("the OpAMP endpoint admits by client certificate");
+    // The Server authenticates no Agent (ADR-0064): the proxy in front of it does, and the Agent
+    // port must be reachable through it alone. `AdmitEveryone` is the seam an authenticating
+    // library plugs into later.
+    info!("the OpAMP endpoint admits every request: the Agent port must be reachable only through the authenticating proxy");
     // Two planes, two listeners (ADR-0013): Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
-    let (agent_tls, operator_tls, issuers, _) = planes;
     let agents = classis_server::agent_app(
         state.clone(),
-        classis_server::transport::Admission::new(true)
-            .with_enrolment(issuers, enrolment)
+        classis_server::transport::Admission::open()
+            .with_authenticator(Arc::new(classis_server::agent_auth::AdmitEveryone))
             .with_revocations(Some(revocations))
             .with_throttle(Arc::new(classis_server::throttle::Throttle::new(
                 limits,
@@ -606,8 +508,8 @@ async fn main() {
         }
     };
     if operator_auth.is_some() {
-        // ADR-0021. Both planes serve TLS, so the password never crosses a network in clear
-        // (ADR-0013).
+        // ADR-0021. Both planes speak plain HTTP (ADR-0064): the password crosses the network
+        // between the proxy and the Server in clear.
         info!("the REST API and the UI require authentication");
     }
     let operators = classis_server::operator_app(state.clone(), operator_auth);
@@ -627,23 +529,12 @@ async fn main() {
         }
     });
 
-    info!(listen = %config.listen, "serving the OpAMP endpoint and package downloads over TLS");
-    info!(listen = %config.rest.listen, "serving the REST API, the API docs, and the UI over TLS");
+    info!(listen = %config.listen, "serving the OpAMP endpoint and package downloads over HTTP");
+    info!(listen = %config.rest.listen, "serving the REST API, the API docs, and the UI over HTTP");
     let (agents, operators) = tokio::join!(
-        listen::plane(
-            agent_listener,
-            Some(agent_tls),
-            config.max_connections,
-            handle.clone()
-        )
-        .serve(agents),
-        listen::plane(
-            operator_listener,
-            Some(operator_tls),
-            config.rest.max_connections,
-            handle
-        )
-        .serve(operators),
+        listen::plain_plane(agent_listener, config.max_connections, handle.clone()).serve(agents),
+        listen::plain_plane(operator_listener, config.rest.max_connections, handle)
+            .serve(operators),
     );
     agents.expect("serve the Agent plane");
     operators.expect("serve the Operator plane");
@@ -678,19 +569,6 @@ fn shutdown_signal() -> impl std::future::Future<Output = ()> {
     }
 }
 
-/// What a Server that signs no CSRs says once at startup (ADR-0026 clause 37): its hosts hold the
-/// certificates an operator provisioned, and only one that names its host is served an uploaded
-/// artifact.
-fn uploaded_artifacts_notice(signs_csrs: bool) -> Option<String> {
-    (!signs_csrs).then(|| {
-        format!(
-            "without [client_ca], uploaded artifacts reach only hosts whose certificate names a \
-             host ({}<id>)",
-            classis_server::ca::HOST_URI_PREFIX
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,16 +584,5 @@ mod tests {
         assert!(!entry.contains("s3cret"));
         assert!(hasher(Some("--bearer")).is_none(), "--bearer is gone");
         assert!(hasher(None).is_none());
-    }
-
-    /// Without `[client_ca]` the Server says at startup that an uploaded artifact needs a
-    /// certificate naming a host, and how one is named; with it, it says nothing.
-    /// Verifies: ADR-0026
-    #[test]
-    fn a_server_without_client_ca_says_uploaded_artifacts_need_a_host() {
-        let notice = uploaded_artifacts_notice(false).expect("a notice");
-        assert!(notice.contains("uploaded artifacts"), "{notice}");
-        assert!(notice.contains("urn:classis:host:<id>"), "{notice}");
-        assert!(uploaded_artifacts_notice(true).is_none());
     }
 }

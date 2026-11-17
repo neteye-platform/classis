@@ -41,17 +41,19 @@ pub struct ServerConfig {
     /// Refused at startup: the state lives under `data_dir` (ADR-0037), and `server migrate` moves
     /// an older installation there. Read only so that a leftover key can be named.
     pub config_dir: Option<IgnoredAny>,
-    /// TLS for the Agent plane, and for the Operator plane unless `[rest.tls]` names its own
-    /// (ADR-0013, ADR-0032). Required: a Server without it is refused at startup. It is an
-    /// `Option` only so that its absence can be named.
+    /// Refused at startup: the Server speaks plain HTTP behind a reverse proxy that terminates TLS
+    /// (ADR-0064). Read only so that a leftover section can be named.
     pub tls: Option<TlsConfig>,
-    /// Refused at startup: the Agent plane admits by client certificate alone and has no credential
-    /// of its own (ADR-0021 clause 1). Read only so that a leftover section can be named.
+    /// Refused at startup: the Agent plane has no credential of its own, and a top-level `[auth]`
+    /// was never one. Read only so that a leftover section can be named.
     pub auth: Option<IgnoredAny>,
+    /// Refused at startup: the Server does not authenticate Agents (ADR-0064). Whatever admits them
+    /// is outside it, in the proxy. Read only so that a leftover `[agents.auth]` can be named.
+    pub agents: Option<IgnoredAny>,
     /// Optional connection settings offered to the fleet (ADR-0014); absent means none.
     pub connection_offer: Option<ConnectionOfferConfig>,
-    /// Optional certificate authority for signing Agent CSRs (ADR-0021); absent means the Server
-    /// issues nothing and does not declare `AcceptsConnectionSettingsRequest`.
+    /// Refused at startup: the Server speaks no mutual TLS, so it signs no client certificate
+    /// (ADR-0064). Read only so that a leftover section can be named.
     pub client_ca: Option<ClientCaConfig>,
     /// Optional destinations for the Agents' own telemetry (ADR-0016); absent means none is
     /// offered and no Agent reports any.
@@ -108,8 +110,8 @@ pub struct ServerConfig {
     /// with the process's file-descriptor limit. `0` is refused at load.
     #[serde(default = "default_agent_max_connections")]
     pub max_connections: usize,
-    /// The bootstrap CA a host enrols with (ADR-0021 clause 19); absent means no host enrols, and
-    /// an operator provisions every certificate.
+    /// Refused at startup: enrolment with a bootstrap certificate is mutual TLS (ADR-0064), and
+    /// NEAG-34 reimplements it. Read only so that a leftover section can be named.
     pub enrolment: Option<EnrolmentConfig>,
     /// How repeated admission failures from one peer address are throttled (ADR-0021 clause 24).
     #[serde(default)]
@@ -117,6 +119,28 @@ pub struct ServerConfig {
     /// How often an admitted peer may be heard on the Agent plane (ADR-0013).
     #[serde(default)]
     pub agent_rate_limit: AgentRateLimitConfig,
+    /// How the log is written on standard error.
+    #[serde(default)]
+    pub log: LogConfig,
+}
+
+/// The `[log]` section: the format of every line the Server writes to standard error. The level is
+/// `RUST_LOG`'s, not a key.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LogConfig {
+    /// `"text"` (the default), one human-readable line per event, or `"json"`, one JSON object per
+    /// line for a log collector.
+    pub format: LogFormat,
+}
+
+/// The formats of `[log] format`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
 }
 
 /// The `[agent_rate_limit]` section (ADR-0013 clause 19). Every key has a default, and none is `0`:
@@ -655,7 +679,8 @@ pub struct RestConfig {
     /// The connections the Operator plane holds at once (ADR-0013). `0` is refused at load.
     #[serde(default = "default_rest_max_connections")]
     pub max_connections: usize,
-    /// The Operator plane's own certificate and key (ADR-0032); without it, `[tls]`'s.
+    /// Refused at startup, like `[tls]` (ADR-0064). Read only so that a leftover section can be
+    /// named.
     pub tls: Option<RestTlsConfig>,
 }
 
@@ -894,22 +919,6 @@ pub struct ClientCaConfig {
     pub validity_days: u32,
 }
 
-impl ClientCaConfig {
-    /// Loud validation (ADR-0010): a CA that cannot sign, or one whose certificates expire before
-    /// the Client would renew them, is a configuration error rather than a runtime surprise.
-    fn check(&self) -> Result<(), String> {
-        if self.validity_days == 0 {
-            return Err("[client_ca] validity_days must be greater than zero".to_string());
-        }
-        for path in [&self.cert_file, &self.key_file] {
-            if !path.exists() {
-                return Err(format!("[client_ca] {} does not exist", path.display()));
-            }
-        }
-        Ok(())
-    }
-}
-
 fn default_agent_max_connections() -> usize {
     opamp::server::listen::DEFAULT_MAX_CONNECTIONS
 }
@@ -976,6 +985,7 @@ impl Default for ServerConfig {
             config_dir: None,
             tls: None,
             auth: None,
+            agents: None,
             connection_offer: None,
             client_ca: None,
             telemetry_offer: None,
@@ -993,6 +1003,7 @@ impl Default for ServerConfig {
             enrolment: None,
             admission_throttle: AdmissionThrottleConfig::default(),
             agent_rate_limit: AgentRateLimitConfig::default(),
+            log: LogConfig::default(),
         }
     }
 }
@@ -1117,10 +1128,39 @@ impl ServerConfig {
         // that silently did nothing would tell them the fleet still needs it.
         if self.auth.is_some() {
             return Err(
-                "[auth] is refused — the Agent plane admits by client certificate alone; \
+                "[auth] is refused — the Agent plane has no credential of its own (ADR-0064); \
                  remove the section"
                     .to_string(),
             );
+        }
+        // The Server does not authenticate Agents (ADR-0064): the proxy in front of it admits
+        // them. A leftover `[agents.auth]` is refused rather than ignored: an operator who kept it
+        // believes the Server still verifies a token, and a section that silently did nothing
+        // would leave the Agent plane open without them knowing.
+        if self.agents.is_some() {
+            return Err(
+                "[agents.auth] is removed — the Server does not authenticate Agents (ADR-0064); \
+                 the reverse proxy in front of it admits them, so the Agent port must be \
+                 reachable only through it; remove the section"
+                    .to_string(),
+            );
+        }
+        // The Server speaks plain HTTP behind a reverse proxy that terminates TLS (ADR-0064). A
+        // leftover section is refused rather than ignored: an operator who kept `[tls]` believes
+        // the Server still terminates TLS, and a section that silently did nothing would let them
+        // publish plaintext without knowing.
+        for (section, named) in [
+            ("[tls]", self.tls.is_some()),
+            ("[rest.tls]", self.rest.tls.is_some()),
+            ("[client_ca]", self.client_ca.is_some()),
+            ("[enrolment]", self.enrolment.is_some()),
+        ] {
+            if named {
+                return Err(format!(
+                    "{section} is removed — the Server speaks plain HTTP behind a reverse proxy \
+                     that terminates TLS and admits Agents (ADR-0064); remove the section"
+                ));
+            }
         }
         // One root for all state (ADR-0037 clause 1). A leftover key is refused rather than
         // ignored: the directory it names holds the fleet's trust data, which this Server would
@@ -1149,9 +1189,6 @@ impl ServerConfig {
         if let Some(offer) = &self.connection_offer {
             offer.check()?;
         }
-        if let Some(client_ca) = &self.client_ca {
-            client_ca.check()?;
-        }
         if let Some(telemetry) = &self.telemetry_offer {
             telemetry.check()?;
         }
@@ -1171,16 +1208,6 @@ impl ServerConfig {
                  plane and the Operator plane are separate listeners",
                 self.listen, self.rest.listen
             ));
-        }
-        // Mutual TLS needs a TLS listener to happen on: `client_ca_file` lives inside `[tls]`, so
-        // this can only be a `[client_ca]` without one — issuing certificates for a channel that
-        // will never ask for them (ADR-0021).
-        if self.client_ca.is_some() && self.tls.is_none() {
-            return Err(
-                "[client_ca] issues client certificates, which only a TLS listener can ask \
-                 for — add a [tls] section, or remove [client_ca]"
-                    .to_string(),
-            );
         }
         // A limit of zero would refuse every message, and the Baseline knows no "unlimited": the
         // limit is mandatory, so a value that cannot carry a message fails startup.
@@ -1246,38 +1273,10 @@ impl ServerConfig {
         })
     }
 
-    /// The transport rules of the specification's Q-1 (ADR-0013): the Agent plane always serves
-    /// TLS, and the Operator plane off the loopback requires authentication.
+    /// The admission rules (ADR-0064): the Operator plane off the loopback requires
+    /// authentication. The Agent plane asks nothing of an Agent, and no TLS is asked of the
+    /// Server: the reverse proxy in front of it terminates it and admits the Agents.
     fn check_secure(&self) -> Result<(), String> {
-        let Some(tls) = &self.tls else {
-            return Err(
-                "[tls] is required — the Agent plane always serves TLS 1.3; set cert_file and \
-                 key_file (`classisctl pki init` makes a set, scripts/dev-pki.sh a development one)"
-                    .to_string(),
-            );
-        };
-        // The certificate is the whole of admission (ADR-0021 clauses 5, 6).
-        if tls.client_ca_file.is_none() {
-            return Err(
-                "[tls] client_ca_file is required — every Agent presents a client certificate in \
-                 the handshake"
-                    .to_string(),
-            );
-        }
-        if self.enrolment.is_some() && self.client_ca.is_none() {
-            return Err(
-                "[enrolment] needs [client_ca]: an approved request is signed by it".to_string(),
-            );
-        }
-        if let Some(enrolment) = &self.enrolment {
-            let max = crate::enrolment::MAX_PENDING;
-            if !(1..=max).contains(&enrolment.max_pending_per_bootstrap) {
-                return Err(format!(
-                    "[enrolment] max_pending_per_bootstrap must be between 1 and {max}, not {}",
-                    enrolment.max_pending_per_bootstrap
-                ));
-            }
-        }
         let throttle = &self.admission_throttle;
         if throttle.max_failures == 0 || throttle.window_secs == 0 || throttle.backoff_secs == 0 {
             return Err(
@@ -1585,9 +1584,10 @@ impl TelemetryOffer {
 mod tests {
     use super::*;
 
-    /// A `[tls]` section with everything admission needs.
-    const TLS: &str =
-        "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\nclient_ca_file = \"ca.pem\"\n";
+    /// What a configuration needs beyond its own keys to load: nothing. The Server asks the Agent
+    /// plane for no credential and no TLS (ADR-0064); the name stays so the tests that append it
+    /// read as they did.
+    const TLS: &str = "";
 
     #[test]
     fn parses_a_full_config() {
@@ -1894,10 +1894,6 @@ mod tests {
             std::fs::write(&path, format!("{auth}{TLS}")).expect("write");
             let err = ServerConfig::load(&path).expect_err(auth);
             assert!(err.contains("[auth]"), "names the section: {err}");
-            assert!(
-                err.contains("admits by client certificate alone"),
-                "says why: {err}"
-            );
             assert!(!err.contains("plain-"), "never echoes a value: {err}");
         }
         std::fs::write(&path, TLS).expect("write");
@@ -2050,75 +2046,39 @@ mod tests {
         assert!(offer.check().is_err());
     }
 
-    /// The certificate is the whole of admission: a Server without the client CA does not start,
-    /// and neither does an `[enrolment]` without a CA to sign what it approves.
-    /// Verifies: ADR-0021, Q-1
+    /// The Server speaks plain HTTP behind a proxy that terminates TLS: a leftover `[tls]`,
+    /// `[rest.tls]`, `[client_ca]` or `[enrolment]` section is refused by name rather than
+    /// ignored, so nobody keeps believing the Server terminates TLS.
+    /// Verifies: ADR-0064
     #[test]
-    fn the_client_ca_is_required_at_startup() {
+    fn the_sections_of_mutual_tls_are_refused_naming_them() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("server.toml");
-        std::fs::write(
-            &path,
-            "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\n",
-        )
-        .expect("write");
-        let err = ServerConfig::load(&path).expect_err("no client CA");
-        assert!(err.contains("client_ca_file is required"), "{err}");
-
+        for (section, body) in [
+            (
+                "[tls]",
+                "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\nclient_ca_file = \"ca.pem\"\n",
+            ),
+            (
+                "[rest.tls]",
+                "[rest.tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\n",
+            ),
+            (
+                "[client_ca]",
+                "[client_ca]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\n",
+            ),
+            (
+                "[enrolment]",
+                "[enrolment]\nbootstrap_ca_file = \"b.pem\"\n",
+            ),
+        ] {
+            std::fs::write(&path, format!("{TLS}{body}")).expect("write");
+            let err = ServerConfig::load(&path).expect_err(section);
+            assert!(err.contains(&format!("{section} is removed")), "{err}");
+            assert!(err.contains("ADR-0064"), "{err}");
+        }
         std::fs::write(&path, TLS).expect("write");
-        ServerConfig::load(&path).expect("the client CA is all admission needs");
-
-        std::fs::write(
-            &path,
-            format!("{TLS}[enrolment]\nbootstrap_ca_file = \"boot.pem\"\n"),
-        )
-        .expect("write");
-        let err = ServerConfig::load(&path).expect_err("enrolment without a CA");
-        assert!(err.contains("[enrolment] needs [client_ca]"), "{err}");
-    }
-
-    /// The share of the enrolment queue one bootstrap certificate may hold runs from 1 to 1024,
-    /// 256 by default; anything else fails startup naming the key.
-    /// Verifies: ADR-0046
-    #[test]
-    fn max_pending_per_bootstrap_runs_from_1_to_1024() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("server.toml");
-        // `[enrolment]` needs a `[client_ca]` whose files exist; their content is not read here.
-        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
-        std::fs::write(&cert, "").expect("write");
-        std::fs::write(&key, "").expect("write");
-        let with = |line: &str| {
-            format!(
-                "{TLS}[client_ca]\ncert_file = {:?}\nkey_file = {:?}\n\
-                 [enrolment]\nbootstrap_ca_file = \"boot.pem\"\n{line}",
-                cert.display().to_string(),
-                key.display().to_string(),
-            )
-        };
-        std::fs::write(&path, with("")).expect("write");
-        let config = ServerConfig::load(&path).expect("the default");
-        assert_eq!(
-            config
-                .enrolment
-                .expect("enrolment")
-                .max_pending_per_bootstrap,
-            256
-        );
-        for ok in [1, 1024] {
-            std::fs::write(&path, with(&format!("max_pending_per_bootstrap = {ok}\n")))
-                .expect("write");
-            ServerConfig::load(&path).expect("within bounds");
-        }
-        for bad in [0, 1025] {
-            std::fs::write(&path, with(&format!("max_pending_per_bootstrap = {bad}\n")))
-                .expect("write");
-            let err = ServerConfig::load(&path).expect_err("out of bounds");
-            assert!(
-                err.contains("[enrolment] max_pending_per_bootstrap"),
-                "{bad}: {err}"
-            );
-        }
+        ServerConfig::load(&path).expect("the token key is all admission needs");
     }
 
     /// Verifies: ADR-0013
@@ -2137,6 +2097,18 @@ mod tests {
     }
 
     /// Verifies: ADR-0013
+    #[test]
+    fn the_log_format_is_text_unless_json_is_named() {
+        let parse = |text: &str| toml::from_str::<ServerConfig>(text).expect("parse");
+        assert_eq!(parse("").log.format, LogFormat::Text);
+        assert_eq!(
+            parse("[log]\nformat = \"json\"").log.format,
+            LogFormat::Json
+        );
+        let err = toml::from_str::<ServerConfig>("[log]\nformat = \"xml\"").expect_err("xml");
+        assert!(err.to_string().contains("xml"), "{err}");
+    }
+
     #[test]
     fn the_agent_rate_limit_defaults_and_refuses_zero() {
         let cfg: ServerConfig = toml::from_str("").expect("parse");
@@ -2211,17 +2183,28 @@ mod tests {
         assert_eq!(cfg.listen, "127.0.0.1:4320".parse().expect("address"));
     }
 
-    /// Verifies: ADR-0013, ADR-0021, Q-1
+    /// The Server does not authenticate Agents: it starts without any section for them, and a
+    /// leftover `[agents.auth]` is refused naming the section, not ignored.
+    /// Verifies: ADR-0064
     #[test]
-    fn a_server_without_tls_is_refused_at_startup() {
+    fn agents_auth_is_removed_and_a_leftover_one_is_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // No file at all is the defaults, and the defaults serve no TLS.
-        let missing = ServerConfig::load_layered(None, Vec::new()).expect_err("no tls");
-        assert!(missing.contains("[tls] is required"), "{missing}");
+        // No file at all is the defaults, and they start.
+        ServerConfig::load_layered(None, Vec::new()).expect("the defaults start");
         let path = dir.path().join("server.toml");
         std::fs::write(&path, "listen = \"127.0.0.1:4320\"\n").expect("write");
-        let err = ServerConfig::load(&path).expect_err("no tls");
-        assert!(err.contains("[tls] is required"), "{err}");
+        ServerConfig::load(&path).expect("no [agents] section is the normal case");
+        for leftover in [
+            "[agents.auth]\njwt_public_key_file = \"/etc/key.pem\"\n",
+            "[agents.auth]\nissuer = \"proxy\"\n",
+            "[agents]\n",
+        ] {
+            std::fs::write(&path, leftover).expect("write");
+            let err = ServerConfig::load(&path).expect_err(leftover);
+            assert!(err.contains("[agents.auth] is removed"), "{err}");
+            assert!(err.contains("reachable only through"), "{err}");
+            assert!(!err.contains("/etc/key.pem"), "never echoes a value: {err}");
+        }
     }
 
     /// Verifies: ADR-0013, ADR-0021
@@ -2253,12 +2236,9 @@ mod tests {
             .collect()
     }
 
-    /// The `[tls]` section as variables, for a configuration that comes from the environment alone.
-    const TLS_VARIABLES: [(&str, &str); 3] = [
-        ("CLASSIS_SERVER__TLS__CERT_FILE", "c.pem"),
-        ("CLASSIS_SERVER__TLS__KEY_FILE", "k.pem"),
-        ("CLASSIS_SERVER__TLS__CLIENT_CA_FILE", "ca.pem"),
-    ];
+    /// A variable that sets a key to its default, so a configuration that comes from the
+    /// environment alone has something to carry.
+    const TLS_VARIABLES: [(&str, &str); 1] = [("CLASSIS_SERVER__LISTEN", "127.0.0.1:4320")];
 
     /// A mistake in the file is named with its line, also when the environment sets other keys
     /// beside it (ADR-0051 clause 7: the file's checks hold as they did).
@@ -2296,7 +2276,7 @@ mod tests {
             format!(
                 "data_dir = \"from-file\"\nstale_after_secs = 120\n\
                  [connection_offer]\nheartbeat_interval_secs = 30\n\
-                 [rest.tls]\ncert_file = \"file-ui.pem\"\nkey_file = \"file-ui-key.pem\"\n\
+                 [rest]\nmax_connections = 100\nlisten = \"127.0.0.1:4400\"\n\
                  [database]\nstore = \"postgres\"\n\
                  [database.postgres]\nhost = \"db.example\"\nport = 5432\ndbname = \"fleet\"\n\
                  user = \"fleet\"\npassword_file = \"/run/secrets/pg\"\n{TLS}"
@@ -2308,10 +2288,7 @@ mod tests {
             variables(&[
                 ("CLASSIS_SERVER__DATABASE__POSTGRES__PORT", "5433"),
                 ("CLASSIS_SERVER__DATA_DIR", "/var/lib/fleet"),
-                (
-                    "CLASSIS_SERVER__REST__TLS__CERT_FILE",
-                    "/run/secrets/ui.pem",
-                ),
+                ("CLASSIS_SERVER__REST__MAX_CONNECTIONS", "200"),
                 (
                     "CLASSIS_SERVER__CONNECTION_OFFER__HEARTBEAT_INTERVAL_SECS",
                     "45",
@@ -2323,9 +2300,8 @@ mod tests {
         .expect("loads");
         let config = layered.config;
         assert_eq!(config.data_dir, PathBuf::from("/var/lib/fleet"));
-        let rest_tls = config.rest.tls.expect("[rest.tls]");
-        assert_eq!(rest_tls.cert_file, PathBuf::from("/run/secrets/ui.pem"));
-        assert_eq!(rest_tls.key_file, PathBuf::from("file-ui-key.pem"));
+        assert_eq!(config.rest.max_connections, 200, "the variable wins");
+        assert_eq!(config.rest.listen.port(), 4400, "a key no variable names");
         assert_eq!(
             config
                 .connection_offer
@@ -2350,9 +2326,8 @@ mod tests {
         let file = config_file(None, None, &default).expect("no file is no error");
         assert_eq!(file, None);
         let config = ServerConfig::load_layered(file.as_deref(), variables(&TLS_VARIABLES))
-            .expect("the environment carries [tls]")
+            .expect("the environment alone is a configuration")
             .config;
-        assert_eq!(config.tls.expect("[tls]").cert_file, PathBuf::from("c.pem"));
         assert_eq!(config.listen.port(), 4320, "a default");
 
         std::fs::write(&default, TLS).expect("write");
@@ -2488,14 +2463,6 @@ mod tests {
 
         let mut pairs = TLS_VARIABLES.to_vec();
         pairs.push(("CLASSIS_SERVER__DATA_DIR", "\"1234\""));
-        pairs.push((
-            "CLASSIS_SERVER__ENROLMENT__BOOTSTRAP_CA_FILE",
-            "/run/secrets/pg",
-        ));
-        let err = ServerConfig::load_layered(None, variables(&pairs))
-            .expect_err("[enrolment] without [client_ca]");
-        assert!(err.contains("[enrolment] needs [client_ca]"), "{err}");
-        pairs.pop();
         let config = ServerConfig::load_layered(None, variables(&pairs))
             .expect("a quoted number is a string")
             .config;
@@ -2653,12 +2620,7 @@ mod tests {
         pairs.push(("CLASSIS_SERVER__DATA_DIR", "/var/lib/secret-place"));
         let layered = ServerConfig::load_layered(None, variables(&pairs)).expect("loads");
         let notice = layered.environment_notice().expect("a notice");
-        for key in [
-            "tls.cert_file",
-            "tls.key_file",
-            "tls.client_ca_file",
-            "data_dir",
-        ] {
+        for key in ["listen", "data_dir"] {
             assert!(notice.contains(key), "{notice}");
         }
         for (_, value) in pairs {
