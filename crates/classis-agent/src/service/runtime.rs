@@ -128,11 +128,7 @@ fn start_log_file(config: &crate::config::ClientConfig) {
     if !config.logging.enabled {
         return;
     }
-    let dir = config
-        .logging
-        .dir
-        .clone()
-        .unwrap_or_else(|| crate::logging::default_dir(&config.state_dir));
+    let dir = crate::logging::configured_dir(config);
     let supervisors: Vec<&str> = config
         .supervisors
         .iter()

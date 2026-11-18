@@ -234,6 +234,13 @@ fn revoke_command(
             dir.display()
         );
     }
+    if classis_agent::logging::configured_dir(&config).is_relative() {
+        println!(
+            "  not deleted: the Client's log files in the relative [logging] dir {}, which the \
+             service resolves against its own working directory; remove them by hand",
+            classis_agent::logging::configured_dir(&config).display()
+        );
+    }
     if !revoked.kept.is_empty() {
         let kept: Vec<String> = revoked
             .kept

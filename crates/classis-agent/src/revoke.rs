@@ -11,7 +11,9 @@
 //! the state directory ([`Outside`]): the Supervisors' directories under a `supervisor_dir` of its
 //! own, each with the identity (`instance-uid`) of the Agent it runs, and the Client's log files in
 //! a `[logging] dir` of its own. Left behind, the identities would be reported by Agents the new
-//! enrolment gives new `instance_uid`s, and refused.
+//! enrolment gives new `instance_uid`s, and refused. Only what this Client's configuration names
+//! is deleted there: the directories of its own Supervisor blocks and the tombstones of a purge.
+//! A directory that no block names is left, whatever it holds — it may be another Client's.
 //!
 //! `--keep-cache` spares what a re-enrolled host would only download again: `config/` and
 //! `packages/`. It is an exception taken out of the default deletion — every entry of the
@@ -26,7 +28,7 @@ use crate::config::{tombstone_of, ClientConfig, PACKAGES_DIR};
 use crate::enrolment::{ServiceHost, STATE_FILE};
 use crate::nofollow::HeldDir;
 use crate::service::ServiceState;
-use crate::storage::{CONFIG_DIR, UID_FILE};
+use crate::storage::CONFIG_DIR;
 
 /// What `--keep-cache` spares, among everything the state directory holds.
 const CACHE: [&str; 2] = [CONFIG_DIR, PACKAGES_DIR];
@@ -39,27 +41,54 @@ pub struct Outside {
     /// The Supervisors' root, where `supervisor_dir` puts it outside the state directory, and the
     /// names of the configured Supervisors beneath it.
     pub supervisors_root: Option<(PathBuf, Vec<String>)>,
-    /// The `[logging] dir`, where it lies outside the state directory.
+    /// The log directory ([`crate::logging::configured_dir`]), where it lies outside the state directory.
     pub log_dir: Option<PathBuf>,
 }
 
 impl Outside {
-    /// What `config` puts outside its state directory.
+    /// What `config` puts outside its state directory, compared as the places they are: a `..` or a
+    /// link in how a directory is written does not make it lie inside the state directory or
+    /// outside it.
+    ///
+    /// A relative `[logging] dir` is left out: the service resolves it against the working
+    /// directory it was started in, which this process does not share, so no directory here is
+    /// provably where its logs went. Resolving it against this process's own would delete
+    /// `supervisor.*.log` files from the shell's directory instead.
     #[must_use]
     pub fn of(config: &ClientConfig) -> Self {
-        let state_dir = &config.state_dir;
+        let state_dir = resolved(&config.state_dir);
         let root = config.supervisors_root();
+        let log_dir = crate::logging::configured_dir(config);
         Outside {
-            supervisors_root: (!root.starts_with(state_dir)).then(|| {
+            supervisors_root: (!resolved(&root).starts_with(&state_dir)).then(|| {
                 let names = config.supervisors.iter().map(|b| b.name.clone()).collect();
                 (root, names)
             }),
-            log_dir: config
-                .logging
-                .dir
-                .as_deref()
-                .map(crate::config_file::absolute)
-                .filter(|dir| !dir.starts_with(state_dir)),
+            log_dir: (log_dir.is_absolute() && !resolved(&log_dir).starts_with(&state_dir))
+                .then_some(log_dir),
+        }
+    }
+}
+
+/// `path` with `..` and links resolved as far as it exists, and the rest — a directory not made
+/// yet — appended as written. What the guards compare, so that two spellings of one directory are
+/// one. It is for comparing only: the deletion never follows a link at what it deletes.
+fn resolved(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            return missing
+                .into_iter()
+                .rev()
+                .fold(real, |dir, name| dir.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
         }
     }
 }
@@ -182,20 +211,25 @@ pub fn revoke(
 /// directories it deleted from. Nothing outside the two directories the configuration names is
 /// touched, and no link is followed: a link is removed as itself.
 ///
-/// - In the Supervisors' root, a Supervisor's directory goes: one a configured block names, a
-///   tombstone of one a purge left, and one that holds an `instance-uid` though no block names it
-///   now. Anything else the root holds is not the Client's, and so is an entry that is the state
-///   directory or holds it: a `supervisor_dir` above the state directory is no licence to delete
+/// - In the Supervisors' root, a Supervisor's directory goes: one a configured block names, and a
+///   tombstone of one a purge left. Anything else the root holds is not provably this Client's —
+///   a directory holding an `instance-uid` may be another Client's — and so is an entry that is
+///   the state directory or holds it, compared as the directories they are, `..` and links of the
+///   directories resolved: a `supervisor_dir` above the state directory is no licence to delete
 ///   the state directory's own `--keep-cache` entries or the installation beside it.
-/// - In a `[logging] dir`, the Client's own log files ([`crate::logging::is_log_file`]): an
+/// - In a log directory, the Client's own log files ([`crate::logging::is_log_file`]): an
 ///   operator may have pointed it at a directory other programs write to.
 fn wipe_outside(state_dir: &Path, outside: &Outside) -> Result<Vec<PathBuf>, String> {
     let mut emptied = Vec::new();
     if let Some((root, supervisors)) = &outside.supervisors_root {
         if let Some(dir) = open_existing(root)? {
+            let state_dir = resolved(state_dir);
+            let real_root = resolved(root);
             for name in dir.names().map_err(|e| read_error(root, &e))? {
                 let path = root.join(&name);
-                if state_dir.starts_with(&path) || !is_a_supervisors(&name, &path, supervisors) {
+                if state_dir.starts_with(real_root.join(&name))
+                    || !is_a_supervisors(&name, supervisors)
+                {
                     continue;
                 }
                 dir.remove_all(&name).map_err(|e| delete_error(&path, &e))?;
@@ -235,16 +269,11 @@ fn delete_error(path: &Path, e: &std::io::Error) -> String {
     format!("cannot delete {}: {e}", path.display())
 }
 
-/// Whether the entry `name` of the Supervisors' root, at `path`, is a Supervisor's directory.
-fn is_a_supervisors(name: &std::ffi::OsStr, path: &Path, supervisors: &[String]) -> bool {
-    let named = name
-        .to_str()
-        .is_some_and(|name| supervisors.iter().any(|s| s == name) || tombstone_of(name).is_some());
-    named
-        || std::fs::symlink_metadata(path).is_ok_and(|meta| {
-            meta.is_dir()
-                && std::fs::symlink_metadata(path.join(UID_FILE)).is_ok_and(|uid| uid.is_file())
-        })
+/// Whether the entry `name` of the Supervisors' root is one of this Client's Supervisors'
+/// directories: named by a configured block, or the tombstone a purge left.
+fn is_a_supervisors(name: &std::ffi::OsStr, supervisors: &[String]) -> bool {
+    name.to_str()
+        .is_some_and(|name| supervisors.iter().any(|s| s == name) || tombstone_of(name).is_some())
 }
 
 /// The confirmation `revoke` asks on a terminal.
@@ -523,9 +552,10 @@ mod tests {
         );
     }
 
-    /// Outside the state directory `revoke` deletes the Supervisors' directories — named by a
-    /// block, left by a purge, or holding an identity no block names now — and the Client's own
-    /// log files, and nothing else those two directories hold; `--keep-cache` spares none of it.
+    /// Outside the state directory `revoke` deletes the Supervisors' directories this Client's
+    /// blocks name or a purge left, and the Client's own log files, and nothing else those two
+    /// directories hold — a directory holding an `instance-uid` that no block names, another
+    /// Client's, included; `--keep-cache` spares none of it.
     /// Verifies: ADR-0064
     #[test]
     fn the_supervisors_and_log_files_outside_the_state_directory_are_deleted() {
@@ -538,13 +568,15 @@ mod tests {
         for (path, contents) in [
             ("supervisors/named/program/bin", "x"),
             ("supervisors/named/packages/p", "x"),
-            ("supervisors/orphan/instance-uid", "x"),
+            ("supervisors/another-clients/instance-uid", "x"),
+            ("supervisors/another-clients/program/bin", "x"),
             ("supervisors/.purge-gone-0123456789abcdef0/x", "x"),
             ("supervisors/someone-elses/data", "x"),
             ("supervisors/notes.txt", "x"),
             ("logs/supervisor.2026-11-17.log", "x"),
             ("logs/other.log", "x"),
             ("logs/supervisor.notes", "x"),
+            ("logs/supervisor.notes.log", "x"),
         ] {
             let path = elsewhere.path().join(path);
             std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
@@ -556,8 +588,16 @@ mod tests {
         };
         let revoked =
             revoke(dir.path(), &outside, true, true, &Host(None), &mut yes).expect("revoked");
-        assert_eq!(left(&root), ["notes.txt", "someone-elses"]);
-        assert_eq!(left(&logs), ["other.log", "supervisor.notes"]);
+        assert_eq!(
+            left(&root),
+            ["another-clients", "notes.txt", "someone-elses"]
+        );
+        assert!(root.join("another-clients/instance-uid").exists());
+        assert!(root.join("another-clients/program/bin").exists());
+        assert_eq!(
+            left(&logs),
+            ["other.log", "supervisor.notes", "supervisor.notes.log"]
+        );
         assert_eq!(revoked.outside, [root, logs]);
         assert_eq!(
             left(dir.path()),
@@ -597,6 +637,152 @@ mod tests {
             [data.path().to_path_buf()],
             "no log directory to empty"
         );
+    }
+
+    fn config_in(state_dir: &Path, extra: &str) -> ClientConfig {
+        let mut config: ClientConfig =
+            toml::from_str(&format!("state_dir = '{}'\n{extra}", state_dir.display()))
+                .expect("config");
+        config.state_dir = state_dir.to_path_buf();
+        config
+    }
+
+    /// Whether a directory lies inside the state directory is decided on the directories, not on
+    /// how they are written: a `..` that leaves the state directory is outside, one that comes
+    /// back into it is inside, and a link to it is it.
+    /// Verifies: ADR-0064
+    #[test]
+    fn the_places_outside_are_decided_on_resolved_directories() {
+        let base = tempfile::tempdir().expect("base");
+        let (state, other) = (base.path().join("state"), base.path().join("other"));
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&other).expect("other");
+        let spelled = |text: &Path| text.display().to_string();
+
+        let back_in = other.join("..").join("state").join("sup");
+        let out_by_dotdot = state.join("..").join("elsewhere");
+        let config = config_in(
+            &state,
+            &format!(
+                "supervisor_dir = '{}'\n[logging]\ndir = '{}'\n",
+                spelled(&back_in),
+                spelled(&state.join("..").join("state").join("log"))
+            ),
+        );
+        assert_eq!(Outside::of(&config), Outside::default());
+
+        let config = config_in(
+            &state,
+            &format!(
+                "supervisor_dir = '{}'\n[logging]\ndir = '{}'\n",
+                spelled(&out_by_dotdot),
+                spelled(&out_by_dotdot.join("log"))
+            ),
+        );
+        assert_eq!(
+            Outside::of(&config),
+            Outside {
+                supervisors_root: Some((out_by_dotdot.clone(), Vec::new())),
+                log_dir: Some(out_by_dotdot.join("log")),
+            }
+        );
+
+        #[cfg(unix)]
+        {
+            let link = base.path().join("link");
+            std::os::unix::fs::symlink(&state, &link).expect("link");
+            let config = config_in(
+                &state,
+                &format!(
+                    "supervisor_dir = '{}'\n[logging]\ndir = '{}'\n",
+                    spelled(&link.join("sup")),
+                    spelled(&link.join("log"))
+                ),
+            );
+            assert_eq!(Outside::of(&config), Outside::default());
+        }
+    }
+
+    /// A relative `[logging] dir` is named as the service uses it — as written, against a working
+    /// directory this process does not share — and is not resolved against this process's own:
+    /// `revoke` would delete `supervisor.*.log` files from the wrong directory. It is left out of
+    /// what is deleted, and the default log directory is the one beneath the state directory.
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_relative_log_directory_is_not_resolved_against_the_operators_directory() {
+        let state = tempfile::tempdir().expect("state");
+        let config = config_in(state.path(), "[logging]\ndir = \"logs-here\"\n");
+        assert_eq!(
+            crate::logging::configured_dir(&config),
+            Path::new("logs-here")
+        );
+        assert_eq!(Outside::of(&config), Outside::default());
+
+        let config = config_in(state.path(), "");
+        assert_eq!(
+            crate::logging::configured_dir(&config),
+            state.path().join("logs")
+        );
+    }
+
+    /// The state directory and the installation beside it are not deleted by the guard alone
+    /// even when a `supervisor_dir` above them names a block after the state directory and the
+    /// directories are spelled with `..` or through a link: with `--keep-cache` the state
+    /// directory's `packages/` survives, and so does everything the installation holds.
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_block_named_like_the_state_directory_costs_neither_it_nor_the_installation() {
+        let base = tempfile::tempdir().expect("base");
+        let data = base.path().join("data");
+        let state = data.join("state");
+        std::fs::create_dir_all(base.path().join("other")).expect("other");
+        for (path, contents) in [
+            ("data/state/state.json", "{}"),
+            ("data/state/packages/p", "x"),
+            ("data/supervisor.toml", "x"),
+            ("data/versions/1.0.0/supervisor", "x"),
+            ("data/stub/instance-uid", "x"),
+        ] {
+            let path = base.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(path, contents).expect("write");
+        }
+        let names = vec!["state".to_string(), "stub".to_string()];
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![(
+            base.path().join("other").join("..").join("data"),
+            state.clone(),
+        )];
+        #[cfg(unix)]
+        {
+            let link = base.path().join("link");
+            std::os::unix::fs::symlink(base.path(), &link).expect("link");
+            spellings.push((link.join("data"), state.clone()));
+            spellings.push((data.clone(), link.join("data").join("state")));
+            spellings.push((
+                link.join("data"),
+                link.join("other").join("..").join("data").join("state"),
+            ));
+        }
+        for (root, state_dir) in spellings {
+            let outside = Outside {
+                supervisors_root: Some((root.clone(), names.clone())),
+                log_dir: None,
+            };
+            revoke(&state_dir, &outside, true, true, &Host(None), &mut yes).expect("revoked");
+            assert_eq!(
+                left(&data),
+                ["state", "supervisor.toml", "versions"],
+                "{} / {}",
+                root.display(),
+                state_dir.display()
+            );
+            assert_eq!(left(&state), ["packages"]);
+            assert!(data.join("versions/1.0.0/supervisor").exists());
+            std::fs::create_dir_all(data.join("stub")).expect("stub");
+            std::fs::write(data.join("stub/instance-uid"), "x").expect("write");
+            std::fs::write(state.join("state.json"), "{}").expect("write");
+        }
     }
 
     /// A link in the Supervisors' root or the log directory is removed as a link, and what it

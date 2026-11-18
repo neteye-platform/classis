@@ -12,7 +12,7 @@
 //! what another sees through its own at once.
 
 use std::fmt::Write as _;
-use std::sync::Mutex;
+use std::sync::{PoisonError, RwLock};
 
 use classis_core::enrolment_key::{validate_space_name, EnrolmentKey};
 use oauth_token::secret;
@@ -55,12 +55,17 @@ impl From<String> for SpaceError {
 /// The Spaces of one store.
 pub struct Spaces {
     store: Box<dyn SpaceStore>,
-    /// Held by [`Spaces::rotate`] and by [`Spaces::while_current`], so that once a rotation has
-    /// returned, no registration that judged the old key current can still be stored. In-process
-    /// is enough: the Server is a single process, which on PostgreSQL its advisory lock
-    /// (ADR-0050 clause 6) makes so, and the Spaces are rotated through this Server's own
-    /// [`Spaces`].
-    rotation: Mutex<()>,
+    /// Held for writing by [`Spaces::rotate`] and for reading by [`Spaces::while_current`], so
+    /// that once a rotation has returned, no registration that judged the old key current can
+    /// still be stored, while registrations stay concurrent with one another. It guards no data:
+    /// what it orders lives in the stores, so a panic that poisons it leaves nothing to repair and
+    /// the guard is taken from a poisoned lock all the same.
+    ///
+    /// In-process is enough, and is the whole guarantee: the Server is a single process, which on
+    /// PostgreSQL its advisory lock (ADR-0050 clause 6) makes so, and every rotation goes through
+    /// the running Server's own [`Spaces`]. A process that rotated a key from outside it would not
+    /// be ordered by this lock.
+    rotation: RwLock<()>,
 }
 
 /// A fresh key of the Space `name`, in a buffer sized once and wiped when it is dropped.
@@ -78,7 +83,7 @@ impl Spaces {
     pub fn new(store: Box<dyn SpaceStore>) -> Self {
         Spaces {
             store,
-            rotation: Mutex::new(()),
+            rotation: RwLock::new(()),
         }
     }
 
@@ -135,7 +140,10 @@ impl Spaces {
     pub fn rotate(&self, name: &str) -> Result<Zeroizing<String>, SpaceError> {
         validate_space_name(name).map_err(|_| SpaceError::NotFound)?;
         let key = new_key(name);
-        let _rotating = self.rotation.lock().expect("rotation lock");
+        let _rotating = self
+            .rotation
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
         if self.store.replace_key(name, &key)? {
             Ok(key)
         } else {
@@ -147,7 +155,8 @@ impl Spaces {
     /// its result; `None` when it is not. [`rotate`](Self::rotate) cannot land while `act` runs,
     /// so once a rotation has returned `act` has not been started under the old key: "the old key
     /// enrols nothing" (ADR-0064 clause 1) holds for what `act` stores, not only for what was
-    /// checked before it.
+    /// checked before it. Calls of `while_current` do not wait for one another, only for a
+    /// rotation that is running.
     ///
     /// # Errors
     /// Returns an error when the Spaces cannot be read.
@@ -157,7 +166,7 @@ impl Spaces {
         space: &str,
         act: impl FnOnce() -> T,
     ) -> Result<Option<T>, String> {
-        let _held = self.rotation.lock().expect("rotation lock");
+        let _held = self.rotation.read().unwrap_or_else(PoisonError::into_inner);
         match self.resolve(presented)? {
             Some(current) if current == space => Ok(Some(act())),
             _ => Ok(None),
@@ -401,6 +410,104 @@ pub(crate) mod tests {
             &Spaces::new(Box::new(FsSpaceStore::open(dir.path()).expect("open"))),
             &|| crate::fs::testing::refuse(&file),
             &|| crate::fs::testing::mend(&file),
+        );
+    }
+
+    /// Registrations do not wait for one another: two that judge the key current are both inside
+    /// `while_current` at once. Each waits, with a bound, for the other to arrive; were they
+    /// serialised the wait would end unmet.
+    /// Verifies: ADR-0064
+    #[test]
+    fn two_registrations_proceed_concurrently_while_no_rotation_runs() {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spaces = Arc::new(Spaces::new(Box::new(
+            FsSpaceStore::open(dir.path()).expect("open"),
+        )));
+        let key = spaces.create("prod").expect("create");
+        let (first_in, first_seen) = channel();
+        let (second_in, second_seen) = channel();
+        let register = |arrived: std::sync::mpsc::Sender<()>,
+                        other: std::sync::mpsc::Receiver<()>| {
+            let (spaces, key) = (spaces.clone(), key.clone());
+            std::thread::spawn(move || {
+                spaces
+                    .while_current(&key, "prod", || {
+                        arrived.send(()).expect("the test listens");
+                        other.recv_timeout(Duration::from_secs(10)).is_ok()
+                    })
+                    .expect("read")
+                    .expect("the key is current")
+            })
+        };
+        let first = register(first_in, second_seen);
+        let second = register(second_in, first_seen);
+        assert!(first.join().expect("first"), "the second never arrived");
+        assert!(second.join().expect("second"), "the first never arrived");
+    }
+
+    /// A store whose key replacement panics while it is armed.
+    struct Panicking {
+        inner: FsSpaceStore,
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl SpaceStore for Panicking {
+        fn load(&self) -> Result<Vec<SpaceRecord>, String> {
+            self.inner.load()
+        }
+        fn create(&self, space: &SpaceRecord) -> Result<bool, String> {
+            self.inner.create(space)
+        }
+        fn get(&self, name: &str) -> Result<Option<SpaceRecord>, String> {
+            self.inner.get(name)
+        }
+        fn replace_key(&self, name: &str, key: &str) -> Result<bool, String> {
+            assert!(
+                !self.armed.load(std::sync::atomic::Ordering::SeqCst),
+                "the store panics"
+            );
+            self.inner.replace_key(name, key)
+        }
+    }
+
+    /// One panic while a key is being replaced does not poison the rotation lock for good: the
+    /// state it orders is in the stores, so later registrations and rotations run as before.
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_panic_under_the_rotation_lock_does_not_disable_enrolment_or_rotation() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let armed = Arc::new(AtomicBool::new(false));
+        let spaces = Arc::new(Spaces::new(Box::new(Panicking {
+            inner: FsSpaceStore::open(dir.path()).expect("open"),
+            armed: armed.clone(),
+        })));
+        let key = spaces.create("prod").expect("create");
+
+        armed.store(true, Ordering::SeqCst);
+        let rotating = {
+            let spaces = spaces.clone();
+            std::thread::spawn(move || spaces.rotate("prod"))
+        };
+        assert!(rotating.join().is_err(), "the rotation panicked");
+        armed.store(false, Ordering::SeqCst);
+        assert!(spaces.rotation.is_poisoned(), "the lock is poisoned");
+
+        assert_eq!(
+            spaces.while_current(&key, "prod", || 7).expect("read"),
+            Some(7),
+            "the old key still stands, and still enrols"
+        );
+        let rotated = spaces.rotate("prod").expect("rotate");
+        assert_eq!(
+            spaces.while_current(&key, "prod", || 7).expect("read"),
+            None
+        );
+        assert_eq!(
+            spaces.while_current(&rotated, "prod", || 7).expect("read"),
+            Some(7)
         );
     }
 

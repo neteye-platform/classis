@@ -255,7 +255,11 @@ async fn no_secret_reaches_the_log() {
     let basic = |password: &str| {
         base64::engine::general_purpose::STANDARD.encode(format!("ops:{password}"))
     };
-    let key_secret = key.rsplit('_').next().expect("a secret").to_string();
+    // The secret's alphabet contains `_`, so only the key format reads it right.
+    let key_secret = classis_core::enrolment_key::EnrolmentKey::parse(&key)
+        .expect("a well-formed key")
+        .secret()
+        .to_string();
     let secrets = [
         ("the enrolment key", key.clone()),
         ("the enrolment key's secret", key_secret.clone()),

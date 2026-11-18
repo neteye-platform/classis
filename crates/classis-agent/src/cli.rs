@@ -126,8 +126,9 @@ pub enum Command {
     // ADR-0064 clause 7.
     /// Take this host out of the fleet, locally: delete everything in the state directory,
     /// `state.json` with it, and what the configuration keeps for the host outside it — the
-    /// Supervisors' directories of a `supervisor_dir`, the Client's log files of a `[logging]
-    /// dir`. The Server is not contacted.
+    /// directories of its configured Supervisors in a `supervisor_dir`, and the Client's own log
+    /// files in an absolute `[logging] dir`. Other directories there are left. The Server is not
+    /// contacted.
     ///
     /// Refused while the service runs. Asks for a confirmation, which `--force` skips, and keeps
     /// the service from starting at boot again.

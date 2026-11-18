@@ -107,8 +107,9 @@ mod unix {
     }
 
     /// `enrol` runs as root or an Administrator over a state directory the service's account
-    /// owns, and its write of `state.json` follows no link: a link at the temporary name is
-    /// replaced and what it points at is as it was; a link at `state.json` itself is refused; a
+    /// owns, and its write of `state.json` follows no link: it stages under a name of its own that
+    /// no account can guess, so a link at the old fixed staging name is neither followed
+    /// nor removed, and what it points at is as it was; a link at `state.json` itself is refused; a
     /// state directory that is a link is refused and nothing is created behind it.
     /// Verifies: ADR-0054, ADR-0064
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -116,7 +117,7 @@ mod unix {
         let server = tempfile::tempdir().expect("server");
         let (base, key) = a_server(server.path()).await;
 
-        // The name `state.json` is staged under.
+        // The name `state.json` was once staged under, now only a name the write does not use.
         let root = tempfile::tempdir().expect("root");
         let outside = tempfile::tempdir().expect("outside");
         let state = root.path().join("state");
@@ -125,9 +126,16 @@ mod unix {
         enrol(&base, &key, &state).await.expect("enrolled");
         assert_untouched(&staged);
         assert!(
-            !is_link(&state.join("state.json~")),
-            "no temporary name is left"
+            is_link(&state.join("state.json~")),
+            "the planted link is left as it was"
         );
+        let mut staging: Vec<String> = std::fs::read_dir(&state)
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with('~'))
+            .collect();
+        staging.sort();
+        assert_eq!(staging, ["state.json~"], "no temporary name is left");
         assert!(!is_link(&state.join("state.json")), "the file is no link");
         assert_eq!(
             std::fs::metadata(state.join("state.json"))

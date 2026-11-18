@@ -117,9 +117,12 @@ built on them.
    restarting the Server does not replace it: only an explicit rotation
    request creates and persists a new one. The key is reusable without limit
    and auto-approves. Rotation makes the old key enrol nothing; hosts already
-   enrolled keep their client and their token. The stored key is protected as
-   a secret. The operator's commands for creating a space, retrieving its key
-   and requesting rotation are outside this decision.
+   enrolled keep their client and their token. Once a rotation has returned,
+   no registration with the old key completes: the running Server orders the
+   two, so every rotation goes through the running Server, never past it to
+   the stores. The stored key is protected as a secret. The operator's
+   commands for creating a space, retrieving its key and requesting rotation
+   are outside this decision.
 2. **Registration** is `POST /v1/enrol` on the Agent plane, following RFC 7591
    with an `application/json` request and the enrolment key as its _initial
    access token_: `Authorization: Bearer cle1_…`, never in the URL (RFC 6750
@@ -260,8 +263,9 @@ built on them.
    `config/` and `packages/` directories. It is an exception taken out of the
    default deletion, not a list of its own, so whatever the default deletes in
    future is deleted under the flag too. Host state the configuration keeps
-   outside the state directory goes as well: the Supervisors' directories,
-   with their `instance_uid`s, under a configured Supervisors' root, and the
+   outside the state directory goes as well: the directories of the
+   Supervisors the configuration names, with their `instance_uid`s, under a
+   configured Supervisors' root, and the
    Client's own log files in a configured log directory. Nothing else there is
    touched, neither other programs' files nor the installation. A new `enrol`
    creates a new device ID, and the host's Agents start with new
