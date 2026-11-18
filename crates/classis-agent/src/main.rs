@@ -4,9 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
-use classis_agent::cli::{self, Command, ConfigArgs, InstallArgs, ServiceAction};
+use classis_agent::cli::{
+    self, Command, ConfigArgs, EnrolArgs, InstallArgs, RevokeArgs, ServiceAction,
+};
 use classis_agent::config::ClientConfig;
 use classis_agent::config_init;
+use classis_agent::enrolment;
+use classis_agent::revoke;
 use classis_agent::service::runtime::{self, RunSpec};
 use classis_agent::service::{
     layout, manager, run_as, windows_rights, ServiceControl, ServiceLevel,
@@ -84,6 +88,12 @@ fn main() {
         Some(Command::Service { action }) => {
             service_command(&cli.config, config_named, cli.state_dir.as_deref(), &action)
         }
+        Some(Command::Enrol(args)) => {
+            enrol_command(&cli.config, config_named, cli.state_dir.as_deref(), &args)
+        }
+        Some(Command::Revoke(args)) => {
+            revoke_command(&cli.config, config_named, cli.state_dir.as_deref(), &args)
+        }
         // Answer for this executable so a self-update can prove it before pointing at it
         // (ADR-0018). Deliberately does nothing else: it must work on a binary that has no
         // configuration, no state directory, and no Server.
@@ -135,6 +145,100 @@ fn agents_service(socket: &Path, client_uid: u32) -> Result<(), String> {
 #[cfg(windows)]
 fn agents_service(pipe: &Path, client: classis_agent::win32::Sid) -> Result<(), String> {
     classis_agent::service::windows::run_agents_as_service(pipe, client)
+}
+
+/// The configuration `enrol` and `revoke` act under, and with it the state directory (ADR-0064
+/// clause 7): the state directory `--state-dir` names; otherwise, where no configuration is named
+/// and a system service is registered, the one that registration carries and the configuration an
+/// install lays out for it; otherwise the configuration file's, as a foreground run reads it.
+fn host_config(
+    config_path: &Path,
+    config_named: bool,
+    state_dir_named: Option<&Path>,
+) -> Result<ClientConfig, String> {
+    let registered = if config_named || state_dir_named.is_some() {
+        None
+    } else {
+        manager::registered_state_dir(ServiceLevel::System)?
+    };
+    let config_path = if registered.is_some() {
+        manager::default_root(ServiceLevel::System)?.join(config_init::FILE_NAME)
+    } else {
+        config_path.to_path_buf()
+    };
+    let mut config = ClientConfig::load(&config_path)?;
+    if let Some(dir) = state_dir_named.map(absolute).transpose()?.or(registered) {
+        config.state_dir = dir;
+    }
+    Ok(config)
+}
+
+/// `enrol <base-url> <key>` (ADR-0064 clause 7).
+fn enrol_command(
+    config_path: &Path,
+    config_named: bool,
+    state_dir_named: Option<&Path>,
+    args: &EnrolArgs,
+) -> Result<(), String> {
+    let config = host_config(config_path, config_named, state_dir_named)?;
+    let tls = classis_agent::tls::trust(&config)?;
+    let enrolled = runtime::daemon_runtime()?.block_on(enrolment::enrol(
+        &args.base_url,
+        &args.key,
+        &config.state_dir,
+        tls,
+        &enrolment::NativeHost,
+    ))?;
+    for warning in &enrolled.warnings {
+        println!("warning: {warning}");
+    }
+    println!(
+        "enrolled in the space {} as {}",
+        enrolled.space, enrolled.device_id
+    );
+    println!("  state file: {}", enrolled.state_file.display());
+    if enrolled.service_started {
+        println!("  the service is started, and starts at boot");
+    } else {
+        println!(
+            "  no service is registered for this state directory: `supervisor run` runs the \
+             Client in the foreground"
+        );
+    }
+    Ok(())
+}
+
+/// `revoke [--force] [--keep-cache]` (ADR-0064 clause 7).
+fn revoke_command(
+    config_path: &Path,
+    config_named: bool,
+    state_dir_named: Option<&Path>,
+    args: &RevokeArgs,
+) -> Result<(), String> {
+    let config = host_config(config_path, config_named, state_dir_named)?;
+    let revoked = revoke::revoke(
+        &config.state_dir,
+        args.force,
+        args.keep_cache,
+        &enrolment::NativeHost,
+        &mut revoke::confirm_on_terminal,
+    )?;
+    println!(
+        "revoked: everything in {} is deleted",
+        config.state_dir.display()
+    );
+    if !revoked.kept.is_empty() {
+        let kept: Vec<String> = revoked
+            .kept
+            .iter()
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        println!("  kept (--keep-cache): {}", kept.join(", "));
+    }
+    if revoked.service_disabled {
+        println!("  the service will not start at boot until this host is enrolled again");
+    }
+    Ok(())
 }
 
 /// Dispatch a `service` verb (ADR-0019).
@@ -723,10 +827,17 @@ fn install(
             manager::agents_service_name()
         );
     }
-    // Since service-manager 0.10, launchd installs do not auto-start; say the next step instead
-    // of pretending.
-    let user = if args.scope.user { " --user" } else { "" };
-    println!("start it with: supervisor service start{user}");
+    // An install starts nothing and enables nothing (ADR-0064 clause 7); say the next step instead
+    // of pretending. A user-scope service names no state directory `enrol` could match it on, so
+    // it is started by hand once the host is enrolled.
+    if args.scope.user {
+        println!(
+            "enrol this host with: supervisor enrol <base-url> <key>, then start it with: \
+             supervisor service start --user"
+        );
+    } else {
+        println!("enrol this host, which starts the service: supervisor enrol <base-url> <key>");
+    }
     Ok(())
 }
 

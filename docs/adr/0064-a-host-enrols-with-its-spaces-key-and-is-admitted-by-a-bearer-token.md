@@ -235,11 +235,19 @@ built on them.
    `access_token` in `state.json` and retry. A bare `401`, `invalid_request` or
    `invalid_client` does not trigger token replacement. It keeps no expiry and
    never renews ahead of time, so an open WebSocket session is never cut by the
-   Client's own renewal. Nothing else in the file changes after `enrol`. The
-   service stays idle while no `state.json` exists.
+   Client's own renewal. Nothing else in the file changes after `enrol`.
 
-   `revoke` is local only and never contacts the Server. It asks for
-   confirmation (`--force` skips it) and deletes the Client's whole state
+   A host without `state.json` runs nothing. Installing the Client registers
+   its service but neither starts it nor lets it start at boot; `enrol`, once
+   `state.json` is written and handed to the account the service runs as,
+   starts the service and lets it start at boot. The Client, as a service or
+   in the foreground, refuses to start without a `state.json` and names
+   `enrol`.
+
+   `revoke` is local only and never contacts the Server. It refuses while the
+   Client's service is running. It asks for
+   confirmation (`--force` skips it), keeps the service from starting at boot
+   again, and deletes the Client's whole state
    directory, `state.json` included: without its `state.json` a host is gone,
    and nothing else stored for it may outlive it. `--keep-cache` spares the
    `config/` and `packages/` directories. It is an exception taken out of the
@@ -495,7 +503,9 @@ implementation:
   `invalid_token`, not after a bare `401`, `invalid_request` or
   `invalid_client`; `revoke` never contacts the Server and deletes the whole
   state directory, and with `--keep-cache` everything but `config/` and
-  `packages/`; the service idles while no `state.json` exists.
+  `packages/`, refuses while the service runs and leaves it unable to start
+  at boot; the Client refuses to start without a `state.json`; installing
+  starts nothing, and `enrol` starts the service.
 - The fuzz targets of clause 8 run in `fuzz.yml`.
 
 **Not mechanically decidable:** that nothing of the certificate model is left

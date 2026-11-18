@@ -94,6 +94,24 @@ fn the_post_install_steps_write_the_configuration() {
     }
 }
 
+/// The post-install starts nothing and enables nothing: the service starts when `enrol` has
+/// written `state.json`, so what it tells the operator to run is `enrol`, never `systemctl start`,
+/// and it makes no call that starts or enables the service itself (ADR-0064 clause 7).
+/// Verifies: ADR-0064
+#[test]
+fn the_post_install_tells_the_operator_to_enrol_and_starts_nothing() {
+    let script = post_install();
+    let text = printed(&script).join("\n");
+    assert!(text.contains("classis enrol"), "{text}");
+    assert!(!text.contains("systemctl start"), "{text}");
+    for command in commands(&script) {
+        assert!(
+            !command.contains("systemctl enable") && !command.contains("systemctl start"),
+            "{command}"
+        );
+    }
+}
+
 fn maintainer_script(name: &str) -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../packaging/linux")

@@ -280,6 +280,16 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
     if let Some(notice) = config.leftover_auth_notice() {
         tracing::warn!(config = %spec.config_path.display(), "{notice}");
     }
+    // A host without `state.json` runs nothing, as a service or in the foreground, and the error
+    // names `enrol` (ADR-0064 clause 7). Before the self-update in flight is resolved: a host that
+    // never enrolled has none, and one that lost its file did not lose it to its new version.
+    config = match enrolled(config) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!(error = %error, "the Client does not start");
+            return Err(error);
+        }
+    };
 
     // Resolve any self-update in flight before anything else runs (ADR-0018): this process may be
     // a freshly installed version on probation, or the previous one brought back after a rollback.
@@ -395,7 +405,7 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
             // configuration — endpoint, intervals, possibly the other transport —
             // and reconnect. The Engine (and its Managed Processes) carries on.
             RunOutcome::Reconfigured => {
-                config = load_effective_config(&spec)?;
+                config = enrolled(load_effective_config(&spec)?)?;
                 // The telemetry destinations of the same offer are already in force: since
                 // ADR-0014 `process_connection_offer` applies them before it asks for the
                 // reconnect, and it composes the one acknowledgement that names anything refused.
@@ -450,6 +460,17 @@ fn load_effective_config(spec: &RunSpec) -> Result<ClientConfig, String> {
     if let Some(stored) = connection::load(&config.state_dir) {
         connection::apply(&mut config, &stored);
     }
+    Ok(config)
+}
+
+/// `config` with what `state.json` holds: the host's identity and its access token, which the run
+/// presents upstream (ADR-0064 clause 7).
+///
+/// # Errors
+/// Returns the error that names `enrol` where the host has no `state.json`, and why a file that is
+/// there cannot be read.
+fn enrolled(mut config: ClientConfig) -> Result<ClientConfig, String> {
+    config.credentials = Some(crate::enrolment::required(&config.state_dir)?);
     Ok(config)
 }
 

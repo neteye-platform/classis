@@ -460,6 +460,8 @@ dependencies = [
  "futures-util",
  "hex",
  "libc",
+ "oauth-registration",
+ "oauth-token",
  "opamp",
  "opentelemetry",
  "opentelemetry-appender-tracing",

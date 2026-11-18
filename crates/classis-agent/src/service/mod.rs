@@ -64,6 +64,18 @@ pub trait ServiceControl {
     /// Returns an error if the platform manager refuses.
     fn stop(&self) -> Result<(), String>;
 
+    /// Let the service start at boot. Starts nothing.
+    ///
+    /// # Errors
+    /// Returns an error if the platform manager refuses.
+    fn enable(&self) -> Result<(), String>;
+
+    /// Keep the service from starting at boot again. Stops nothing.
+    ///
+    /// # Errors
+    /// Returns an error if the platform manager refuses.
+    fn disable(&self) -> Result<(), String>;
+
     /// The service's current state.
     ///
     /// # Errors
@@ -86,6 +98,12 @@ mod tests {
         }
         fn stop(&self) -> Result<(), String> {
             self.0.set(ServiceState::Stopped);
+            Ok(())
+        }
+        fn enable(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn disable(&self) -> Result<(), String> {
             Ok(())
         }
         fn state(&self) -> Result<ServiceState, String> {

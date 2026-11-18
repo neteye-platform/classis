@@ -159,6 +159,54 @@ impl HeldDir {
         check_name(name)?;
         sys::remove(self, name)
     }
+
+    /// The names of everything in this directory, read through its handle.
+    ///
+    /// # Errors
+    /// Returns an error when the directory cannot be read.
+    pub fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+            Ok(crate::storage::handle::entries(&self.fd)?
+                .into_iter()
+                .map(|name| std::ffi::OsString::from_vec(name.into_bytes()))
+                .collect())
+        }
+        #[cfg(windows)]
+        {
+            std::fs::read_dir(&self.path)?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect()
+        }
+    }
+
+    /// Removes the entry `name` with everything beneath it. A link is removed as a link and never
+    /// followed, in this directory or in any directory beneath it.
+    ///
+    /// # Errors
+    /// Returns the first entry that cannot be removed.
+    pub fn remove_all(&self, name: &std::ffi::OsStr) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let entry = std::ffi::CString::new(name.as_bytes())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            crate::storage::handle::remove_tree_at(&self.fd, &entry, &self.path.join(name))
+        }
+        #[cfg(windows)]
+        {
+            let path = self.path.join(name);
+            let kind = std::fs::symlink_metadata(&path)?.file_type();
+            // A real directory is emptied without following a link or a junction in it; a link
+            // is removed as itself, a file link or a directory link as each needs.
+            if kind.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

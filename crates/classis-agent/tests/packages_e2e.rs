@@ -82,7 +82,8 @@ async fn spawn_server(
                 PackageOffering::new(dir.path(), store).expect("deployments"),
             )),
     );
-    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -90,6 +91,11 @@ async fn spawn_server(
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
+    // The Client is a host of the Server's Space: the `state.json` of the state directory the
+    // tests below name (ADR-0064).
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
     (addr, state, dir)
 }
 

@@ -51,7 +51,7 @@
                  Text="The configuration is written to %ProgramData%\classis\supervisor.toml. Edit it there afterwards, or run &quot;supervisor service config&quot; from an elevated prompt." />
 
         <Control Id="StartNote" Type="Text" X="20" Y="207" Width="320" Height="25" NoPrefix="yes"
-                 Text="The service is registered but not started, so that a Client which is not yet fully configured never runs against the wrong Server." />
+                 Text="The service is registered but not started, and does not start at boot. Run &quot;supervisor enrol &lt;base-url&gt; &lt;key&gt;&quot; from an elevated prompt: it enrols this host and starts the service." />
       </Dialog>
     </UI>
   </Fragment>

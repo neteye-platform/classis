@@ -30,8 +30,9 @@ pub(crate) fn certificates_file(path: &Path) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     /// The Client's secrets are held in buffers wiped when they are dropped: the Supervisor
-    /// Endpoint token and `[packages] archive_key`.
-    /// Were either a plain buffer again, this would not compile.
+    /// Endpoint token, `[packages] archive_key`, and the client secret and the access token of
+    /// `state.json` (ADR-0064 clause 7).
+    /// Were any a plain buffer again, this would not compile.
     /// Verifies: ADR-0057
     #[test]
     fn the_clients_secrets_are_held_in_zeroizing_buffers() {
@@ -41,6 +42,13 @@ mod tests {
         }
         let makes_token: fn() -> Result<Zeroizing<String>, String> =
             crate::supervisor::endpoint::new_token;
+        fn enrolment(
+            credentials: crate::credentials::Credentials,
+        ) -> (Zeroizing<String>, Zeroizing<String>) {
+            (credentials.client_secret, credentials.access_token)
+        }
+        let _: fn(crate::credentials::Credentials) -> (Zeroizing<String>, Zeroizing<String>) =
+            enrolment;
 
         assert_eq!(makes_token().expect("a token").len(), 64);
         let packages: crate::config::PackagesConfig =

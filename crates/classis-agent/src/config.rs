@@ -105,6 +105,11 @@ pub struct ClientConfig {
     /// from the `--process-uid` its registration names, never by the file.
     #[serde(skip)]
     pub process_account_group: Option<crate::supervisor::ports::ProcessAccountGroup>,
+    /// What `enrol` wrote into `state.json` (ADR-0064 clause 7): the token every upstream request
+    /// carries and the credentials that replace it. Set by the run from the state directory, never
+    /// by the file; `None` where no host is enrolled, which is every unit test's configuration.
+    #[serde(skip)]
+    pub credentials: Option<crate::credentials::Credentials>,
     /// The largest OpAMP message the Client accepts or sends, on either transport and in either
     /// direction — the Supervisor Endpoint included. The Baseline requires the limit, recommends
     /// this default, and asks that it be configurable.
@@ -200,7 +205,7 @@ pub const PROGRAM_DIR: &str = "program";
 pub const TREE_DIR: &str = "tree";
 
 /// The subdirectory a downloaded artifact is staged in, per Supervisor.
-const PACKAGES_DIR: &str = "packages";
+pub(crate) const PACKAGES_DIR: &str = "packages";
 
 /// The default Supervisors' root in the state directory, where `supervisor_dir` names none.
 const SUPERVISORS_DIR: &str = "supervisors";
@@ -795,6 +800,7 @@ impl Default for ClientConfig {
             path: None,
             state_dir_as_written: default_state_dir(),
             process_account_group: None,
+            credentials: None,
             max_message_size_bytes: default_max_message_size(),
             max_artifact_size_bytes: default_max_artifact_size(),
             supervisors: Vec::new(),

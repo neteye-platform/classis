@@ -19,7 +19,20 @@ fn wait_for(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// The host is enrolled, as the Client requires before it runs anything (ADR-0064): a `state.json`
+/// in the `state` directory beside the configuration, for a Server that is not there to be asked.
+fn enrolled(config_path: &Path) {
+    let state = config_path
+        .parent()
+        .expect("the configuration has a directory")
+        .join("state");
+    if !state.join("state.json").exists() {
+        common::write_state_json(&state, "http://127.0.0.1:1");
+    }
+}
+
 fn spawn_client(config_path: &Path) -> Child {
+    enrolled(config_path);
     Command::new(env!("CARGO_BIN_EXE_supervisor"))
         .arg("--config")
         .arg(config_path)
@@ -61,6 +74,7 @@ fn write_config(dir: &Path, marker: &Path) -> std::path::PathBuf {
     );
     let path = dir.join("supervisor.toml");
     std::fs::write(&path, config).expect("write supervisor.toml");
+    enrolled(&path);
     path
 }
 

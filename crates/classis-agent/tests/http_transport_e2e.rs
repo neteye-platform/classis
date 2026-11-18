@@ -125,12 +125,17 @@ fn spawn_client(config_path: &Path) -> ClientUnderTest {
 async fn a_configuration_rollout_reaches_a_polling_client() {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    // The Client is a host of the Server's Space (ADR-0064).
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
 
     let state_dir: PathBuf = dir.path().join("client-state");
     let marker = dir.path().join("otelcol-marker");
@@ -219,12 +224,17 @@ async fn a_package_rollout_reaches_a_polling_client() {
                 PackageOffering::new(store_dir.path(), store).expect("deployments"),
             )),
     );
-    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    // The Client is a host of the Server's Space (ADR-0064).
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
 
     let state_dir = dir.path().join("client-state");
     let program_dir = state_dir.join("supervisors/myagent/program");

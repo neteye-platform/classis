@@ -43,6 +43,9 @@ impl Pki {
     }
 }
 
+/// What the refusal of a connection without the credential says in `WWW-Authenticate`.
+const CHALLENGE: &str = "Bearer error=\"invalid_token\"";
+
 /// Admits a connection that brings the credential, and answers every report with its own
 /// `instance_uid`.
 struct Gate;
@@ -64,7 +67,10 @@ impl Handler for Gate {
         } else {
             Err(Rejection {
                 status: StatusCode::UNAUTHORIZED,
-                headers: Vec::new(),
+                headers: vec![(
+                    header::WWW_AUTHENTICATE,
+                    header::HeaderValue::from_static(CHALLENGE),
+                )],
                 message: "refused".to_string(),
             })
         }
@@ -267,5 +273,137 @@ async fn a_tls12_only_server_fails_the_handshake() {
             .await
             .expect_err("a TLS 1.2 server was reached");
         assert!(error.starts_with("cannot reach"), "{scheme}: {error}");
+    }
+}
+
+/// A session that is refused, notes what it was told of the refusal, and answers as it was made to
+/// whether the run ends on it.
+struct Refused {
+    ends_on_refusal: bool,
+    told: Vec<Vec<String>>,
+    lost: usize,
+}
+
+impl Refused {
+    fn new(ends_on_refusal: bool) -> Self {
+        Refused {
+            ends_on_refusal,
+            told: Vec::new(),
+            lost: 0,
+        }
+    }
+}
+
+impl Session for Refused {
+    fn connected(&mut self) -> Vec<AgentToServer> {
+        report().into_iter().collect()
+    }
+    fn routine(&mut self) -> Vec<AgentToServer> {
+        Vec::new()
+    }
+    fn owed(&mut self) -> Vec<AgentToServer> {
+        Vec::new()
+    }
+    fn on_reply(&mut self, _: &ServerToAgent) -> Option<Duration> {
+        None
+    }
+    async fn after_reply<S: ReportSink>(&mut self, _: &mut S) -> AfterReply {
+        AfterReply::Continue
+    }
+    async fn changed(&mut self) {
+        std::future::pending::<()>().await;
+    }
+    fn exchange_failed(&mut self) {
+        self.lost += 1;
+    }
+    async fn stop(&mut self) {}
+    fn goodbyes(&mut self) -> Vec<AgentToServer> {
+        Vec::new()
+    }
+    fn unauthorized(&mut self, challenges: &[String]) -> bool {
+        self.told.push(challenges.to_vec());
+        self.ends_on_refusal
+    }
+}
+
+/// Stops the run once the time given has passed since it was made.
+struct After(tokio::time::Instant);
+
+impl After {
+    fn new(after: Duration) -> Self {
+        After(tokio::time::Instant::now() + after)
+    }
+}
+
+impl StopSignal for After {
+    fn requested(&mut self) -> impl std::future::Future<Output = ()> + Send {
+        tokio::time::sleep_until(self.0)
+    }
+}
+
+/// A `401` that refuses a connection, and the `WWW-Authenticate` header it came with, reach the
+/// caller on both transports: the run ends with them, and the session is told of them first
+/// (ADR-0064 clause 7).
+/// Verifies: ADR-0064
+#[tokio::test]
+async fn a_401_and_its_challenge_reach_the_caller_on_both_transports() {
+    let pki = Pki::new();
+    let port = serve(&pki);
+    for scheme in ["wss", "https"] {
+        let without = Connection {
+            authorization: None,
+            ..connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki)
+        };
+        let mut session = Refused::new(true);
+        let ended = tokio::time::timeout(
+            Duration::from_secs(10),
+            opamp::client::connection::run(&without, &mut session, &mut Never),
+        )
+        .await
+        .expect("within the bound")
+        .expect("run");
+        assert_eq!(
+            ended,
+            Ended::Unauthorized {
+                challenges: vec![CHALLENGE.to_string()]
+            },
+            "{scheme}"
+        );
+        assert_eq!(session.told, [[CHALLENGE.to_string()]], "{scheme}");
+    }
+}
+
+/// A session that does not end the run on a `401` keeps the driver's behaviour for it: the refusal
+/// is not the end of the run, a lost exchange on plain HTTP and a retry after a back-off on a
+/// WebSocket (ADR-0064 clause 7: only an invalid token asks for a new one).
+/// Verifies: ADR-0064
+#[tokio::test]
+async fn a_session_that_does_not_end_on_a_401_keeps_the_drivers_behaviour() {
+    let pki = Pki::new();
+    let port = serve(&pki);
+    for scheme in ["wss", "https"] {
+        let without = Connection {
+            authorization: None,
+            ..connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki)
+        };
+        let mut session = Refused::new(false);
+        let ended = tokio::time::timeout(
+            Duration::from_secs(10),
+            opamp::client::connection::run(
+                &without,
+                &mut session,
+                &mut After::new(Duration::from_millis(300)),
+            ),
+        )
+        .await
+        .expect("within the bound")
+        .expect("run");
+        assert_eq!(ended, Ended::Stopped, "{scheme}");
+        assert_eq!(session.told, [[CHALLENGE.to_string()]], "{scheme}");
+        assert_eq!(
+            session.lost,
+            usize::from(scheme == "https"),
+            "{scheme}: a refused exchange is a lost one on plain HTTP alone"
+        );
     }
 }

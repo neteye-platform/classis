@@ -4,6 +4,8 @@
 
 #![cfg(unix)]
 
+mod common;
+
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -22,6 +24,9 @@ fn sigterm_shuts_the_client_down_cleanly() {
         ),
     )
     .expect("write the config");
+
+    // A host that runs anything is enrolled (ADR-0064).
+    common::write_state_json(&dir.path().join("state"), "http://127.0.0.1:9");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_supervisor"))
         .arg("--config")

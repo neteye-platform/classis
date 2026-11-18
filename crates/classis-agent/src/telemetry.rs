@@ -275,6 +275,10 @@ struct Endpoints {
     metrics: Option<String>,
     traces: Option<String>,
     logs: Option<String>,
+    /// The hash of the access token the exporters at the Server's own origin were built with, so
+    /// that a new token is a change, and the exporters carrying the old one are replaced. `None`
+    /// where no destination has that origin.
+    bearer: Option<Vec<u8>>,
 }
 
 impl Telemetry {
@@ -300,11 +304,18 @@ impl Telemetry {
         description: &AgentDescription,
         config: &ClientConfig,
     ) -> Vec<String> {
-        let wanted = Endpoints {
+        let mut wanted = Endpoints {
             metrics: endpoint_of(settings.own_metrics.as_ref()),
             traces: endpoint_of(settings.own_traces.as_ref()),
             logs: endpoint_of(settings.own_logs.as_ref()),
+            bearer: None,
         };
+        wanted.bearer = carried_token(
+            config,
+            [&wanted.metrics, &wanted.traces, &wanted.logs]
+                .into_iter()
+                .flatten(),
+        );
         let mut this = self.providers();
         if wanted == this.in_force {
             return Vec::new();
@@ -627,8 +638,9 @@ impl std::fmt::Debug for RuntimeBoundClient {
     }
 }
 
-/// The HTTP client the OTLP exporters send through: this Client's TLS trust and no credential —
-/// the fleet identity is for the Server, not for a telemetry destination (ADR-0016) — and it
+/// The HTTP client the OTLP exporters send through: this Client's TLS trust and no credential of its
+/// own — the host's access token is for the Server, and [`headers`] puts it only on what goes to
+/// the Server's own origin (ADR-0016, ADR-0064 clause 7) — and it
 /// follows no redirect, so a destination cannot steer the export to another host or to plaintext.
 ///
 /// `ca_cert` is deliberately *not* added to the trust store. The Baseline is explicit about it:
@@ -679,8 +691,15 @@ fn resource(description: &AgentDescription) -> Resource {
         .build()
 }
 
-fn headers(settings: &TelemetryConnectionSettings) -> HashMap<String, String> {
-    settings
+/// The headers an exporter sends: the ones the Server offered, and the host's access token where
+/// the destination has the Server's own origin (ADR-0064 clause 7) — there in place of any
+/// `Authorization` that was offered, and nowhere else, so the token never reaches another
+/// collector.
+fn headers(
+    settings: &TelemetryConnectionSettings,
+    config: &ClientConfig,
+) -> HashMap<String, String> {
+    let mut headers: HashMap<String, String> = settings
         .headers
         .as_ref()
         .map(|headers| {
@@ -690,7 +709,32 @@ fn headers(settings: &TelemetryConnectionSettings) -> HashMap<String, String> {
                 .map(|header| (header.key.clone(), header.value.clone()))
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let authorization = crate::packages::ServerOrigin::new(config)
+        .ok()
+        .and_then(|origin| {
+            origin
+                .authorization_for(&settings.destination_endpoint)
+                .map(str::to_string)
+        });
+    if let Some(authorization) = authorization {
+        headers.retain(|key, _| !key.eq_ignore_ascii_case("authorization"));
+        headers.insert("Authorization".to_string(), authorization);
+    }
+    headers
+}
+
+/// A hash of the access token, when any of `destinations` is at the Server's own origin and so
+/// carries it.
+fn carried_token<'a>(
+    config: &ClientConfig,
+    mut destinations: impl Iterator<Item = &'a String>,
+) -> Option<Vec<u8>> {
+    use sha2::Digest as _;
+    let origin = crate::packages::ServerOrigin::new(config).ok()?;
+    destinations
+        .find_map(|destination| origin.authorization_for(destination))
+        .map(|authorization| sha2::Sha256::digest(authorization.as_bytes()).to_vec())
 }
 
 fn metric_provider(
@@ -701,7 +745,7 @@ fn metric_provider(
     let exporter = MetricExporter::builder()
         .with_http()
         .with_endpoint(&settings.destination_endpoint)
-        .with_headers(headers(settings))
+        .with_headers(headers(settings, config))
         .with_http_client(exporter_client("own_metrics", config)?)
         .build()
         .map_err(|e| format!("own_metrics: cannot build the exporter: {e}"))?;
@@ -724,7 +768,7 @@ fn trace_provider(
     let exporter = SpanExporter::builder()
         .with_http()
         .with_endpoint(&settings.destination_endpoint)
-        .with_headers(headers(settings))
+        .with_headers(headers(settings, config))
         .with_http_client(exporter_client("own_traces", config)?)
         .build()
         .map_err(|e| format!("own_traces: cannot build the exporter: {e}"))?;
@@ -742,7 +786,7 @@ fn log_provider(
     let exporter = LogExporter::builder()
         .with_http()
         .with_endpoint(&settings.destination_endpoint)
-        .with_headers(headers(settings))
+        .with_headers(headers(settings, config))
         .with_http_client(exporter_client("own_logs", config)?)
         .build()
         .map_err(|e| format!("own_logs: cannot build the exporter: {e}"))?;

@@ -220,7 +220,7 @@ pub fn apply(config: &mut ClientConfig, stored: &ConnectionSettingsOffers) {
 /// offered fields, falling back to the current ones. A WebSocket candidate must complete its
 /// handshake; a plain-HTTP candidate must complete a real exchange, fed by `probe_report`. The
 /// current TLS trust override applies to the candidate too. Offered `headers` are never used, and
-/// no `Authorization` is sent (ADR-0014 clauses 5, 8).
+/// no `Authorization` but the host's own access token is sent (ADR-0014 clauses 5, 8, ADR-0064 clause 7).
 pub async fn verify(
     settings: &OpAmpConnectionSettings,
     config: &ClientConfig,
@@ -626,8 +626,9 @@ mod tests {
         String::from_utf8_lossy(&head).to_ascii_lowercase()
     }
 
-    /// The verification connect carries no `Authorization` on either transport — not one an offer
-    /// planted in its `headers`, and not one a leftover `[auth]` in the file still names.
+    /// The verification connect of a host that is not enrolled carries no `Authorization` on either
+    /// transport — not one an offer planted in its `headers`, and not one a leftover `[auth]` in
+    /// the file still names.
     /// Verifies: ADR-0014, ADR-0021
     #[tokio::test]
     async fn verify_sends_no_authorization_even_when_one_is_offered() {
@@ -662,6 +663,52 @@ mod tests {
             );
             assert!(!head.contains("authorization"), "{scheme}: {head}");
             assert!(!head.contains("x-fleet"), "{scheme}: {head}");
+        }
+    }
+
+    /// An enrolled host's verification connect carries its own access token on either transport —
+    /// and still never a credential an offer planted in its `headers`, nor one a leftover `[auth]`
+    /// in the file names (ADR-0064 clause 7).
+    /// Verifies: ADR-0064
+    #[tokio::test]
+    async fn verify_sends_the_hosts_own_token_and_nothing_offered() {
+        opamp::tls::install_ring_provider();
+        for scheme in ["ws", "http"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            let seen = tokio::spawn(request_head(listener));
+
+            let mut config: ClientConfig = toml::from_str(&format!(
+                "endpoint = \"{scheme}://127.0.0.1:{port}/v1/opamp\"\n\
+                 [auth]\nbearer_token = \"leftover\"\n"
+            ))
+            .expect("config");
+            config.credentials = Some(crate::credentials::Credentials {
+                endpoint: "https://fleet.example".to_string(),
+                space: "lab".to_string(),
+                device_id: "device".to_string(),
+                client_secret: zeroize::Zeroizing::new("secret".to_string()),
+                access_token: zeroize::Zeroizing::new("the-hosts-token".to_string()),
+            });
+            let offered = OpAmpConnectionSettings {
+                headers: Some(planted_headers()),
+                ..Default::default()
+            };
+            let _ = verify(&offered, &config, || Some(AgentToServer::default())).await;
+
+            let head = tokio::time::timeout(std::time::Duration::from_secs(5), seen)
+                .await
+                .expect("the probe reached the listener")
+                .expect("listener");
+            assert!(
+                head.contains("authorization: bearer the-hosts-token"),
+                "{scheme}: {head}"
+            );
+            for planted in ["planted-value", "leftover", "x-fleet"] {
+                assert!(!head.contains(planted), "{scheme}: {head}");
+            }
         }
     }
 

@@ -91,13 +91,14 @@ func main() {
 		flags := flag.NewFlagSet("client", flag.ExitOnError)
 		requestUid := flags.Bool("request-uid", false, "ask the Server for an instance_uid")
 		files := flags.String("tls", "", "ca")
+		bearer := flags.String("bearer", "", "access token sent as Authorization: Bearer")
 		_ = flags.Parse(os.Args[2:])
 		if flags.NArg() != 1 {
 			usage()
 		}
 		var config *tls.Config
 		if config, err = clientTLS(*files); err == nil {
-			err = runClient(flags.Arg(0), *requestUid, config)
+			err = runClient(flags.Arg(0), *requestUid, *bearer, config)
 		}
 	case "server":
 		flags := flag.NewFlagSet("server", flag.ExitOnError)
@@ -117,7 +118,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: opamp-go-harness client [--request-uid] [--tls ca] <url>")
+	fmt.Fprintln(os.Stderr, "usage: opamp-go-harness client [--request-uid] [--bearer token] [--tls ca] <url>")
 	fmt.Fprintln(os.Stderr, "       opamp-go-harness server [--tls cert,key]")
 	os.Exit(2)
 }
@@ -197,7 +198,7 @@ const agentCapabilities = protobufs.AgentCapabilities_AgentCapabilities_ReportsS
 	protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig |
 	protobufs.AgentCapabilities_AgentCapabilities_ReportsHeartbeat
 
-func runClient(url string, requestUid bool, tlsConfig *tls.Config) error {
+func runClient(url string, requestUid bool, bearer string, tlsConfig *tls.Config) error {
 	var uid clienttypes.InstanceUid
 	if _, err := rand.Read(uid[:]); err != nil {
 		return err
@@ -233,8 +234,15 @@ func runClient(url string, requestUid bool, tlsConfig *tls.Config) error {
 
 	heartbeat := time.Second
 	ctx := context.Background()
+	// The credential of a Server that admits by bearer token (ADR-0064): sent with the WebSocket
+	// upgrade and with every plain-HTTP request.
+	var header http.Header
+	if bearer != "" {
+		header = http.Header{"Authorization": []string{"Bearer " + bearer}}
+	}
 	settings := clienttypes.StartSettings{
 		OpAMPServerURL:    url,
+		Header:            header,
 		Client:            httpClient,
 		TLSConfig:         websocketTLS(httpClient, tlsConfig),
 		InstanceUid:       uid,

@@ -115,6 +115,21 @@ pub enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    // ADR-0064 clause 7.
+    /// Enrol this host with the Server: register with the Space's key, get a token, and write
+    /// `state.json` in the state directory. Starts the registered service, and lets it start at
+    /// boot.
+    ///
+    /// The key names the Space (`cle1_<space>_<secret>`), and nothing else does: no command takes
+    /// a Space a second time. A host that holds a `state.json` is refused.
+    Enrol(EnrolArgs),
+    // ADR-0064 clause 7.
+    /// Take this host out of the fleet, locally: delete everything in the state directory,
+    /// `state.json` with it. The Server is not contacted.
+    ///
+    /// Refused while the service runs. Asks for a confirmation, which `--force` skips, and keeps
+    /// the service from starting at boot again.
+    Revoke(RevokeArgs),
     // ADR-0018.
     /// Prove that this executable is a Classis Client and say which version.
     ///
@@ -126,6 +141,38 @@ pub enum Command {
     /// it is a machine-to-machine handshake and not an operator command.
     #[command(hide = true)]
     SelfCheck,
+}
+
+/// Arguments for `enrol` (ADR-0064 clause 7): the Server's base URL and the Space's enrolment key.
+#[derive(Debug, clap::Args)]
+pub struct EnrolArgs {
+    /// The Server's base URL, against which `/v1/enrol` and `/v1/token` are resolved: `https://`,
+    /// or `http://` to 127.0.0.1 or ::1 alone.
+    #[arg(value_name = "BASE_URL")]
+    pub base_url: String,
+    /// The enrolment key of the Space this host joins: `cle1_<space>_<secret>`.
+    #[arg(value_name = "KEY", value_parser = secret_value)]
+    pub key: zeroize::Zeroizing<String>,
+}
+
+/// A secret on the command line, held in a buffer wiped when it is dropped (ADR-0057).
+fn secret_value(text: &str) -> Result<zeroize::Zeroizing<String>, String> {
+    if text.is_empty() {
+        return Err("it is empty".to_string());
+    }
+    Ok(zeroize::Zeroizing::new(text.to_string()))
+}
+
+/// Arguments for `revoke` (ADR-0064 clause 7).
+#[derive(Debug, clap::Args)]
+pub struct RevokeArgs {
+    /// Delete without asking for a confirmation.
+    #[arg(long)]
+    pub force: bool,
+    /// Spare `config/` and `packages/` in the state directory, which a host enrolled again would
+    /// only download again. Everything else in it is deleted.
+    #[arg(long)]
+    pub keep_cache: bool,
 }
 
 /// Arguments for `run`.
@@ -1096,6 +1143,61 @@ mod tests {
         assert_eq!(cli.state_dir, Some(PathBuf::from("/var/lib/x")));
         // Absent by default: the configuration file's value applies.
         assert_eq!(parse(&["client"]).state_dir, None);
+    }
+
+    /// `enrol` takes the base URL and the key, and nothing else: the Space is in the key, so no
+    /// flag states it a second time (ADR-0064 clause 7).
+    /// Verifies: ADR-0064
+    #[test]
+    fn enrol_takes_a_base_url_and_a_key_and_no_space() {
+        let cli = parse(&[
+            "client",
+            "enrol",
+            "https://fleet.example",
+            "cle1_lab_secret",
+        ]);
+        match cli.command {
+            Some(Command::Enrol(args)) => {
+                assert_eq!(args.base_url, "https://fleet.example");
+                assert_eq!(args.key.as_str(), "cle1_lab_secret");
+            }
+            other => panic!("expected `enrol`, parsed {other:?}"),
+        }
+        for refused in [
+            &["client", "enrol", "https://fleet.example"][..],
+            &[
+                "client",
+                "enrol",
+                "--space",
+                "lab",
+                "https://f.example",
+                "cle1_x",
+            ],
+            &["client", "enrol", "https://f.example", "cle1_x", "extra"],
+            &["client", "enrol", "https://f.example", ""],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+        let shown = format!(
+            "{:?}",
+            parse(&["client", "enrol", "https://f.example", "cle1_lab_s3cret"])
+        );
+        assert!(!shown.contains("s3cret"), "{shown}");
+    }
+
+    /// `revoke` takes `--force` and `--keep-cache` and neither by default.
+    /// Verifies: ADR-0064
+    #[test]
+    fn revoke_takes_force_and_keep_cache() {
+        let flags = |args: &[&str]| match parse(args).command {
+            Some(Command::Revoke(revoke)) => (revoke.force, revoke.keep_cache),
+            other => panic!("expected `revoke`, parsed {other:?}"),
+        };
+        assert_eq!(flags(&["client", "revoke"]), (false, false));
+        assert_eq!(
+            flags(&["client", "revoke", "--force", "--keep-cache"]),
+            (true, true)
+        );
     }
 
     #[test]

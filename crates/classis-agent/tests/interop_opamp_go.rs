@@ -161,10 +161,15 @@ async fn wait_until<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
     panic!("timed out waiting for {what}");
 }
 
-/// Our Server in-process, plaintext on the loopback, as the rest of the suite runs it.
+/// Our Server in-process, plaintext on the loopback, as the rest of the suite runs it: it admits
+/// by bearer token as the binary does (ADR-0064), and the Go Client presents one this Server
+/// issued to a host of its Space.
 struct OurServer {
     addr: SocketAddr,
     state: Arc<AppState>,
+    admission: common::Admission,
+    /// The access token of the host the Go Client speaks as.
+    token: String,
     _dir: tempfile::TempDir,
 }
 
@@ -172,16 +177,30 @@ impl OurServer {
     async fn start() -> OurServer {
         opamp::tls::install_ring_provider();
         let dir = tempfile::tempdir().expect("tempdir");
+        let admission = common::Admission::new(dir.path());
+        OurServer::start_with(dir, admission).await
+    }
+
+    /// A second Server over the Space and the hosts of `first`, with a Fleet of its own: a Server
+    /// that has never seen the Agent, and admits the host it reports under.
+    async fn start_beside(first: &OurServer) -> OurServer {
+        let dir = tempfile::tempdir().expect("tempdir");
+        OurServer::start_with(dir, first.admission.clone()).await
+    }
+
+    async fn start_with(dir: tempfile::TempDir, admission: common::Admission) -> OurServer {
         let state = Arc::new(common::fleet_state(dir.path()));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Agent plane");
         let addr = listener.local_addr().expect("local addr");
-        let app =
-            classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
+        let app = admission.app(state.clone());
         let handle = opamp::server::listen::Handle::new();
         tokio::spawn(classis_server::listen::plane(listener, None, 64, handle).serve(app));
+        let token = host_token(&admission, addr, dir.path()).await;
         OurServer {
             addr,
             state,
+            admission,
+            token,
             _dir: dir,
         }
     }
@@ -192,6 +211,16 @@ impl OurServer {
             .into_iter()
             .find(|a| uid_hex(&a.instance_uid) == uid_hex(uid))
     }
+}
+
+/// Enrols a host at the Agent plane on `addr` and answers the access token it was given.
+async fn host_token(admission: &common::Admission, addr: SocketAddr, dir: &Path) -> String {
+    let state_dir = dir.join("go-host");
+    admission.enrol(addr, &state_dir).await;
+    classis_agent::enrolment::required(&state_dir)
+        .expect("the host's state.json")
+        .access_token
+        .to_string()
 }
 
 /// A TCP relay in front of our Server, so a test can cut every connection the Go Client holds —
@@ -249,7 +278,7 @@ const GO_AGENT_TYPE: &str = "opamp-go-harness";
 async fn go_client_against_our_server(scheme: &str) {
     let server = OurServer::start().await;
     let relay = Relay::start(server.addr).await;
-    let mut go = Harness::spawn(&["client", &relay.url(scheme)]);
+    let mut go = Harness::spawn(&["client", "--bearer", &server.token, &relay.url(scheme)]);
     let uid = go.wait_for("the Go Client to start", "started", |_| true)["instance_uid"]
         .as_str()
         .unwrap()
@@ -343,7 +372,7 @@ async fn go_client_against_our_server(scheme: &str) {
 
     // ReportFullState for an unknown Agent: a second Server that has never seen it asks, and
     // gets the description back.
-    let other = OurServer::start().await;
+    let other = OurServer::start_beside(&server).await;
     relay.switch_to(other.addr);
     wait_until("the second Server to recover the full state", || {
         other
@@ -394,6 +423,8 @@ async fn go_client_takes_an_assigned_identity(scheme: &str) {
     let server = OurServer::start().await;
     let go = Harness::spawn(&[
         "client",
+        "--bearer",
+        &server.token,
         "--request-uid",
         &format!("{scheme}://{}/v1/opamp", server.addr),
     ]);
@@ -484,6 +515,8 @@ fn our_client_with(dir: &Path, endpoint: &str, tls: &str) -> (OurClient, PathBuf
     );
     let path = dir.join("supervisor.toml");
     std::fs::write(&path, config).expect("write supervisor.toml");
+    // The Go Server checks no token, and our Client does not start without a `state.json`.
+    common::write_state_json(&state_dir, "http://127.0.0.1:9");
     let child = Command::new(env!("CARGO_BIN_EXE_supervisor"))
         .arg("--config")
         .arg(&path)
@@ -719,7 +752,7 @@ impl Party {
 
 /// Our Server's TLS as the binary sets it up (`main.rs`): TLS 1.3 alone. What does not act at the
 /// handshake — rate limits — is left out.
-async fn our_tls_server(pki: &TestPki) -> (SocketAddr, Arc<AppState>, tempfile::TempDir) {
+async fn our_tls_server(pki: &TestPki) -> (SocketAddr, Arc<AppState>, String, tempfile::TempDir) {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
@@ -734,10 +767,21 @@ async fn our_tls_server(pki: &TestPki) -> (SocketAddr, Arc<AppState>, tempfile::
     let agent_tls = planes.agent.rustls_config().expect("the Agent plane's TLS");
     let listener = std::net::TcpListener::bind((LOOPBACK, 0)).expect("bind the Agent plane");
     let addr = listener.local_addr().expect("local addr");
-    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let handle = opamp::server::listen::Handle::new();
-    tokio::spawn(classis_server::listen::plane(listener, Some(agent_tls), 64, handle).serve(app));
-    (addr, state, dir)
+    tokio::spawn(
+        classis_server::listen::plane(listener, Some(agent_tls), 64, handle).serve(app.clone()),
+    );
+    // The host enrols over a plaintext listener on the loopback, where TLS terminates elsewhere
+    // (ADR-0064 clause 6), and speaks to the Agent plane's TLS with the token it was given.
+    let enrolling = tokio::net::TcpListener::bind((LOOPBACK, 0))
+        .await
+        .expect("bind the enrolment listener");
+    let enrolling_addr = enrolling.local_addr().expect("local addr");
+    tokio::spawn(async move { axum::serve(enrolling, app).await.expect("serve") });
+    let token = host_token(&admission, enrolling_addr, dir.path()).await;
+    (addr, state, token, dir)
 }
 
 /// A harness Client that our Server must get nowhere with: it starts, fails to connect, and never
@@ -764,7 +808,7 @@ fn refused_go_client(state: &AppState, args: &[&str]) {
 /// get past the handshake.
 async fn go_client_against_our_tls_server(scheme: &str) {
     let pki = TestPki::new("interop-fleet-ca");
-    let (addr, state, _dir) = our_tls_server(&pki).await;
+    let (addr, state, token, _dir) = our_tls_server(&pki).await;
     let url = format!("{scheme}://{addr}/v1/opamp");
     let agent = |uid: &str| {
         state
@@ -774,7 +818,7 @@ async fn go_client_against_our_tls_server(scheme: &str) {
     };
 
     let ca = pki.ca_file().display().to_string();
-    let go = Harness::spawn(&["client", "--tls", &ca, &url]);
+    let go = Harness::spawn(&["client", "--bearer", &token, "--tls", &ca, &url]);
     let uid = go.wait_for("the Go Client to start", "started", |_| true)["instance_uid"]
         .as_str()
         .unwrap()
@@ -793,7 +837,10 @@ async fn go_client_against_our_tls_server(scheme: &str) {
 
     let elsewhere = TestPki::new("someone-elses-ca");
     let other_ca = elsewhere.ca_file().display().to_string();
-    refused_go_client(&state, &["client", "--tls", &other_ca, &url]);
+    refused_go_client(
+        &state,
+        &["client", "--bearer", &token, "--tls", &other_ca, &url],
+    );
 }
 
 /// Our Client against an `opamp-go` Server over TLS: trusting the Server's CA it reports and

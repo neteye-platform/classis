@@ -40,7 +40,8 @@ async fn wait_until<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
 async fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app = classis_server::agent_app_open_for_tests(state.clone());
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -48,6 +49,11 @@ async fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile::TempD
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
+    // The Client is a host of the Server's Space: the `state.json` of the state directory every
+    // test below names (ADR-0064).
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
     (addr, state, dir)
 }
 
@@ -308,8 +314,18 @@ async fn a_config_change_reaches_both_supervised_agents_over_one_connection() {
     // uid, matched by the same Selectors — and it takes effect without touching the host's file
     // (ADR-0024, ADR-0017).
     let uid = opamp::uid::InstanceUid::parse(&stub.instance_uid).expect("the uid the Server holds");
+    // The Client's own Agent is in the fleet-wide channel, and a Supervisor's Agent inherits the
+    // labels of the Client Agent on its host below its own (ADR-0035): to leave the channel the
+    // stub states a channel of its own beside the role, which wins over the inherited one.
     assert!(state
-        .set_labels(&uid, [("role".to_string(), "edge".to_string())].into())
+        .set_labels(
+            &uid,
+            [
+                ("role".to_string(), "edge".to_string()),
+                (common::CHANNEL.0.to_string(), "edge-only".to_string()),
+            ]
+            .into()
+        )
         .is_ok());
     let agents = state.snapshot();
     assert_eq!(

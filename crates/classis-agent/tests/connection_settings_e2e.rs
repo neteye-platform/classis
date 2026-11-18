@@ -45,7 +45,8 @@ async fn spawn_armed_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile:
             .expect("open the configuration store")
             .with_connection_offer(Some(ConnectionOffer::from_config(&offer_config))),
     );
-    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -53,6 +54,11 @@ async fn spawn_armed_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile:
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
+    // The Client is a host of the Server's Space: the `state.json` of the state directory every
+    // test below names (ADR-0064).
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
     (addr, state, dir)
 }
 

@@ -159,15 +159,20 @@ fn kill(pid: u32) {
     );
 }
 
+/// A Server the installed service can reach, and the key of the Space its hosts enrol in.
+struct Served {
+    key: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
 /// A Server the installed service can reach. Bound on the loopback interface, so it is reachable
-/// from a service running as `LocalSystem` or `root` — a different account, the same machine.
-fn spawn_server() -> (
-    std::net::SocketAddr,
-    Arc<AppState>,
-    std::thread::JoinHandle<()>,
-) {
+/// from a service running as `LocalSystem` or `root` — a different account, the same machine. It
+/// admits by bearer token, as the binary does (ADR-0064).
+fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, Served) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(AppState::new(dir.path().join("fleet-configs")).expect("configs"));
+    let admission = common::Admission::new(dir.path());
+    let key = admission.key.clone();
     std::mem::forget(dir);
     let (tx, rx) = std::sync::mpsc::channel();
     let served = state.clone();
@@ -178,16 +183,41 @@ fn spawn_server() -> (
                 .await
                 .expect("bind");
             tx.send(listener.local_addr().expect("addr")).expect("send");
-            axum::serve(
-                listener,
-                classis_server::agent_app_admitted_as_for_tests(served, Some(common::HOST)),
-            )
-            .await
-            .expect("serve");
+            axum::serve(listener, admission.app(served))
+                .await
+                .expect("serve");
         });
     });
     let addr = rx.recv().expect("the server's address");
-    (addr, state, handle)
+    (
+        addr,
+        state,
+        Served {
+            key,
+            _thread: handle,
+        },
+    )
+}
+
+/// Enrols the host the install made, through the real `enrol`: it writes `state.json` in the state
+/// directory the registration names, hands it to the account the service runs as, lets the service
+/// start at boot and starts it (ADR-0064 clause 7) — which is how a service installed here is
+/// started.
+fn enrol_installed(addr: std::net::SocketAddr, server: &Served, config: &Path) {
+    let state_dir = classis_agent::service::manager::registered_state_dir(ServiceLevel::System)
+        .expect("read the registration")
+        .expect("the install registered a state directory");
+    client(
+        &[
+            "--state-dir",
+            &state_dir.to_string_lossy(),
+            "enrol",
+            &format!("http://{addr}"),
+            &server.key,
+        ],
+        config,
+    )
+    .expect("enrol the host");
 }
 
 /// Install → start → the Agent is in the fleet → kill it → the manager brings it back → stop →
@@ -209,7 +239,7 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
 
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("install");
-    let (addr, state, _server) = spawn_server();
+    let (addr, state, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
@@ -226,9 +256,9 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
     .expect("install the service");
     let _registered = Registered;
 
-    // launchd does not auto-start after an install (a known ADR-0019 gap), so every platform is
-    // started explicitly — which is also what the README's checklist tells an operator to do.
-    client(&["service", "start"], &config).expect("start the service");
+    // An install starts nothing and enables nothing: `enrol` starts the service, and lets it start
+    // at boot (ADR-0064 clause 7).
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the service to report running",
         Duration::from_secs(60),
@@ -427,7 +457,7 @@ fn a_reregistration_keeps_the_account_and_the_service_keeps_its_privileges() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("install");
-    let (addr, state, _server) = spawn_server();
+    let (addr, state, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
@@ -456,7 +486,7 @@ fn a_reregistration_keeps_the_account_and_the_service_keeps_its_privileges() {
         "{again}"
     );
 
-    client(&["service", "start"], &config).expect("start the service");
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -684,7 +714,7 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
         .expect("chmod the program");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
@@ -711,7 +741,7 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     )
     .expect("install the service with a process account");
     let _registered = Registered;
-    client(&["service", "start"], &config).expect("start the service");
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -956,7 +986,7 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
         .expect("chmod the program");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
@@ -983,7 +1013,7 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     )
     .expect("install the service with a process account");
     let _registered = Registered;
-    client(&["service", "start"], &config).expect("start the service");
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -1240,7 +1270,7 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
     )
     .expect("write the program");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
@@ -1289,7 +1319,7 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
                 .expect("its required privileges");
         assert_eq!(privileges, ["SeChangeNotifyPrivilege"]);
     }
-    service_on_windows("start", &config, &root);
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -1629,7 +1659,7 @@ while ($true) {
     )
     .expect("write the impostor");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
@@ -1656,7 +1686,7 @@ while ($true) {
     )
     .expect("install the service with LocalService as the process account");
     let _registered = Registered;
-    service_on_windows("start", &config, &root);
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
