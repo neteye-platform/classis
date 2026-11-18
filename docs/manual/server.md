@@ -23,17 +23,22 @@ foreground process — unlike the Client, it does not install itself as a servic
 - [Moving the fleet: connection settings](#moving-the-fleet-connection-settings)
 - [What the Server does not do](#what-the-server-does-not-do)
 
-> **Plain HTTP behind a reverse proxy, and no authentication of Agents in the Server
+> **Plain HTTP behind a reverse proxy, and no authentication of Agents in the
+> Server
 > ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).**
-> The Server terminates no TLS: both planes speak plain HTTP, on any address, and a reverse proxy
-> in front of it ends TLS. The Server **authenticates no Agent**: the proxy admits them, and the
-> Agent port must be reachable only through it. `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]`
-> and `[agents.auth]` are **refused at startup**, naming the section, and `server pki` is removed. The
-> sections below on mutual TLS, certificates, enrolment and revocation describe machinery that is
-> **disabled** in this mode — kept until the reimplementation of enrolment replaces it — and are
-> marked so. The proxy is where TLS lives and the only thing that should reach the Server's ports:
-> the operator's Basic password and every package cross the hop between them in the clear, any peer
-> that reaches the Agent port may claim any identity, and the peer's address is the one the proxy writes in `X-Forwarded-For`
+> The Server terminates no TLS: both planes speak plain HTTP, on any address,
+> and a reverse proxy in front of it ends TLS. The Server **authenticates no
+> Agent**: the proxy admits them, and the Agent port must be reachable only
+> through it. `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]` and
+> `[agents.auth]` are **refused at startup**, naming the section, and
+> `server pki` is removed. The sections below on mutual TLS, certificates,
+> enrolment and revocation describe machinery that is **disabled** in this mode
+> — kept until the reimplementation of enrolment replaces it — and are marked
+> so. The proxy is where TLS lives and the only thing that should reach the
+> Server's ports: the operator's Basic password and every package cross the hop
+> between them in the clear, any peer that reaches the Agent port may claim any
+> identity, and the peer's address is the one the proxy writes in
+> `X-Forwarded-For`
 > ([Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)).
 
 ## What the Server does
@@ -69,24 +74,25 @@ server --config /etc/opamp/server.toml
 server --version
 ```
 
-| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Flag              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--config <path>` | The TOML configuration file. Without it, the file `CLASSIS_SERVER_CONFIG` names; without both, `server.toml` in the working directory when it exists, and otherwise none — the Server then starts from its defaults and its environment ([Configuration from the environment](#configuration-from-the-environment)). A file named by `--config` or `CLASSIS_SERVER_CONFIG` that does not exist fails startup, naming the path. A Server configured by nothing listens on the loopback. |
-| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--version`       | Print the version and exit — the full string, `1.2.3+<commit>` for a release and `1.2.3-dev+<commit>` for a build on the way to one.                                                                                                                                                                                                                                                                                                                                                   |
 
 Any other argument prints usage and exits with status 2. Logging goes to stderr
 and its level is controlled by the `RUST_LOG` environment variable (default
-`info`); its form by [`[log] format`](#log);
-everything else is in the configuration file and the `CLASSIS_SERVER__…` variables
-over it. `server pki` is removed: the Server holds no certificate.
+`info`); its form by [`[log] format`](#log); everything else is in the
+configuration file and the `CLASSIS_SERVER__…` variables over it. `server pki`
+is removed: the Server holds no certificate.
 
 Stopping the Server is `SIGTERM`/`Ctrl-C`. Configurations and packages are
 persisted to disk, so a restart resumes with the same fleet state; Agents
 reconnect on their own.
 
-The Server refuses to start with `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]`,
-`[agents.auth]`, an `[auth]` section, or a credential key in `[connection_offer]`, and the
-refusal names the section: the Server speaks plain HTTP and authenticates no Agent
+The Server refuses to start with `[tls]`, `[rest.tls]`, `[client_ca]`,
+`[enrolment]`, `[agents.auth]`, an `[auth]` section, or a credential key in
+`[connection_offer]`, and the refusal names the section: the Server speaks plain
+HTTP and authenticates no Agent
 ([Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)).
 
 There are **two listeners, split by audience**: the one the fleet talks to, and
@@ -95,14 +101,15 @@ the one you talk to. Both speak plain HTTP; the proxy in front of them ends TLS.
 **The Agent plane** — `listen`, `127.0.0.1:4320` by default. Serving the fleet
 is one deliberate line, `listen = "0.0.0.0:4320"`.
 
-| Path                                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/v1/opamp`                                    | The OpAMP endpoint. `GET` upgrades to WebSocket, `POST` is the plain-HTTP exchange — the same path serves both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Path                                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/v1/opamp`                                    | The OpAMP endpoint. `GET` upgrades to WebSocket, `POST` is the plain-HTTP exchange — the same path serves both.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `/api/v1/packages/{agent_type}/{version}/file` | An artifact's bytes: the one `/api/v1` route that belongs to the Agents, because the `download_url` in a package offer is a path the Client resolves against _its own_ endpoint. It sits outside the Operator plane's `[rest.auth]` and asks nothing, as `/v1/opamp` asks nothing. A host is served only the artifact offered to one of its own Agents, and every other request is answered `404` ([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)). |
 
-The Agent plane asks no credential: the Server admits every request, and the proxy in
-front of it is what authenticates an Agent. Reach the Agent port through the proxy
-alone, because any peer that reaches it may claim any identity.
+The Agent plane asks no credential: the Server admits every request, and the
+proxy in front of it is what authenticates an Agent. Reach the Agent port
+through the proxy alone, because any peer that reaches it may claim any
+identity.
 
 **The Operator plane** — `[rest] listen`, `127.0.0.1:4321` by default:
 
@@ -125,9 +132,8 @@ and a Server without it is refused at startup with a message naming both keys.
 
 Each plane holds a bounded number of connections: `max_connections` for the
 Agent plane and `[rest] max_connections` for the Operator plane. A connection
-past the cap is closed on accept, and the connections
-already held keep working. See
-[Bounds on every listener](#bounds-on-every-listener).
+past the cap is closed on accept, and the connections already held keep working.
+See [Bounds on every listener](#bounds-on-every-listener).
 
 ### In a container
 
@@ -151,23 +157,23 @@ asset `server_<version>_linux_<arch>.cdx.json` for the image's architecture; the
 base's own packages are not in it and are named by the
 `org.opencontainers.image.base.digest` annotation.
 
-| Property                                   | Value                                                                                                                                             |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Entrypoint                                 | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                      |
-| User                                       | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                  |
-| Data directory                             | `/var/lib/classis`, a volume owned by `65532`                                                                                                     |
-| Working directory                          | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                          |
-| Ports                                      | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                  |
-| Environment it sets                        | `CLASSIS_SERVER__DATA_DIR=/var/lib/classis`, `CLASSIS_SERVER__LISTEN=0.0.0.0:4320`, `CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
-| Configuration, keys, secrets               | none; you mount them as files                                                                                                                     |
+| Property                     | Value                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entrypoint                   | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                      |
+| User                         | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                  |
+| Data directory               | `/var/lib/classis`, a volume owned by `65532`                                                                                                     |
+| Working directory            | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                          |
+| Ports                        | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                  |
+| Environment it sets          | `CLASSIS_SERVER__DATA_DIR=/var/lib/classis`, `CLASSIS_SERVER__LISTEN=0.0.0.0:4320`, `CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
+| Configuration, keys, secrets | none; you mount them as files                                                                                                                     |
 
 Because both planes listen off the loopback inside the container, the Server
-requires `[rest.auth]` there. The image carries none, so
-started with nothing mounted it names the missing key and stops — it never serves the
-Operator plane without authentication. Put the image behind the reverse proxy that terminates
+requires `[rest.auth]` there. The image carries none, so started with nothing
+mounted it names the missing key and stops — it never serves the Operator plane
+without authentication. Put the image behind the reverse proxy that terminates
 TLS and authenticates the Agents. Mount every password or credential file
-read-only, and name their paths in the configuration. The image works with a read-only root filesystem; the Server
-writes under its data directory alone.
+read-only, and name their paths in the configuration. The image works with a
+read-only root filesystem; the Server writes under its data directory alone.
 
 ```console
 $ docker run -d --name classis-server --read-only \
@@ -182,9 +188,9 @@ A bind mount for the data directory must be writable by UID `65532`. There is no
 `HEALTHCHECK` — the image has no shell to run one. An orchestrator probes over
 HTTP on the Operator plane: `GET /livez` and `GET /readyz` on `4321`, which
 answer without a credential ([Liveness and readiness](#liveness-and-readiness)).
-A TCP connection to `4320` only shows that the port is open. The
-`debug` variant of the base, which has a shell, is for inspecting a problem
-locally; it is not published.
+A TCP connection to `4320` only shows that the port is open. The `debug` variant
+of the base, which has a shell, is for inspecting a problem locally; it is not
+published.
 
 To build the image yourself from a checkout, on a system whose glibc is no newer
 than Debian 13's, copy the binary under the name the Containerfile expects:
@@ -200,8 +206,8 @@ $ docker buildx build --platform linux/amd64 --load -t classis-server:dev \
 
 The full annotated example is [`config/server.toml`](../../config/server.toml).
 Every key is shown below with its default. Every key is optional; the Server
-speaks plain HTTP behind a reverse proxy, so no TLS section is needed. An unknown
-key fails startup rather than being ignored.
+speaks plain HTTP behind a reverse proxy, so no TLS section is needed. An
+unknown key fails startup rather than being ignored.
 
 ### Configuration from the environment
 
@@ -241,16 +247,16 @@ other variable configures the Server.
 
 ### Top level
 
-| Key                       | Default                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `listen`                  | `"127.0.0.1:4320"`     | The **Agent plane**, as `address:port`: the OpAMP endpoint and the package downloads. `4320` is the protocol's default port. Serve the fleet with `"0.0.0.0:4320"`.                                                                                                                                                                                                                                                                               |
-| `max_connections`         | `10000`                | The connections the Agent plane holds at once. A connection past it is closed on accept. Raise it together with the process's file-descriptor limit for a larger fleet. `0` is refused at startup.                                                                                                                                                                                                                                                |
-| `data_dir`                | `"fleet-data"`         | Where the Server keeps **all** of its state, one directory per domain: see [Where the Server keeps its state](#where-the-server-keeps-its-state). Created owner-only when missing — except with `[database] store = "postgres"` and `[blobs] store = "s3"`, where the Server keeps nothing on the filesystem and creates nothing. `config_dir` and `packages_dir` are gone: a file naming either fails startup and names `server migrate` ([Upgrading to one data directory](#upgrading-to-one-data-directory)).                                                                                 |
-| `max_message_size_bytes`  | `67108864` (64 MiB)    | The largest OpAMP message accepted or sent, in either direction and on either transport. The protocol requires a limit and recommends this value; a fleet of status reports needs far less. An oversized HTTP request is answered `413`, an oversized WebSocket message closes the connection with `1009`. A request or message that has begun and delivers less than 64 KiB in a minute is answered `408`, or closes its connection with `1008`. |
-| `max_package_size_bytes`  | `1073741824` (1 GiB)   | The largest artifact the package-upload route accepts. A package is a program, not a message — an `otelcol-contrib` binary is a few hundred megabytes — so this bound is far larger, and it applies to that one route. The upload has no deadline, but like every request body it must deliver 64 KiB in each minute once it has begun, or it is answered `408`.                                                                                  |
-| `max_total_package_bytes` | `17179869184` (16 GiB) | The total size of all stored artifacts before a new upload is refused `507`. Where `max_package_size_bytes` bounds one artifact, this bounds the whole store, so no caller fills the disk by uploading many artifacts under distinct names. Identical bytes are stored once and counted once. `0` is refused at startup.                                                                                                                          |
-| `max_agents`              | `100000`               | The most Agent records the fleet holds at once. A report bearing a **new** `instance_uid` past this ceiling is answered `Unavailable` rather than admitted, so an admitted peer minting fresh self-asserted UIDs cannot exhaust memory and disk; Agents already known keep reporting. The defence against an anonymous flood is [admission](#authentication) by client certificate; this is the backstop behind it. `0` is refused at startup.    |
-| `stale_after_secs`        | `90`                   | How long an Agent that declares `ReportsHeartbeat` may be silent before the fleet view marks it **stale**. Ignored when `[connection_offer]` names a heartbeat interval — then the budget is three of those. Only heartbeating Agents can go stale: one that promised no periodic report is never late.                                                                                                                                           |
+| Key                       | Default                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listen`                  | `"127.0.0.1:4320"`     | The **Agent plane**, as `address:port`: the OpAMP endpoint and the package downloads. `4320` is the protocol's default port. Serve the fleet with `"0.0.0.0:4320"`.                                                                                                                                                                                                                                                                                                                                              |
+| `max_connections`         | `10000`                | The connections the Agent plane holds at once. A connection past it is closed on accept. Raise it together with the process's file-descriptor limit for a larger fleet. `0` is refused at startup.                                                                                                                                                                                                                                                                                                               |
+| `data_dir`                | `"fleet-data"`         | Where the Server keeps **all** of its state, one directory per domain: see [Where the Server keeps its state](#where-the-server-keeps-its-state). Created owner-only when missing — except with `[database] store = "postgres"` and `[blobs] store = "s3"`, where the Server keeps nothing on the filesystem and creates nothing. `config_dir` and `packages_dir` are gone: a file naming either fails startup and names `server migrate` ([Upgrading to one data directory](#upgrading-to-one-data-directory)). |
+| `max_message_size_bytes`  | `67108864` (64 MiB)    | The largest OpAMP message accepted or sent, in either direction and on either transport. The protocol requires a limit and recommends this value; a fleet of status reports needs far less. An oversized HTTP request is answered `413`, an oversized WebSocket message closes the connection with `1009`. A request or message that has begun and delivers less than 64 KiB in a minute is answered `408`, or closes its connection with `1008`.                                                                |
+| `max_package_size_bytes`  | `1073741824` (1 GiB)   | The largest artifact the package-upload route accepts. A package is a program, not a message — an `otelcol-contrib` binary is a few hundred megabytes — so this bound is far larger, and it applies to that one route. The upload has no deadline, but like every request body it must deliver 64 KiB in each minute once it has begun, or it is answered `408`.                                                                                                                                                 |
+| `max_total_package_bytes` | `17179869184` (16 GiB) | The total size of all stored artifacts before a new upload is refused `507`. Where `max_package_size_bytes` bounds one artifact, this bounds the whole store, so no caller fills the disk by uploading many artifacts under distinct names. Identical bytes are stored once and counted once. `0` is refused at startup.                                                                                                                                                                                         |
+| `max_agents`              | `100000`               | The most Agent records the fleet holds at once. A report bearing a **new** `instance_uid` past this ceiling is answered `Unavailable` rather than admitted, so an admitted peer minting fresh self-asserted UIDs cannot exhaust memory and disk; Agents already known keep reporting. The defence against an anonymous flood is [admission](#authentication) by client certificate; this is the backstop behind it. `0` is refused at startup.                                                                   |
+| `stale_after_secs`        | `90`                   | How long an Agent that declares `ReportsHeartbeat` may be silent before the fleet view marks it **stale**. Ignored when `[connection_offer]` names a heartbeat interval — then the budget is three of those. Only heartbeating Agents can go stale: one that promised no periodic report is never late.                                                                                                                                                                                                          |
 
 ### `[rest]`
 
@@ -262,10 +268,10 @@ listen = "127.0.0.1:4321"   # "0.0.0.0:4321" publishes the plane, and then needs
 max_connections = 256
 ```
 
-| Key               | Default            | Meaning                                                                                                                                                                                                                                                                                                                               |
-| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key               | Default            | Meaning                                                                                                                                                                                                                                                                                      |
+| ----------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `listen`          | `"127.0.0.1:4321"` | Where the REST API, the API docs, and the UI are served, in plain HTTP. It must differ from `listen` above — two equal addresses are refused at startup by name, rather than surfacing later as _address already in use_. An address other than `127.0.0.1` or `::1` requires `[rest.auth]`. |
-| `max_connections` | `256`              | The connections the Operator plane holds at once. `0` is refused at startup.                                                                                                                                                                                                                                                          |
+| `max_connections` | `256`              | The connections the Operator plane holds at once. `0` is refused at startup.                                                                                                                                                                                                                 |
 
 #### `[rest.auth]`
 
@@ -285,9 +291,10 @@ fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
 
 #### `[rest.tls]`
 
-Removed ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
-The section is refused at startup, naming it: the proxy in front of the Operator plane serves the
-UI's certificate.
+Removed
+([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
+The section is refused at startup, naming it: the proxy in front of the Operator
+plane serves the UI's certificate.
 
 ### `[packages]`
 
@@ -323,16 +330,16 @@ access_key_id = "<key id>"
 secret_access_key_file = "/run/secrets/s3-secret-access-key"
 ```
 
-| Key                         | Default | Meaning                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `store`                     | `"fs"`  | `"fs"` or `"s3"`. Any other value fails startup naming the key; so do `"s3"` without a `[blobs.s3]` section and a `[blobs.s3]` section beside `"fs"`.                                                                                                                                                                                     |
-| `s3.endpoint`               | —       | Required with `"s3"`. The store's URL, `https://`. `http://` is accepted to `127.0.0.1` or `::1` alone; any other fails startup naming the key.                                                                                                                                                                                           |
-| `s3.bucket`                 | —       | Required with `"s3"`. The bucket. The Server does not create it: one that does not exist, or that refuses the credentials, fails startup at once, naming it and the error; a store that does not answer yet — the name not resolving, the connection refused, a timeout, a server error — is asked again every five seconds for up to 180 seconds, logging each wait at `warn`.                                                                                                                                                                                      |
-| `s3.region`                 | —       | Required with `"s3"`. The region the requests are signed for; a store without regions takes any, such as `us-east-1`.                                                                                                                                                                                                                     |
-| `s3.prefix`                 | empty   | Where in the bucket the Server's keys live: empty, or ending in `/`. Artifacts are kept at `<prefix>blobs/<sha256>`, an upload in progress at `<prefix>staging/<random>`. Letters, digits, space and `- _ . / ! ' ( ) & $ @ = ; : + ,` only: any other character, which the S3 client would percent-encode, fails startup naming the key. |
-| `s3.ca_file`                | unset   | One PEM root for a store whose certificate no public root signs.                                                                                                                                                                                                                                                                          |
-| `s3.access_key_id`          | unset   | The key ID of a static key pair. Set together with `secret_access_key_file` or not at all; one without the other fails startup naming both.                                                                                                                                                                                               |
-| `s3.secret_access_key_file` | unset   | The file holding that key pair's secret, readable by the Server's account and at most its group (`0600`, or `0640`/`0440` as an orchestrator mounts a secret for a group); one others can read, or its group can write, fails startup naming the key. The secret is never written into `server.toml`.                                     |
+| Key                         | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store`                     | `"fs"`  | `"fs"` or `"s3"`. Any other value fails startup naming the key; so do `"s3"` without a `[blobs.s3]` section and a `[blobs.s3]` section beside `"fs"`.                                                                                                                                                                                                                           |
+| `s3.endpoint`               | —       | Required with `"s3"`. The store's URL, `https://`. `http://` is accepted to `127.0.0.1` or `::1` alone; any other fails startup naming the key.                                                                                                                                                                                                                                 |
+| `s3.bucket`                 | —       | Required with `"s3"`. The bucket. The Server does not create it: one that does not exist, or that refuses the credentials, fails startup at once, naming it and the error; a store that does not answer yet — the name not resolving, the connection refused, a timeout, a server error — is asked again every five seconds for up to 180 seconds, logging each wait at `warn`. |
+| `s3.region`                 | —       | Required with `"s3"`. The region the requests are signed for; a store without regions takes any, such as `us-east-1`.                                                                                                                                                                                                                                                           |
+| `s3.prefix`                 | empty   | Where in the bucket the Server's keys live: empty, or ending in `/`. Artifacts are kept at `<prefix>blobs/<sha256>`, an upload in progress at `<prefix>staging/<random>`. Letters, digits, space and `- _ . / ! ' ( ) & $ @ = ; : + ,` only: any other character, which the S3 client would percent-encode, fails startup naming the key.                                       |
+| `s3.ca_file`                | unset   | One PEM root for a store whose certificate no public root signs.                                                                                                                                                                                                                                                                                                                |
+| `s3.access_key_id`          | unset   | The key ID of a static key pair. Set together with `secret_access_key_file` or not at all; one without the other fails startup naming both.                                                                                                                                                                                                                                     |
+| `s3.secret_access_key_file` | unset   | The file holding that key pair's secret, readable by the Server's account and at most its group (`0600`, or `0640`/`0440` as an orchestrator mounts a secret for a group); one others can read, or its group can write, fails startup naming the key. The secret is never written into `server.toml`.                                                                           |
 
 Without a key pair the Server uses its platform's workload identity, in this
 order: a web identity token (`AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN`),
@@ -425,25 +432,26 @@ versions, and is left unchanged. The Server creates tables and indexes, and
 nothing else: the database, the role, its rights and extensions, replication and
 backups are the operator's.
 
-At startup the Server waits for the database: a database that does not answer yet —
-the name not resolving, the connection refused or reset, the database starting up,
-shutting down or out of connections, as during a failover — is asked again every five
-seconds for up to 180 seconds, logging each wait at `warn` with the reason and the time
-left, and then the Server stops, naming the database. A refusal that asking again would
-not change stops it at once: a rejected password, a certificate that does not verify, a
-database that does not exist, a schema that needs a newer Server. Size an orchestrator's
-startup probe to allow the wait.
+At startup the Server waits for the database: a database that does not answer
+yet — the name not resolving, the connection refused or reset, the database
+starting up, shutting down or out of connections, as during a failover — is
+asked again every five seconds for up to 180 seconds, logging each wait at
+`warn` with the reason and the time left, and then the Server stops, naming the
+database. A refusal that asking again would not change stops it at once: a
+rejected password, a certificate that does not verify, a database that does not
+exist, a schema that needs a newer Server. Size an orchestrator's startup probe
+to allow the wait.
 
 One Server per database schema: the Server holds a lock on the schema it works
 in — its role's default — while it runs, and a second one started against the
-same database and schema waits for it, asking again every five seconds within the same
-180 seconds so that a Server an orchestrator replaces can take over once the old
-one has stopped, and then stops, naming the database. The lock lives on a
-connection of its own; when that connection ends while the Server runs — the
-database restarted, the session was ended, the host is gone — the lock is gone
-with it, and the Server logs an error naming the database and exits with status
-1, so it never writes beside a second Server. An orchestrator restarts it; it
-then waits for the lock as above.
+same database and schema waits for it, asking again every five seconds within
+the same 180 seconds so that a Server an orchestrator replaces can take over
+once the old one has stopped, and then stops, naming the database. The lock
+lives on a connection of its own; when that connection ends while the Server
+runs — the database restarted, the session was ended, the host is gone — the
+lock is gone with it, and the Server logs an error naming the database and exits
+with status 1, so it never writes beside a second Server. An orchestrator
+restarts it; it then waits for the lock as above.
 
 With `"postgres"`, `data_dir` holds the artifacts (`blobs/`) with the filesystem
 blob store, and nothing else. A record of
@@ -454,16 +462,18 @@ together.
 
 ### `[agents.auth]`
 
-Removed. The Server authenticates no Agent: the reverse proxy in front of it does, and a
-library there checks the credential an Agent presents. The section is refused at startup with
-`[agents.auth] is removed`, and so is a bare `[agents]`. The Agent plane admits every request;
-the seam an authenticator plugs into later is `AgentAuthenticator`
+Removed. The Server authenticates no Agent: the reverse proxy in front of it
+does, and a library there checks the credential an Agent presents. The section
+is refused at startup with `[agents.auth] is removed`, and so is a bare
+`[agents]`. The Agent plane admits every request; the seam an authenticator
+plugs into later is `AgentAuthenticator`
 (`crates/classis-server/src/agent_auth.rs`).
 
 ### `[tls]`
 
-Removed. The Server terminates no TLS: a reverse proxy in front of it does. The section is refused at
-startup with `[tls] is removed`, as are `[rest.tls]`, `[client_ca]` and `[enrolment]`.
+Removed. The Server terminates no TLS: a reverse proxy in front of it does. The
+section is refused at startup with `[tls] is removed`, as are `[rest.tls]`,
+`[client_ca]` and `[enrolment]`.
 
 ### `[telemetry_offer]`
 
@@ -485,14 +495,15 @@ startup, naming both. It is the one way the environment names the headers.
 
 ### `[client_ca]`
 
-Removed, and with it the CSR flow. The section is refused at startup (`[client_ca] is removed`): the
-Server signs no certificate and authenticates no Agent. Everything the manual says about issuing
-certificates is disabled until enrolment is reimplemented.
+Removed, and with it the CSR flow. The section is refused at startup
+(`[client_ca] is removed`): the Server signs no certificate and authenticates no
+Agent. Everything the manual says about issuing certificates is disabled until
+enrolment is reimplemented.
 
 ### `[enrolment]`
 
-Removed, and with it the enrolment window, the bootstrap certificates and the pending queue. The
-section is refused at startup (`[enrolment] is removed`).
+Removed, and with it the enrolment window, the bootstrap certificates and the
+pending queue. The section is refused at startup (`[enrolment] is removed`).
 
 ### `[admission_throttle]`
 
@@ -530,21 +541,23 @@ format = "text"
 
 `format` is `"text"` (one human-readable line per event) or `"json"` (one JSON
 object per line, for a log collector). Anything else fails startup. The
-environment variable is `CLASSIS_SERVER__LOG__FORMAT`. The level is `RUST_LOG`'s.
+environment variable is `CLASSIS_SERVER__LOG__FORMAT`. The level is
+`RUST_LOG`'s.
 
 ### Liveness and readiness
 
 The Operator plane answers two routes beside its guard, with no credential, to
 `GET` and `HEAD`:
 
-| Route      | Answer                                                                                                                                                                                                                                 |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/livez`   | `200 ok` while the process serves requests.                                                                                                                                                                                            |
-| `/readyz`  | `200 ok` when the Server holds its database lock, the database answers a query and the blob store answers; `503` with the body `database` or `blobs`, naming the check that failed and nothing else. |
+| Route     | Answer                                                                                                                                                                                               |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/livez`  | `200 ok` while the process serves requests.                                                                                                                                                          |
+| `/readyz` | `200 ok` when the Server holds its database lock, the database answers a query and the blob store answers; `503` with the body `database` or `blobs`, naming the check that failed and nothing else. |
 
 Every other route of the plane still answers `401` without a credential, and
-neither route counts toward the [admission throttle](#repeated-failures-are-throttled).
-Point an orchestrator's HTTP probe at `4321`. The Agent plane has no such route.
+neither route counts toward the
+[admission throttle](#repeated-failures-are-throttled). Point an orchestrator's
+HTTP probe at `4321`. The Agent plane has no such route.
 
 ### `[connection_offer]`
 
@@ -702,8 +715,9 @@ reads neither: a `server.toml` naming either key stops it at startup.
 
 > **Disabled.** The Server speaks plain HTTP and authenticates no Agent
 > ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
-> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs until enrolment is
-> reimplemented. It describes the machinery that stays in the code.
+> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs
+> until enrolment is reimplemented. It describes the machinery that stays in the
+> code.
 
 `[tls] client_ca_file` is required, and the Agent plane asks every peer for a
 client certificate **in the TLS handshake**:
@@ -877,8 +891,9 @@ with a bootstrap certificate, or is given a new certificate by an operator.
 
 > **Disabled.** The Server speaks plain HTTP and authenticates no Agent
 > ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
-> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs until enrolment is
-> reimplemented. It describes the machinery that stays in the code.
+> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs
+> until enrolment is reimplemented. It describes the machinery that stays in the
+> code.
 
 Enrolment is how a fresh host obtains its first certificate without an operator
 signing one by hand. It is armed by `[enrolment]`, and it needs `[client_ca]`,
@@ -1171,8 +1186,9 @@ what that costs (see
 
 > **Disabled.** The Server speaks plain HTTP and authenticates no Agent
 > ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
-> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs until enrolment is
-> reimplemented. It describes the machinery that stays in the code.
+> `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs
+> until enrolment is reimplemented. It describes the machinery that stays in the
+> code.
 
 A certificate stays valid until it expires. To shut a host out sooner, revoke
 its certificate. The Server refuses it from then on, on both transports and on
@@ -1972,13 +1988,16 @@ timeout, so a row stays until someone forgets it.
 
 ## Authentication
 
-The Server **authenticates no Agent**: the Agent plane admits every request on `/v1/opamp`, over
-both transports, and on the package download route, with or without an `Authorization` header,
-which it ignores. What admits an Agent — a random string it presents, checked by a library — lives
-in the reverse proxy in front of the Server ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
-**Any peer that reaches the Agent port is admitted and may claim any identity**: an Agent is what
-the `instance_uid` of its OpAMP message says it is. The port must be reachable only through the
-proxy. A top-level `[auth]` section and `[agents.auth]` are refused at startup.
+The Server **authenticates no Agent**: the Agent plane admits every request on
+`/v1/opamp`, over both transports, and on the package download route, with or
+without an `Authorization` header, which it ignores. What admits an Agent — a
+random string it presents, checked by a library — lives in the reverse proxy in
+front of the Server
+([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
+**Any peer that reaches the Agent port is admitted and may claim any identity**:
+an Agent is what the `instance_uid` of its OpAMP message says it is. The port
+must be reachable only through the proxy. A top-level `[auth]` section and
+`[agents.auth]` are refused at startup.
 
 The Operator plane is the one with a password,
 [`[rest.auth]`](#the-operator-plane-restauth) below. It never reaches an Agent's
@@ -2002,9 +2021,9 @@ $argon2id$v=19$m=19456,t=2,p=1$…
 `--basic` is the one scheme; it reads the password from standard input, without
 showing it on a terminal, and prints the hash to paste.
 
-The package download route sits outside `[rest.auth]`: it is on the Agent plane, which the Server
-authenticates no more than the OpAMP endpoint (ADR-0064), and its content hash and signature
-protect what it serves.
+The package download route sits outside `[rest.auth]`: it is on the Agent plane,
+which the Server authenticates no more than the OpAMP endpoint (ADR-0064), and
+its content hash and signature protect what it serves.
 
 ### Repeated failures are throttled
 
@@ -2136,22 +2155,25 @@ network in cleartext, and `server.toml` holds only its Argon2id hash.
 
 ## Plain HTTP behind a reverse proxy
 
-Both listeners speak plain HTTP, on whatever address `listen` and `[rest] listen` name. There is no
-TLS to configure on the Server, no certificate to mount and none to renew: a reverse proxy in front
-of it terminates TLS and forwards the request, and what protects the hop between them is the
-network they share — a NetworkPolicy that lets only the proxy reach the Server's ports.
+Both listeners speak plain HTTP, on whatever address `listen` and
+`[rest] listen` name. There is no TLS to configure on the Server, no certificate
+to mount and none to renew: a reverse proxy in front of it terminates TLS and
+forwards the request, and what protects the hop between them is the network they
+share — a NetworkPolicy that lets only the proxy reach the Server's ports.
 
-- **The operator's password crosses that hop in the clear.** So does every package.
-- **The peer is the address in `X-Forwarded-For`.** The left-most entry that parses as an address
-  (`203.0.113.7`, `203.0.113.7:51000` or `[2001:db8::1]`) is the peer the admission throttle counts;
-  without the header, the connection's address. **The header is trusted from any source**:
-  whoever can reach the port can write it, name any address, and so keep their own failures from
-  filling the throttle or put another host's address in back-off. Keep the Server's ports closed to
-  everything but the proxy.
+- **The operator's password crosses that hop in the clear.** So does every
+  package.
+- **The peer is the address in `X-Forwarded-For`.** The left-most entry that
+  parses as an address (`203.0.113.7`, `203.0.113.7:51000` or `[2001:db8::1]`)
+  is the peer the admission throttle counts; without the header, the
+  connection's address. **The header is trusted from any source**: whoever can
+  reach the port can write it, name any address, and so keep their own failures
+  from filling the throttle or put another host's address in back-off. Keep the
+  Server's ports closed to everything but the proxy.
 - **Outbound connections stay TLS 1.3**: to PostgreSQL and to S3.
 
-An Agent or Gateway that still presents a client certificate is not refused for it: the certificate
-is not read.
+An Agent or Gateway that still presents a client certificate is not refused for
+it: the certificate is not read.
 
 ### Bounds on every listener
 
