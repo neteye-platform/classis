@@ -16,6 +16,7 @@ pub mod config;
 pub mod configs;
 pub mod credentials;
 pub mod deployments;
+pub mod enrolment;
 pub mod fleet;
 pub mod fs;
 pub mod labels;
@@ -262,17 +263,66 @@ impl PackageOffering {
     }
 }
 
-/// The **Agent plane** (ADR-0013): the OpAMP endpoint and the package download route beside it.
+/// The **Agent plane** (ADR-0013): the OpAMP endpoint and the package download route beside it,
+/// the routes that enrol a host and issue its token, and the bearer admission that guards the first
+/// two (ADR-0064), with the back-off round all of them.
 ///
 /// The download lives here rather than with the rest of `/api/v1` because the split between the
 /// two planes is by *audience*, not by path: this route is the one an Agent calls, and its
 /// `download_url` is resolved against the Agent's own endpoint.
-pub fn agent_app(state: Arc<AppState>) -> Router {
+///
+/// The plane never fails open: it is built from an [`Enrolment`](enrolment::Enrolment) or not at
+/// all, and every request to the OpAMP endpoint or the download route is admitted by its Bearer
+/// credential (ADR-0064 clause 6).
+pub fn agent_app(state: Arc<AppState>, enrolment: Arc<enrolment::Enrolment>) -> Router {
+    // `/v1/enrol` and `/v1/token` authenticate by what they carry (a key, a client secret), so
+    // they are not behind bearer admission; the back-off round all of them counts the refusals.
+    let routes = transport::admit(agent_routes(state), enrolment.clone())
+        .route(
+            enrolment::ENROL_PATH,
+            oauth_registration::server::endpoint(enrolment.clone(), enrolment::REALM)
+                .expect("the realm is a valid header value"),
+        )
+        .route(
+            enrolment::TOKEN_PATH,
+            oauth_token::server::endpoint(enrolment.clone(), enrolment.lifetime()),
+        );
+    match enrolment.throttle() {
+        Some(throttle) => transport::back_off(routes, throttle.clone()),
+        None => routes,
+    }
+}
+
+/// What bearer admission guards: the OpAMP endpoint and the package download.
+fn agent_routes(state: Arc<AppState>) -> Router {
     let downloads = transport::limit_downloads(
         api::download_router(state.clone()),
         state.agent_rate().cloned(),
     );
     transport::router(state).merge(downloads)
+}
+
+/// **For tests only.** The Agent plane without admission: it serves anyone, enrols no one and
+/// answers no `/v1/token`, and no request arrives as any host — what the plane did before
+/// admission existed, for the tests that are not about admission.
+///
+/// It exists only under the `test-support` feature, which `classis-server` and `classis-agent`
+/// enable for their tests alone: a build of the Server binary does not contain it.
+#[cfg(feature = "test-support")]
+pub fn agent_app_open_for_tests(state: Arc<AppState>) -> Router {
+    agent_routes(state)
+}
+
+/// **For tests only.** [`agent_app_open_for_tests`] with every request arriving as `host` — or as
+/// admitted without one, for `None` — what admission hands the handlers once a token names a host
+/// (ADR-0064), for the tests that are about what the plane does by the host, or that drive a Client
+/// which does not send a token yet. Under the same feature, and absent from the Server binary alike.
+#[cfg(feature = "test-support")]
+pub fn agent_app_admitted_as_for_tests(state: Arc<AppState>, host: Option<&str>) -> Router {
+    let proofs = transport::Proofs {
+        host: host.map(str::to_string),
+    };
+    agent_routes(state).layer(axum::Extension(proofs))
 }
 
 /// The **Operator plane** (ADR-0013): the REST API, its OpenAPI document and docs page, and the

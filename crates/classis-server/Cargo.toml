@@ -12,12 +12,19 @@ publish.workspace = true
 name = "server"
 path = "src/main.rs"
 
+[features]
+# `agent_app_open_for_tests`: the Agent plane without admission. Enabled by the tests of this crate
+# and of `classis-agent`, never by a build of the Server.
+test-support = []
+
 [dependencies]
 opamp = { workspace = true, features = ["server"] }
 classis-core.workspace = true
 # `secret::generate` and `secret::hash`: the one generator of the enrolment key's secret, and of
-# what a client keeps hashes of (ADR-0064 clauses 1 and 8).
-oauth-token.workspace = true
+# what a client keeps hashes of (ADR-0064 clauses 1 and 8); the `server` halves are the routes
+# `/v1/enrol` and `/v1/token` and the reading of a Bearer credential at admission (clauses 2, 4, 6).
+oauth-token = { workspace = true, features = ["server"] }
+oauth-registration = { workspace = true, features = ["server"] }
 # Streaming a stored package artifact into the response body (ADR-0026) — the same workspace
 # dependency the Client already builds on, promoted from dev-only.
 futures-util.workspace = true
@@ -58,7 +65,13 @@ tokio-postgres-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+# The integration tests of this crate enable its own `test-support` feature.
+classis-server = { path = ".", features = ["test-support"] }
 flate2.workspace = true
 rcgen.workspace = true
 tokio-tungstenite.workspace = true
+# The two OAuth clients enrol a host and ask for its token in the tests of `/v1/enrol` and `/v1/token`
+# (ADR-0064 Enforcement).
+oauth-token = { workspace = true, features = ["client"] }
+oauth-registration = { workspace = true, features = ["client"] }
 tempfile = "3"

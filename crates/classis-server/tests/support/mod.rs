@@ -93,8 +93,10 @@ async fn spawn_full(
     }
 }
 
-/// Serves the two planes on ephemeral ports, exactly as the binary serves them (ADR-0013), and
-/// answers with the address of each. The Operator plane is open, as it is without `[rest.auth]`.
+/// Serves the two planes on ephemeral ports as the binary serves them (ADR-0013), except that the
+/// Agent plane has no admission and no request on it arrives as any host — for the tests that are
+/// not about admission (`agent_app_open_for_tests`). Answers with the address of each plane. The
+/// Operator plane is open, as it is without `[rest.auth]`.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
 pub async fn serve(state: Arc<AppState>) -> (SocketAddr, SocketAddr) {
     serve_guarded(state, None).await
@@ -106,25 +108,47 @@ pub async fn serve_guarded(
     state: Arc<AppState>,
     operator_auth: Option<classis_server::api::OperatorAuth>,
 ) -> (SocketAddr, SocketAddr) {
-    let agents = classis_server::agent_app(state.clone());
+    let agents = classis_server::agent_app_open_for_tests(state.clone());
     let operators = classis_server::operator_app(state, operator_auth);
     serve_planes(agents, operators).await
 }
 
-/// The same two planes, with every request on the Agent plane admitted as `host`: what the Agent
-/// plane's admission will hand a request once it names one (ADR-0064), which no request can yet
-/// make happen over the wire.
+/// The two planes as the binary builds them: the Agent plane admits by `enrolment` alone
+/// (ADR-0064).
+#[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
+pub async fn serve_enrolled(
+    state: Arc<AppState>,
+    enrolment: Arc<classis_server::enrolment::Enrolment>,
+    operator_auth: Option<classis_server::api::OperatorAuth>,
+) -> (SocketAddr, SocketAddr) {
+    let agents = classis_server::agent_app(state.clone(), enrolment);
+    let operators = classis_server::operator_app(state, operator_auth);
+    serve_planes(agents, operators).await
+}
+
+/// The same two planes as [`serve`], with every request on the Agent plane arriving as `host`:
+/// what the Agent plane's admission hands the handlers once a token names one (ADR-0064).
 #[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
 pub async fn serve_admitted_as(
     state: Arc<AppState>,
     host: Option<&str>,
 ) -> (SocketAddr, SocketAddr) {
-    let proofs = classis_server::transport::Proofs {
-        host: host.map(str::to_string),
-    };
-    let agents = classis_server::agent_app(state.clone()).layer(axum::Extension(proofs));
+    let agents = classis_server::agent_app_admitted_as_for_tests(state.clone(), host);
     let operators = classis_server::operator_app(state, None);
     serve_planes(agents, operators).await
+}
+
+/// Creates the Space `name` in the data directory `data_dir` — laid out as a Server lays it out —
+/// and returns its enrolment key: what an operator's tooling does until the CLI exists (ADR-0064),
+/// for a test that starts the `server` binary on that directory.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
+pub fn create_space(data_dir: &std::path::Path, name: &str) -> String {
+    classis_server::fs::open_data_dir(data_dir, true).expect("the data directory");
+    let records = classis_server::Records::Files(data_dir.to_path_buf());
+    classis_server::spaces::Spaces::new(records.spaces().expect("the spaces"))
+        .create(name)
+        .expect("a space")
+        .to_string()
 }
 
 async fn serve_planes(agents: axum::Router, operators: axum::Router) -> (SocketAddr, SocketAddr) {

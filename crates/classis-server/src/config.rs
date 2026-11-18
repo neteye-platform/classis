@@ -10,7 +10,7 @@ use opamp::proto::{Header, Headers, OpAmpConnectionSettings, TelemetryConnection
 use serde::de::IgnoredAny;
 use serde::Deserialize;
 
-use crate::fleet::{ConnectionOffer, TelemetryOffer};
+use crate::fleet::{ConnectionOffer, TelemetryOffer, AGENTS_PER_HOST};
 
 /// The default Agent-plane address: the Baseline's port, on the loopback (ADR-0013). Serving the
 /// estate is a line an operator writes deliberately, together with the TLS it needs.
@@ -109,6 +109,10 @@ pub struct ServerConfig {
     /// How often an admitted peer may be heard on the Agent plane (ADR-0013).
     #[serde(default)]
     pub agent_rate_limit: AgentRateLimitConfig,
+    /// How long an access token is accepted after it is issued, in seconds; `0` — the default —
+    /// means it never expires (ADR-0064 clause 5). A token ends when it is replaced all the same.
+    #[serde(default)]
+    pub token_lifetime_secs: u64,
 }
 
 /// The `[agent_rate_limit]` section (ADR-0013 clause 19). Every key has a default, and none is `0`:
@@ -157,10 +161,6 @@ impl AgentRateLimitConfig {
         Ok(())
     }
 }
-
-/// The Agents a host may speak for at most (ADR-0021 clause 7), which the limit has to carry at
-/// the fleet's heartbeat (ADR-0013 clause 20).
-const AGENTS_PER_HOST: u64 = 256;
 
 /// The heartbeat the Baseline uses when none is offered.
 const BASELINE_HEARTBEAT_SECS: u64 = 30;
@@ -900,6 +900,7 @@ impl Default for ServerConfig {
             max_connections: default_agent_max_connections(),
             admission_throttle: AdmissionThrottleConfig::default(),
             agent_rate_limit: AgentRateLimitConfig::default(),
+            token_lifetime_secs: 0,
         }
     }
 }
@@ -1114,6 +1115,16 @@ impl ServerConfig {
             );
         }
         self.check_secure()
+    }
+
+    /// The lifetime of the tokens this Server issues (ADR-0064 clause 5): `token_lifetime_secs`,
+    /// with `0` for a token that never expires.
+    #[must_use]
+    pub fn token_lifetime(&self) -> oauth_token::server::Lifetime {
+        std::num::NonZeroU64::new(self.token_lifetime_secs).map_or(
+            oauth_token::server::Lifetime::Never,
+            oauth_token::server::Lifetime::Seconds,
+        )
     }
 
     /// A warning when one host cannot report for all the Agents it may speak for at the fleet's
@@ -1670,6 +1681,38 @@ mod tests {
         std::fs::write(&path, "max_total_package_bytes = 0\n").expect("write");
         let err = ServerConfig::load(&path).expect_err("zero must fail startup");
         assert!(err.contains("max_total_package_bytes"), "{err}");
+    }
+
+    /// The token lifetime is the Server setting of ADR-0064 clause 5: `0`, the default, is a token
+    /// that never expires, anything else is its life in seconds, and the environment sets it like
+    /// any other key.
+    /// Verifies: ADR-0064, ADR-0051
+    #[test]
+    fn the_token_lifetime_defaults_to_never_and_is_configurable() {
+        use oauth_token::server::Lifetime;
+        let default: ServerConfig = toml::from_str("").expect("parse");
+        assert_eq!(default.token_lifetime_secs, 0);
+        assert_eq!(default.token_lifetime(), Lifetime::Never);
+        let finite: ServerConfig = toml::from_str("token_lifetime_secs = 3600").expect("parse");
+        assert_eq!(
+            finite.token_lifetime(),
+            Lifetime::Seconds(std::num::NonZeroU64::new(3600).expect("non-zero"))
+        );
+
+        let from_environment = ServerConfig::load_layered(
+            None,
+            variables(&[
+                ("CLASSIS_SERVER__TLS__CERT_FILE", "c.pem"),
+                ("CLASSIS_SERVER__TLS__KEY_FILE", "k.pem"),
+                ("CLASSIS_SERVER__TOKEN_LIFETIME_SECS", "90"),
+            ]),
+        )
+        .expect("loads")
+        .config;
+        assert_eq!(from_environment.token_lifetime_secs, 90);
+        let err = toml::from_str::<ServerConfig>("token_lifetime_secs = \"soon\"")
+            .expect_err("not a number");
+        assert!(err.to_string().contains("token_lifetime_secs"), "{err}");
     }
 
     #[test]

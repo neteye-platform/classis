@@ -18,6 +18,7 @@ publish = false
 opamp = { path = "crates/opamp", version = "0.20" }
 classis-core = { path = "crates/classis-core" }
 oauth-token = { path = "crates/oauth-token", version = "0.1" }
+oauth-registration = { path = "crates/oauth-registration", version = "0.1" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "io-util", "process"] }
 axum = "0.8"
 prost = "0.14"

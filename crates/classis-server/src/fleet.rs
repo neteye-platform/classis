@@ -458,6 +458,10 @@ impl PackageOffering {
     }
 }
 
+/// The Agents a host may speak for at most (ADR-0064 clause 3), which the limit has to carry at
+/// the fleet's heartbeat (ADR-0013 clause 20).
+pub const AGENTS_PER_HOST: u64 = 256;
+
 /// Shared state behind every handler: the fleet, the Configuration store, and the push channel
 /// WebSocket loops subscribe to.
 pub struct AppState {
@@ -1363,10 +1367,11 @@ impl AppState {
     /// then answer with what the Agent still lacks — the config offer gated by the hash comparison.
     /// `conn` identifies the WebSocket connection that carried the report; `None` for plain HTTP.
     ///
-    /// The reported `instance_uid` is taken at face value: a report's identity is self-asserted and
-    /// not authorized against any other Agent. The plain-HTTP path in particular offers nothing to
-    /// tell two pollers apart; the WebSocket duplicate-`instance_uid` rekey below is collision
-    /// handling, not authorization.
+    /// With no host named, the reported `instance_uid` is taken at face value: a report's identity
+    /// is self-asserted and not authorized against any other Agent. The plain-HTTP path in
+    /// particular offers nothing to tell two pollers apart; the WebSocket duplicate-`instance_uid`
+    /// rekey below is collision handling, not authorization. A report that arrived over a host is
+    /// bound by [`process_for_host`](Self::process_for_host)'s ownership rule.
     pub fn process(
         &self,
         msg: AgentToServer,
@@ -1376,8 +1381,15 @@ impl AppState {
         self.process_for_host(msg, transport, conn, None)
     }
 
-    /// [`process`](Self::process) for a connection that arrived over `host`, which the Agent's
-    /// record then names as the Host it last arrived over.
+    /// [`process`](Self::process) for a connection that arrived over `host` — the `client_id` of
+    /// the token that admitted it (ADR-0064 clause 3) — which the Agent's record then names.
+    ///
+    /// The record's host is the only binding of an `instance_uid` to a host, so a host owns the
+    /// `instance_uid`s whose records name it. A report for one recorded under another host is
+    /// refused outright with an error: nothing is recorded for the reporter, and the owner's record
+    /// is untouched. A host owns at most
+    /// [`AGENTS_PER_HOST`] of them; a report that would make one more
+    /// is answered with an error.
     pub fn process_for_host(
         &self,
         msg: AgentToServer,
@@ -1405,6 +1417,28 @@ impl AppState {
         let mut fleet = self.fleet.lock().expect("fleet lock");
         let mut reply_flags = 0u64;
         let mut identification = None;
+
+        // An instance_uid belongs to the host its record names (ADR-0064 clause 3): another host
+        // does not speak for it. The report is refused outright: the reporter is adopted under no
+        // identity, nothing is recorded for it, and the owner's record stays as it is.
+        if let Some(host) = host {
+            let claimed = fleet
+                .get(&uid)
+                .and_then(|record| record.host.as_deref())
+                .is_some_and(|owner| owner != host);
+            if claimed {
+                drop(fleet);
+                warn!(
+                    event = "identity.claimed", claimed = %uid, host,
+                    "refusing a report: the Agent it names belongs to another host"
+                );
+                return Processed {
+                    reply: bad_request("this instance_uid belongs to another host"),
+                    uid: None,
+                    disconnected: false,
+                };
+            }
+        }
 
         // The Agent asked the Server to assign its identity (AgentToServerFlags_RequestInstanceUid):
         // mint a UUID v7 and re-key the record; the reply tells the Agent to adopt it.
@@ -1471,6 +1505,36 @@ impl AppState {
                 uid: None,
                 disconnected: false,
             };
+        }
+        // A host owns at most AGENTS_PER_HOST of the records: one more, whether new or taken over
+        // from no host, is refused (ADR-0064 clause 3).
+        if let Some(host) = host {
+            let owned = fleet
+                .get(&uid)
+                .is_some_and(|r| r.host.as_deref() == Some(host));
+            if !owned {
+                let count = fleet
+                    .values()
+                    .filter(|record| record.host.as_deref() == Some(host))
+                    .count();
+                if u64::try_from(count).unwrap_or(u64::MAX) >= AGENTS_PER_HOST {
+                    drop(fleet);
+                    warn!(
+                        event = "identity.limit",
+                        host,
+                        limit = AGENTS_PER_HOST,
+                        "refusing a report: the host already speaks for as many Agents as it may"
+                    );
+                    return Processed {
+                        reply: bad_request(&format!(
+                            "this host already speaks for {} Agents",
+                            AGENTS_PER_HOST
+                        )),
+                        uid: None,
+                        disconnected: false,
+                    };
+                }
+            }
         }
         let record = fleet.entry(uid).or_insert_with(|| {
             info!(agent = %uid, transport = transport.as_str(), "new agent");
@@ -3629,11 +3693,10 @@ mod tests {
         ));
     }
 
-    /// A host does not speak for another host's Agent: the reporter is re-keyed to an identity of
-    /// its own, and the Agent it claimed keeps its record.
-    /// Verifies: ADR-0021, G-17
+    /// A host does not speak for another host's Agent: the report is refused with an error, nothing
+    /// is recorded for the reporter, and the Agent it claimed keeps its record.
+    /// Verifies: ADR-0064, ADR-0021, G-17
     #[test]
-    #[ignore = "needs bearer admission (ADR-0064)"]
     fn a_host_cannot_report_for_another_hosts_agent() {
         let dir = tempfile::tempdir().expect("tempdir");
         let state = AppState::new(dir.path().join("configs")).expect("state");
@@ -3654,9 +3717,11 @@ mod tests {
         assert_eq!(own.uid, Some(victim));
         assert!(own.reply.agent_identification.is_none());
 
+        let before = serde_json::to_value(view(&state, &victim)).expect("the view serializes");
         let claimed = state.process_for_host(
             AgentToServer {
                 instance_uid: victim.as_bytes().to_vec(),
+                sequence_num: 7,
                 flags: AgentToServerFlags::RequestInstanceUid as u64,
                 ..Default::default()
             },
@@ -3664,47 +3729,26 @@ mod tests {
             None,
             Some("h2"),
         );
-        let new_uid = claimed.uid.expect("an identity");
-        assert_ne!(new_uid, victim, "another host spoke for the Agent");
         assert_eq!(
-            claimed.reply.instance_uid,
-            victim.as_bytes().to_vec(),
-            "the reply is addressed to the identity the reporter sent, or it routes to no one"
-        );
-        assert_eq!(
-            claimed
-                .reply
-                .agent_identification
-                .expect("told to adopt it")
-                .new_instance_uid,
-            new_uid.as_bytes().to_vec()
+            claimed.uid, None,
+            "the reporter is adopted under no identity"
         );
         assert!(
-            state
-                .snapshot()
-                .iter()
-                .any(|agent| agent.instance_uid == victim.to_string()),
-            "the claimed Agent's record moved"
+            claimed.reply.agent_identification.is_none(),
+            "no identity is offered either"
         );
-
-        // Having adopted it, the reporter speaks under its new identity and is re-keyed no more:
-        // no further record appears for it.
-        let adopted = state.process_for_host(
-            AgentToServer {
-                instance_uid: new_uid.as_bytes().to_vec(),
-                ..Default::default()
-            },
-            Transport::Http,
-            None,
-            Some("h2"),
+        assert_eq!(
+            claimed.reply.error_response.expect("an error").r#type,
+            ServerErrorResponseType::BadRequest as i32
         );
-        assert_eq!(adopted.uid, Some(new_uid));
-        assert!(adopted.reply.agent_identification.is_none());
-        assert_eq!(state.snapshot().len(), 2, "one record per Agent, no more");
+        assert_eq!(state.snapshot().len(), 1, "nothing is recorded for it");
+        let after = serde_json::to_value(view(&state, &victim)).expect("the view serializes");
+        assert_eq!(after, before, "the owner's record was not touched");
+        assert_eq!(after["host"], "h1", "the owner keeps its Agent");
     }
 
     /// Forgetting an Agent releases it: another host's report for it names that host, under the
-    /// identity it reported, where before it would have been re-keyed.
+    /// identity it reported, where before it would have been refused.
     /// Verifies: ADR-0047
     #[test]
     fn forgetting_an_agent_releases_its_binding() {

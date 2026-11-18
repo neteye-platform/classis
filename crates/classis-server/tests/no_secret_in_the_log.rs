@@ -1,8 +1,11 @@
-//! No secret reaches the Server's log (ADR-0022 clause 2): the `server` binary, logging at `trace`,
-//! is sent an `Authorization` header by an Agent, a wrong password on the Operator plane, and the
-//! right one for an act — and none of the values, nor a hash of them, is in what it wrote to
-//! standard error.
+//! No secret reaches the Server's log (ADR-0022 clause 2, ADR-0064 clause 6): the `server` binary,
+//! logging at `trace`, enrols a host with its Space's key, hands it a token, admits it with the
+//! token, is sent a token it never issued, a wrong password on the Operator plane, and the right
+//! one for an act — and none of the values, nor a hash of them, is in what it wrote to standard
+//! error.
 #![cfg(unix)]
+
+mod support;
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -83,15 +86,21 @@ fn path(dir: &Path, name: &str, contents: &str) -> String {
     toml::Value::String(path.display().to_string()).to_string()
 }
 
-/// Verifies: ADR-0022, ADR-0028, ADR-0029
+fn sha256_hex(text: &str) -> String {
+    hex::encode(sha2::Sha256::digest(text.as_bytes()))
+}
+
+/// Verifies: ADR-0022, ADR-0028, ADR-0029, ADR-0064
 #[tokio::test]
 async fn no_secret_reaches_the_log() {
     const OPERATOR_PASSWORD: &str = "the operator's own password";
     const WRONG_PASSWORD: &str = "a guess that does not sign in";
-    let token = "an-old-fleet-token-of-32-characters";
-    let authorization = format!("Bearer {token}");
+    let unissued = "an-old-fleet-token-of-32-characters";
+    let unissued_authorization = format!("Bearer {unissued}");
 
     let dir = tempfile::tempdir().expect("tempdir");
+    // The Space an operator's tooling made before the Server started.
+    let key = support::create_space(&dir.path().join("data"), "lab");
     let fleet_ca = ca("classis test CA");
     let server = issue(&fleet_ca, &["localhost"]);
     let (agent_port, operator_port) = free_ports();
@@ -143,22 +152,58 @@ async fn no_secret_reaches_the_log() {
         }
     }
 
-    // An Agent of an older version sends a token the Agent plane does not read.
+    // A host enrols with the key, asks for its token, and is admitted with it.
     let agent = client(&fleet_ca.0);
+    let registered = oauth_registration::client::register(
+        &agent,
+        format!("https://localhost:{agent_port}/v1/enrol"),
+        &key,
+    )
+    .await
+    .expect("enrolled");
+    let issued = oauth_token::client::request_token(
+        &agent,
+        format!("https://localhost:{agent_port}/v1/token"),
+        &registered.client_id,
+        &registered.client_secret,
+    )
+    .await
+    .expect("a token");
+    let token = issued.access_token.to_string();
+    let secret = registered.client_secret.to_string();
     let report = AgentToServer {
         instance_uid: InstanceUid::default().as_bytes().to_vec(),
         sequence_num: 1,
         ..Default::default()
     };
-    let response = agent
+    let admitted = agent
         .post(format!("https://localhost:{agent_port}/v1/opamp"))
         .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
-        .header(reqwest::header::AUTHORIZATION, &authorization)
+        .bearer_auth(&token)
         .body(report.encode_to_vec())
         .send()
         .await
         .expect("report");
-    assert!(response.status().is_success(), "{:?}", response.status());
+    assert!(admitted.status().is_success(), "{:?}", admitted.status());
+
+    // A token the Server never issued, and a key that is not any Space's: both refused.
+    let refused = agent
+        .post(format!("https://localhost:{agent_port}/v1/opamp"))
+        .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
+        .header(reqwest::header::AUTHORIZATION, &unissued_authorization)
+        .body(report.encode_to_vec())
+        .send()
+        .await
+        .expect("report");
+    assert_eq!(refused.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let wrong_key = format!("cle1_lab_{}", "A".repeat(43));
+    let refused = oauth_registration::client::register(
+        &agent,
+        format!("https://localhost:{agent_port}/v1/enrol"),
+        &wrong_key,
+    )
+    .await;
+    assert!(refused.is_err(), "a key that is no Space's enrolled a host");
 
     // A wrong password on the Operator plane, and the right one for every act after it.
     let operator = client(&fleet_ca.0);
@@ -189,7 +234,15 @@ async fn no_secret_reaches_the_log() {
     drop(running);
     let log = log.join("\n");
     // Every event of the run is there, the `debug` ones too, so the absence below means something.
-    for event in ["operator.refused", "operator.act"] {
+    for event in [
+        "operator.refused",
+        "operator.act",
+        "enrolment.registered",
+        "token.issued",
+        "admission.admitted",
+        "admission.refused",
+        "enrolment.refused",
+    ] {
         assert!(log.contains(event), "no {event} in the log: {log}");
     }
     // An act names the operator who made it.
@@ -202,20 +255,39 @@ async fn no_secret_reaches_the_log() {
     let basic = |password: &str| {
         base64::engine::general_purpose::STANDARD.encode(format!("ops:{password}"))
     };
+    let key_secret = key.rsplit('_').next().expect("a secret").to_string();
     let secrets = [
-        ("the Agent's token", token.to_string()),
+        ("the enrolment key", key.clone()),
+        ("the enrolment key's secret", key_secret.clone()),
+        ("a hash of the enrolment key", sha256_hex(&key)),
         (
-            "a hash of the token",
-            hex::encode(sha2::Sha256::digest(token.as_bytes())),
+            "a hash of the enrolment key's secret",
+            sha256_hex(&key_secret),
         ),
+        ("the rejected enrolment key", wrong_key.clone()),
+        ("the client secret", secret.clone()),
+        ("a hash of the client secret", sha256_hex(&secret)),
+        ("the access token", token.clone()),
+        ("a hash of the access token", sha256_hex(&token)),
+        (
+            "a hash of the access token's Authorization value",
+            sha256_hex(&format!("Bearer {token}")),
+        ),
+        ("the unissued token", unissued.to_string()),
+        ("a hash of the unissued token", sha256_hex(unissued)),
         (
             "a hash of the Authorization value",
-            hex::encode(sha2::Sha256::digest(authorization.as_bytes())),
+            sha256_hex(&unissued_authorization),
         ),
         ("the wrong password", WRONG_PASSWORD.to_string()),
         ("the wrong Basic credential", basic(WRONG_PASSWORD)),
         ("the operator's password", OPERATOR_PASSWORD.to_string()),
         ("the operator's Basic credential", basic(OPERATOR_PASSWORD)),
+        (
+            "the client's Basic credential",
+            base64::engine::general_purpose::STANDARD
+                .encode(format!("{}:{secret}", registered.client_id)),
+        ),
     ];
     for (what, secret) in secrets {
         assert!(!log.contains(&secret), "{what} is in the log");

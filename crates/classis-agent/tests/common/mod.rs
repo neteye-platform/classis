@@ -2,6 +2,11 @@
 
 use std::path::Path;
 
+/// The host every request to the Agent plane of these tests is admitted as: the Client sends no
+/// token yet, so the Server under test serves the plane as this host (ADR-0064).
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub const HOST: &str = "test-host";
+
 /// The fleet state on `dir` with the Deployments armed, as the binary wires it: the Configuration
 /// store under `fleet-configs`, and an empty package store under `packages`, which arms the
 /// Deployments that release Configurations and Packages alike (ADR-0034).

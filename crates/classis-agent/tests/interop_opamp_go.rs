@@ -175,7 +175,8 @@ impl OurServer {
         let state = Arc::new(common::fleet_state(dir.path()));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Agent plane");
         let addr = listener.local_addr().expect("local addr");
-        let app = classis_server::agent_app(state.clone());
+        let app =
+            classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
         let handle = opamp::server::listen::Handle::new();
         tokio::spawn(classis_server::listen::plane(listener, None, 64, handle).serve(app));
         OurServer {
@@ -733,7 +734,7 @@ async fn our_tls_server(pki: &TestPki) -> (SocketAddr, Arc<AppState>, tempfile::
     let agent_tls = planes.agent.rustls_config().expect("the Agent plane's TLS");
     let listener = std::net::TcpListener::bind((LOOPBACK, 0)).expect("bind the Agent plane");
     let addr = listener.local_addr().expect("local addr");
-    let app = classis_server::agent_app(state.clone());
+    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
     let handle = opamp::server::listen::Handle::new();
     tokio::spawn(classis_server::listen::plane(listener, Some(agent_tls), 64, handle).serve(app));
     (addr, state, dir)

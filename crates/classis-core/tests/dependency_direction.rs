@@ -79,6 +79,7 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("clock", Adapter),
             ("config", Adapter),
             ("credentials", Adapter),
+            ("enrolment", Adapter),
             ("fs", Adapter),
             ("fs::agents", Adapter),
             ("fs::blobs", Adapter),

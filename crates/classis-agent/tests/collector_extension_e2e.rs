@@ -94,7 +94,7 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app = classis_server::agent_app(state.clone());
+    let app = classis_server::agent_app_admitted_as_for_tests(state.clone(), Some(common::HOST));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");

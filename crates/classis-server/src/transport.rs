@@ -5,9 +5,13 @@
 //! describes. The communication is `opamp::server`'s, shared with the Gateway and the Supervisor
 //! Endpoint (ADR-0010); what is the Server's is the [`Fleet`] handler, which hands every decoded
 //! report to the same [`AppState::process_for_host`], so transport is carriage, never semantics.
+//!
+//! Admission (ADR-0064 clause 6) is a layer round the endpoint and the download route:
+//! [`admit`] reads the Bearer credential and hands what it proves on as [`Proofs`], and
+//! [`back_off`] round the whole Agent plane counts its refusals per peer address.
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{header, StatusCode};
@@ -15,20 +19,25 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use opamp::proto::{AgentToServer, ServerToAgent};
-use opamp::server::{Handler, Outbound, Rejection, Reply, RequestInfo, Settings, Unreadable};
+use opamp::server::{
+    Closing, Handler, Outbound, Rejection, Reply, RequestInfo, Settings, Unreadable,
+};
 use opamp::uid::InstanceUid;
 use tokio::sync::watch;
 use tracing::{debug, info};
 
 use crate::agent_rate::{AgentRate, Subject};
+use crate::enrolment::{Enrolment, SessionWatch, ENROL_PATH, TOKEN_PATH};
 use crate::fleet::{bad_request, unavailable, AppState, ConnId, Transport};
+use crate::throttle::Throttle;
 
 /// The endpoint path the Baseline names as the default, and the protobuf media type it requires —
 /// both from the shared crate, because the Gateway serves the same endpoint (ADR-0010).
 pub use opamp::endpoint::{OPAMP_PATH, PROTOBUF_CONTENT_TYPE};
 
-/// What admitted a connection: the host it arrived over, when one did. Nothing admits a connection
-/// at present, so a request carries none and every message is counted by its peer address.
+/// What admitted a connection: the host it arrived over, when one did — the `client_id` of the
+/// client holding the token it presented (ADR-0064 clause 3). A request without one is counted by
+/// its peer address.
 #[derive(Clone, Debug, Default)]
 pub struct Proofs {
     pub host: Option<String>,
@@ -52,6 +61,114 @@ pub fn router(state: Arc<AppState>) -> Router {
     // The limits the Baseline requires of the Server, on both transports and in both directions.
     let settings = Settings::new(state.max_message_size());
     opamp::server::router(Arc::new(Fleet(state)), settings)
+}
+
+/// Admits every request of `router` by its Bearer credential (ADR-0064 clause 6): every plain-HTTP
+/// exchange and every download, and a WebSocket session once, at its upgrade. What the token
+/// proves — the host — reaches the handlers as [`Proofs`].
+pub fn admit(router: Router, enrolment: Arc<Enrolment>) -> Router {
+    router.layer(middleware::from_fn_with_state(enrolment, admit_request))
+}
+
+async fn admit_request(
+    State(enrolment): State<Arc<Enrolment>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let peer = peer_ip(&request);
+    let websocket = request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    match enrolment
+        .admit(request.headers(), request.uri(), websocket)
+        .await
+    {
+        Ok(admitted) => {
+            // At `debug`: a plain-HTTP poll comes every few seconds, and a request that asks for
+            // an upgrade is not yet a session — the endpoint may refuse it. A session is logged
+            // once it is accepted (`session.started`) (ADR-0022 clause 3).
+            debug!(
+                event = "admission.admitted",
+                peer = peer.map(tracing::field::display),
+                transport = if websocket { "websocket" } else { "http" },
+                client = %admitted.client_id,
+                "admitted a request"
+            );
+            request.extensions_mut().insert(Proofs {
+                host: Some(admitted.client_id),
+            });
+            if let Some(watch) = admitted.watch {
+                request.extensions_mut().insert(watch);
+            }
+            next.run(request).await
+        }
+        Err(refused) => {
+            // At `debug`: a peer that was not admitted repeats a refusal at will. Which check
+            // refused, never the presented value.
+            debug!(
+                event = "admission.refused",
+                peer = peer.map(tracing::field::display),
+                check = refused.check(),
+                "refused admission"
+            );
+            refused.into_response()
+        }
+    }
+}
+
+/// The per-peer back-off of the Agent plane (ADR-0064 clause 6) round `router`: a peer in back-off
+/// is answered `429` before anything else is checked, and every refused authentication — a `401`,
+/// or a Bearer `400 invalid_request` — counts as a failure of the peer's address. A refusal that
+/// comes after authentication, such as `invalid_client_metadata`, counts for nothing, and a success
+/// clears nothing.
+pub fn back_off(router: Router, throttle: Arc<Throttle>) -> Router {
+    router.layer(middleware::from_fn_with_state(throttle, count_refusals))
+}
+
+async fn count_refusals(
+    State(throttle): State<Arc<Throttle>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let peer = peer_ip(&request);
+    if let Some(wait) = peer.and_then(|peer| throttle.retry_after(peer)) {
+        debug!(
+            event = "admission.throttled",
+            peer = peer.map(tracing::field::display),
+            "refused: the address is in back-off"
+        );
+        return throttled(wait);
+    }
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+    let status = response.status();
+    // At `debug`: a peer repeats a refused request at will (ADR-0022 clause 3).
+    if status.is_client_error() {
+        if path == ENROL_PATH {
+            debug!(
+                event = "enrolment.refused",
+                peer = peer.map(tracing::field::display),
+                status = status.as_u16(),
+                "refused an enrolment request"
+            );
+        } else if path == TOKEN_PATH {
+            debug!(
+                event = "token.refused",
+                peer = peer.map(tracing::field::display),
+                status = status.as_u16(),
+                "refused a token request"
+            );
+        }
+    }
+    let authentication_refused = status == StatusCode::UNAUTHORIZED
+        || (status == StatusCode::BAD_REQUEST
+            && response.headers().contains_key(header::WWW_AUTHENTICATE));
+    if let (true, Some(peer)) = (authentication_refused, peer) {
+        throttle.failed(peer);
+    }
+    response
 }
 
 /// Counts every download against the sender's rate (ADR-0013 clause 21); without a limit the
@@ -145,11 +262,22 @@ struct Carrier {
     peer: Option<IpAddr>,
     /// Who its messages are counted for (ADR-0013 clause 22).
     subject: Subject,
+    /// Why the session was ended, once its [`Session`] has ended it.
+    ended: Arc<Mutex<Option<&'static str>>>,
 }
 
+/// Why a session ends when the token it was admitted with is replaced (ADR-0064 clause 6).
+const TOKEN_REPLACED: &str = "token replaced";
+
 /// A WebSocket session's outbound side: it hears of every change to the fleet's desired state —
-/// the "within seconds" of the control loop.
-struct Session(watch::Receiver<u64>);
+/// the "within seconds" of the control loop — and ends when the token it was admitted with is
+/// replaced. It does not end when that token merely expires (ADR-0064 clause 6).
+struct Session {
+    changes: watch::Receiver<u64>,
+    token: Option<SessionWatch>,
+    client: Option<String>,
+    ended: Arc<Mutex<Option<&'static str>>>,
+}
 
 /// One occasion to push.
 struct Push;
@@ -158,7 +286,28 @@ impl Outbound for Session {
     type Item = Push;
 
     async fn next(&mut self) -> Option<Push> {
-        self.0.changed().await.ok().map(|()| Push)
+        let Session {
+            changes,
+            token,
+            client,
+            ended,
+        } = self;
+        let Some(token) = token else {
+            return changes.changed().await.ok().map(|()| Push);
+        };
+        tokio::select! {
+            changed = changes.changed() => changed.ok().map(|()| Push),
+            () = token.replaced() => {
+                info!(
+                    event = "session.ended",
+                    reason = TOKEN_REPLACED,
+                    client = client.as_deref(),
+                    "ending a session"
+                );
+                *ended.lock().expect("ended lock") = Some(TOKEN_REPLACED);
+                None
+            }
+        }
     }
 }
 
@@ -183,14 +332,21 @@ impl Handler for Fleet {
             info!(
                 event = "session.started",
                 peer = peer.map(tracing::field::display),
+                client = proofs.host.as_deref(),
                 "a WebSocket session starts"
             );
         }
+        let ended = Arc::new(Mutex::new(None));
         let (transport, conn, outbound) = if websocket {
             (
                 Transport::WebSocket,
                 Some(self.0.connection_id()),
-                Some(Session(self.0.subscribe())),
+                Some(Session {
+                    changes: self.0.subscribe(),
+                    token: request.extensions.get::<SessionWatch>().cloned(),
+                    client: proofs.host.clone(),
+                    ended: ended.clone(),
+                }),
             )
         } else {
             (Transport::Http, None, None)
@@ -203,6 +359,7 @@ impl Handler for Fleet {
                 subject: proofs.subject(peer),
                 host: proofs.host,
                 peer,
+                ended,
             },
             outbound,
         ))
@@ -254,6 +411,11 @@ impl Handler for Fleet {
             Transport::Http => "the request body is not a valid AgentToServer message",
             Transport::WebSocket => "the frame is not a valid OpAMP message",
         }))
+    }
+
+    fn closing(&self, carrier: &Carrier) -> Option<Closing> {
+        let reason = (*carrier.ended.lock().expect("ended lock"))?;
+        Some(Closing::policy(reason))
     }
 
     /// The connection is gone; every Agent it carried is unreachable until it reports again.

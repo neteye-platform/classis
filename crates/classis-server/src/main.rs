@@ -467,6 +467,21 @@ async fn main() {
         config.agent_rate_limit.limits(),
         clock.clone(),
     ));
+    // Enrolment and bearer admission of the Agent plane (ADR-0064), counting its refusals in a
+    // table of its own, apart from the Operator plane's.
+    let enrolment = match classis_server::enrolment::Enrolment::on(
+        &records,
+        config.token_lifetime(),
+        clock.clone(),
+    ) {
+        Ok(enrolment) => Arc::new(enrolment.with_throttle(Arc::new(
+            classis_server::throttle::Throttle::new(limits, clock.clone()),
+        ))),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     let state = match AppState::on(&records) {
         Ok(state) => Arc::new(
             state
@@ -487,7 +502,7 @@ async fn main() {
     };
     // Two planes, two listeners (ADR-0013): Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
-    let agents = classis_server::agent_app(state.clone());
+    let agents = classis_server::agent_app(state.clone(), enrolment);
     let operator_auth = match config
         .rest
         .auth

@@ -83,7 +83,7 @@ async fn serve(
             64,
             handle.clone(),
         )
-        .serve(classis_server::agent_app(state.clone())),
+        .serve(classis_server::agent_app_open_for_tests(state.clone())),
     );
     tokio::spawn(
         classis_server::listen::plane(

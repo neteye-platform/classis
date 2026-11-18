@@ -27,7 +27,7 @@ async fn spawn() -> (std::net::SocketAddr, tempfile::TempDir) {
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs")).expect("open the configuration store"),
     );
-    let app = classis_server::agent_app(state);
+    let app = classis_server::agent_app_open_for_tests(state);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Agent plane");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(

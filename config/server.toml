@@ -69,6 +69,11 @@ max_message_size_bytes = 67108864
 # default heartbeat of 30 s, because one missed beat is a lost packet.
 stale_after_secs = 90
 
+# How long an access token is accepted after it is issued, in seconds; 0 — the default — means it
+# never expires. A token ends when its client is issued a new one all the same, and an open
+# WebSocket session outlives its token's expiry, ending only when the token is replaced.
+token_lifetime_secs = 0
+
 # The largest package artifact the REST API accepts on upload. A package is a program, not a
 # message: an otelcol-contrib binary is a few hundred megabytes, so this bound is far larger than
 # max_message_size_bytes above and applies to the package upload route alone.
@@ -193,9 +198,11 @@ max_package_size_bytes = 1073741824
 cert_file = "cert.pem"
 key_file = "key.pem"
 
-# Repeated admission failures from one peer address: past max_failures 401s within
-# window_secs, the address is answered 429 with Retry-After for backoff_secs, before anything else
-# is checked. The Operator plane counts its own failures the same way.
+# Repeated admission failures from one peer address: past max_failures refused authentications
+# (a 401, or a Bearer 400 invalid_request) within window_secs on /v1/enrol, /v1/token, /v1/opamp
+# or the package download, the address is answered 429 with Retry-After for backoff_secs, before
+# anything else is checked. The Operator plane counts its own failures the same way, in a table of
+# its own.
 # [admission_throttle]
 # max_failures = 10
 # window_secs = 60
