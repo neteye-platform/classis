@@ -19,11 +19,13 @@ use opamp::uid::InstanceUid;
 use super::{client, schema, sql, Database, IMPORT_TIMEOUT};
 use crate::agent_store::{AgentStore as _, PersistedAgent};
 use crate::blobs::BlobStore as _;
+use crate::client_store::{ClientRecord, ClientStore as _};
 use crate::config::PostgresConfig;
 use crate::configs::{ConfigBackend as _, Configuration};
 use crate::deployments::{Deployment, DeploymentBackend as _};
 use crate::fs;
 use crate::packages::{Package, PackageBackend as _};
+use crate::space_store::{SpaceRecord, SpaceStore as _};
 
 /// What the copy carried, one line per kind, for the operator to read.
 #[derive(Debug, Default)]
@@ -37,6 +39,8 @@ struct Records {
     deployments: Vec<Deployment>,
     packages: Vec<Package>,
     agents: HashMap<InstanceUid, PersistedAgent>,
+    spaces: Vec<SpaceRecord>,
+    clients: Vec<ClientRecord>,
 }
 
 impl Records {
@@ -47,6 +51,8 @@ impl Records {
             deployments: fs::FsDeploymentBackend::open(root)?.load()?,
             packages: fs::FsPackageBackend::open(root)?.load()?,
             agents: fs::FsAgentStore::open(root)?.load()?,
+            spaces: fs::FsSpaceStore::open(root)?.load()?,
+            clients: fs::FsClientStore::open(root)?.load()?,
         })
     }
 
@@ -64,6 +70,8 @@ impl Records {
             format!("{} deployments", self.deployments.len()),
             format!("{} packages", self.packages.len()),
             format!("{} agents", self.agents.len()),
+            format!("{} spaces", self.spaces.len()),
+            format!("{} clients", self.clients.len()),
         ]
     }
 
@@ -80,6 +88,16 @@ impl Records {
         }
         for (uid, record) in &self.agents {
             super::agents::write(client, uid, record).await?;
+        }
+        for space in &self.spaces {
+            if !super::spaces::write(client, space).await? {
+                return Err(format!("space {:?} was written twice", space.name));
+            }
+        }
+        for record in &self.clients {
+            if !super::clients::write(client, record).await? {
+                return Err(format!("client {:?} was written twice", record.client_id));
+            }
         }
         Ok(())
     }
@@ -413,6 +431,30 @@ mod tests {
             .expect("open")
             .put(&InstanceUid::default(), &agent)
             .expect("agent");
+        let spaces = fs::FsSpaceStore::open(root).expect("open");
+        for (name, seed) in [("Prod_EU", 'p'), ("lab", 'l')] {
+            assert!(spaces
+                .create(&crate::space_store::tests::space(name, seed))
+                .expect("space"));
+        }
+        let clients = fs::FsClientStore::open(root).expect("open");
+        let mut enrolled = crate::client_store::tests::client(
+            "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8091",
+            "Prod_EU",
+            3,
+        );
+        enrolled.token = Some(crate::client_store::ActiveToken {
+            hash: [9; 32],
+            expires_at: Some(u64::MAX),
+        });
+        assert!(clients.insert(&enrolled).expect("client"));
+        assert!(clients
+            .insert(&crate::client_store::tests::client(
+                "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8092",
+                "lab",
+                4
+            ))
+            .expect("client"));
     }
 
     /// The copy over a fixture `data_dir` carries every record into the database and the blobs
@@ -445,6 +487,9 @@ mod tests {
             report.lines.iter().any(|line| line == "1 agents"),
             "{report:?}"
         );
+        for line in ["2 spaces", "2 clients"] {
+            assert!(report.lines.iter().any(|l| l == line), "{report:?}");
+        }
         assert_eq!(snapshot(&old), before, "the old data_dir is unchanged");
 
         let database = test.open();
@@ -458,6 +503,18 @@ mod tests {
             expected.deployments
         );
         assert!(records.agents().expect("a").load().expect("load") == expected.agents);
+        assert_eq!(expected.spaces.len(), 2);
+        assert_eq!(
+            records.spaces().expect("s").load().expect("load"),
+            expected.spaces,
+            "every Space, its whole key included"
+        );
+        assert_eq!(expected.clients.len(), 2);
+        assert_eq!(
+            records.clients().expect("c").load().expect("load"),
+            expected.clients,
+            "every client, its hashes and its token's expiry included"
+        );
         let packages = records.packages().expect("p").load().expect("load");
         // Every Package whole: its identity and each entry's platform, hash, size and signature.
         let shown = |packages: &[Package]| -> Vec<_> {

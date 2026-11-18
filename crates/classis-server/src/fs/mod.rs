@@ -8,15 +8,19 @@
 
 mod agents;
 mod blobs;
+mod clients;
 mod configs;
 mod deployments;
 mod packages;
+mod spaces;
 
 pub use agents::FsAgentStore;
 pub use blobs::FsBlobStore;
+pub use clients::FsClientStore;
 pub use configs::FsConfigBackend;
 pub use deployments::FsDeploymentBackend;
 pub use packages::FsPackageBackend;
+pub use spaces::FsSpaceStore;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -31,8 +35,23 @@ pub const PACKAGES: &str = "packages";
 pub const BLOBS: &str = "blobs";
 /// One Agent record per file.
 pub const AGENTS: &str = "agents";
-/// Every directory the layout names, in the order the table of ADR-0037 clause 2 lists them.
-pub const DIRECTORIES: [&str; 5] = [CONFIGURATIONS, DEPLOYMENTS, PACKAGES, BLOBS, AGENTS];
+/// One Space per file, named by its lowercase name: the name and the whole enrolment key
+/// (ADR-0064 clause 1).
+pub const SPACES: &str = "spaces";
+/// One OAuth client per file: its Space, the hash of its secret and the hash and expiry of its one
+/// active token (ADR-0064 clauses 2 to 4).
+pub const CLIENTS: &str = "clients";
+/// Every directory the layout names, in the order the table of ADR-0037 clause 2 lists them, then
+/// the two ADR-0064 adds.
+pub const DIRECTORIES: [&str; 7] = [
+    CONFIGURATIONS,
+    DEPLOYMENTS,
+    PACKAGES,
+    BLOBS,
+    AGENTS,
+    SPACES,
+    CLIENTS,
+];
 
 /// Opens the data directory (ADR-0037): creates it and every directory of the layout owner-only —
 /// `blobs/` only with the filesystem blob store, `filesystem_blobs`: beside a bucket it is the

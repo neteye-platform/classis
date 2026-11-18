@@ -514,6 +514,7 @@ dependencies = [
  "futures-util",
  "hex",
  "libc",
+ "oauth-token",
  "object_store",
  "opamp",
  "prost",

@@ -28,7 +28,7 @@ pub const SCHEMA_TABLE: &str = "fleet_schema";
 
 /// Every table the migrations create, so that a database holding any of them is recognised as one
 /// the Server already wrote ([`super::Database::server_tables`]).
-pub const TABLES: [&str; 8] = [
+pub const TABLES: [&str; 10] = [
     "configurations",
     "configuration_revisions",
     "deployments",
@@ -36,6 +36,8 @@ pub const TABLES: [&str; 8] = [
     "package_entries",
     "agents",
     "agent_assignment_configurations",
+    "spaces",
+    "clients",
     // Not tables of the records, but the Server's all the same.
     SCHEMA_TABLE,
 ];
@@ -48,7 +50,9 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
 }];
 
 /// The first schema: one table per kind of record, the parts of a record that are many in tables
-/// of their own (ADR-0050 clauses 3, 8, 10 to 14). Unsigned integers are kept as `bigint` with
+/// of their own (ADR-0050 clauses 3, 8, 10 to 14). A Space's enrolment key is kept whole in
+/// `spaces.key` (ADR-0064 clause 1); a client keeps only the hashes of its secret and of its one
+/// active token, the token's unique, so admission is an index lookup (ADR-0064 clause 4). Unsigned integers are kept as `bigint` with
 /// their bits unchanged, so every value round-trips.
 ///
 /// PostgreSQL's `text` and `jsonb` refuse a NUL character, which a file keeps. Text an Agent
@@ -120,6 +124,20 @@ CREATE TABLE agent_assignment_configurations (
     configuration text NOT NULL,
     revision text NOT NULL,
     PRIMARY KEY (instance_uid, configuration)
+);
+CREATE TABLE spaces (
+    name text PRIMARY KEY,
+    key text NOT NULL
+);
+CREATE UNIQUE INDEX spaces_name_ignoring_case ON spaces (lower(name));
+CREATE TABLE clients (
+    client_id text PRIMARY KEY,
+    space text NOT NULL,
+    secret_hash bytea NOT NULL,
+    issued_at bigint NOT NULL,
+    token_hash bytea UNIQUE,
+    token_expires_at bigint,
+    CHECK (token_hash IS NOT NULL OR token_expires_at IS NULL)
 );
 ";
 

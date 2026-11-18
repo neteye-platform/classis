@@ -10,6 +10,7 @@ pub mod agent_store;
 pub mod api;
 pub mod blobs;
 pub mod bridge;
+pub mod client_store;
 pub mod clock;
 pub mod config;
 pub mod configs;
@@ -24,6 +25,8 @@ pub mod packages;
 pub mod pki;
 pub mod postgres;
 pub mod s3;
+pub mod space_store;
+pub mod spaces;
 pub mod throttle;
 pub mod tls;
 pub mod transport;
@@ -34,7 +37,10 @@ use axum::Router;
 
 use deployments::DeploymentStore;
 use fleet::{AppState, PackageOffering};
-use fs::{FsAgentStore, FsBlobStore, FsConfigBackend, FsDeploymentBackend, FsPackageBackend};
+use fs::{
+    FsAgentStore, FsBlobStore, FsClientStore, FsConfigBackend, FsDeploymentBackend,
+    FsPackageBackend, FsSpaceStore,
+};
 
 /// Where the Server keeps its records (ADR-0050 clause 1): files under `data_dir`, or one
 /// PostgreSQL database. The composition root asks it for each port's adapter, so the rest of the
@@ -111,6 +117,29 @@ impl Records {
             Records::Postgres(db) => {
                 Box::new(postgres::packages::PgPackageBackend::new(db.clone()))
             }
+        })
+    }
+
+    /// The Spaces and their enrolment keys (ADR-0064 clause 1); [`spaces::Spaces`] is the
+    /// service over them.
+    ///
+    /// # Errors
+    /// As [`agents`](Self::agents), and when a Space's file does not parse.
+    pub fn spaces(&self) -> Result<Box<dyn space_store::SpaceStore>, String> {
+        Ok(match self {
+            Records::Files(dir) => Box::new(FsSpaceStore::open(dir)?),
+            Records::Postgres(db) => Box::new(postgres::spaces::PgSpaceStore::new(db.clone())),
+        })
+    }
+
+    /// The OAuth clients, their secret hashes and their active tokens (ADR-0064 clauses 2 to 4).
+    ///
+    /// # Errors
+    /// As [`agents`](Self::agents), and when a client's file does not parse.
+    pub fn clients(&self) -> Result<Box<dyn client_store::ClientStore>, String> {
+        Ok(match self {
+            Records::Files(dir) => Box::new(FsClientStore::open(dir)?),
+            Records::Postgres(db) => Box::new(postgres::clients::PgClientStore::new(db.clone())),
         })
     }
 }

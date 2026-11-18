@@ -111,8 +111,8 @@ fn sigterm_shuts_the_server_down_gracefully() {
         "the server ended with {status:?} instead of shutting down"
     );
 
-    // Started on an empty data_dir, the Server laid out every directory of ADR-0037 clause 2,
-    // each owner-only, and nothing else.
+    // Started on an empty data_dir, the Server laid out every directory of ADR-0037 clause 2 and the
+    // two of ADR-0064, each owner-only, and nothing else.
     let data = dir.path().join("data");
     let mut found: Vec<String> = std::fs::read_dir(&data)
         .expect("the data directory")
@@ -131,9 +131,11 @@ fn sigterm_shuts_the_server_down_gracefully() {
         [
             "agents",
             "blobs",
+            "clients",
             "configurations",
             "deployments",
-            "packages"
+            "packages",
+            "spaces"
         ]
     );
     for name in std::iter::once(String::new()).chain(found) {

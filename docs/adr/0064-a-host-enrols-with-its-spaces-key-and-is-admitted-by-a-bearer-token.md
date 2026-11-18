@@ -94,7 +94,9 @@ built on them.
 
 1. **Spaces and the enrolment key.** A space's name matches
    `^[A-Za-z0-9]([A-Za-z0-9_]{0,30}[A-Za-z0-9])?$`: 1 to 32 letters, digits and
-   underscores, starting and ending with a letter or digit. It has exactly one
+   underscores, starting and ending with a letter or digit. A name keeps the
+   case it was created with, but two spaces may not have names that differ
+   only in case; a key names its space exactly. It has exactly one
    active key of the form `cle1_<space>_<secret>`: the fixed prefix `cle1_` (so
    secret scanners and log redaction recognize it), the space name, `_`, and a
    secret of 256 random bits written as 43 characters of base64url without
