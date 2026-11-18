@@ -75,9 +75,10 @@ state_dir = "client-state"
 # [attributes]
 # env = "prod"
 
-# TLS toward the Server. ca_file trusts a private CA. The Client sends no credential; a leftover
-# [auth] section from an earlier version is ignored, with one warning at startup, and can be
-# deleted.
+# TLS toward the Server. ca_file trusts a private CA. The Client presents no certificate, and
+# reads no credential from this file: it sends the bearer token that `supervisor enrol` keeps in
+# state.json in the state directory. A leftover [auth] section from an earlier version is ignored,
+# with one warning at startup, and can be deleted.
 # [tls]
 # ca_file = "ca.pem"          # replaces the built-in roots — the private-CA deployment
 

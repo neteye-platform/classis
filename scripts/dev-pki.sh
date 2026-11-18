@@ -64,5 +64,11 @@ cat <<EOF
 Created in $OUT, with a server.toml and a supervisor.toml that use the set:
 
   cargo run -p classis-server -- --config $OUT/server.toml
+
+A Client refuses to start until its host is enrolled with a Space's key (ADR-0064). No command
+of the Server creates a Space yet (ADR-0065). With a key, and the Server running, enrol the host
+before the first run, with the Server's base URL (the https:// form of the endpoint above):
+
+  cargo run -p classis-agent -- --config $OUT/supervisor.toml enrol <base-url> <key>
   cargo run -p classis-agent -- --config $OUT/supervisor.toml
 EOF

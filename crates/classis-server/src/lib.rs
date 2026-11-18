@@ -287,10 +287,7 @@ pub fn agent_app(state: Arc<AppState>, enrolment: Arc<enrolment::Enrolment>) -> 
             enrolment::TOKEN_PATH,
             oauth_token::server::endpoint(enrolment.clone(), enrolment.lifetime()),
         );
-    match enrolment.throttle() {
-        Some(throttle) => transport::back_off(routes, throttle.clone()),
-        None => routes,
-    }
+    transport::back_off(routes, enrolment.throttle().clone())
 }
 
 /// What bearer admission guards: the OpAMP endpoint and the package download.
@@ -306,8 +303,8 @@ fn agent_routes(state: Arc<AppState>) -> Router {
 /// answers no `/v1/token`, and no request arrives as any host — what the plane did before
 /// admission existed, for the tests that are not about admission.
 ///
-/// It exists only under the `test-support` feature, which `classis-server` and `classis-agent`
-/// enable for their tests alone: a build of the Server binary does not contain it.
+/// It exists only under the `test-support` feature, which `classis-server` enables for its own tests
+/// alone, through a dev-dependency on itself: a build of the Server binary does not contain it.
 #[cfg(feature = "test-support")]
 pub fn agent_app_open_for_tests(state: Arc<AppState>) -> Router {
     agent_routes(state)
@@ -315,8 +312,8 @@ pub fn agent_app_open_for_tests(state: Arc<AppState>) -> Router {
 
 /// **For tests only.** [`agent_app_open_for_tests`] with every request arriving as `host` — or as
 /// admitted without one, for `None` — what admission hands the handlers once a token names a host
-/// (ADR-0064), for the tests that are about what the plane does by the host, or that drive a Client
-/// which does not send a token yet. Under the same feature, and absent from the Server binary alike.
+/// (ADR-0064), for the tests that are about what the plane does by the host and not by how it was
+/// admitted. Under the same feature, and absent from the Server binary alike.
 #[cfg(feature = "test-support")]
 pub fn agent_app_admitted_as_for_tests(state: Arc<AppState>, host: Option<&str>) -> Router {
     let proofs = transport::Proofs {

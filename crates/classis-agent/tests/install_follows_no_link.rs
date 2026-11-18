@@ -4,6 +4,8 @@
 //! each case here plants one and checks that the install refused it or replaced it, and that what
 //! it pointed at is as it was.
 
+mod common;
+
 use std::path::Path;
 
 use classis_agent::connection::{self, SETTINGS_FILE};
@@ -77,6 +79,103 @@ mod unix {
         assert_untouched(&settings);
         assert!(!is_link(&state.path().join(UID_FILE)));
         assert!(!is_link(&state.path().join(SETTINGS_FILE)));
+    }
+
+    /// The Server an `enrol` of these tests asks, and the base URL and key to enrol with.
+    async fn a_server(dir: &Path) -> (String, String) {
+        let state = std::sync::Arc::new(common::fleet_state(dir));
+        let admission = common::Admission::new(dir);
+        let app = admission.app(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+        (format!("http://{addr}"), admission.key.clone())
+    }
+
+    async fn enrol(base: &str, key: &str, state: &Path) -> Result<(), String> {
+        classis_agent::enrolment::enrol(
+            base,
+            key,
+            state,
+            opamp::client::ClientTls::default(),
+            &common::NoService,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `enrol` runs as root or an Administrator over a state directory the service's account
+    /// owns, and its write of `state.json` follows no link: a link at the temporary name is
+    /// replaced and what it points at is as it was; a link at `state.json` itself is refused; a
+    /// state directory that is a link is refused and nothing is created behind it.
+    /// Verifies: ADR-0054, ADR-0064
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enrol_writes_state_json_through_no_link() {
+        let server = tempfile::tempdir().expect("server");
+        let (base, key) = a_server(server.path()).await;
+
+        // The name `state.json` is staged under.
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).expect("state directory");
+        let staged = plant(&state, outside.path(), "state.json~");
+        enrol(&base, &key, &state).await.expect("enrolled");
+        assert_untouched(&staged);
+        assert!(
+            !is_link(&state.join("state.json~")),
+            "no temporary name is left"
+        );
+        assert!(!is_link(&state.join("state.json")), "the file is no link");
+        assert_eq!(
+            std::fs::metadata(state.join("state.json"))
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        // A link at `state.json` is no host that has not enrolled: it is refused, not followed.
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).expect("state directory");
+        let linked = plant(&state, outside.path(), "state.json");
+        enrol(&base, &key, &state).await.expect_err("a link");
+        assert_untouched(&linked);
+        assert!(is_link(&state.join("state.json")), "the link is as it was");
+
+        // A state directory that is a link.
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o750))
+            .expect("mode");
+        let state = root.path().join("state");
+        std::os::unix::fs::symlink(outside.path(), &state).expect("plant the link");
+        enrol(&base, &key, &state)
+            .await
+            .expect_err("a linked state directory");
+        let entries: Vec<_> = std::fs::read_dir(outside.path())
+            .expect("list")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "nothing is written behind it: {entries:?}"
+        );
+        assert_eq!(
+            outside
+                .path()
+                .metadata()
+                .expect("meta")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
+        );
     }
 
     /// A state directory the account replaced with a link is refused by everything an install

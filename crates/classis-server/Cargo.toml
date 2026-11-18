@@ -13,8 +13,9 @@ name = "server"
 path = "src/main.rs"
 
 [features]
-# `agent_app_open_for_tests`: the Agent plane without admission. Enabled by the tests of this crate
-# and of `classis-agent`, never by a build of the Server.
+# `agent_app_open_for_tests` and `agent_app_admitted_as_for_tests`: the Agent plane without
+# admission. Enabled by the tests of this crate alone, through its own dev-dependency, never by a
+# build of the Server.
 test-support = []
 
 [dependencies]

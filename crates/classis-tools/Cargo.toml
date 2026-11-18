@@ -63,3 +63,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# ADR-0028: the end-to-end test runs the real Server, and the real Client's `enrol`, in-process on
+# what `pki init` wrote, reading the fragments as their configuration files are read.
+classis-server = { path = "../classis-server" }

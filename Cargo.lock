@@ -552,6 +552,7 @@ dependencies = [
  "clap",
  "classis-agent",
  "classis-core",
+ "classis-server",
  "dialoguer",
  "flate2",
  "hex",

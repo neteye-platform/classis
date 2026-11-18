@@ -397,15 +397,15 @@ async fn a_wrong_key_leaves_no_state_json() {
     assert!(!state_dir.join("state.json").exists());
 }
 
-/// `enrol` writes `state.json` before it lets the service start at boot and starts it, and
-/// installing starts nothing: the registered service is asked for nothing until `enrol`.
+/// `enrol` writes `state.json` before it lets the service start at boot and starts it, and a host
+/// that refuses (a second `enrol`) asks the service for nothing. That an install starts and
+/// enables nothing is decided by `an_install_starts_nothing_and_enrol_and_revoke_ask_the_manager`.
 /// Verifies: ADR-0064
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enrol_enables_and_starts_the_registered_service_after_state_json() {
     let server = server().await;
     let state_dir = server.dir.path().join("host");
     let host = FakeHost::new(ServiceState::Stopped, Some(state_dir.join("state.json")));
-    assert!(host.asked().is_empty(), "an install starts nothing");
 
     let enrolled = enrolment::enrol(
         &server.base(),
@@ -945,19 +945,226 @@ async fn revoke_refuses_while_the_service_runs_and_leaves_it_disabled() {
     leave_traces(&state_dir);
 
     let running = FakeHost::new(ServiceState::Running, None);
-    let error = classis_agent::revoke::revoke(&state_dir, true, false, &running, &mut |_| Ok(true))
-        .expect_err("the service runs");
+    let error = classis_agent::revoke::revoke(
+        &state_dir,
+        &classis_agent::revoke::Outside::default(),
+        true,
+        false,
+        &running,
+        &mut |_| Ok(true),
+    )
+    .expect_err("the service runs");
     assert!(error.contains("running"), "{error}");
     assert!(running.asked().is_empty(), "{:?}", running.asked());
     assert!(state_dir.join("state.json").exists());
 
     let stopped = FakeHost::new(ServiceState::Stopped, None);
-    let revoked =
-        classis_agent::revoke::revoke(&state_dir, true, false, &stopped, &mut |_| Ok(true))
-            .expect("revoked");
+    let revoked = classis_agent::revoke::revoke(
+        &state_dir,
+        &classis_agent::revoke::Outside::default(),
+        true,
+        false,
+        &stopped,
+        &mut |_| Ok(true),
+    )
+    .expect("revoked");
     assert!(revoked.service_disabled);
     assert_eq!(stopped.asked(), ["disable"]);
     assert!(entries(&state_dir).is_empty());
+}
+
+/// What the service manager of the next test was asked, in order.
+#[cfg(unix)]
+static ASKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(unix)]
+fn asked() -> Vec<String> {
+    std::mem::take(&mut *ASKED.lock().expect("asked"))
+}
+
+/// A service manager that records what it is asked, as the real one is by `install`, `start`,
+/// `stop` and `status`.
+#[cfg(unix)]
+struct Recording;
+
+#[cfg(unix)]
+impl service_manager::ServiceManager for Recording {
+    fn available(&self) -> std::io::Result<bool> {
+        Ok(true)
+    }
+    fn install(&self, ctx: service_manager::ServiceInstallCtx) -> std::io::Result<()> {
+        // A registration that asks for a start at boot is one that starts the service: launchd's
+        // `Disabled` plist key holds it back, where `service-manager` writes `RunAtLoad` anyway.
+        let at_boot = ctx.autostart && !cfg!(target_os = "macos");
+        ASKED
+            .lock()
+            .expect("asked")
+            .push(format!("install {} at-boot={at_boot}", ctx.label));
+        Ok(())
+    }
+    fn uninstall(&self, ctx: service_manager::ServiceUninstallCtx) -> std::io::Result<()> {
+        ASKED
+            .lock()
+            .expect("asked")
+            .push(format!("uninstall {}", ctx.label));
+        Ok(())
+    }
+    fn start(&self, ctx: service_manager::ServiceStartCtx) -> std::io::Result<()> {
+        ASKED
+            .lock()
+            .expect("asked")
+            .push(format!("start {}", ctx.label));
+        Ok(())
+    }
+    fn stop(&self, ctx: service_manager::ServiceStopCtx) -> std::io::Result<()> {
+        ASKED
+            .lock()
+            .expect("asked")
+            .push(format!("stop {}", ctx.label));
+        Ok(())
+    }
+    fn level(&self) -> service_manager::ServiceLevel {
+        service_manager::ServiceLevel::System
+    }
+    fn set_level(&mut self, _: service_manager::ServiceLevel) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn status(
+        &self,
+        _: service_manager::ServiceStatusCtx,
+    ) -> std::io::Result<service_manager::ServiceStatus> {
+        Ok(service_manager::ServiceStatus::Stopped(None))
+    }
+}
+
+/// The real `NativeService`, over [`Recording`] and an at-boot change that records what it is asked.
+#[cfg(unix)]
+struct SeamHost;
+
+#[cfg(unix)]
+impl ServiceHost for SeamHost {
+    fn registered(&self, _: &Path) -> Result<Option<Installed>, String> {
+        Ok(Some(Installed {
+            control: Box::new(classis_agent::service::manager::NativeService::with_seams(
+                classis_agent::service::ServiceLevel::System,
+                |_| Ok(Box::new(Recording)),
+                |_| false,
+                |_, label, on| {
+                    ASKED
+                        .lock()
+                        .expect("asked")
+                        .push(format!("{} {label}", if on { "enable" } else { "disable" }));
+                    Ok(())
+                },
+            )),
+            run_as: None,
+        }))
+    }
+}
+
+/// Installing registers the service and asks the manager for nothing else — no start, no start at
+/// boot — through the real `install`; `enrol` then lets it start at boot and starts it, in that
+/// order and after `state.json` is written, through the real service control; and `revoke` keeps
+/// it from starting at boot again without starting or stopping it (ADR-0064 clause 7).
+/// Verifies: ADR-0064
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_install_starts_nothing_and_enrol_and_revoke_ask_the_manager() {
+    use classis_agent::service::manager::{install_with, InstallSpec};
+    use classis_agent::service::ServiceLevel;
+
+    let server = server().await;
+    let state_dir = server.dir.path().join("host");
+    asked();
+
+    install_with(
+        &InstallSpec {
+            level: ServiceLevel::System,
+            program: PathBuf::from("/opt/classis/current/supervisor"),
+            config_path: server.dir.path().join("supervisor.toml"),
+            state_dir: state_dir.clone(),
+            run_as: None,
+            agents: None,
+        },
+        |_| Ok(Box::new(Recording)),
+    )
+    .expect("installed");
+    assert_eq!(
+        asked(),
+        ["install classis at-boot=false"],
+        "a registration, which neither starts nor enables"
+    );
+
+    enrolment::enrol(
+        &server.base(),
+        &server.admission.key,
+        &state_dir,
+        ClientTls::default(),
+        &SeamHost,
+    )
+    .await
+    .expect("enrolled");
+    assert_eq!(asked(), ["enable classis", "start classis"]);
+    assert!(state_dir.join("state.json").exists());
+
+    classis_agent::revoke::revoke(
+        &state_dir,
+        &classis_agent::revoke::Outside::default(),
+        true,
+        false,
+        &SeamHost,
+        &mut |_| Ok(true),
+    )
+    .expect("revoked");
+    assert_eq!(
+        asked(),
+        ["disable classis"],
+        "kept from starting at boot, and neither started nor stopped"
+    );
+}
+
+/// A host whose service registration is read while another run of `enrol` writes `state.json`:
+/// the file appears between the check `enrol` makes first and its own write.
+struct RacedHost {
+    state_dir: PathBuf,
+}
+
+impl ServiceHost for RacedHost {
+    fn registered(&self, _: &Path) -> Result<Option<Installed>, String> {
+        std::fs::create_dir_all(&self.state_dir).expect("state directory");
+        std::fs::write(self.state_dir.join("state.json"), "another run's file").expect("write");
+        Ok(None)
+    }
+}
+
+/// A `state.json` another run wrote while this one registered is not replaced: the second `enrol`
+/// ends in the same refusal as one that finds the file first, and the first run's file stands.
+/// Verifies: ADR-0064
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_state_json_that_appeared_meanwhile_is_not_replaced() {
+    let server = server().await;
+    let state_dir = server.dir.path().join("host");
+    let error = enrolment::enrol(
+        &server.base(),
+        &server.admission.key,
+        &state_dir,
+        ClientTls::default(),
+        &RacedHost {
+            state_dir: state_dir.clone(),
+        },
+    )
+    .await
+    .expect_err("a file appeared");
+    assert!(error.contains("enrolled already"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("state.json")).expect("read"),
+        "another run's file"
+    );
+    assert_eq!(
+        entries(&state_dir),
+        ["state.json"],
+        "no temporary file is left"
+    );
 }
 
 /// The Client does not start without a `state.json`, in the foreground or by a bare invocation, and
@@ -980,4 +1187,113 @@ async fn the_client_refuses_to_start_without_state_json() {
         let error = stderr(&output);
         assert!(error.contains("supervisor enrol"), "{args:?}: {error}");
     }
+}
+
+/// `revoke` deletes what the Client keeps for the host wherever the configuration puts it: the
+/// Supervisors' directories under a `supervisor_dir` of their own, with the identities of their
+/// Agents, and the Client's log files in a `[logging] dir` of its own — and only those. A host
+/// enrolled again is a new one: its Agents come back under new `instance_uid`s and are admitted,
+/// where an identity left behind would be refused (ADR-0064 clause 7).
+/// Verifies: ADR-0064
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoke_deletes_the_supervisors_and_logs_kept_outside_the_state_directory() {
+    let server = server().await;
+    let state_dir = server.dir.path().join("client-state");
+    let supervisors = server.dir.path().join("supervisors-elsewhere");
+    let logs = server.dir.path().join("logs-elsewhere");
+    server.admission.enrol(server.addr, &state_dir).await;
+    let program = Path::new(env!("CARGO_BIN_EXE_stub_agent"))
+        .file_name()
+        .expect("a file name")
+        .to_string_lossy()
+        .into_owned();
+    let stage_program = || {
+        let dir = supervisors.join("stub/program");
+        std::fs::create_dir_all(&dir).expect("program directory");
+        let staged = dir.join(&program);
+        std::fs::copy(env!("CARGO_BIN_EXE_stub_agent"), &staged).expect("stage the stub");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+    };
+    let config = write_config(
+        server.dir.path(),
+        &format!("ws://{}/v1/opamp", server.addr),
+        &state_dir,
+        &format!(
+            "supervisor_dir = {supervisors:?}\n\n[logging]\ndir = {logs:?}\n\n\
+             [[supervisor]]\ntype = \"command\"\nname = \"stub\"\ncommand = {program:?}\n",
+        ),
+    );
+    let config_arg = config.to_string_lossy().into_owned();
+    stage_program();
+
+    // The Client and the Supervisor's Agent run once, and are known to the Server.
+    let mut client = run_client(&config);
+    let before = wait_until("both Agents to connect", || {
+        let connected: Vec<String> = server
+            .state
+            .snapshot()
+            .iter()
+            .filter(|agent| agent.connected)
+            .map(|agent| agent.instance_uid.clone())
+            .collect();
+        (connected.len() == 2).then_some(connected)
+    })
+    .await;
+    client.kill().await.expect("stop the Client");
+    assert!(supervisors.join("stub/instance-uid").is_file());
+    // A service run writes the Client's log files there; a foreground run writes none, so the
+    // files of two days are put where the rotation puts them.
+    std::fs::create_dir_all(&logs).expect("log directory");
+    for day in ["2026-11-16", "2026-11-17"] {
+        std::fs::write(logs.join(format!("supervisor.{day}.log")), "a line").expect("write");
+    }
+    std::fs::write(logs.join("other-program.log"), "not the Client's").expect("write");
+    std::fs::write(supervisors.join("not-a-supervisor"), "x").expect("write");
+
+    let revoked = supervisor(&["--config", &config_arg, "revoke", "--force"]).await;
+    assert!(revoked.status.success(), "{}", stderr(&revoked));
+    assert!(entries(&state_dir).is_empty(), "{:?}", entries(&state_dir));
+    assert_eq!(
+        entries(&supervisors),
+        ["not-a-supervisor"],
+        "the Supervisors' directories are gone, and nothing but them"
+    );
+    assert_eq!(
+        entries(&logs),
+        ["other-program.log"],
+        "the Client's own log files are gone, and nothing but them"
+    );
+
+    // Enrolled again: a new host, whose Agents are new and are admitted.
+    let enrolled = supervisor(&[
+        "--config",
+        &config_arg,
+        "enrol",
+        &server.base(),
+        &server.admission.key,
+    ])
+    .await;
+    assert!(enrolled.status.success(), "{}", stderr(&enrolled));
+    stage_program();
+    let _client = run_client(&config);
+    let after = wait_until("both Agents to be admitted again", || {
+        let connected: Vec<String> = server
+            .state
+            .snapshot()
+            .iter()
+            .filter(|agent| agent.connected)
+            .map(|agent| agent.instance_uid.clone())
+            .collect();
+        (connected.len() == 2).then_some(connected)
+    })
+    .await;
+    assert!(
+        after.iter().all(|uid| !before.contains(uid)),
+        "new instance_uids: before {before:?}, after {after:?}"
+    );
 }

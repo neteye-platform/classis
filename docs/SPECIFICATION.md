@@ -532,5 +532,6 @@ Related integration work also touches
 and [ADR-0037](adr/0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md):
 crate boundaries, protocol conformance, TLS and listener bounds, installation,
 and storage adapters need alignment with the new credential model, not blanket
-removal of those decisions. This draft changes no implementation, operator CLI,
-ADR status, or architecture overview of the system as it currently runs.
+removal of those decisions. This draft changes no ADR status; the
+implementation and the architecture overview change with it, in the same pull
+request.

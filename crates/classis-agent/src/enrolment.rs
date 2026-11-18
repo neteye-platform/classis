@@ -124,7 +124,8 @@ fn encode(credentials: &Credentials) -> Result<Zeroizing<Vec<u8>>, String> {
 
 /// Writes `state.json` for the first time, owner-only and never through a link, creating the state
 /// directory where it is missing and leaving it as it is where it exists: an install made it, and
-/// shared it with the accounts that need it.
+/// shared it with the accounts that need it. A `state.json` that appears while this run enrols is
+/// never replaced: the write fails, and the other run's file stands.
 ///
 /// # Errors
 /// Returns an error when the file exists already, or cannot be written.
@@ -143,8 +144,16 @@ fn create(state_dir: &Path, credentials: &Credentials) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(failed(e)),
     }
-    dir.write(STATE_FILE, &encode(credentials)?, 0o600)
-        .map_err(failed)
+    // The check above is for a plain message; this is what decides it: a `state.json` another run
+    // wrote meanwhile is never replaced.
+    dir.write_new(STATE_FILE, &encode(credentials)?, 0o600)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                already_enrolled(&path)
+            } else {
+                failed(e)
+            }
+        })
 }
 
 /// What `enrol` says of a host that has a `state.json` already.
@@ -495,6 +504,33 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
         let error = create(&state, &credentials()).expect_err("a second write");
         assert!(error.contains("enrolled already"), "{error}");
+    }
+
+    /// `enrol` keeps a state directory a Client with a process account laid out as it is — `0710`,
+    /// in the process account's group — and writes `state.json` `0600`; a state directory it makes
+    /// itself is the Client's alone, `0700` (ADR-0059 clause 6).
+    /// Verifies: ADR-0064, ADR-0059
+    #[cfg(unix)]
+    #[test]
+    fn an_enrolment_keeps_a_shared_state_directory_shared() {
+        use std::os::unix::fs::MetadataExt as _;
+        let mode_and_group = |path: &Path| {
+            let meta = std::fs::symlink_metadata(path).expect("metadata");
+            (meta.mode() & 0o7777, meta.gid())
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        // SAFETY: getegid(2) cannot fail and touches no memory.
+        let group = crate::supervisor::ports::ProcessAccountGroup(unsafe { libc::getegid() });
+        let shared = dir.path().join("shared");
+        crate::storage::Storage::client(shared.clone(), Some(group))
+            .expect("laid out with a process account");
+        create(&shared, &credentials()).expect("written");
+        assert_eq!(mode_and_group(&shared), (0o710, group.0));
+        assert_eq!(mode_and_group(&state_path(&shared)).0, 0o600);
+
+        let private = dir.path().join("private");
+        create(&private, &credentials()).expect("written");
+        assert_eq!(mode_and_group(&private).0, 0o700);
     }
 
     /// A renewal changes `access_token` and nothing else, and the file keeps its mode.

@@ -275,8 +275,8 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
     // After the log file, so the line that says which version is running is the first line *in the
     // file* — a log whose opening line is already about work in progress starts one step too late.
     announce(&config, &spec.config_path);
-    // Once per start, not per reconnect: a leftover [auth] is ignored and nothing from it is sent
-    // (ADR-0021 clause 3).
+    // Once per start, not per reconnect: a leftover [auth] is ignored and nothing from it is sent;
+    // the token the Client sends is the one in `state.json` (ADR-0064 clause 7).
     if let Some(notice) = config.leftover_auth_notice() {
         tracing::warn!(config = %spec.config_path.display(), "{notice}");
     }

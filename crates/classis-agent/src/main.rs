@@ -218,6 +218,7 @@ fn revoke_command(
     let config = host_config(config_path, config_named, state_dir_named)?;
     let revoked = revoke::revoke(
         &config.state_dir,
+        &revoke::Outside::of(&config),
         args.force,
         args.keep_cache,
         &enrolment::NativeHost,
@@ -227,6 +228,12 @@ fn revoke_command(
         "revoked: everything in {} is deleted",
         config.state_dir.display()
     );
+    for dir in &revoked.outside {
+        println!(
+            "  also deleted, outside it: what the Client kept in {}",
+            dir.display()
+        );
+    }
     if !revoked.kept.is_empty() {
         let kept: Vec<String> = revoked
             .kept

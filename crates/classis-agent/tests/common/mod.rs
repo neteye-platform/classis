@@ -38,10 +38,17 @@ impl Admission {
         let data = dir.join("admission");
         classis_server::fs::open_data_dir(&data, true).expect("the data directory");
         let records = classis_server::Records::Files(data);
+        let clock = std::sync::Arc::new(classis_server::clock::SystemClock);
+        // No back-off: a test of a refusal is not to be answered with a wait.
+        let limits = classis_server::throttle::Limits {
+            max_failures: u32::MAX,
+            ..classis_server::throttle::Limits::default()
+        };
         let enrolment = classis_server::enrolment::Enrolment::on(
             &records,
             oauth_token::server::Lifetime::Never,
-            std::sync::Arc::new(classis_server::clock::SystemClock),
+            clock.clone(),
+            std::sync::Arc::new(classis_server::throttle::Throttle::new(limits, clock)),
         )
         .expect("the enrolment");
         let key = enrolment

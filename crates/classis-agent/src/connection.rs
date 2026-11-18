@@ -712,6 +712,149 @@ mod tests {
         }
     }
 
+    /// The verification connect checks the Server's TLS certificate and sends the host's token: a
+    /// listener that presents a certificate of a test CA and admits only that token is reached when
+    /// `[tls] ca_file` names the CA and the token is the host's own, and is not reached under the
+    /// public roots alone, nor without the token. The Client presents no certificate of its own
+    /// (ADR-0014 clause 5, ADR-0064 clauses 7 and 9).
+    /// Verifies: ADR-0014, ADR-0064
+    #[tokio::test]
+    async fn verify_trusts_the_ca_file_and_sends_the_token_over_tls() {
+        use opamp::server::listen::{Handle, Listener, ServerTls};
+        use opamp::tls::Identity;
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+
+        opamp::tls::install_ring_provider();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_key = KeyPair::generate().expect("ca key");
+        let mut params = CertificateParams::new(vec!["test-ca".to_string()]).expect("params");
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&ca_key).expect("ca");
+        let issuer = Issuer::from_ca_cert_pem(&ca.pem(), ca_key).expect("issuer");
+        let server_key = KeyPair::generate().expect("key");
+        let server_cert = CertificateParams::new(vec!["localhost".to_string()])
+            .expect("params")
+            .signed_by(&server_key, &issuer)
+            .expect("signed");
+        let tls = ServerTls {
+            identity: Identity {
+                cert_pem: server_cert.pem().into_bytes(),
+                key_pem: server_key.serialize_pem().into_bytes(),
+            },
+        }
+        .rustls_config()
+        .expect("server config");
+        let router = axum::Router::new().route(
+            "/v1/opamp",
+            axum::routing::post(|headers: axum::http::HeaderMap| async move {
+                let admitted = headers
+                    .get("authorization")
+                    .is_some_and(|value| value == "Bearer the-hosts-token");
+                if admitted {
+                    axum::http::StatusCode::OK
+                } else {
+                    axum::http::StatusCode::UNAUTHORIZED
+                }
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(
+            Listener::new(listener, Handle::new())
+                .with_tls(tls)
+                .serve(router),
+        );
+
+        let ca_file = dir.path().join("ca.pem");
+        std::fs::write(&ca_file, ca.pem()).expect("ca");
+        let config = |trusting: bool, token: &str| {
+            let mut config: ClientConfig = toml::from_str(&format!(
+                "endpoint = \"https://localhost:{port}/v1/opamp\"\n{}",
+                if trusting {
+                    format!("[tls]\nca_file = {:?}\n", ca_file.to_string_lossy())
+                } else {
+                    String::new()
+                }
+            ))
+            .expect("config");
+            config.credentials = Some(crate::credentials::Credentials {
+                endpoint: "https://fleet.example".to_string(),
+                space: "lab".to_string(),
+                device_id: "device".to_string(),
+                client_secret: zeroize::Zeroizing::new("secret".to_string()),
+                access_token: zeroize::Zeroizing::new(token.to_string()),
+            });
+            config
+        };
+        let report = || Some(AgentToServer::default());
+        let keep = OpAmpConnectionSettings::default();
+
+        verify(&keep, &config(true, "the-hosts-token"), report)
+            .await
+            .expect("the CA in force vouches for the Server, and the token admits the probe");
+        assert!(
+            verify(&keep, &config(false, "the-hosts-token"), report)
+                .await
+                .is_err(),
+            "a certificate of a CA nobody named was trusted"
+        );
+        assert!(
+            verify(&keep, &config(true, "another-token"), report)
+                .await
+                .is_err(),
+            "the listener admitted a token that is not the one it knows"
+        );
+    }
+
+    /// A TLS client certificate and private key that an offer carries are ignored, and the rest of
+    /// the offer applies: the offer is not reported as dropping anything, the endpoint and the
+    /// heartbeat are folded in and persisted, and neither the certificate nor the key reaches the
+    /// stored file or the configuration in force (ADR-0064 clause 9).
+    /// Verifies: ADR-0064
+    #[test]
+    fn an_offered_client_certificate_is_ignored_and_the_rest_of_the_offer_applies() {
+        use opamp::proto::TlsCertificate;
+        let offer = ConnectionSettingsOffers {
+            hash: b"h".to_vec(),
+            opamp: Some(OpAmpConnectionSettings {
+                destination_endpoint: "wss://moved.example/v1/opamp".to_string(),
+                heartbeat_interval_seconds: 45,
+                certificate: Some(TlsCertificate {
+                    cert: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                    private_key: b"-----BEGIN PRIVATE KEY-----".to_vec(),
+                    ca_cert: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let offered = offer.opamp.as_ref().expect("opamp");
+        assert_eq!(
+            unhonoured(offered),
+            Ok(()),
+            "nothing is reported as dropped"
+        );
+
+        let merged = merge(None, &offer);
+        let kept = merged.opamp.as_ref().expect("opamp settings");
+        assert_eq!(kept.destination_endpoint, "wss://moved.example/v1/opamp");
+        assert_eq!(kept.heartbeat_interval_seconds, 45);
+        assert!(kept.certificate.is_none(), "no certificate is kept");
+        let bytes = merged.encode_to_vec();
+        assert!(
+            !bytes.windows(10).any(|window| window == b"PRIVATE KE"),
+            "no key is persisted"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        store(dir.path(), None, &merged).expect("stored");
+        let loaded = load(dir.path()).expect("loaded");
+        let mut config = ClientConfig::default();
+        apply(&mut config, &loaded);
+        assert_eq!(config.endpoint, "wss://moved.example/v1/opamp");
+        assert_eq!(config.heartbeat_interval_secs, 45);
+    }
+
     fn endpoint_only(endpoint: &str) -> OpAmpConnectionSettings {
         OpAmpConnectionSettings {
             destination_endpoint: endpoint.to_string(),

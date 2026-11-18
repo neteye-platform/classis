@@ -12,6 +12,7 @@
 //! what another sees through its own at once.
 
 use std::fmt::Write as _;
+use std::sync::Mutex;
 
 use classis_core::enrolment_key::{validate_space_name, EnrolmentKey};
 use oauth_token::secret;
@@ -54,6 +55,12 @@ impl From<String> for SpaceError {
 /// The Spaces of one store.
 pub struct Spaces {
     store: Box<dyn SpaceStore>,
+    /// Held by [`Spaces::rotate`] and by [`Spaces::while_current`], so that once a rotation has
+    /// returned, no registration that judged the old key current can still be stored. In-process
+    /// is enough: the Server is a single process, which on PostgreSQL its advisory lock
+    /// (ADR-0050 clause 6) makes so, and the Spaces are rotated through this Server's own
+    /// [`Spaces`].
+    rotation: Mutex<()>,
 }
 
 /// A fresh key of the Space `name`, in a buffer sized once and wiped when it is dropped.
@@ -69,7 +76,10 @@ impl Spaces {
     /// The Spaces kept in `store`.
     #[must_use]
     pub fn new(store: Box<dyn SpaceStore>) -> Self {
-        Spaces { store }
+        Spaces {
+            store,
+            rotation: Mutex::new(()),
+        }
     }
 
     /// Creates the Space `name` with a new key, and returns the key. The name keeps the case it is
@@ -91,7 +101,8 @@ impl Spaces {
         }
     }
 
-    /// The names of the Spaces, sorted. Never a key.
+    /// The names of the Spaces, sorted. Never a key. The operator's commands of ADR-0065 call it;
+    /// nothing in the Server does yet.
     ///
     /// # Errors
     /// [`SpaceError::Store`] when the Spaces cannot be read.
@@ -124,10 +135,32 @@ impl Spaces {
     pub fn rotate(&self, name: &str) -> Result<Zeroizing<String>, SpaceError> {
         validate_space_name(name).map_err(|_| SpaceError::NotFound)?;
         let key = new_key(name);
+        let _rotating = self.rotation.lock().expect("rotation lock");
         if self.store.replace_key(name, &key)? {
             Ok(key)
         } else {
             Err(SpaceError::NotFound)
+        }
+    }
+
+    /// Runs `act` only if `presented` is still the active key of the Space `space`, and returns
+    /// its result; `None` when it is not. [`rotate`](Self::rotate) cannot land while `act` runs,
+    /// so once a rotation has returned `act` has not been started under the old key: "the old key
+    /// enrols nothing" (ADR-0064 clause 1) holds for what `act` stores, not only for what was
+    /// checked before it.
+    ///
+    /// # Errors
+    /// Returns an error when the Spaces cannot be read.
+    pub fn while_current<T>(
+        &self,
+        presented: &str,
+        space: &str,
+        act: impl FnOnce() -> T,
+    ) -> Result<Option<T>, String> {
+        let _held = self.rotation.lock().expect("rotation lock");
+        match self.resolve(presented)? {
+            Some(current) if current == space => Ok(Some(act())),
+            _ => Ok(None),
         }
     }
 
@@ -150,24 +183,27 @@ impl Spaces {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::Arc;
+
+    use oauth_registration::server::{NewClient, RegistrationStore as _};
+    use oauth_token::server::{Lifetime, TokenStore as _};
+
     use super::*;
-    use crate::client_store::tests::client;
-    use crate::client_store::{ActiveToken, ClientStore, TokenReplaced};
+    use crate::client_store::{ActiveToken, ClientRecord, ClientStore, TokenReplaced};
+    use crate::enrolment::Enrolment;
     use crate::fs::{FsClientStore, FsSpaceStore};
-    use crate::postgres::clients::PgClientStore;
-    use crate::postgres::spaces::PgSpaceStore;
-    use crate::postgres::testing::TestDatabase;
+    use crate::throttle::{Limits, Throttle};
 
     /// A Space service and the client store beside it, both reopened by calling `open` again, which
     /// is what a Server restart does.
-    type Open<'a> = &'a dyn Fn() -> (Spaces, Box<dyn ClientStore>);
+    pub(crate) type Open<'a> = &'a dyn Fn() -> (Spaces, Box<dyn ClientStore>);
 
     /// ADR-0064's server store tests, through the service: on either backend, a Space's complete
     /// key is recoverable after reopening; reading it, resolving it and enrolling a client leaves
     /// it unchanged; an explicit rotation persists a different key that survives reopening,
     /// resolves instead of the old one, and changes no client and no token.
-    fn contract(open: Open<'_>) {
+    pub(crate) fn contract(open: Open<'_>) {
         let (spaces, clients) = open();
         assert_eq!(spaces.list().expect("list"), Vec::<String>::new());
         let prod = spaces.create("Prod_EU").expect("create");
@@ -191,25 +227,55 @@ mod tests {
         );
         assert_eq!(spaces.list().expect("list"), ["Prod_EU", "lab"]);
 
-        // Reading the key does not change it, and neither does enrolling a host.
+        // Reading the key does not change it, and neither does enrolling a host, which here goes
+        // the way a host does: through the registration of the Agent plane, then a token request.
         assert_eq!(*spaces.key("Prod_EU").expect("key"), *prod);
         assert_eq!(
             spaces.resolve(&prod).expect("resolve").as_deref(),
             Some("Prod_EU")
         );
-        let enrolled = client("0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8091", "Prod_EU", 1);
-        assert!(clients.insert(&enrolled).expect("enrol"));
+        let clock: Arc<dyn crate::fleet::Clock> = Arc::new(crate::clock::SystemClock);
+        let enrolment = Enrolment::new(
+            spaces,
+            clients,
+            Lifetime::Never,
+            clock.clone(),
+            Arc::new(Throttle::new(Limits::default(), clock)),
+        );
+        let grant = enrolment
+            .authorise(&prod)
+            .expect("authorise")
+            .expect("the key is current");
+        let enrolled = ClientRecord {
+            client_id: "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8091".to_string(),
+            space: "Prod_EU".to_string(),
+            secret_hash: [1; 32],
+            issued_at: 1_790_000_001,
+            token: None,
+        };
+        enrolment
+            .register(
+                &grant,
+                NewClient {
+                    client_id: enrolled.client_id.clone(),
+                    client_secret_hash: enrolled.secret_hash,
+                    client_id_issued_at: enrolled.issued_at,
+                    metadata: oauth_registration::server::Metadata::REGISTERED,
+                },
+            )
+            .expect("register")
+            .expect("the key enrols");
         let token = ActiveToken {
             hash: oauth_token::secret::hash("a token"),
             expires_at: Some(2_000_000_000),
         };
-        clients
-            .replace_token(&enrolled.client_id, &token)
+        enrolment
+            .replace_token(&enrolled.client_id, token.hash, token.expires_at)
             .expect("a token");
-        assert_eq!(*spaces.key("Prod_EU").expect("key"), *prod);
+        assert_eq!(*enrolment.spaces().key("Prod_EU").expect("key"), *prod);
 
         // The key is recoverable after the stores are reopened.
-        drop((spaces, clients));
+        drop(enrolment);
         let (spaces, clients) = open();
         assert_eq!(*spaces.key("Prod_EU").expect("key"), *prod);
         assert_eq!(*spaces.key("lab").expect("key"), *lab);
@@ -308,23 +374,8 @@ mod tests {
         });
     }
 
-    /// Verifies: ADR-0064
-    #[test]
-    fn the_space_service_keeps_its_key_and_rotates_it_on_request_on_postgres() {
-        let Some(test) = TestDatabase::named() else {
-            return;
-        };
-        let database = test.open();
-        contract(&|| {
-            (
-                Spaces::new(Box::new(PgSpaceStore::new(database.clone()))),
-                Box::new(PgClientStore::new(database.clone())),
-            )
-        });
-    }
-
     /// A rotation whose write fails leaves the old key in force, on either backend.
-    fn rotation_fails_part_way(spaces: &Spaces, refuse: &dyn Fn(), mend: &dyn Fn()) {
+    pub(crate) fn rotation_fails_part_way(spaces: &Spaces, refuse: &dyn Fn(), mend: &dyn Fn()) {
         let key = spaces.create("prod").expect("create");
         refuse();
         assert!(matches!(
@@ -350,19 +401,6 @@ mod tests {
             &Spaces::new(Box::new(FsSpaceStore::open(dir.path()).expect("open"))),
             &|| crate::fs::testing::refuse(&file),
             &|| crate::fs::testing::mend(&file),
-        );
-    }
-
-    /// Verifies: ADR-0064
-    #[test]
-    fn a_failed_rotation_leaves_the_old_key_in_force_on_postgres() {
-        let Some(test) = TestDatabase::named() else {
-            return;
-        };
-        rotation_fails_part_way(
-            &Spaces::new(Box::new(PgSpaceStore::new(test.open()))),
-            &|| test.refuse("spaces", "NEW.name = 'prod'"),
-            &|| test.mend("spaces"),
         );
     }
 

@@ -205,8 +205,14 @@ fn agents_label() -> ServiceLabel {
     }
 }
 
+/// How a service manager is made for a scope: the host's own, or a test's.
+type MakeManager = fn(ServiceLevel) -> Result<Box<dyn ServiceManager>, String>;
+
 /// Build the native service manager, selecting user-level when requested.
 fn manager(level: ServiceLevel) -> Result<Box<dyn ServiceManager>, String> {
+    #[cfg(windows)]
+    let mut manager: Box<dyn ServiceManager> = Box::new(sc_manager());
+    #[cfg(not(windows))]
     let mut manager = <dyn ServiceManager>::native()
         .map_err(|e| format!("cannot detect the native service manager: {e}"))?;
     if level == ServiceLevel::User {
@@ -324,6 +330,22 @@ fn agents_args(agents: &Agents) -> Vec<OsString> {
 /// removes it, so a registration there is no more started or enabled than elsewhere.
 const AUTOSTART: bool = cfg!(target_os = "macos");
 
+/// The SCM's manager, registering a service with the `demand` start type (ADR-0064 clause 7).
+/// `service-manager` takes the start type of `sc create` from [`AUTOSTART`] only when that is
+/// true, and from this configuration otherwise, whose default is `auto`: left alone, a first
+/// registration on Windows would start the service at every boot, and a host that holds no
+/// `state.json` has nothing for it to run. `enrol` lets it start at boot by `sc config`, which a
+/// later re-registration keeps ([`windows_config`](super::windows_config)).
+#[cfg(any(windows, test))]
+fn sc_manager() -> service_manager::ScServiceManager {
+    service_manager::ScServiceManager::system().with_config(service_manager::ScConfig {
+        install: service_manager::ScInstallConfig {
+            start_type: service_manager::WindowsStartType::Demand,
+            ..service_manager::ScInstallConfig::default()
+        },
+    })
+}
+
 /// Register the service running `spec.program`, **including** the failure recovery
 /// that makes ADR-0019's restart-on-failure real on every platform. On Windows that is a second
 /// step against the SCM, because `service-manager` silently drops the policy there; on systemd and
@@ -333,11 +355,22 @@ const AUTOSTART: bool = cfg!(target_os = "macos");
 /// Returns an error if the manager rejects the install (commonly: not running as
 /// root/Administrator for a system-level service), or if the recovery actions cannot be set.
 pub fn install(spec: &InstallSpec) -> Result<(), String> {
+    install_with(spec, manager)
+}
+
+/// [`install`] with the service manager `make` makes in place of the host's: how a test drives the
+/// real registration and sees what it asks of the manager (ADR-0064 clause 7: nothing is started
+/// or enabled).
+///
+/// # Errors
+/// As [`install`].
+#[doc(hidden)]
+pub fn install_with(spec: &InstallSpec, make: MakeManager) -> Result<(), String> {
     // The second service first: the Client's unit names it as what it wants and starts after.
     if let Some(agents) = &spec.agents {
-        install_agents(spec, agents)?;
+        install_agents(spec, agents, make)?;
     }
-    install_service(spec)?;
+    install_service(spec, make)?;
     // What `service-manager` does not do on Windows, done here (see `windows_config`) — since
     // ADR-0019 that includes the logon account, which its `sc.exe` backend ignores.
     super::windows_config::configure(
@@ -348,7 +381,7 @@ pub fn install(spec: &InstallSpec) -> Result<(), String> {
     )
 }
 
-fn install_service(spec: &InstallSpec) -> Result<(), String> {
+fn install_service(spec: &InstallSpec, make: MakeManager) -> Result<(), String> {
     let ctx = client_install_ctx(
         spec,
         cfg!(target_os = "linux")
@@ -357,7 +390,7 @@ fn install_service(spec: &InstallSpec) -> Result<(), String> {
                 Ok(ServiceManagerKind::Systemd)
             ),
     )?;
-    register(spec.level, ctx).map_err(|e| {
+    register(spec.level, ctx, make).map_err(|e| {
         format!("cannot install the service (system scope needs root/Administrator): {e}")
     })
 }
@@ -398,8 +431,8 @@ fn client_install_ctx(spec: &InstallSpec, own_unit: bool) -> Result<ServiceInsta
 /// type are rewritten and its logon account kept, and what `windows_config` sets follows as on a
 /// first registration. A re-registration — an upgrade among them — so keeps the second service
 /// and the process account it runs under (ADR-0059 clause 1).
-fn register(level: ServiceLevel, ctx: ServiceInstallCtx) -> Result<(), String> {
-    let manager = manager(level)?;
+fn register(level: ServiceLevel, ctx: ServiceInstallCtx, make: MakeManager) -> Result<(), String> {
+    let manager = make(level)?;
     #[cfg(windows)]
     if manager
         .status(ServiceStatusCtx {
@@ -429,10 +462,11 @@ fn register(level: ServiceLevel, ctx: ServiceInstallCtx) -> Result<(), String> {
 /// service that does not come up would hold the Client down with it (StartService,
 /// `ERROR_SERVICE_DEPENDENCY_FAIL`), where the Client runs without it (ADR-0059 clause 2). The
 /// start names the second service first instead ([`started`]).
-fn install_agents(spec: &InstallSpec, agents: &Agents) -> Result<(), String> {
+fn install_agents(spec: &InstallSpec, agents: &Agents, make: MakeManager) -> Result<(), String> {
     register(
         spec.level,
         agents_install_ctx(spec, agents, cfg!(target_os = "linux"))?,
+        make,
     )
     .map_err(|e| {
         format!("cannot install the second service (system scope needs root or Administrator): {e}")
@@ -1858,13 +1892,35 @@ fn remove_socket_dir(socket: &Path) -> Result<(), String> {
         .map_err(|e| left(dir, e))
 }
 
-/// Lets the service `label` start at boot, or keeps it from starting there (ADR-0064 clause 7), as
-/// the host's service manager does it: `systemctl enable` and `disable`, `launchctl enable` and
-/// `disable` against the service's domain, and the start type of the service in the SCM. Nothing
-/// is started or stopped by it.
-fn at_boot(level: ServiceLevel, label: &ServiceLabel, on: bool) -> Result<(), String> {
-    let (program, args): (&str, Vec<String>) = if cfg!(windows) {
-        (
+/// The service manager an at-boot change goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootBackend {
+    Systemd,
+    Launchd,
+    Sc,
+}
+
+impl BootBackend {
+    /// The one this host's service manager is.
+    const NATIVE: Self = if cfg!(windows) {
+        Self::Sc
+    } else if cfg!(target_os = "macos") {
+        Self::Launchd
+    } else {
+        Self::Systemd
+    };
+}
+
+/// The program and arguments that let `label` start at boot (`on`), or keep it from it, under
+/// `backend`: [`at_boot`] runs them, and a test reads them without running anything.
+fn at_boot_command(
+    backend: BootBackend,
+    level: ServiceLevel,
+    label: &ServiceLabel,
+    on: bool,
+) -> (&'static str, Vec<String>) {
+    match backend {
+        BootBackend::Sc => (
             "sc.exe",
             vec![
                 "config".to_string(),
@@ -1872,32 +1928,42 @@ fn at_boot(level: ServiceLevel, label: &ServiceLabel, on: bool) -> Result<(), St
                 "start=".to_string(),
                 if on { "auto" } else { "demand" }.to_string(),
             ],
-        )
-    } else if cfg!(target_os = "macos") {
-        let domain = match level {
-            ServiceLevel::System => "system".to_string(),
-            // SAFETY: getuid(2) cannot fail and touches no memory.
-            #[cfg(unix)]
-            ServiceLevel::User => format!("gui/{}", unsafe { libc::getuid() }),
-            #[cfg(not(unix))]
-            ServiceLevel::User => "gui".to_string(),
-        };
-        (
-            "launchctl",
-            vec![
-                if on { "enable" } else { "disable" }.to_string(),
-                format!("{domain}/{}", label.to_qualified_name()),
-            ],
-        )
-    } else {
-        let mut args = Vec::new();
-        if level == ServiceLevel::User {
-            args.push("--user".to_string());
+        ),
+        BootBackend::Launchd => {
+            let domain = match level {
+                ServiceLevel::System => "system".to_string(),
+                // SAFETY: getuid(2) cannot fail and touches no memory.
+                #[cfg(unix)]
+                ServiceLevel::User => format!("gui/{}", unsafe { libc::getuid() }),
+                #[cfg(not(unix))]
+                ServiceLevel::User => "gui".to_string(),
+            };
+            (
+                "launchctl",
+                vec![
+                    if on { "enable" } else { "disable" }.to_string(),
+                    format!("{domain}/{}", label.to_qualified_name()),
+                ],
+            )
         }
-        args.push(if on { "enable" } else { "disable" }.to_string());
-        args.push(format!("{}.service", label.to_script_name()));
-        ("systemctl", args)
-    };
+        BootBackend::Systemd => {
+            let mut args = Vec::new();
+            if level == ServiceLevel::User {
+                args.push("--user".to_string());
+            }
+            args.push(if on { "enable" } else { "disable" }.to_string());
+            args.push(format!("{}.service", label.to_script_name()));
+            ("systemctl", args)
+        }
+    }
+}
+
+/// Lets the service `label` start at boot, or keeps it from starting there (ADR-0064 clause 7), as
+/// the host's service manager does it: `systemctl enable` and `disable`, `launchctl enable` and
+/// `disable` against the service's domain, and the start type of the service in the SCM. Nothing
+/// is started or stopped by it.
+fn at_boot(level: ServiceLevel, label: &ServiceLabel, on: bool) -> Result<(), String> {
+    let (program, args) = at_boot_command(BootBackend::NATIVE, level, label, on);
     let output = std::process::Command::new(program)
         .args(&args)
         .stdin(std::process::Stdio::null())
@@ -1982,6 +2048,27 @@ impl NativeService {
                     .map(|_| ())
             },
             #[cfg(not(windows))]
+            halt: halt_by_the_manager,
+        }
+    }
+
+    /// A handle to the service whose manager, second-service check and at-boot change are a test's
+    /// own: what [`new`](Self::new) builds, with nothing of the machine's service manager in it.
+    #[cfg(not(windows))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_seams(
+        level: ServiceLevel,
+        manager: MakeManager,
+        agents_registered: fn(ServiceLevel) -> bool,
+        at_boot: fn(ServiceLevel, &ServiceLabel, bool) -> Result<(), String>,
+    ) -> Self {
+        Self {
+            level,
+            manager,
+            agents_registered,
+            activity: None,
+            at_boot,
             halt: halt_by_the_manager,
         }
     }
@@ -2971,6 +3058,141 @@ mod tests {
 
         let agents = agents_install_ctx(&spec, &agents(), cfg!(target_os = "linux")).expect("ctx");
         assert_eq!(agents.autostart, AUTOSTART);
+    }
+
+    /// A first registration under the SCM is created with the `demand` start type, for both
+    /// services: `service-manager` takes `sc create`'s `start=` from its own configuration where
+    /// the registration asks for no start at boot, and that defaults to `auto`. The registration
+    /// is made by the real SCM manager against a stand-in `sc.exe` that records its arguments,
+    /// in a child run of this test, since the program is found through the process's `PATH`
+    /// (ADR-0064 clause 7, decision D-28).
+    /// Verifies: ADR-0064
+    #[cfg(unix)]
+    #[test]
+    fn a_first_registration_under_the_scm_is_created_on_demand() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let spec = system_spec("/opt/classis");
+        if std::env::var_os("CLASSIS_FAKE_SC_LOG").is_some() {
+            let manager = sc_manager();
+            for ctx in [
+                client_install_ctx(&spec, false).expect("client"),
+                agents_install_ctx(&spec, &agents(), false).expect("agents"),
+            ] {
+                assert!(!ctx.autostart, "the registration asks for no start at boot");
+                manager.install(ctx).expect("registers");
+            }
+            return;
+        }
+
+        let dir = tempfile::tempdir().expect("dir");
+        let log = dir.path().join("sc.log");
+        let fake = dir.path().join("sc.exe");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$CLASSIS_FAKE_SC_LOG\"; done\nprintf -- '--\\n' >> \"$CLASSIS_FAKE_SC_LOG\"\n",
+        )
+        .expect("fake sc.exe");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .expect("PATH");
+        let this = module_path!().split_once("::").expect("a crate path").1;
+        let status = std::process::Command::new(std::env::current_exe().expect("exe"))
+            .args([
+                &format!("{this}::a_first_registration_under_the_scm_is_created_on_demand"),
+                "--exact",
+            ])
+            .env("PATH", path)
+            .env("CLASSIS_FAKE_SC_LOG", &log)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("child run");
+        assert!(
+            status.status.success(),
+            "child: {}",
+            String::from_utf8_lossy(&status.stdout)
+        );
+
+        let log = std::fs::read_to_string(&log).expect("sc.exe was run");
+        let calls: Vec<Vec<&str>> = log
+            .split("--\n")
+            .filter(|call| !call.is_empty())
+            .map(|call| call.lines().collect())
+            .collect();
+        assert_eq!(calls.len(), 2, "one create per service: {calls:?}");
+        for (call, name) in calls.iter().zip([
+            label().to_qualified_name(),
+            agents_label().to_qualified_name(),
+        ]) {
+            assert_eq!(call[..2], ["create", name.as_str()], "{call:?}");
+            let start = call
+                .iter()
+                .position(|arg| *arg == "start=")
+                .expect("start=");
+            assert_eq!(call[start + 1], "demand", "{call:?}");
+        }
+    }
+
+    /// What lets a service start at boot and what keeps it from it are the commands each service
+    /// manager has for it, and neither starts nor stops anything: `systemctl enable` and
+    /// `disable` (with `--user` at user scope), `launchctl enable` and `disable` against the
+    /// service's domain, and the start type of the service in the SCM — `auto` and `demand`
+    /// (ADR-0064 clause 7).
+    /// Verifies: ADR-0064
+    #[test]
+    fn the_commands_that_enable_and_disable_a_service_at_boot_are_the_managers_own() {
+        let client = label();
+        let command = |backend, level, on| at_boot_command(backend, level, &client, on);
+        let strings = |args: &[&str]| args.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert_eq!(
+            command(BootBackend::Systemd, ServiceLevel::System, true),
+            ("systemctl", strings(&["enable", "classis.service"]))
+        );
+        assert_eq!(
+            command(BootBackend::Systemd, ServiceLevel::System, false),
+            ("systemctl", strings(&["disable", "classis.service"]))
+        );
+        assert_eq!(
+            command(BootBackend::Systemd, ServiceLevel::User, true),
+            (
+                "systemctl",
+                strings(&["--user", "enable", "classis.service"])
+            )
+        );
+        assert_eq!(
+            command(BootBackend::Launchd, ServiceLevel::System, true),
+            ("launchctl", strings(&["enable", "system/classis"]))
+        );
+        assert_eq!(
+            command(BootBackend::Launchd, ServiceLevel::System, false),
+            ("launchctl", strings(&["disable", "system/classis"]))
+        );
+        #[cfg(unix)]
+        {
+            // SAFETY: getuid(2) cannot fail and touches no memory.
+            let uid = unsafe { libc::getuid() };
+            assert_eq!(
+                command(BootBackend::Launchd, ServiceLevel::User, false),
+                (
+                    "launchctl",
+                    vec!["disable".to_string(), format!("gui/{uid}/classis")]
+                )
+            );
+        }
+        assert_eq!(
+            command(BootBackend::Sc, ServiceLevel::System, true),
+            ("sc.exe", strings(&["config", "classis", "start=", "auto"]))
+        );
+        assert_eq!(
+            command(BootBackend::Sc, ServiceLevel::System, false),
+            (
+                "sc.exe",
+                strings(&["config", "classis", "start=", "demand"])
+            )
+        );
     }
 
     /// Where a stop asks first — under the SCM — a service that does not run or is stopping

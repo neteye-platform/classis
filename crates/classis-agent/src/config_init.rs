@@ -518,8 +518,9 @@ impl Defaults {
 /// Render the answers as `supervisor.toml`. Pure, so what lands on disk is testable without a tty.
 ///
 /// Values go through `toml`'s own string encoder rather than into `"{}"`: a name may contain a
-/// quote, and a Windows path is full of backslashes. The file has no `[auth]` section: the Client
-/// sends no credential (ADR-0019 clause 17).
+/// quote, and a Windows path is full of backslashes. The file has no `[auth]` section: the host's
+/// credential is the `state.json` that `enrol` writes in the state directory, never this file
+/// (ADR-0064 clause 7).
 #[must_use]
 pub fn render(answers: &Answers) -> String {
     let mut out = String::new();
@@ -660,9 +661,11 @@ mod tests {
         }
     }
 
-    /// What the questionnaire writes loads, carries the verification key as answered, and names no
-    /// CA when none was answered (ADR-0019).
-    /// Verifies: ADR-0019
+    /// What the questionnaire writes loads, passes the validation the Client applies at startup,
+    /// carries the verification key as answered, names no CA when none was answered, and — beside
+    /// the `state.json` an `enrol` leaves — is what the Client starts with (ADR-0019, ADR-0064
+    /// clause 7).
+    /// Verifies: ADR-0019, ADR-0064
     #[test]
     fn a_complete_answer_writes_a_file_the_client_starts_with() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -672,10 +675,27 @@ mod tests {
             ..answers()
         };
         write_new(&path, &render(&given)).expect("write");
-        let loaded = ClientConfig::load(&path).expect("the written file loads");
+        let mut loaded = ClientConfig::load(&path).expect("the written file loads");
         assert!(loaded.tls.is_none(), "no CA was written");
+
+        loaded.state_dir = dir.path().join("state");
+        assert!(
+            crate::enrolment::required(&loaded.state_dir).is_err(),
+            "a host that has not enrolled starts nothing"
+        );
+        std::fs::create_dir_all(&loaded.state_dir).expect("state dir");
+        std::fs::write(
+            crate::enrolment::state_path(&loaded.state_dir),
+            r#"{"endpoint":"https://fleet.example","space":"lab","device_id":"d",
+               "client_secret":"s","access_token":"t"}"#,
+        )
+        .expect("state.json");
+        crate::enrolment::required(&loaded.state_dir).expect("the Client would start with it");
+        let checked = loaded
+            .checked(&path)
+            .expect("the written file is a valid Client configuration");
         assert_eq!(
-            loaded.package_key(),
+            checked.package_key(),
             Some(&[7u8; 32][..]),
             "the key as answered"
         );

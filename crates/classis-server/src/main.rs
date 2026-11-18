@@ -473,10 +473,12 @@ async fn main() {
         &records,
         config.token_lifetime(),
         clock.clone(),
+        Arc::new(classis_server::throttle::Throttle::new(
+            limits,
+            clock.clone(),
+        )),
     ) {
-        Ok(enrolment) => Arc::new(enrolment.with_throttle(Arc::new(
-            classis_server::throttle::Throttle::new(limits, clock.clone()),
-        ))),
+        Ok(enrolment) => Arc::new(enrolment),
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);

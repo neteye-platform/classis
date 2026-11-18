@@ -125,7 +125,9 @@ pub enum Command {
     Enrol(EnrolArgs),
     // ADR-0064 clause 7.
     /// Take this host out of the fleet, locally: delete everything in the state directory,
-    /// `state.json` with it. The Server is not contacted.
+    /// `state.json` with it, and what the configuration keeps for the host outside it — the
+    /// Supervisors' directories of a `supervisor_dir`, the Client's log files of a `[logging]
+    /// dir`. The Server is not contacted.
     ///
     /// Refused while the service runs. Asks for a confirmation, which `--force` skips, and keeps
     /// the service from starting at boot again.

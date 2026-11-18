@@ -1,8 +1,9 @@
 //! A host enrols with its Space's key and is admitted by a bearer token (ADR-0064): the routes
 //! `/v1/enrol` and `/v1/token`, the admission of `/v1/opamp` on both transports and of the package
 //! download, the end of a session whose token is replaced, the ownership of an `instance_uid`, and
-//! the per-address back-off. Over the plaintext loopback, since TLS terminates elsewhere (clause 6);
-//! the Agent plane asks for no client certificate.
+//! the per-address back-off. Over the plaintext loopback, since TLS terminates elsewhere (clause 6),
+//! but for the one test that serves the Agent plane over TLS to show that it asks for no client
+//! certificate.
 
 mod support;
 
@@ -39,6 +40,13 @@ const LIMITS: Limits = Limits {
     backoff_secs: 300,
 };
 
+/// So many refusals that no test not about the back-off meets it.
+const GENEROUS: Limits = Limits {
+    max_failures: u32::MAX,
+    window_secs: 60,
+    backoff_secs: 300,
+};
+
 /// One Server with a Space called `lab`, on a clock the test moves.
 struct Rig {
     addr: SocketAddr,
@@ -53,7 +61,7 @@ struct Rig {
 
 struct Setup {
     lifetime: oauth_token::server::Lifetime,
-    limits: Option<Limits>,
+    limits: Limits,
     operator_auth: Option<classis_server::api::OperatorAuth>,
     agent_rate: Option<classis_server::agent_rate::Limits>,
 }
@@ -62,7 +70,7 @@ impl Default for Setup {
     fn default() -> Self {
         Setup {
             lifetime: oauth_token::server::Lifetime::Never,
-            limits: None,
+            limits: GENEROUS,
             operator_auth: None,
             agent_rate: None,
         }
@@ -87,12 +95,15 @@ async fn rig(setup: Setup) -> Rig {
     let records = classis_server::Records::Files(data);
     // The clock starts at the real time: a token's expiry is made from it by the token endpoint.
     let clock = Arc::new(ManualClock(AtomicU64::new(real_now_ms())));
-    let mut enrolment =
-        Enrolment::on(&records, setup.lifetime, clock.clone()).expect("the enrolment");
-    if let Some(limits) = setup.limits {
-        enrolment = enrolment.with_throttle(Arc::new(Throttle::new(limits, clock.clone())));
-    }
-    let enrolment = Arc::new(enrolment);
+    let enrolment = Arc::new(
+        Enrolment::on(
+            &records,
+            setup.lifetime,
+            clock.clone(),
+            Arc::new(Throttle::new(setup.limits, clock.clone())),
+        )
+        .expect("the enrolment"),
+    );
     let key = enrolment
         .spaces()
         .create("lab")
@@ -324,9 +335,17 @@ async fn a_valid_key_enrols_and_an_unknown_or_replaced_key_does_not() {
     let old_key = rig.key.clone();
     let new_key = rig.enrolment.spaces().rotate("lab").expect("rotated");
     assert_ne!(*new_key, old_key);
-    assert!(
-        register(old_key).await.is_err(),
-        "a replaced key enrols nothing"
+    let oauth_registration::client::Error::Rejected(rejection) = register(old_key)
+        .await
+        .expect_err("a replaced key enrols nothing")
+    else {
+        panic!("a replaced key: not a refusal");
+    };
+    assert_eq!(rejection.status, 401, "a replaced key");
+    assert_eq!(
+        rejection.challenges[0].error(),
+        Some("invalid_token"),
+        "a replaced key"
     );
     let again = register(new_key.to_string())
         .await
@@ -520,8 +539,9 @@ async fn an_open_session_outlives_its_tokens_expiry_and_ends_with_1008_when_it_i
     rig.renew(&mut bystander).await;
 }
 
-/// The Agent plane completes an OpAMP exchange on both transports with a bearer token and no
-/// client certificate (plaintext: nothing on the connection can carry one).
+/// The Agent plane completes an OpAMP exchange on both transports with a bearer token. Over
+/// plaintext this decides only the exchange; the absence of a client certificate is decided by
+/// `the_agent_plane_over_tls_completes_a_handshake_with_no_client_certificate`.
 /// Verifies: ADR-0064
 #[tokio::test]
 async fn the_agent_plane_completes_an_exchange_without_a_client_certificate() {
@@ -532,6 +552,144 @@ async fn the_agent_plane_completes_an_exchange_without_a_client_certificate() {
     assert_eq!(reply.instance_uid, uid.as_bytes());
 
     let mut socket = websocket(&rig, Some(&host.token)).await.expect("admitted");
+    let socket_uid = InstanceUid::default();
+    send(&mut socket, &report(&socket_uid, 1)).await;
+    assert_eq!(recv(&mut socket).await.instance_uid, socket_uid.as_bytes());
+}
+
+/// The Agent plane served over TLS, as the binary serves it when `[tls]` is configured: its
+/// certificate, no request for one of the client's. Answers the address and the CA a Client trusts.
+async fn tls_agent_plane(dir: &Path) -> (SocketAddr, String, String) {
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+
+    opamp::tls::install_ring_provider();
+    let data = dir.join("data");
+    classis_server::fs::open_data_dir(&data, true).expect("the data directory");
+    let clock = ManualClock::new();
+    let enrolment = Arc::new(
+        Enrolment::on(
+            &classis_server::Records::Files(data),
+            oauth_token::server::Lifetime::Never,
+            clock.clone(),
+            Arc::new(Throttle::new(GENEROUS, clock)),
+        )
+        .expect("the enrolment"),
+    );
+    let key = enrolment
+        .spaces()
+        .create("lab")
+        .expect("a space")
+        .to_string();
+
+    let ca_key = KeyPair::generate().expect("ca key");
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+    ca_params
+        .distinguished_name
+        .push(DnType::CommonName, "test CA");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_pem = ca_params.self_signed(&ca_key).expect("ca").pem();
+    let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).expect("issuer");
+    let server_key = KeyPair::generate().expect("key");
+    let server_cert = CertificateParams::new(vec!["localhost".to_string()])
+        .expect("params")
+        .signed_by(&server_key, &issuer)
+        .expect("signed");
+    let (cert_file, key_file) = (dir.join("server.pem"), dir.join("server-key.pem"));
+    std::fs::write(&cert_file, server_cert.pem()).expect("write");
+    std::fs::write(&key_file, server_key.serialize_pem()).expect("write");
+    let planes = classis_server::tls::server_tls(
+        &classis_server::config::TlsConfig {
+            cert_file,
+            key_file,
+        },
+        None,
+    )
+    .expect("server material");
+
+    let state = Arc::new(support::state_on(dir));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(
+        classis_server::listen::plane(
+            listener,
+            Some(planes.agent.rustls_config().expect("agent plane config")),
+            64,
+            opamp::server::listen::Handle::new(),
+        )
+        .serve(classis_server::agent_app(state, enrolment)),
+    );
+    (addr, ca_pem, key)
+}
+
+/// The Agent plane, served over TLS, completes a handshake with a client that presents no
+/// certificate, and a Client with a real token completes an OpAMP exchange on both transports:
+/// enrolment, token and admission need nothing of the TLS layer beyond the Server's own
+/// certificate (clause 6).
+/// Verifies: ADR-0064
+#[tokio::test]
+async fn the_agent_plane_over_tls_completes_a_handshake_with_no_client_certificate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (addr, ca_pem, key) = tls_agent_plane(dir.path()).await;
+    let http = reqwest::Client::builder()
+        .use_rustls_tls()
+        .tls_certs_only([reqwest::Certificate::from_pem(ca_pem.as_bytes()).expect("ca")])
+        .resolve("localhost", addr)
+        .build()
+        .expect("a client that trusts the CA and presents no certificate");
+    let base = format!("https://localhost:{}", addr.port());
+
+    let registered = oauth_registration::client::register(&http, format!("{base}/v1/enrol"), &key)
+        .await
+        .expect("enrolled over TLS");
+    let issued = oauth_token::client::request_token(
+        &http,
+        format!("{base}/v1/token"),
+        &registered.client_id,
+        &registered.client_secret,
+    )
+    .await
+    .expect("a token over TLS");
+    let token = issued.access_token.to_string();
+
+    let uid = InstanceUid::default();
+    let answered = http
+        .post(format!("{base}/v1/opamp"))
+        .header("content-type", PROTOBUF)
+        .bearer_auth(&token)
+        .body(report(&uid, 1).encode_to_vec())
+        .send()
+        .await
+        .expect("post over TLS");
+    assert_eq!(answered.status(), 200);
+    let reply =
+        ServerToAgent::decode(answered.bytes().await.expect("body").as_ref()).expect("decode");
+    assert_eq!(reply.instance_uid, uid.as_bytes());
+
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in opamp::tls::certificates(ca_pem.as_bytes()).expect("the CA") {
+        roots.add(certificate).expect("a root");
+    }
+    let no_client_certificate = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = format!("wss://localhost:{}/v1/opamp", addr.port())
+        .into_client_request()
+        .expect("request");
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {token}").parse().expect("header"),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async_tls_with_config(
+        request,
+        None,
+        false,
+        Some(tokio_tungstenite::Connector::Rustls(Arc::new(
+            no_client_certificate,
+        ))),
+    )
+    .await
+    .expect("admitted over TLS");
     let socket_uid = InstanceUid::default();
     send(&mut socket, &report(&socket_uid, 1)).await;
     assert_eq!(recv(&mut socket).await.instance_uid, socket_uid.as_bytes());
@@ -740,18 +898,8 @@ fn package_report(uid: &InstanceUid) -> AgentToServer {
     }
 }
 
-/// A host downloads the artifact offered to one of its own Agents, and nothing offered only to
-/// another host's; with no token, or a bad one, it downloads nothing.
-/// Verifies: ADR-0064
-#[tokio::test]
-async fn a_host_downloads_only_what_its_own_agents_are_offered() {
-    let rig = rig(Setup::default()).await;
-    let (owner, stranger) = (rig.enrol().await, rig.enrol().await);
-    rig.report(&owner.token, &package_report(&InstanceUid([1; 16])))
-        .await;
-    rig.report(&stranger.token, &report(&InstanceUid([2; 16]), 1))
-        .await;
-
+/// Offers the package `otelcol` 1.0.0 to every Agent of type `otelcol` that has reported by now.
+fn offer_otelcol(rig: &Rig) {
     let id = PackageId::new(OTELCOL, "1.0.0").expect("id");
     let platform = Platform::new("linux", "amd64").expect("platform");
     let packages = rig.state.packages().expect("package delivery");
@@ -774,6 +922,21 @@ async fn a_host_downloads_only_what_its_own_agents_are_offered() {
         .put_deployment_package("stable", &id, true)
         .expect("package");
     assert_eq!(rig.state.rollout_deployment("stable").expect("rollout"), 1);
+}
+
+/// A host downloads the artifact offered to one of its own Agents, and nothing offered only to
+/// another host's; with no token, or a bad one, it downloads nothing.
+/// Verifies: ADR-0064
+#[tokio::test]
+async fn a_host_downloads_only_what_its_own_agents_are_offered() {
+    let rig = rig(Setup::default()).await;
+    let (owner, stranger) = (rig.enrol().await, rig.enrol().await);
+    rig.report(&owner.token, &package_report(&InstanceUid([1; 16])))
+        .await;
+    rig.report(&stranger.token, &report(&InstanceUid([2; 16]), 1))
+        .await;
+
+    offer_otelcol(&rig);
 
     let path = artifact_path("1.0.0");
     let response = rig.fetch(Some(&owner.token), &path).await;
@@ -788,6 +951,98 @@ async fn a_host_downloads_only_what_its_own_agents_are_offered() {
         rig.fetch(Some("not-a-token-of-ours"), &path).await.status(),
         401
     );
+}
+
+/// A member over its rate is answered `429` with `Retry-After: 30` and not served the artifact;
+/// once its bucket refills the download is served again, and the refusals counted no failure
+/// toward the Agent plane's back-off, which here backs off after a single one: the host is admitted
+/// by its token throughout.
+/// Verifies: ADR-0013, ADR-0064
+#[tokio::test]
+async fn a_download_past_the_limit_is_answered_429_after_thirty_seconds() {
+    let rig = rig(Setup {
+        limits: Limits {
+            max_failures: 1,
+            window_secs: 60,
+            backoff_secs: 300,
+        },
+        agent_rate: Some(classis_server::agent_rate::Limits {
+            messages_per_sec: 1,
+            burst: 1,
+        }),
+        ..Setup::default()
+    })
+    .await;
+    let host = rig.enrol().await;
+    rig.report(&host.token, &package_report(&InstanceUid([1; 16])))
+        .await;
+    offer_otelcol(&rig);
+    let path = artifact_path("1.0.0");
+    // The report took the bucket's one token.
+    rig.clock.advance(Duration::from_secs(1));
+
+    assert_eq!(rig.fetch(Some(&host.token), &path).await.status(), 200);
+    for _ in 0..2 {
+        let refused = rig.fetch(Some(&host.token), &path).await;
+        assert_eq!(refused.status(), 429);
+        assert_eq!(
+            refused
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()),
+            Some("30"),
+            "the rate limit's 30 s, never the failure back-off's 300"
+        );
+        assert_ne!(refused.bytes().await.expect("body").as_ref(), b"the-binary");
+    }
+    rig.clock.advance(Duration::from_secs(1));
+    let served = rig.fetch(Some(&host.token), &path).await;
+    assert_eq!(
+        served.status(),
+        200,
+        "no back-off for a member over its rate"
+    );
+    assert_eq!(served.bytes().await.expect("bytes").as_ref(), b"the-binary");
+}
+
+/// A download that is not offered to the host is answered `404` and counts for nothing toward the
+/// Agent plane's back-off, which here backs off after one refused authentication: the host is
+/// still admitted after two such fetches, while a refused credential does count.
+/// Verifies: ADR-0026, ADR-0064
+#[tokio::test]
+async fn a_refused_fetch_is_no_failure_the_throttle_counts() {
+    let rig = rig(Setup {
+        limits: Limits {
+            max_failures: 1,
+            window_secs: 60,
+            backoff_secs: 300,
+        },
+        ..Setup::default()
+    })
+    .await;
+    let (owner, other) = (rig.enrol().await, rig.enrol().await);
+    rig.report(&owner.token, &package_report(&InstanceUid([1; 16])))
+        .await;
+    rig.report(&other.token, &report(&InstanceUid([2; 16]), 1))
+        .await;
+    offer_otelcol(&rig);
+    let path = artifact_path("1.0.0");
+
+    for _ in 0..2 {
+        assert_eq!(rig.fetch(Some(&other.token), &path).await.status(), 404);
+    }
+    // Past the back-off's one failure, the same address is still admitted.
+    assert_eq!(rig.fetch(Some(&other.token), &path).await.status(), 404);
+    rig.report(&other.token, &report(&InstanceUid([2; 16]), 2))
+        .await;
+    assert_eq!(rig.fetch(Some(&owner.token), &path).await.status(), 200);
+
+    // A refused credential does count, so the back-off above was armed.
+    assert_eq!(
+        rig.fetch(Some("not-a-token-of-ours"), &path).await.status(),
+        401
+    );
+    assert_eq!(rig.fetch(Some(&owner.token), &path).await.status(), 429);
 }
 
 /// A message and a download both draw on the bucket of the client that was admitted, which is not
@@ -980,6 +1235,7 @@ async fn the_agent_plane_as_built_for_production_has_no_open_path() {
             &classis_server::Records::Files(data),
             oauth_token::server::Lifetime::Never,
             ManualClock::new(),
+            Arc::new(Throttle::new(GENEROUS, ManualClock::new())),
         )
         .expect("the enrolment"),
     );
@@ -1121,7 +1377,7 @@ async fn repeated_refusals_put_an_address_in_back_off_on_each_route() {
         None,
     ] {
         let rig = rig(Setup {
-            limits: Some(LIMITS),
+            limits: LIMITS,
             ..Setup::default()
         })
         .await;
@@ -1172,7 +1428,7 @@ async fn repeated_refusals_put_an_address_in_back_off_on_each_route() {
 #[tokio::test]
 async fn a_bearer_invalid_request_counts_as_a_refusal() {
     let rig = rig(Setup {
-        limits: Some(LIMITS),
+        limits: LIMITS,
         ..Setup::default()
     })
     .await;
@@ -1194,7 +1450,7 @@ async fn a_bearer_invalid_request_counts_as_a_refusal() {
 #[tokio::test]
 async fn refusals_after_authentication_are_not_counted_and_a_success_clears_nothing() {
     let rig = rig(Setup {
-        limits: Some(LIMITS),
+        limits: LIMITS,
         ..Setup::default()
     })
     .await;
@@ -1261,7 +1517,7 @@ async fn the_agent_planes_back_off_is_a_table_of_its_own() {
         .expect("operator auth")
         .with_throttle(Arc::new(Throttle::new(LIMITS, operator_clock)));
     let rig = rig(Setup {
-        limits: Some(LIMITS),
+        limits: LIMITS,
         operator_auth: Some(operator_auth),
         ..Setup::default()
     })

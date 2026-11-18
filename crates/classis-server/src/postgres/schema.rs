@@ -50,10 +50,10 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
 }];
 
 /// The first schema: one table per kind of record, the parts of a record that are many in tables
-/// of their own (ADR-0050 clauses 3, 8, 10 to 14). A Space's enrolment key is kept whole in
+/// of their own (ADR-0050 clauses 3, 8, 13 and 14). A Space's enrolment key is kept whole in
 /// `spaces.key` (ADR-0064 clause 1); a client keeps only the hashes of its secret and of its one
-/// active token, the token's unique, so admission is an index lookup (ADR-0064 clause 4). Unsigned integers are kept as `bigint` with
-/// their bits unchanged, so every value round-trips.
+/// active token, the token's unique, so admission is an index lookup (ADR-0064 clause 4).
+/// Unsigned integers are kept as `bigint` with their bits unchanged, so every value round-trips.
 ///
 /// PostgreSQL's `text` and `jsonb` refuse a NUL character, which a file keeps. Text an Agent
 /// chose — an Agent's effective configuration — is kept as `bytea`,

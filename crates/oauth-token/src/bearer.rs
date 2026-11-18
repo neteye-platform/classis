@@ -192,7 +192,7 @@ fn is_blank(b: u8) -> bool {
     matches!(b, b' ' | b'\t')
 }
 
-fn is_tchar(b: u8) -> bool {
+pub(crate) fn is_tchar(b: u8) -> bool {
     b.is_ascii_alphanumeric()
         || matches!(
             b,

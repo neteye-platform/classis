@@ -799,7 +799,10 @@ fn log_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opamp::proto::{any_value, AnyValue, KeyValue as ProtoKeyValue, TlsConnectionSettings};
+    use opamp::proto::{
+        any_value, AnyValue, Header, Headers, KeyValue as ProtoKeyValue, TlsCertificate,
+        TlsConnectionSettings,
+    };
 
     fn description() -> AgentDescription {
         AgentDescription {
@@ -976,6 +979,53 @@ mod tests {
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(refused[0].contains("tls"), "{}", refused[0]);
         assert!(!telemetry.reporting());
+    }
+
+    /// A TLS client certificate, with or without a private key, that an offer of an own-telemetry
+    /// destination carries is ignored — not refused, not used — and the rest of the offer applies:
+    /// the destination is in force, and the headers it names are what the exporter sends
+    /// (ADR-0064 clause 9).
+    /// Verifies: ADR-0064
+    #[tokio::test]
+    async fn an_offered_client_certificate_is_ignored_and_the_rest_of_the_offer_applies() {
+        opamp::tls::install_ring_provider();
+        let with_certificate = |private_key: &[u8]| TelemetryConnectionSettings {
+            destination_endpoint: "http://127.0.0.1:4318/v1/metrics".to_string(),
+            headers: Some(Headers {
+                headers: vec![Header {
+                    key: "X-Fleet".to_string(),
+                    value: "kept".to_string(),
+                }],
+            }),
+            certificate: Some(TlsCertificate {
+                cert: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                private_key: private_key.to_vec(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for private_key in [&b""[..], &b"-----BEGIN PRIVATE KEY-----"[..]] {
+            let settings = with_certificate(private_key);
+            assert!(
+                check(&settings, "own_metrics").is_ok(),
+                "nothing is refused"
+            );
+            assert_eq!(
+                headers(&settings, &ClientConfig::default()).get("X-Fleet"),
+                Some(&"kept".to_string()),
+                "the offered headers still go"
+            );
+
+            let telemetry = Telemetry::new();
+            let offer = ConnectionSettingsOffers {
+                own_metrics: Some(settings),
+                ..Default::default()
+            };
+            let refused = telemetry.apply(&offer, &description(), &ClientConfig::default());
+            assert!(refused.is_empty(), "{refused:?}");
+            assert!(telemetry.reporting(), "the destination is in force");
+            telemetry.shutdown();
+        }
     }
 
     /// The Baseline names a number for own metrics — *"The recommended reporting interval is 10

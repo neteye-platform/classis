@@ -56,6 +56,14 @@ terms below are the ones it uses without defining.
 - **Access token** — the opaque bearer credential with which a Host's Agents
   authenticate to the Server's Agent plane. It is distinct from the enrolment
   key and client secret. _Avoid:_ enrolment key, client secret (for the token).
+- **State file** (`state.json`) — the file in the Client's state directory that
+  `enrol` writes once: the Server's base URL, the Space, the Device ID, the
+  client secret and the access token. A Host without it is not enrolled and
+  runs nothing. _Avoid:_ config, credentials file.
+- **Revoke** — the Client's local command that forgets the Host: it deletes the
+  State file and every other piece of host state, wherever configured, and
+  never contacts the Server. A new enrolment makes a new Host. _Avoid:_
+  unenrol, deregister (nothing is removed at the Server).
 - **Rollout** — the explicit act that releases a Deployment to Agents and pins
   what each receives. _Avoid:_ publish, push, deploy.
 - **Process account** — the account the operator names at a Client's

@@ -90,7 +90,7 @@ fn sha256_hex(text: &str) -> String {
     hex::encode(sha2::Sha256::digest(text.as_bytes()))
 }
 
-/// Verifies: ADR-0022, ADR-0028, ADR-0029, ADR-0064
+/// Verifies: ADR-0022, ADR-0064
 #[tokio::test]
 async fn no_secret_reaches_the_log() {
     const OPERATOR_PASSWORD: &str = "the operator's own password";

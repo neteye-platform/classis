@@ -58,10 +58,10 @@ fn the_post_install_prints_no_endpoint_the_client_refuses_at_startup() {
 }
 
 /// The first step the post-install prints is the questionnaire. The `--endpoint` it does print is
-/// the scripted form, with `--fleet-files`, where the install finds the fleet's files. It names
-/// nothing the Client does not read, and never a credential (ADR-0029 clause 13, which restates
-/// ADR-0019 clause 37).
-/// Verifies: ADR-0029
+/// the scripted form, with `--fleet-files`, where the install finds the fleet's files (ADR-0029
+/// clause 6). It names nothing the Client does not read, and no credential: the host's is the
+/// `state.json` that `enrol` writes (ADR-0064 clause 7).
+/// Verifies: ADR-0029, ADR-0064
 #[test]
 fn the_post_install_steps_write_the_configuration() {
     let script = post_install();

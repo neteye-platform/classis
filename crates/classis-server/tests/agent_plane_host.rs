@@ -1,7 +1,8 @@
 //! What the Agent plane does by the host a request was admitted as (ADR-0026, ADR-0013,
 //! ADR-0022): the artifact a host may fetch, whose bucket a message draws on, and what is logged
-//! when a session starts. Nothing admits a request over the wire yet, so these serve the plane with
-//! every request admitted as a host the test names ([`support::serve_admitted_as`]).
+//! when a session starts. Admission by token is the business of `enrolment.rs`; these serve the
+//! plane with every request admitted as a host the test names ([`support::serve_admitted_as`]), so
+//! that they decide what the plane does by the host and not how a host is admitted.
 
 mod support;
 

@@ -1076,4 +1076,32 @@ mod tests {
             b"{}"
         );
     }
+
+    /// A new data directory the Server could not open fails the migration, naming why: the report
+    /// says so and its exit is non-zero.
+    /// Verifies: ADR-0037
+    #[test]
+    fn a_new_data_directory_that_does_not_open_fails_the_migration() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let not_a_directory = root.path().join("fleet-data");
+        write(
+            &not_a_directory,
+            b"a file where the data directory should be",
+        );
+        let mut report = Report::default();
+        check_opens(&not_a_directory, &mut report);
+        assert!(report.failed);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.starts_with("FAILED: the new data directory does not open")),
+            "{:?}",
+            report.lines
+        );
+
+        let mut report = Report::default();
+        check_opens(&root.path().join("empty"), &mut report);
+        assert!(!report.failed, "{:?}", report.lines);
+    }
 }

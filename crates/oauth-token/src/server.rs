@@ -9,11 +9,11 @@
 //!
 //! 1. **Malformed request**, `400 invalid_request` ([`parse_request`]): a `Content-Type` other than
 //!    UTF-8 `application/x-www-form-urlencoded`; a body that is not UTF-8; more than one
-//!    `Authorization` header or an `Authorization` header without a valid scheme; a repeated
-//!    `grant_type`, `scope` or `client_secret`; two client-authentication methods (an
-//!    `Authorization` header together with a `client_secret` in the body); a missing `grant_type`.
-//!    Empty parameter values count as omitted before any of this is judged, and unknown parameters
-//!    are ignored, repeated or not (RFC 6749 §3.2).
+//!    `Authorization` header or an `Authorization` header without a valid scheme; any parameter
+//!    that is repeated, a recognised one or not (§3.2); two client-authentication methods (an
+//!    `Authorization` header together with a `client_secret` in the body, or a body `client_id`
+//!    that is not the Basic username, §2.3.1); a missing `grant_type`. Empty parameter values
+//!    count as omitted before any of this is judged, and unknown parameters are ignored (§3.2).
 //! 2. **Client authentication**, `401 invalid_client` (§5.2): no `Authorization` header (a
 //!    `client_secret` in the body alone is no authentication), Basic credentials that cannot be
 //!    read, an unknown client or a wrong secret, answered with `WWW-Authenticate: Basic
@@ -33,6 +33,7 @@
 //! The application's [`TokenStore`] is synchronous and is called on a blocking thread of the Tokio
 //! runtime, so it may do file I/O or block on a database without stalling the endpoint.
 
+use std::collections::HashSet;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -196,21 +197,26 @@ pub fn parse_request(headers: &HeaderMap, body: &[u8]) -> Result<TokenRequest, R
     }
 
     let body = std::str::from_utf8(body).map_err(|_| RequestError::Invalid)?;
+    let mut seen = HashSet::new();
     let mut grant_type = None;
     let mut scope = None;
+    let mut body_client_id = None;
     let mut body_secret = false;
     for (name, value) in form_urlencoded::parse(body.as_bytes()) {
         if value.is_empty() {
             continue;
         }
-        let repeated = match name.as_ref() {
-            "grant_type" => grant_type.replace(value.into_owned()).is_some(),
-            "scope" => scope.replace(value.into_owned()).is_some(),
-            "client_secret" => std::mem::replace(&mut body_secret, true),
-            _ => false,
-        };
-        if repeated {
+        // RFC 6749 §3.2: request parameters MUST NOT be included more than once, whichever they
+        // are, an unrecognised one included.
+        if !seen.insert(name.clone().into_owned()) {
             return Err(RequestError::Invalid);
+        }
+        match name.as_ref() {
+            "grant_type" => grant_type = Some(value.into_owned()),
+            "scope" => scope = Some(value.into_owned()),
+            "client_id" => body_client_id = Some(value.into_owned()),
+            "client_secret" => body_secret = true,
+            _ => {}
         }
     }
     if authorization.is_some() && body_secret {
@@ -222,6 +228,13 @@ pub fn parse_request(headers: &HeaderMap, body: &[u8]) -> Result<TokenRequest, R
         None => ClientAuth::Missing,
         Some(value) => client_auth(value)?,
     };
+    // RFC 6749 §2.3.1: a `client_id` in the body beside the Basic one is a second identity unless
+    // it names the same client.
+    if let (ClientAuth::Basic { client_id, .. }, Some(in_body)) = (&client, &body_client_id) {
+        if client_id != in_body {
+            return Err(RequestError::Invalid);
+        }
+    }
     Ok(TokenRequest {
         client,
         grant_type,
@@ -255,7 +268,7 @@ fn require_form_content_type(headers: &HeaderMap) -> Result<(), RequestError> {
 fn client_auth(value: &HeaderValue) -> Result<ClientAuth, RequestError> {
     let value = value.to_str().map_err(|_| RequestError::Invalid)?;
     let (scheme, rest) = value.split_once(' ').unwrap_or((value, ""));
-    if scheme.is_empty() || !scheme.bytes().all(is_tchar) {
+    if scheme.is_empty() || !scheme.bytes().all(crate::bearer::is_tchar) {
         return Err(RequestError::Invalid);
     }
     if !scheme.eq_ignore_ascii_case("Basic") {
@@ -270,27 +283,6 @@ fn client_auth(value: &HeaderValue) -> Result<ClientAuth, RequestError> {
         },
         None => ClientAuth::UnreadableBasic,
     })
-}
-
-fn is_tchar(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(
-            b,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-        )
 }
 
 /// RFC 7617 `user-id ":" password`, then RFC 6749 §2.3.1: each part is form-decoded.

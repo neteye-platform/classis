@@ -679,10 +679,9 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o777)).expect("chmod out/");
     let result = out.join("result");
 
-    // A secret of the Client's where ADR-0059 protects it: in the state directory, owner-only.
-    let key = state.join("client-secret");
-    std::fs::write(&key, "the Client's secret\n").expect("write the secret");
-    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod secret");
+    // The Client's secret where ADR-0059 protects it: `state.json`, which `enrol` writes in the
+    // state directory below, owner-only, with the client secret and the token in it.
+    let key = state.join("state.json");
 
     std::fs::write(config_dir.join("settings"), "from the config\n").expect("config entry");
     let script = program.join("probe.sh");
@@ -742,6 +741,15 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     .expect("install the service with a process account");
     let _registered = Registered;
     enrol_installed(addr, &server, &config);
+    assert_eq!(
+        std::fs::metadata(&key)
+            .expect("`enrol` wrote state.json")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
+        "the secret the Managed Process is denied is the real one, owner-only"
+    );
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -932,10 +940,6 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o777)).expect("chmod out/");
     let result = out.join("result");
     let heard = out.join("impostor.log");
-
-    let key = state.join("client-secret");
-    std::fs::write(&key, "the Client's secret\n").expect("write the secret");
-    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod secret");
 
     // The impostor: in a session of its own, so the end of the Client's connection, which ends
     // the program's process group, does not end it; it listens at the socket's name and notes how
@@ -1240,8 +1244,8 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
     grant_modify(&out, "*S-1-1-0");
     let result = out.join("result");
 
-    let key = state.join("client-secret");
-    std::fs::write(&key, "the Client's secret\n").expect("write the secret");
+    // The Client's secret: `state.json`, which `enrol` writes in the state directory below.
+    let key = state.join("state.json");
     std::fs::write(config_dir.join("settings"), "from the config\r\n").expect("config entry");
     std::fs::write(
         program.join("probe.cmd"),
@@ -1320,6 +1324,10 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
         assert_eq!(privileges, ["SeChangeNotifyPrivilege"]);
     }
     enrol_installed(addr, &server, &config);
+    assert!(
+        key.is_file(),
+        "`enrol` wrote the state.json the program is denied"
+    );
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -1612,8 +1620,6 @@ fn on_windows_a_pipe_the_scm_names_no_process_for_is_refused() {
             .unwrap_or(0)
     };
 
-    let key = state.join("client-secret");
-    std::fs::write(&key, "the Client's secret\n").expect("write the secret");
     std::fs::write(
         program.join("probe.cmd"),
         format!(

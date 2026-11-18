@@ -26,6 +26,12 @@ use tracing_subscriber::fmt::writer::{EitherWriter, MakeWriter};
 const FILE_STEM: &str = "supervisor";
 const FILE_SUFFIX: &str = "log";
 
+/// Whether `name` is the name of one of the Client's own log files, as the rotation makes it
+/// (`supervisor.<date>.log`): what a log directory the operator chose may hold beside other files.
+pub(crate) fn is_log_file(name: &str) -> bool {
+    name.starts_with(&format!("{FILE_STEM}.")) && name.ends_with(&format!(".{FILE_SUFFIX}"))
+}
+
 /// The open file, once there is one. Set at most once per process.
 static FILE: OnceLock<NonBlocking> = OnceLock::new();
 

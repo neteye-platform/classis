@@ -49,6 +49,13 @@ max_connections = 10000
 #   packages/<agent type>@<version>.json  a Package: its identity and entries, no bytes
 #   blobs/<sha256>                        an artifact, named by its SHA-256, stored once
 #   agents/<instance_uid>.json            an Agent: what it reported, its assignment, its labels
+#   spaces/<name>.json                    a Space, with its enrolment key in recoverable form
+#   clients/<client_id>.json              an enrolled host: its Space and the hashes of its secret
+#                                         and of its one active token, never a value to present
+#
+# spaces/ holds every Space's enrolment key whole, so that it can be read again after a restart:
+# protect that directory, and any backup of it, as you would a password file. A key enrols hosts
+# into its Space until it is rotated; rotating it does not touch a host already enrolled.
 #
 # Back it up as one directory, with the Server stopped. A Server before 0.5.5 kept its state under
 # config_dir and packages_dir instead; those keys stop this Server at startup, and

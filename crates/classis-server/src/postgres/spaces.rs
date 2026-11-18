@@ -214,6 +214,40 @@ mod tests {
         contract(&|| Box::new(PgSpaceStore::new(database.clone())));
     }
 
+    /// The Space service over PostgreSQL: the key is recoverable, and enrolling a host leaves it
+    /// unchanged; a rotation persists a different key that survives reopening and touches no
+    /// client and no token.
+    /// Verifies: ADR-0064
+    #[test]
+    fn the_space_service_keeps_its_key_and_rotates_it_on_request_on_postgres() {
+        let Some(test) = TestDatabase::named() else {
+            return;
+        };
+        let database = test.open();
+        crate::spaces::tests::contract(&|| {
+            (
+                crate::spaces::Spaces::new(Box::new(PgSpaceStore::new(database.clone()))),
+                Box::new(crate::postgres::clients::PgClientStore::new(
+                    database.clone(),
+                )),
+            )
+        });
+    }
+
+    /// A rotation whose write fails leaves the old key in force, on PostgreSQL.
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_failed_rotation_leaves_the_old_key_in_force_on_postgres() {
+        let Some(test) = TestDatabase::named() else {
+            return;
+        };
+        crate::spaces::tests::rotation_fails_part_way(
+            &crate::spaces::Spaces::new(Box::new(PgSpaceStore::new(test.open()))),
+            &|| test.refuse("spaces", "NEW.name = 'prod'"),
+            &|| test.mend("spaces"),
+        );
+    }
+
     /// A replacement that fails leaves the key as it was, on either store.
     fn fails_part_way(store: &dyn SpaceStore, refuse: &dyn Fn(), mend: &dyn Fn()) {
         let before = space("prod", 'a');

@@ -5,8 +5,8 @@
 //! `/v1/opamp` and the download route:
 //!
 //! - as a [`RegistrationStore`] it judges an enrolment key (a Space's *current* key, and the same
-//!   key again at the moment the client is stored, so a rotation between the two steps refuses) and
-//!   stores the client with its Space and the hash of its secret;
+//!   key again, under the rotation lock, at the moment the client is stored, so a rotation between
+//!   the two steps refuses) and stores the client with its Space and the hash of its secret;
 //! - as a [`TokenStore`] it checks a client secret's hash and replaces the client's one token,
 //!   which ends every WebSocket session admitted with the token before it ([`Sessions`]);
 //! - [`admit`](Enrolment::admit) reads the Bearer credential of a request, hashes it, and asks the
@@ -51,18 +51,22 @@ pub struct Enrolment {
     clock: Arc<dyn Clock>,
     lifetime: Lifetime,
     sessions: Arc<Sessions>,
-    throttle: Option<Arc<Throttle>>,
+    throttle: Arc<Throttle>,
 }
 
 impl Enrolment {
     /// Enrolment over `spaces` and `clients`. A token lives `lifetime` (ADR-0064 clause 5), and
-    /// one is expired when `clock` has reached its `expires_at`.
+    /// one is expired when `clock` has reached its `expires_at`. Every refused authentication of
+    /// the Agent plane is counted in `throttle`, and a peer in back-off is answered before
+    /// anything else is checked (clause 6); the table is the Agent plane's own, the Operator
+    /// plane counts its failures in another.
     #[must_use]
     pub fn new(
         spaces: Spaces,
         clients: Box<dyn ClientStore>,
         lifetime: Lifetime,
         clock: Arc<dyn Clock>,
+        throttle: Arc<Throttle>,
     ) -> Self {
         Enrolment {
             spaces,
@@ -70,7 +74,7 @@ impl Enrolment {
             clock,
             lifetime,
             sessions: Arc::new(Sessions::default()),
-            throttle: None,
+            throttle,
         }
     }
 
@@ -82,28 +86,21 @@ impl Enrolment {
         records: &Records,
         lifetime: Lifetime,
         clock: Arc<dyn Clock>,
+        throttle: Arc<Throttle>,
     ) -> Result<Self, String> {
         Ok(Self::new(
             Spaces::new(records.spaces()?),
             records.clients()?,
             lifetime,
             clock,
+            throttle,
         ))
     }
 
-    /// Counts every refused authentication of the Agent plane in `throttle` and answers a peer in
-    /// back-off before anything else is checked (ADR-0064 clause 6). The table is the Agent
-    /// plane's own: the Operator plane counts its failures in another.
+    /// The Agent plane's back-off table.
     #[must_use]
-    pub fn with_throttle(mut self, throttle: Arc<Throttle>) -> Self {
-        self.throttle = Some(throttle);
-        self
-    }
-
-    /// The Agent plane's back-off table, when one is armed.
-    #[must_use]
-    pub fn throttle(&self) -> Option<&Arc<Throttle>> {
-        self.throttle.as_ref()
+    pub fn throttle(&self) -> &Arc<Throttle> {
+        &self.throttle
     }
 
     /// The lifetime a token is issued with.
@@ -260,16 +257,6 @@ impl RegistrationStore for Enrolment {
         grant: &Grant,
         client: NewClient,
     ) -> Result<Option<Map<String, Value>>, RegistrationError> {
-        // The key may have been rotated since `authorise`: a client is stored only under a key
-        // that is still its Space's current one.
-        match self.spaces.resolve(&grant.key) {
-            Ok(Some(space)) if space == grant.space => {}
-            Ok(_) => return Ok(None),
-            Err(e) => {
-                error!(event = "enrolment.failed", error = %e, "cannot read the Spaces");
-                return Err(RegistrationError);
-            }
-        }
         let record = ClientRecord {
             client_id: client.client_id,
             space: grant.space.clone(),
@@ -277,17 +264,28 @@ impl RegistrationStore for Enrolment {
             issued_at: client.client_id_issued_at,
             token: None,
         };
-        match self.clients.insert(&record) {
-            Ok(true) => {}
-            Ok(false) => {
+        // The key may have been rotated since `authorise`: a client is stored only under a key
+        // that is still its Space's current one, and a rotation cannot land between that check and
+        // the store, so once a rotation has returned the old key has enrolled nothing more.
+        let stored = self
+            .spaces
+            .while_current(&grant.key, &grant.space, || self.clients.insert(&record));
+        match stored {
+            Ok(Some(Ok(true))) => {}
+            Ok(None) => return Ok(None),
+            Ok(Some(Ok(false))) => {
                 error!(
                     event = "enrolment.failed",
                     "a client identifier was made twice"
                 );
                 return Err(RegistrationError);
             }
-            Err(e) => {
+            Ok(Some(Err(e))) => {
                 error!(event = "enrolment.failed", error = %e, "cannot store a client");
+                return Err(RegistrationError);
+            }
+            Err(e) => {
+                error!(event = "enrolment.failed", error = %e, "cannot read the Spaces");
                 return Err(RegistrationError);
             }
         }
@@ -447,5 +445,163 @@ mod tests {
         assert!(sessions.watched.lock().expect("lock").is_empty());
         drop(sessions.watch([3; 32]));
         assert!(sessions.watched.lock().expect("lock").is_empty());
+    }
+
+    /// A client store whose `insert` stops in the middle until it is let go: the moment between
+    /// the final check of the key and the store of the client, held open.
+    struct Gate {
+        inner: Box<dyn ClientStore>,
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        /// Read as the insert finishes: has a rotation returned by then?
+        rotated: Arc<std::sync::atomic::AtomicBool>,
+        rotated_when_stored: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl ClientStore for Gate {
+        fn load(&self) -> Result<Vec<ClientRecord>, String> {
+            self.inner.load()
+        }
+        fn insert(&self, client: &ClientRecord) -> Result<bool, String> {
+            self.entered.send(()).expect("the test listens");
+            self.release
+                .lock()
+                .expect("release")
+                .recv()
+                .expect("the test lets go");
+            self.rotated_when_stored.store(
+                self.rotated.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            self.inner.insert(client)
+        }
+        fn secret_hash(&self, client_id: &str) -> Result<Option<Hash>, String> {
+            self.inner.secret_hash(client_id)
+        }
+        fn replace_token(
+            &self,
+            client_id: &str,
+            token: &ActiveToken,
+        ) -> Result<TokenReplaced, String> {
+            self.inner.replace_token(client_id, token)
+        }
+        fn find_by_token(
+            &self,
+            token_hash: &Hash,
+        ) -> Result<Option<crate::client_store::Admitted>, String> {
+            self.inner.find_by_token(token_hash)
+        }
+    }
+
+    fn new_client() -> NewClient {
+        NewClient {
+            client_id: "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8091".to_string(),
+            client_secret_hash: [7; 32],
+            client_id_issued_at: 1_790_000_000,
+            metadata: oauth_registration::server::Metadata::REGISTERED,
+        }
+    }
+
+    fn enrolment_over(dir: &std::path::Path, clients: Box<dyn ClientStore>) -> Arc<Enrolment> {
+        let clock: Arc<dyn Clock> = Arc::new(crate::clock::SystemClock);
+        Arc::new(Enrolment::new(
+            Spaces::new(Box::new(
+                crate::fs::FsSpaceStore::open(dir).expect("the spaces"),
+            )),
+            clients,
+            Lifetime::Never,
+            clock.clone(),
+            Arc::new(Throttle::new(crate::throttle::Limits::default(), clock)),
+        ))
+    }
+
+    /// Once `rotate` has returned, the old key has enrolled nothing: a rotation that arrives while
+    /// a registration under the old key is between its final check and the store of its client
+    /// waits for it, so a client is never stored after the rotation that made its key stale
+    /// returned.
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_rotation_waits_for_the_registration_that_is_storing_its_client() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::fs::open_data_dir(dir.path(), true).expect("the data directory");
+        let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release) = std::sync::mpsc::channel();
+        let rotated = Arc::new(AtomicBool::new(false));
+        let rotated_when_stored = Arc::new(AtomicBool::new(true));
+        let gate = Gate {
+            inner: Box::new(crate::fs::FsClientStore::open(dir.path()).expect("the clients")),
+            entered: entered_tx,
+            release: Mutex::new(release),
+            rotated: rotated.clone(),
+            rotated_when_stored: rotated_when_stored.clone(),
+        };
+        let enrolment = enrolment_over(dir.path(), Box::new(gate));
+        let old_key = enrolment.spaces().create("lab").expect("a space");
+        let grant = enrolment
+            .authorise(&old_key)
+            .expect("authorise")
+            .expect("the key is current");
+
+        let registering = {
+            let enrolment = enrolment.clone();
+            std::thread::spawn(move || enrolment.register(&grant, new_client()))
+        };
+        entered.recv().expect("the registration reaches the store");
+        let (rotation_tx, rotation_done) = std::sync::mpsc::channel();
+        let rotating = {
+            let enrolment = enrolment.clone();
+            let rotated = rotated.clone();
+            std::thread::spawn(move || {
+                let key = enrolment.spaces().rotate("lab").expect("rotate");
+                rotated.store(true, Ordering::SeqCst);
+                rotation_tx.send(()).expect("the test listens");
+                key
+            })
+        };
+        // Given every chance to return, the rotation does not while the client is being stored.
+        let returned_early = rotation_done
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_ok();
+        release_tx.send(()).expect("let the store go");
+        let registered = registering.join().expect("registering");
+        rotating.join().expect("rotating");
+
+        assert!(
+            !returned_early && !rotated_when_stored.load(Ordering::SeqCst),
+            "a rotation returned while a client was being stored under the old key"
+        );
+        assert!(registered.expect("registered").is_some());
+        // The rotation came after the registration, and the old key enrols nothing from here on.
+        assert_eq!(enrolment.spaces().resolve(&old_key).expect("resolve"), None);
+    }
+
+    /// A registration that judged its key current and finds it rotated when it comes to store its
+    /// client is refused, and stores nothing.
+    /// Verifies: ADR-0064
+    #[test]
+    fn a_registration_whose_key_was_rotated_meanwhile_stores_no_client() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::fs::open_data_dir(dir.path(), true).expect("the data directory");
+        let clients = crate::fs::FsClientStore::open(dir.path()).expect("the clients");
+        let enrolment = enrolment_over(dir.path(), Box::new(clients));
+        let old_key = enrolment.spaces().create("lab").expect("a space");
+        let grant = enrolment
+            .authorise(&old_key)
+            .expect("authorise")
+            .expect("the key is current");
+        enrolment.spaces().rotate("lab").expect("rotate");
+
+        assert!(enrolment
+            .register(&grant, new_client())
+            .expect("register")
+            .is_none());
+        assert_eq!(
+            crate::fs::FsClientStore::open(dir.path())
+                .expect("the clients")
+                .load()
+                .expect("load"),
+            []
+        );
     }
 }

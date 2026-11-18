@@ -360,9 +360,44 @@ async fn empty_parameters_count_as_omitted() {
 #[tokio::test]
 async fn unknown_parameters_are_ignored() {
     let store = store();
-    let body = "grant_type=client_credentials&foo=1&foo=2&client_id=other&resource=x";
+    let body = "grant_type=client_credentials&foo=1&resource=x";
     let answer = post(&app(&store, Lifetime::Never), Some(RFC_BASIC), body).await;
     assert_eq!(answer.status, StatusCode::OK);
+}
+
+/// Verifies: ADR-0064
+/// RFC 6749 §2.3.1 and §3.2 (ADR-0064 clause 4: "multiple authentication methods are refused"):
+/// `client_id` is a request parameter the RFC defines, so a body `client_id` that is not the Basic
+/// username names a second identity and is an invalid request, judged before the secret is
+/// checked; one that names the same client is no second identity and is accepted.
+#[tokio::test]
+async fn a_body_client_id_other_than_the_basic_username_is_an_invalid_request() {
+    let store = store();
+    let app = app(&store, Lifetime::Never);
+    let other = post(
+        &app,
+        Some(RFC_BASIC),
+        "grant_type=client_credentials&client_id=other",
+    )
+    .await;
+    assert_eq!(other.status, StatusCode::BAD_REQUEST);
+    assert_eq!(other.error(), "invalid_request");
+    assert!(store.no_token_issued());
+    let same = post(
+        &app,
+        Some(RFC_BASIC),
+        "grant_type=client_credentials&client_id=s6BhdRkqt3",
+    )
+    .await;
+    assert_eq!(same.status, StatusCode::OK);
+    // Form-decoded like the username: `+` is a space.
+    let spaced = post(
+        &app,
+        Some("Basic YStiJTNBYzpwJTJCcSUyNSVDMyVBOQ=="),
+        "grant_type=client_credentials&client_id=a+b%3Ac",
+    )
+    .await;
+    assert_eq!(spaced.status, StatusCode::OK);
 }
 
 /// Verifies: ADR-0064
@@ -376,6 +411,8 @@ async fn a_repeated_parameter_is_an_invalid_request() {
         "grant_type=client_credentials&grant_type=client_credentials",
         "grant_type=client_credentials&scope=a&scope=b",
         "grant_type=client_credentials&client_secret=a&client_secret=b",
+        "grant_type=client_credentials&client_id=s6BhdRkqt3&client_id=s6BhdRkqt3",
+        "grant_type=client_credentials&foo=1&foo=2",
     ] {
         let answer = post(&app, Some(RFC_BASIC), body).await;
         assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{body}");
@@ -384,6 +421,14 @@ async fn a_repeated_parameter_is_an_invalid_request() {
     let unauthenticated = post(&app, None, "grant_type=a&grant_type=b").await;
     assert_eq!(unauthenticated.status, StatusCode::BAD_REQUEST);
     assert!(store.no_token_issued());
+    // A repeat of which one is empty is no repeat: empty counts as omitted.
+    let answer = post(
+        &app,
+        Some(RFC_BASIC),
+        "grant_type=client_credentials&foo=1&foo=",
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
 }
 
 /// Verifies: ADR-0064

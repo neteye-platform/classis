@@ -79,11 +79,18 @@ change lands, and it names those four passages for it.
 ADRs. This record is written against the governance reset proposed in pull
 request #4, which removes the inherited ADRs, so it supersedes none of them
 clause by clause. Until that reset lands, the conflicting ADRs stay in force and
-this one stays `proposed`. One of them is named here because the reset alone
+this one stays `proposed`. Four of them are named here because the reset alone
 does not explain the contradiction:
 [ADR-0050](0050-the-servers-records-may-live-in-postgresql.md) clause 5 lets a
 migration only add, and clause 9 below rewrites the schema's first migration
-instead.
+instead; ADR-0050 clause 4 has the Server answer from memory, while the stores
+of spaces and clients are read per request;
+[ADR-0037](0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)
+clause 2 fixes the data directory's layout, which gains `spaces/` and
+`clients/`; and
+[ADR-0016](0016-what-an-agent-reports-about-itself.md) point 32 has an offered
+`certificate` behave as on the OpAMP connection, while clause 9 below ignores
+it.
 
 ## Decision
 
@@ -252,8 +259,13 @@ built on them.
    and nothing else stored for it may outlive it. `--keep-cache` spares the
    `config/` and `packages/` directories. It is an exception taken out of the
    default deletion, not a list of its own, so whatever the default deletes in
-   future is deleted under the flag too. A new `enrol` creates a new device ID,
-   and the host's Agents start with new `instance_uid`s.
+   future is deleted under the flag too. Host state the configuration keeps
+   outside the state directory goes as well: the Supervisors' directories,
+   with their `instance_uid`s, under a configured Supervisors' root, and the
+   Client's own log files in a configured log directory. Nothing else there is
+   touched, neither other programs' files nor the installation. A new `enrol`
+   creates a new device ID, and the host's Agents start with new
+   `instance_uid`s.
 8. **Two standalone crates.** `oauth-registration` (RFC 7591) and `oauth-token`
    (RFC 6749 client credentials) know nothing of Classis. Each has a `server`
    module, an axum handler over a storage trait the application implements,

@@ -53,9 +53,10 @@ pub struct ClientConfig {
     pub attributes: BTreeMap<String, String>,
     /// Optional TLS trust override for `wss://` / `https://` endpoints.
     pub tls: Option<TlsConfig>,
-    /// An `[auth]` section a file written for an earlier version still holds. The Client sends
-    /// no credential (ADR-0021 clause 3): the section is read only so that it does not fail the
-    /// load — whatever keys it has — and nothing in it is kept. Its presence is what
+    /// An `[auth]` section a file written for an earlier version still holds. The Client's one
+    /// credential is the bearer token in `state.json`, never anything in this file (ADR-0064
+    /// clause 7): the section is read only so that it does not fail the load — whatever keys it
+    /// has — and nothing in it is kept. Its presence is what
     /// [`leftover_auth_notice`](Self::leftover_auth_notice) reports, once, at startup.
     #[serde(default, rename = "auth")]
     pub leftover_auth: Option<serde::de::IgnoredAny>,

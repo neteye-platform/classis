@@ -131,6 +131,20 @@ impl HeldDir {
         sys::write(self, name, &temporary, contents, mode)
     }
 
+    /// Writes `contents` as the file `name`, with `mode` on Unix, only where nothing is at `name`:
+    /// whole, to a new temporary name beside it, then linked to `name`, which refuses a name that
+    /// exists — a file, or a link, which is never followed. Two runs that write the same name
+    /// cannot both succeed, and neither replaces what the other wrote.
+    ///
+    /// # Errors
+    /// Returns an error of kind `AlreadyExists` when something is at `name`, and another when the
+    /// file cannot be written.
+    pub fn write_new(&self, name: &str, contents: &[u8], mode: u32) -> io::Result<()> {
+        check_name(name)?;
+        let temporary = format!("{name}~");
+        sys::write_new(self, name, &temporary, contents, mode)
+    }
+
     /// Makes what was created, renamed or removed in this directory durable. On Windows NTFS
     /// journals the directory's entries itself, and a directory handle opened for reading cannot be
     /// flushed, so nothing is done.
@@ -415,12 +429,13 @@ mod sys {
         Ok(file)
     }
 
-    pub(super) fn write(
+    /// Writes `contents` to a new file `temporary` in `dir`, which `finish` then puts at its name.
+    fn staged(
         held: &HeldDir,
-        name: &str,
         temporary: &str,
         contents: &[u8],
         mode: u32,
+        finish: impl FnOnce(RawFd, &CString) -> io::Result<()>,
     ) -> io::Result<()> {
         let dir = held.fd.as_raw_fd();
         let temporary = c_name(OsStr::new(temporary))?;
@@ -442,11 +457,43 @@ mod sys {
             file.write_all(contents)?;
             file.sync_all()
         })
-        .and_then(|()| renameat(dir, &temporary, &c_name(OsStr::new(name))?));
+        .and_then(|()| finish(dir, &temporary));
         if written.is_err() {
             let _ = unlinkat(dir, &temporary);
         }
         written
+    }
+
+    pub(super) fn write(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        mode: u32,
+    ) -> io::Result<()> {
+        let name = c_name(OsStr::new(name))?;
+        staged(held, temporary, contents, mode, |dir, temporary| {
+            renameat(dir, temporary, &name)
+        })
+    }
+
+    pub(super) fn write_new(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        mode: u32,
+    ) -> io::Result<()> {
+        let name = c_name(OsStr::new(name))?;
+        staged(held, temporary, contents, mode, |dir, temporary| {
+            // SAFETY: a valid descriptor and two NUL-terminated names; `linkat(2)` without
+            // `AT_SYMLINK_FOLLOW` follows no link, and fails with `EEXIST` where `name` exists.
+            if unsafe { libc::linkat(dir, temporary.as_ptr(), dir, name.as_ptr(), 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // The data is at `name` now; the temporary name is only what is left of the staging.
+            unlinkat(dir, temporary)
+        })
     }
 
     fn unlinkat(dir: RawFd, name: &CString) -> io::Result<()> {
@@ -583,12 +630,12 @@ mod sys {
         Ok(file)
     }
 
-    pub(super) fn write(
+    /// Writes `contents` to a new file `temporary` in `held`, which `finish` then puts at its name.
+    fn staged(
         held: &HeldDir,
-        name: &str,
         temporary: &str,
         contents: &[u8],
-        _mode: u32,
+        finish: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<()> {
         let temporary = held.path.join(temporary);
         // A leftover from an interrupted run would make `create_new` refuse; a link goes as a link.
@@ -604,11 +651,37 @@ mod sys {
                 file.write_all(contents)?;
                 file.sync_all()
             })
-            .and_then(|()| std::fs::rename(&temporary, held.path.join(name)));
+            .and_then(|()| finish(&temporary));
         if written.is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
         written
+    }
+
+    pub(super) fn write(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        _mode: u32,
+    ) -> io::Result<()> {
+        staged(held, temporary, contents, |temporary| {
+            std::fs::rename(temporary, held.path.join(name))
+        })
+    }
+
+    pub(super) fn write_new(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        _mode: u32,
+    ) -> io::Result<()> {
+        staged(held, temporary, contents, |temporary| {
+            // A hard link is made only where nothing is at `name`; the temporary name goes after.
+            std::fs::hard_link(temporary, held.path.join(name))?;
+            std::fs::remove_file(temporary)
+        })
     }
 
     pub(super) fn rename(held: &HeldDir, from: &str, to: &str) -> io::Result<()> {
@@ -622,5 +695,66 @@ mod sys {
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn sync(_: &HeldDir) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `write_new` writes a name nothing is at, and never replaces what is: a file stands as it
+    /// was, a link is no name to take and is not followed, and no temporary name is left behind
+    /// (ADR-0064 clause 7).
+    /// Verifies: ADR-0064
+    #[test]
+    fn write_new_refuses_a_name_that_exists_and_follows_no_link() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = HeldDir::open(dir.path()).expect("held");
+
+        held.write_new("new", b"first", 0o600).expect("a new name");
+        assert_eq!(
+            std::fs::read(dir.path().join("new")).expect("read"),
+            b"first"
+        );
+        let again = held
+            .write_new("new", b"second", 0o600)
+            .expect_err("a name taken");
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(dir.path().join("new")).expect("read"),
+            b"first"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(dir.path().join("new"))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+
+            let outside = tempfile::tempdir().expect("outside");
+            std::os::unix::fs::symlink(outside.path().join("target"), dir.path().join("link"))
+                .expect("link");
+            let linked = held
+                .write_new("link", b"x", 0o600)
+                .expect_err("a link at the name");
+            assert_eq!(linked.kind(), io::ErrorKind::AlreadyExists);
+            assert!(
+                !outside.path().join("target").exists(),
+                "the link was followed"
+            );
+        }
+
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert!(
+            !names.iter().any(|name| name.ends_with('~')),
+            "a temporary name was left: {names:?}"
+        );
     }
 }
