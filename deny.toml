@@ -56,10 +56,9 @@ deny = [
     { name = "native-tls", reason = "TLS is rustls on ring (ADR-0013)" },
     { name = "aws-lc-rs", reason = "TLS is rustls on ring (ADR-0013)" },
     { name = "aws-lc-sys", reason = "TLS is rustls on ring (ADR-0013)" },
-    # The bootstrap PKCS#12 file is PBES2 with AES only (ADR-0029); `p12-keystore`'s `pbes1`
-    # feature, which would link these, stays off.
-    { name = "rc2", reason = "no legacy PKCS#12 scheme (ADR-0029)" },
-    { name = "des", reason = "no legacy PKCS#12 scheme (ADR-0029)" },
+    # Legacy ciphers nothing here uses; a PKCS#12 reader's legacy scheme would link them.
+    { name = "rc2", reason = "a legacy cipher nothing here needs" },
+    { name = "des", reason = "a legacy cipher nothing here needs" },
 ]
 
 [sources]

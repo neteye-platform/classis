@@ -2457,9 +2457,10 @@ pub struct AgentView {
     /// Nothing has been heard from this Agent for longer than its staleness budget (ADR-0024).
     ///
     /// Beside [`connected`](Self::connected), never instead of it: that one says a connection
-    /// carrying this Agent is open — behind a Gateway, the *Gateway's* — and this one says whether
-    /// the Agent itself is still talking. `connected: true, stale: true` is precisely the gatewayed
-    /// case, and precisely what an operator needs to be told.
+    /// carrying this Agent is open — one connection carries every Agent of a Client — and this one
+    /// says whether the Agent itself is still talking. `connected: true, stale: true` is a
+    /// connection that is up while its Agent has gone quiet, and precisely what an operator needs to
+    /// be told.
     ///
     /// Only an Agent declaring `ReportsHeartbeat` can be stale: that capability is the promise that
     /// makes silence mean something. Derived on read, never stored.
@@ -2867,7 +2868,7 @@ pub const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// The `ServerToAgent` for a report the Server is momentarily unable to accept — the Baseline's
 /// `Unavailable`, which unlike `BadRequest` tells the Agent to **retry later** rather than give up,
 /// and with `retry_info` says when. It carries the `instance_uid` of the message it answers, the
-/// field a Client and a Gateway route a reply by (ADR-0013 clause 25).
+/// field a Client routes a reply by (ADR-0013 clause 25).
 pub fn unavailable(instance_uid: &[u8], message: &str) -> ServerToAgent {
     ServerToAgent {
         instance_uid: instance_uid.to_vec(),
@@ -3000,8 +3001,8 @@ mod tests {
         assert_eq!(map["host.ip"], "10.0.0.7, 192.168.1.140");
     }
 
-    /// The gatewayed case, which is why this exists: the connection is up — it is the Gateway's —
-    /// and the Agent behind it has stopped talking. Both facts are reported, neither overwrites
+    /// The case this exists for: the connection is up — it is the Client's, shared by all its
+    /// Agents — and this Agent has stopped talking. Both facts are reported, neither overwrites
     /// the other (ADR-0024).
     // Verifies: ADR-0024
     #[test]
@@ -3079,8 +3080,8 @@ mod tests {
         assert_eq!(state.snapshot().len(), 1, "the row stays");
     }
 
-    /// The gatewayed case: the connection is up because it is the *Gateway's*, and the Agent behind
-    /// it stopped talking long ago. `connected` alone would refuse this forever.
+    /// The connection is up because it is the Client's, shared by all its Agents, and this Agent
+    /// stopped talking long ago. `connected` alone would refuse this forever.
     #[test]
     fn a_connected_agent_that_went_quiet_is_forgotten() {
         let state = forgettable_state();

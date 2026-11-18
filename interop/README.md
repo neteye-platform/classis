@@ -32,7 +32,11 @@ The test builds this program itself with `go build`.
 
 Each runs in both directions (`opamp-go`'s Client against our Server, our Client
 against `opamp-go`'s Server) and on both transports. All run in plaintext on the
-loopback with an open admission, except the runs on the endpoint as it ships:
+loopback, except the runs on the endpoint as it ships. Our Server admits by bearer
+token ([ADR-0064](../docs/adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)):
+the test enrols a host and gives `opamp-go`'s Client its access token.
+`opamp-go`'s Server checks no token, and our Client is started with a
+`state.json`, which it does not run without:
 
 - connect and report: the description and the declared capabilities arrive;
 - `sequence_num` continuity, and the `ReportFullState` recovery: our Server asks

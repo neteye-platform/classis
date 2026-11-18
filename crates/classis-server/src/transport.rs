@@ -2,8 +2,8 @@
 //!
 //! `/v1/opamp` serves the whole protocol: a request carrying the protobuf `Content-Type` is the
 //! plain-HTTP transport, a WebSocket upgrade is the other — exactly the detection the Baseline
-//! describes. The communication is `opamp::server`'s, shared with the Gateway and the Supervisor
-//! Endpoint (ADR-0010); what is the Server's is the [`Fleet`] handler, which hands every decoded
+//! describes. The communication is `opamp::server`'s, shared with the Supervisor Endpoint
+//! (ADR-0010); what is the Server's is the [`Fleet`] handler, which hands every decoded
 //! report to the same [`AppState::process_for_host`], so transport is carriage, never semantics.
 //!
 //! Admission (ADR-0064 clause 6) is a layer round the endpoint and the download route:
@@ -32,7 +32,7 @@ use crate::fleet::{bad_request, unavailable, AppState, ConnId, Transport};
 use crate::throttle::Throttle;
 
 /// The endpoint path the Baseline names as the default, and the protobuf media type it requires —
-/// both from the shared crate, because the Gateway serves the same endpoint (ADR-0010).
+/// both from the shared crate, because the Supervisor Endpoint serves the same protocol (ADR-0010).
 pub use opamp::endpoint::{OPAMP_PATH, PROTOBUF_CONTENT_TYPE};
 
 /// What admitted a connection: the host it arrived over, when one did — the `client_id` of the

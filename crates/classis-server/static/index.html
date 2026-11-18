@@ -518,17 +518,17 @@
       };
 
       function statusPill(a) {
-        // Two facts, not one (ADR-0024): the pill says whether a connection is open — behind a
-        // Gateway, the Gateway's — and "Stale" beside it says the Agent itself stopped talking.
+        // Two facts, not one (ADR-0024): the pill says whether a connection is open — one
+        // connection carries every Agent of a Client — and "Stale" beside it says the Agent itself stopped talking.
         // Disconnected is soft red, not gray: a link that is down is a finding, not an absence —
-        // but soft, because behind a Gateway it can be routine (ADR-0024); FAILED keeps the
+        // but soft, because a host that is switched off is routine (ADR-0024); FAILED keeps the
         // stronger reading as the one hard error in the row.
         //
         // The badge carries a ✕: a disconnected row is where forgetting is usually decided, so
         // the remedy rides on the diagnosis. A shortcut, not the rule — the details keep the
         // forget chip for *every* Agent, because whether one may be forgotten is a question about
-        // silence and not about this flag (ADR-0024): an Agent behind a Gateway reads Connected
-        // however dead its host is, and must stay forgettable.
+        // silence and not about this flag (ADR-0024): an Agent on a connection that is still
+        // open reads Connected however quiet it has gone, and must stay forgettable.
         const base = a.connected
           ? `<span class="pill solid-green"><span class="dot"></span>Connected</span>`
           : `<span class="pill red"><span class="dot"></span>Disconnected<span class="forget-btn" data-uid="${esc(a.instance_uid)}" title="Forget this Agent: the Server drops what it knows and the row goes away. Nothing happens on the host — a Client that is still running comes back.">✕</span></span>`;

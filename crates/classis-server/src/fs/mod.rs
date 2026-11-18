@@ -224,7 +224,7 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 /// [`replace`], and durable: the content reaches the disk before the rename makes it the document,
 /// and on Unix the rename reaches it before this returns, so a power loss leaves the old document
-/// or the new one, never an empty file or a revocation lost after it was answered. For a record
+/// or the new one, never an empty file or a security decision lost after it was answered. For a record
 /// that answers a security decision (ADR-0037 clause 1).
 pub fn replace_owner_only(path: &Path, bytes: &[u8]) -> Result<(), String> {
     write_temp(path, bytes, true)?;

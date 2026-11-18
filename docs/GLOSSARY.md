@@ -47,7 +47,7 @@ terms below are the ones it uses without defining.
   certificate, access token (for the enrolment key).
 - **Enrolment** — the exchange in which a host uses its Space's enrolment key
   to register as an OAuth client and obtain client credentials and an access
-  token, without individual operator approval. _Avoid:_ enrolment, onboarding.
+  token, without individual operator approval. _Avoid:_ enrollment, onboarding.
 - **Device ID** — the OAuth `client_id` assigned at enrolment, identifying one
   Host rather than one Agent. _Avoid:_ instance UID (for a Host's identity).
 - **Client credentials** — the Host's `client_id` and `client_secret` pair, used
