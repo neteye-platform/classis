@@ -23,12 +23,6 @@ impl Drop for ServerUnderTest {
 #[test]
 fn sigterm_shuts_the_server_down_gracefully() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
-        .expect("a self-signed certificate");
-    std::fs::write(dir.path().join("cert.pem"), cert.cert.pem()).expect("write cert");
-    std::fs::write(dir.path().join("key.pem"), cert.signing_key.serialize_pem())
-        .expect("write key");
-
     // Two distinct free ports: both listeners are held until the configuration names them.
     let agent = TcpListener::bind("127.0.0.1:0").expect("bind");
     let operator = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -39,18 +33,12 @@ fn sigterm_shuts_the_server_down_gracefully() {
             concat!(
                 "listen = \"127.0.0.1:{agent}\"\n",
                 "data_dir = {data:?}\n",
-                "[tls]\n",
-                "cert_file = {cert:?}\n",
-                "key_file = {key:?}\n",
-                "client_ca_file = {cert:?}\n",
                 "[rest]\n",
                 "listen = \"127.0.0.1:{operator}\"\n",
             ),
             agent = agent.local_addr().expect("addr").port(),
             operator = operator.local_addr().expect("addr").port(),
             data = dir.path().join("data"),
-            cert = dir.path().join("cert.pem"),
-            key = dir.path().join("key.pem"),
         ),
     )
     .expect("write server.toml");

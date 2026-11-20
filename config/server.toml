@@ -1,7 +1,8 @@
-# Classis Server configuration. Every setting has a default, shown here, except [tls]:
-# the Server refuses to start without a certificate and key. For development,
-# scripts/dev-pki.sh creates a set and a server.toml that uses it. Start with:
-# cargo run -p classis-server -- --config .dev-pki/server.toml
+# Classis Server configuration. Every setting has a default, shown here. The Server speaks
+# plain HTTP behind a reverse proxy that terminates TLS and authenticates the Agents (ADR-0064);
+# it has no [tls] and checks no Agent's credential, and a [tls], [rest.tls], [client_ca],
+# [enrolment] or [agents.auth] section is refused. Start with:
+# cargo run -p classis-server -- --config server.toml
 #
 # HOW THIS FILE IS ORDERED, AND WHY IT MATTERS. Every bare key comes first; every [section] comes
 # after them. That is not tidiness — it is the only layout in which the commented examples below can
@@ -14,7 +15,7 @@
 # by the key's path, its segments joined by __ and upper-cased; it wins over this file:
 #
 #   CLASSIS_SERVER__DATA_DIR=/var/lib/classis       sets data_dir
-#   CLASSIS_SERVER__REST__TLS__CERT_FILE=ui.pem         sets [rest.tls] cert_file
+#   CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321           sets [rest] listen
 #
 # The value is TOML (30 is an integer, "30" a string), and what is not TOML is a string, so a path
 # needs no quotes. A variable that names no key fails startup, naming it, as an unknown key here
@@ -190,59 +191,12 @@ max_package_size_bytes = 1073741824
 # password_file = "/run/secrets/fleet-db-password"
 # ca_file = "/etc/opamp/db-ca.pem"      # optional: the roots the database's certificate is checked against
 
-# TLS, REQUIRED: the Agent plane serves HTTPS/WSS with this certificate and key, in TLS 1.3
-# only, and so does the Operator plane unless [rest.tls] below names its own. Without the
-# section the Server refuses to start, naming it.
-#
-# client_ca_file is REQUIRED too: the Agent plane asks every peer for a client
-# certificate IN THE HANDSHAKE, and one that chains to neither this CA nor the bootstrap CA of
-# [enrolment] never reaches the Server — the package download included. That certificate is the
-# whole of admission: the Agent plane has no credential, and an [auth] section is refused at
-# startup. The Operator plane asks
-# for none; a browser reaches it with the password of [rest.auth].
-[tls]
-cert_file = "cert.pem"
-key_file = "key.pem"
-client_ca_file = "client-ca.pem"
-
-# The certificate authority that signs Agent CSRs. Present is what arms the CSR flow:
-# the Server declares AcceptsConnectionSettingsRequest, and an Agent that holds one of its
-# certificates renews it automatically once it is two thirds through its life — generating a key
-# that never leaves its host, and receiving the certificate as an ordinary connection-settings
-# offer. Point client_ca_file above at this CA's certificate.
-#
-# This is deliberately NOT the listener's own certificate and key: a CA private key sitting where
-# the server certificate lives means compromising the Server mints fleet members at will. A
-# certificate can be revoked through the REST API; validity_days bounds what one stolen
-# unnoticed is good for, and a Client renews at two thirds of it.
-# [client_ca]
-# cert_file = "client-ca.pem"
-# key_file = "client-ca-key.pem"
-# validity_days = 30
-
-# ENROLMENT: how a fresh host gets its first certificate. It connects with a BOOTSTRAP
-# certificate from a CA of its own — never the client CA. That opens
-# nothing by itself: the connection is admitted only while an operator holds the enrolment window
-# open, it may only send a certificate signing request, and the request waits until an operator
-# approves it:
-#   POST /api/v1/enrolment/window  {"open_for_secs": 3600}   opens it (1 s to 24 h); closed by default
-#   GET  /api/v1/enrolments                                  lists the pending requests
-#   POST /api/v1/enrolments/<id>/approve | /reject           decides one
-# The Client logs its request's key fingerprint, which is the id listed, so an approval can be
-# matched to a host. Needs [client_ca], which signs the approved request. Without [enrolment] no
-# host enrols, and an operator issues every certificate.
-# With bootstrap_ca_key_file the Server also issues the bootstrap certificates, each with a subject
-# the operator names (country, state, locality, organization, organizational_unit,
-# organization_identifier), which every host certificate issued from it carries, and hands out the
-# key in that one answer:
-#   POST /api/v1/bootstrap-certificates  {"subject": {"organization": "…"}, "validity_days": 10}
-#   GET  /api/v1/bootstrap-certificates  lists the valid ones, each revocable by its serial
-# The pending queue holds at most 1024 requests; those of one bootstrap certificate at most
-# max_pending_per_bootstrap of them (1 to 1024), a quarter by default.
-# [enrolment]
-# bootstrap_ca_file = "bootstrap-ca.pem"
-# bootstrap_ca_key_file = "bootstrap-ca-key.pem"
-# max_pending_per_bootstrap = 256
+# The AGENT PLANE's admission: none. The Server admits every request of the Agent plane and
+# authenticates no Agent (ADR-0064): the reverse proxy in front of it does, and the Agent port must
+# be reachable through it alone, because any peer that reaches it may claim any identity. There is
+# no [agents.auth]: the section is refused. Behind the proxy the peer address the throttle counts is
+# X-Forwarded-For's, trusted from any source: keep the Server's ports closed to everything but
+# the proxy.
 
 # Repeated admission failures from one peer address: past max_failures 401s within
 # window_secs, the address is answered 429 with Retry-After for backoff_secs, before anything else
@@ -350,7 +304,7 @@ client_ca_file = "client-ca.pem"
 # metrics_endpoint = "https://collector.example:4318/v1/metrics"
 
 # THE OPERATOR PLANE: the REST API, the API docs, and the bundled UI, on their own
-# listener, over the TLS of [tls]. This port carries the authority to reconfigure and re-package the
+# listener, in plain HTTP. This port carries the authority to reconfigure and re-package the
 # entire fleet — hence loopback by default. Reach it through an SSH tunnel, or publish it
 # deliberately with listen = "0.0.0.0:4321": off the loopback [rest.auth] is required, and the
 # Server refuses to start without it.
@@ -371,7 +325,8 @@ max_connections = 256
 # operator tools carry it in the URL they are given: --server https://fleet-admin:secret@host:4321
 #
 # This is authentication, not authorization: everyone listed can do everything the plane offers.
-# Basic sends the password on every request; the plane's TLS is what keeps it off the wire. The
+# Basic sends the password on every request; the proxy's TLS is what keeps it off the wire beyond the
+# proxy, and the hop between the proxy and the Server is in the clear. The
 # password is listed by its Argon2id hash: `server hash-credential --basic`.
 # [rest.auth.basic_users]
 # fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
@@ -380,18 +335,3 @@ max_connections = 256
 # — never both:
 # [rest.auth]
 # basic_users_file = "/run/secrets/basic-users.toml"
-
-# The Operator plane's own certificate and key, OPTIONAL. Without the section the Operator plane
-# serves [tls]'s, which chains to the fleet's server CA — the one every Client trusts, and one a
-# browser trusts only once it is imported. With it, the Operator plane serves this pair instead,
-# typically from your organization's own PKI, so that its browsers trust the UI as they are; the
-# Agent plane keeps [tls]'s. cert_file holds the leaf first and any intermediates after it.
-#
-# Nothing else belongs here: the Operator plane asks for no client certificate. A key that does
-# not match its certificate refuses the start, naming both files. A new pair takes effect when the
-# Server restarts; `server pki status` lists it, and the running Server warns before it ends.
-# A certificate from a PKI rarely names 127.0.0.1: through an SSH tunnel to a loopback listen,
-# dial the name the certificate carries.
-# [rest.tls]
-# cert_file = "ui.pem"
-# key_file = "ui-key.pem"

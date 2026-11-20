@@ -71,6 +71,12 @@ const KEEPALIVES_IDLE: Duration = Duration::from_secs(15);
 const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(5);
 const KEEPALIVES_RETRIES: u32 = 3;
 
+/// How long a Server waits at startup for the database to answer and for the lock to be free, and
+/// how often it asks again (ADR-0062): long enough for a failover of the database or for the
+/// Server it replaces to stop, short enough that a database nobody brings back fails startup.
+const START_WAIT: Duration = Duration::from_secs(180);
+const START_RETRY: Duration = Duration::from_secs(5);
+
 /// The connections the pool holds at most. The Server writes one record at a time per act, and
 /// the in-memory state answers every read (ADR-0050 clause 4), so a few suffice.
 const POOL_SIZE: usize = 8;
@@ -100,6 +106,29 @@ pub struct Database {
     bridge: Bridge,
 }
 
+/// What a Server does about the lock beyond taking it once (ADR-0062).
+#[derive(Clone, Copy)]
+pub(crate) struct LockPolicy {
+    /// How long to ask again while another Server holds the lock or the database cannot be
+    /// reached for a reason that may pass.
+    pub(crate) wait: Duration,
+    /// Whether the process exits when the lock's connection ends while it runs.
+    pub(crate) exit_on_loss: bool,
+}
+
+impl LockPolicy {
+    /// The Server's own: wait for the database and the lock at startup, exit when it is lost.
+    const SERVER: Self = Self {
+        wait: START_WAIT,
+        exit_on_loss: true,
+    };
+    /// One attempt, and a loss only refuses calls: what the tests and the import tool run under.
+    pub(crate) const ONCE: Self = Self {
+        wait: Duration::ZERO,
+        exit_on_loss: false,
+    };
+}
+
 /// The TLS of the connection, or none on the loopback.
 #[derive(Clone)]
 enum Tls {
@@ -116,16 +145,26 @@ impl Database {
     /// and the database when it cannot be reached or another Server holds it, and naming both
     /// versions when its schema needs a newer Server.
     pub fn open(config: &PostgresConfig) -> Result<Arc<Self>, String> {
-        Self::open_in(config, None)
+        Self::open_with(config, None, LockPolicy::SERVER)
     }
 
     /// [`open`](Self::open), in the schema `schema` rather than the role's default: what the tests
     /// work in, one schema each.
+    #[cfg(test)]
     pub(crate) fn open_in(
         config: &PostgresConfig,
         schema: Option<&str>,
     ) -> Result<Arc<Self>, String> {
-        let database = Self::connect(config, schema)?;
+        Self::open_with(config, schema, LockPolicy::ONCE)
+    }
+
+    /// [`open_in`](Self::open_in) under `policy`.
+    fn open_with(
+        config: &PostgresConfig,
+        schema: Option<&str>,
+        policy: LockPolicy,
+    ) -> Result<Arc<Self>, String> {
+        let database = Self::connect_within(config, schema, CALL_TIMEOUT, policy)?;
         let applied = database.apply_schema(schema::MIGRATIONS)?;
         if !applied.versions.is_empty() {
             tracing::info!(
@@ -142,7 +181,7 @@ impl Database {
     /// # Errors
     /// As [`open`](Self::open), the schema aside.
     pub(crate) fn connect(config: &PostgresConfig, schema: Option<&str>) -> Result<Self, String> {
-        Self::connect_within(config, schema, CALL_TIMEOUT)
+        Self::connect_within(config, schema, CALL_TIMEOUT, LockPolicy::ONCE)
     }
 
     /// [`connect`](Self::connect), its every call bounded by `bound` rather than
@@ -151,6 +190,7 @@ impl Database {
         config: &PostgresConfig,
         schema: Option<&str>,
         bound: Duration,
+        policy: LockPolicy,
     ) -> Result<Self, String> {
         let name = format!(
             "database {} on {}:{}",
@@ -165,19 +205,29 @@ impl Database {
         // is dropped (ADR-0057 clauses 3 and 4).
         let pg = pg_config(config, &password, schema);
         let bridge = Bridge::new("records-postgres")?;
-        let (lost, closing) = (
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-        );
-        let lock = bridge
-            .run({
+        let started = std::time::Instant::now();
+        // Why the last attempt did not get the lock: `None` when another Server holds it, the
+        // reason when the database did not answer.
+        let mut unreached: Option<String> = None;
+        let (lock, lost, closing, lock_pid) = retry_until(policy.wait, START_RETRY, || {
+            // One set of flags per attempt: the connection of an attempt that did not get the lock
+            // ends when it is dropped, or when the database goes away while the lock is asked
+            // for, and that is no loss of a lock — only `held` makes its end one.
+            let (lost, closing, armed) = (
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            let attempt = bridge.run({
                 let (pg, tls) = (pg.clone(), tls.clone());
                 let watch = LockWatch {
                     name: name.clone(),
                     lost: lost.clone(),
                     closing: closing.clone(),
+                    held: armed.clone(),
+                    exit_on_loss: policy.exit_on_loss,
                 };
-                bounded(bound, async move {
+                bounded_attempt(bound, async move {
                     let client = connect_watched(&pg, &tls, watch).await?;
                     let row = client
                         .query_one(
@@ -186,18 +236,70 @@ impl Database {
                             &[],
                         )
                         .await
-                        .map_err(sql)?;
-                    Ok::<_, String>((client, row.get::<_, bool>(0), row.get::<_, i32>(1)))
+                        .map_err(Unreached::of)?;
+                    Ok::<_, Unreached>((client, row.get::<_, bool>(0), row.get::<_, i32>(1)))
                 })
-            })
-            .map_err(|e| format!("cannot reach the {name}: {e}"))?;
-        let (lock, held, lock_pid) = lock;
-        if !held {
-            return Err(format!(
+            });
+            let left = policy.wait.saturating_sub(started.elapsed());
+            let (client, held, lock_pid) = match attempt {
+                Ok(attempt) => attempt,
+                // What may pass — the name not yet resolving, the connection refused while the
+                // database fails over — is asked again until the time is up; a refusal that will
+                // not change (the credentials, the certificate, the database's name) ends the
+                // wait at once (ADR-0062).
+                Err(failure) if failure.transient && !left.is_zero() => {
+                    tracing::warn!(
+                        database = %name,
+                        error = %failure.why,
+                        retry_in_secs = START_RETRY.as_secs(),
+                        left_secs = left.as_secs(),
+                        "cannot reach the database yet; asking again"
+                    );
+                    unreached = Some(failure.why);
+                    return Ok(None);
+                }
+                Err(failure) => return Err(format!("cannot reach the {name}: {}", failure.why)),
+            };
+            if held {
+                // Armed before `lost` is read, as the watch sets `lost` before it reads `held`: a
+                // connection that ends in between is seen by one side at least.
+                armed.store(true, Ordering::SeqCst);
+                if lost.load(Ordering::SeqCst) {
+                    closing.store(true, Ordering::SeqCst);
+                    let why = "the connection ended as the lock was taken".to_string();
+                    if left.is_zero() {
+                        return Err(format!("cannot reach the {name}: {why}"));
+                    }
+                    tracing::warn!(
+                        database = %name,
+                        error = %why,
+                        retry_in_secs = START_RETRY.as_secs(),
+                        left_secs = left.as_secs(),
+                        "cannot reach the database yet; asking again"
+                    );
+                    unreached = Some(why);
+                    return Ok(None);
+                }
+                unreached = None;
+                Ok(Some((client, lost, closing, lock_pid)))
+            } else {
+                closing.store(true, Ordering::SeqCst);
+                unreached = None;
+                tracing::info!(
+                    database = %name,
+                    left_secs = left.as_secs(),
+                    "another Server holds the lock; waiting for it"
+                );
+                Ok(None)
+            }
+        })?
+        .ok_or_else(|| match &unreached {
+            Some(why) => format!("cannot reach the {name}: {why}"),
+            None => format!(
                 "another Server holds the {name} — one Server per database; stop the other one \
                  first"
-            ));
-        }
+            ),
+        })?;
         let manager = match tls {
             Tls::Rustls(tls) => Manager::from_config(
                 pg,
@@ -231,6 +333,21 @@ impl Database {
             name,
             bound,
             bridge,
+        })
+    }
+
+    /// Whether the Server holds its lock and the database answers a query (ADR-0063).
+    ///
+    /// # Errors
+    /// Returns the loss of the lock, or why the query failed.
+    pub fn ready(&self) -> Result<(), String> {
+        self.run(|pool| async move {
+            client(&pool)
+                .await?
+                .query_one("SELECT 1", &[])
+                .await
+                .map_err(sql)
+                .map(|_| ())
         })
     }
 
@@ -343,11 +460,32 @@ impl Drop for Database {
     }
 }
 
+/// Runs `attempt` until it returns a value or `wait` has passed, asking again every `interval`
+/// (ADR-0062): `Ok(None)` is an attempt that found the lock held, and what is returned when the time
+/// passes; an error ends the wait at once.
+fn retry_until<T>(
+    wait: Duration,
+    interval: Duration,
+    mut attempt: impl FnMut() -> Result<Option<T>, String>,
+) -> Result<Option<T>, String> {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if let Some(found) = attempt()? {
+            return Ok(Some(found));
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(interval.min(deadline - now));
+    }
+}
+
 /// Why every call is refused once the lock's connection has ended.
 fn lost_lock(name: &str) -> String {
     format!(
-        "this Server lost its lock on the {name} — another Server may hold it now (ADR-0050 \
-         clause 6), so this one writes nothing more; restart it once the database answers"
+        "this Server lost its lock on the {name} — another Server may hold it now (ADR-0062), so \
+         this one writes nothing more; restart it once the database answers"
     )
 }
 
@@ -356,6 +494,11 @@ struct LockWatch {
     name: String,
     lost: Arc<AtomicBool>,
     closing: Arc<AtomicBool>,
+    /// Set once the connection holds the lock: before, its end is a failed attempt, asked again
+    /// within the wait, and no loss.
+    held: Arc<AtomicBool>,
+    /// Whether the process exits once the loss is logged (ADR-0062).
+    exit_on_loss: bool,
 }
 
 /// `work`, or an error once `bound` has passed without its answer. What it left unfinished is
@@ -370,6 +513,76 @@ async fn bounded<T>(
             bound.as_millis()
         ))
     })
+}
+
+/// [`bounded`], for an attempt to reach the database: running past `bound` is a failure that may
+/// pass.
+async fn bounded_attempt<T>(
+    bound: Duration,
+    work: impl Future<Output = Result<T, Unreached>>,
+) -> Result<T, Unreached> {
+    tokio::time::timeout(bound, work).await.unwrap_or_else(|_| {
+        Err(Unreached {
+            why: format!(
+                "no answer within {} ms — the database or the network to it does not answer",
+                bound.as_millis()
+            ),
+            transient: true,
+        })
+    })
+}
+
+/// An attempt that did not reach the database: why, and whether asking again may change the
+/// answer (ADR-0062).
+struct Unreached {
+    why: String,
+    transient: bool,
+}
+
+impl Unreached {
+    fn of(error: tokio_postgres::Error) -> Self {
+        let transient = may_pass(&error);
+        Self {
+            why: sql(error),
+            transient,
+        }
+    }
+}
+
+/// Whether the failure to reach or use the database may pass on its own: a name that does not
+/// resolve yet, a refused or reset connection, a database that is starting, shutting down or full.
+/// What will not change by asking again is refused at once: the credentials, the database's name,
+/// a certificate that does not verify, a configuration the client rejects.
+fn may_pass(error: &tokio_postgres::Error) -> bool {
+    use tokio_postgres::error::SqlState;
+    if let Some(db) = error.as_db_error() {
+        let code = db.code();
+        return *code == SqlState::CANNOT_CONNECT_NOW
+            || *code == SqlState::TOO_MANY_CONNECTIONS
+            || *code == SqlState::ADMIN_SHUTDOWN
+            || *code == SqlState::CRASH_SHUTDOWN
+            || code.code().starts_with("08");
+    }
+    if error.is_closed() {
+        return true;
+    }
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            // The handshake reports a certificate that does not verify as invalid data. A connect
+            // that fails with `EPERM` (PermissionDenied) is what Cilium's socket load balancer
+            // answers for a Service that has no backend — the `-rw` Service while the primary is
+            // being replaced — so it is a transient failure, bounded like the others.
+            return !matches!(
+                io.kind(),
+                std::io::ErrorKind::InvalidData
+                    | std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::Unsupported
+            );
+        }
+        source = cause.source();
+    }
+    false
 }
 
 /// A pooled connection, or why there is none: a database lost while the Server runs fails the
@@ -486,12 +699,15 @@ async fn connect_watched(
     pg: &tokio_postgres::Config,
     tls: &Tls,
     watch: LockWatch,
-) -> Result<tokio_postgres::Client, String> {
+) -> Result<tokio_postgres::Client, Unreached> {
     let ended = move |result: Result<(), tokio_postgres::Error>| {
         if watch.closing.load(Ordering::SeqCst) {
             return;
         }
         watch.lost.store(true, Ordering::SeqCst);
+        if !watch.held.load(Ordering::SeqCst) {
+            return;
+        }
         let why = result
             .err()
             .map_or_else(|| "it was closed".to_string(), sql);
@@ -501,15 +717,19 @@ async fn connect_watched(
             "{}",
             lost_lock(&watch.name)
         );
+        if watch.exit_on_loss {
+            // ADR-0062: a Server that lost its lock is replaced, not kept refusing calls.
+            std::process::exit(1);
+        }
     };
     match tls {
         Tls::Rustls(tls) => {
-            let (client, connection) = pg.connect(tls.clone()).await.map_err(sql)?;
+            let (client, connection) = pg.connect(tls.clone()).await.map_err(Unreached::of)?;
             tokio::spawn(async move { ended(connection.await) });
             Ok(client)
         }
         Tls::Plain => {
-            let (client, connection) = pg.connect(NoTls).await.map_err(sql)?;
+            let (client, connection) = pg.connect(NoTls).await.map_err(Unreached::of)?;
             tokio::spawn(async move { ended(connection.await) });
             Ok(client)
         }
@@ -891,9 +1111,10 @@ mod tests {
         silent.port = port;
         silent.password_file = path;
         let started = std::time::Instant::now();
-        let err = Database::connect_within(&silent, None, Duration::from_millis(500))
-            .map(|_| ())
-            .expect_err("no answer");
+        let err =
+            Database::connect_within(&silent, None, Duration::from_millis(500), LockPolicy::ONCE)
+                .map(|_| ())
+                .expect_err("no answer");
         assert!(started.elapsed() < Duration::from_secs(5), "{err}");
         assert!(err.contains("no answer within 500 ms"), "{err}");
         assert!(
@@ -964,7 +1185,8 @@ mod tests {
         through.port = port;
         let bound = Duration::from_secs(1);
         let database = Arc::new(
-            Database::connect_within(&through, Some(&test.schema), bound).expect("connect"),
+            Database::connect_within(&through, Some(&test.schema), bound, LockPolicy::ONCE)
+                .expect("connect"),
         );
         database.apply_schema(schema::MIGRATIONS).expect("schema");
         let store = configs::PgConfigBackend::new(database.clone());
@@ -1072,9 +1294,10 @@ mod tests {
             named.port = port;
             named.password_file = password.clone();
             named.ca_file = Some(ca_file);
-            let err = Database::connect_within(&named, None, Duration::from_secs(5))
-                .map(|_| ())
-                .expect_err("nothing serves past the handshake");
+            let err =
+                Database::connect_within(&named, None, Duration::from_secs(5), LockPolicy::ONCE)
+                    .map(|_| ())
+                    .expect_err("nothing serves past the handshake");
             (err, handshaken.load(Ordering::SeqCst))
         };
 
@@ -1093,6 +1316,196 @@ mod tests {
             handshaken,
             "a root that signed the host's name is accepted: {err}"
         );
+    }
+
+    /// A password file the Server accepts (owner-only), holding `secret`.
+    fn password_file(dir: &Path, secret: &str) -> std::path::PathBuf {
+        let path = dir.join(format!("password-{}", secret.len()));
+        std::fs::write(&path, secret).expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        path
+    }
+
+    /// A database that does not answer yet — the port refused, the name not resolving — is asked
+    /// again until the wait has passed and then fails naming it; with no wait it is asked once. A
+    /// certificate that does not verify, which asking again would not change, fails at once
+    /// however long the wait. Needs no database.
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_database_that_does_not_answer_yet_is_asked_again_until_the_wait_passes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let password = password_file(dir.path(), "secret");
+        let wait = Duration::from_millis(700);
+        let policy = LockPolicy {
+            wait,
+            exit_on_loss: false,
+        };
+        let attempt = |named: &PostgresConfig, policy: LockPolicy| {
+            let started = std::time::Instant::now();
+            let err = Database::connect_within(named, None, Duration::from_secs(5), policy)
+                .map(|_| ())
+                .expect_err("nothing answers");
+            (err, started.elapsed())
+        };
+
+        // The port is refused: a listener bound and dropped leaves its port closed.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+            .port();
+        let mut refused = config("127.0.0.1", false);
+        refused.port = closed;
+        refused.password_file = password.clone();
+        let (err, took) = attempt(&refused, policy);
+        assert!(err.contains("cannot reach the database fleet"), "{err}");
+        assert!(took >= wait, "it asked again for the wait: {took:?}");
+        let (_, once) = attempt(&refused, LockPolicy::ONCE);
+        assert!(once < wait, "no wait is one attempt: {once:?}");
+
+        // The name does not resolve (`.invalid` never does).
+        let mut unresolved = config("db.invalid", true);
+        unresolved.password_file = password.clone();
+        let (err, took) = attempt(&unresolved, policy);
+        assert!(err.contains("cannot reach the database fleet"), "{err}");
+        assert!(took >= wait, "it asked again for the wait: {took:?}");
+
+        // A certificate no root of `ca_file` signed: refused at once, the wait unused.
+        let (_, local, key) = signed_for("database CA", &["localhost"]);
+        let (other_ca, _, _) = signed_for("another CA", &["localhost"]);
+        let ca_file = dir.path().join("other-ca.pem");
+        std::fs::write(&ca_file, other_ca).expect("write");
+        let mut unverified = config("localhost", true);
+        unverified.port = tls_database(&local, &key).0;
+        unverified.password_file = password;
+        unverified.ca_file = Some(ca_file);
+        let (err, took) = attempt(
+            &unverified,
+            LockPolicy {
+                wait: Duration::from_secs(60),
+                exit_on_loss: false,
+            },
+        );
+        assert!(err.contains("UnknownIssuer"), "{err}");
+        assert!(took < Duration::from_secs(5), "refused at once: {took:?}");
+    }
+
+    /// A database that accepts every connection and closes it once the lock is asked for: what a
+    /// database that goes away mid-attempt looks like. Needs no database.
+    fn database_that_closes_on_the_query() -> u16 {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                // The startup message: its length, then the rest of it.
+                let mut length = [0u8; 4];
+                if stream.read_exact(&mut length).is_err() {
+                    continue;
+                }
+                let mut startup =
+                    vec![0u8; (u32::from_be_bytes(length) as usize).saturating_sub(4)];
+                if stream.read_exact(&mut startup).is_err() {
+                    continue;
+                }
+                // AuthenticationOk, then ReadyForQuery.
+                if stream
+                    .write_all(b"R\0\0\0\x08\0\0\0\0Z\0\0\0\x05I")
+                    .is_err()
+                {
+                    continue;
+                }
+                // The first bytes of the lock's query, then the connection ends.
+                let mut query = [0u8; 1];
+                let _ = stream.read(&mut query);
+            }
+        });
+        port
+    }
+
+    /// The marker that makes [`ended_attempt_child`] run.
+    const ENDED_ATTEMPT_CHILD: &str = "CLASSIS_TEST_ENDED_ATTEMPT_CHILD";
+
+    /// A connection that ends while the lock is asked for is a failed attempt, asked again until
+    /// the wait has passed, not a lost lock: the Server's own policy, which exits on a loss, does
+    /// not exit. Run in a child process, which such an exit would end.
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_connection_that_ends_while_the_lock_is_asked_for_is_asked_again() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "postgres::tests::ended_attempt_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(ENDED_ATTEMPT_CHILD, "1")
+            .output()
+            .expect("run the child");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The child of [`a_connection_that_ends_while_the_lock_is_asked_for_is_asked_again`]; it
+    /// passes trivially when run by itself.
+    #[test]
+    fn ended_attempt_child() {
+        if std::env::var_os(ENDED_ATTEMPT_CHILD).is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut closing = config("127.0.0.1", false);
+        closing.port = database_that_closes_on_the_query();
+        closing.password_file = password_file(dir.path(), "secret");
+        let wait = Duration::from_millis(700);
+        let started = std::time::Instant::now();
+        let err = Database::connect_within(
+            &closing,
+            None,
+            Duration::from_secs(5),
+            LockPolicy {
+                wait,
+                exit_on_loss: true,
+            },
+        )
+        .map(|_| ())
+        .expect_err("the lock is never taken");
+        assert!(err.contains("cannot reach the database fleet"), "{err}");
+        assert!(started.elapsed() >= wait, "it asked again for the wait");
+    }
+
+    /// A password the database refuses is no reason to ask again: startup fails at once, naming
+    /// the refusal, however long the wait.
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_refused_password_fails_startup_at_once() {
+        let Some(test) = TestDatabase::named() else {
+            return;
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut wrong = test.config();
+        wrong.password_file = password_file(dir.path(), "not the password");
+        let started = std::time::Instant::now();
+        let err = Database::connect_within(
+            &wrong,
+            Some(&test.schema),
+            Duration::from_secs(5),
+            LockPolicy {
+                wait: Duration::from_secs(60),
+                exit_on_loss: false,
+            },
+        )
+        .map(|_| ())
+        .expect_err("the password is wrong");
+        assert!(err.contains("28P01"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{err}");
     }
 
     /// What the tests of this module log, read back: the global subscriber of the test process,
@@ -1124,6 +1537,44 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    /// A Server that finds the lock held asks again until it gets it, and gives up once the wait
+    /// has passed; a failed attempt ends the wait at once (ADR-0062).
+    /// Verifies: ADR-0062
+    #[test]
+    fn the_wait_for_the_lock_is_bounded_and_ends_with_the_lock() {
+        let mut asked = 0;
+        let got = retry_until(Duration::from_secs(5), Duration::from_millis(1), || {
+            asked += 1;
+            Ok((asked == 3).then_some(asked))
+        });
+        assert_eq!(got, Ok(Some(3)));
+
+        let started = std::time::Instant::now();
+        let mut asked = 0;
+        let got = retry_until::<()>(Duration::from_millis(60), Duration::from_millis(10), || {
+            asked += 1;
+            Ok(None)
+        });
+        assert_eq!(got, Ok(None));
+        assert!(asked > 1, "it asked again");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the wait is bounded"
+        );
+
+        let mut asked = 0;
+        let got = retry_until::<()>(Duration::ZERO, Duration::from_secs(60), || {
+            asked += 1;
+            Ok(None)
+        });
+        assert_eq!((got, asked), (Ok(None), 1), "no wait is one attempt");
+
+        let got = retry_until::<()>(Duration::from_secs(60), Duration::from_secs(60), || {
+            Err("cannot reach".to_string())
+        });
+        assert_eq!(got, Err("cannot reach".to_string()));
     }
 
     /// A Server whose lock's connection ends while it runs notices: it logs why and refuses every
@@ -1199,6 +1650,49 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         assert!(reopened.is_some(), "the lock was not released");
+    }
+
+    /// The database is ready while the Server holds its lock and the database answers, and is not
+    /// once the lock's connection is gone (ADR-0063).
+    /// Verifies: ADR-0063
+    #[test]
+    fn the_database_is_ready_while_it_holds_its_lock() {
+        let Some(test) = TestDatabase::named() else {
+            return;
+        };
+        let database = test.open();
+        database.ready().expect("ready");
+        test.sql(&format!(
+            "SELECT pg_terminate_backend({})",
+            database.lock_pid
+        ));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while database.ready().is_ok() {
+            assert!(std::time::Instant::now() < deadline, "still ready");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// A Server started while another holds the lock waits for it and takes it once the first is
+    /// gone (ADR-0062).
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_server_waits_for_the_lock_the_one_it_replaces_releases() {
+        let Some(test) = TestDatabase::named() else {
+            return;
+        };
+        let first = test.open();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            drop(first);
+        });
+        let policy = LockPolicy {
+            wait: Duration::from_secs(30),
+            exit_on_loss: false,
+        };
+        let second = Database::open_with(&test.config(), Some(&test.schema), policy);
+        releaser.join().expect("releaser");
+        assert!(second.is_ok(), "the lock was not taken within the wait");
     }
 
     /// The schema is applied at startup and recorded; a database one migration behind is migrated

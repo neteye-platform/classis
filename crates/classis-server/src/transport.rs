@@ -23,6 +23,7 @@ use opamp::uid::InstanceUid;
 use tokio::sync::watch;
 use tracing::{debug, info};
 
+use crate::agent_auth::{Admitted, AgentAuthenticator, Refusal};
 use crate::agent_rate::{AgentRate, Subject};
 use crate::enrolment::{Enrolment, Requester, Submitted};
 use crate::fleet::{bad_request, bounded, unavailable, AppState, ConnId, Transport};
@@ -49,6 +50,10 @@ pub struct Admission {
     enrolment: Option<Arc<Enrolment>>,
     throttle: Option<Arc<Throttle>>,
     revocations: Option<Arc<Revocations>>,
+    /// What admits a peer when the Server sits behind a proxy that terminates TLS (ADR-0064): the
+    /// authenticator of the Agent plane, which today admits every request. When set, no
+    /// certificate is read.
+    authenticator: Option<Arc<dyn AgentAuthenticator>>,
 }
 
 /// What admitted a connection (ADR-0021 clause 40): the certificate, with when it expires. A
@@ -160,9 +165,44 @@ impl Admission {
         self
     }
 
-    fn required(&self) -> bool {
-        self.require_client_certificate || self.throttle.is_some() || self.revocations.is_some()
+    /// Admits by `authenticator`, in place of a client certificate (ADR-0064): the Server speaks
+    /// plain HTTP behind a proxy, so no certificate reaches it. With
+    /// [`AdmitEveryone`](crate::agent_auth::AdmitEveryone) it admits every request, and the
+    /// authentication is the proxy's.
+    #[must_use]
+    pub fn with_authenticator(mut self, authenticator: Arc<dyn AgentAuthenticator>) -> Self {
+        self.authenticator = Some(authenticator);
+        self
     }
+
+    fn required(&self) -> bool {
+        self.require_client_certificate
+            || self.throttle.is_some()
+            || self.revocations.is_some()
+            || self.authenticator.is_some()
+    }
+}
+
+/// What an admitted request is, as the rest of the Server reads a proof: a member of the fleet
+/// with no certificate, speaking for the host the authenticator named, if it named one. With no
+/// host the identity is the `instance_uid` of the OpAMP message, as for any request that carries
+/// no proof, and no session ends on its own: nothing here expires or can be revoked.
+fn admitted_proofs(admitted: Admitted) -> Proofs {
+    Proofs {
+        certificate: None,
+        der: None,
+        host: admitted.host,
+        subject_values: crate::revocation::SubjectValues::default(),
+    }
+}
+
+/// `401` for a request the authenticator refused, saying nothing of why.
+fn refused() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        "the OpAMP endpoint refuses this request",
+    )
+        .into_response()
 }
 
 /// Milliseconds since the Unix epoch, on the host's clock.
@@ -193,6 +233,7 @@ pub struct DownloadGuard {
     throttle: Option<Arc<Throttle>>,
     revocations: Option<Arc<Revocations>>,
     agent_rate: Option<Arc<AgentRate>>,
+    authenticator: Option<Arc<dyn AgentAuthenticator>>,
 }
 
 impl Admission {
@@ -205,6 +246,7 @@ impl Admission {
             throttle: self.throttle.clone(),
             revocations: self.revocations.clone(),
             agent_rate: None,
+            authenticator: self.authenticator.clone(),
         }
     }
 }
@@ -220,7 +262,11 @@ impl DownloadGuard {
 
 /// Wraps the download route in its guard.
 pub fn guard_download(router: Router, guard: DownloadGuard) -> Router {
-    if !guard.require_client_certificate && guard.throttle.is_none() && guard.agent_rate.is_none() {
+    if !guard.require_client_certificate
+        && guard.throttle.is_none()
+        && guard.agent_rate.is_none()
+        && guard.authenticator.is_none()
+    {
         return router;
     }
     router.layer(middleware::from_fn_with_state(
@@ -249,6 +295,25 @@ async fn admit_download(
             return throttled(wait);
         }
     }
+    // Behind a proxy that terminates TLS the authenticator is the proof (ADR-0064), and no
+    // certificate is read.
+    let admitted = guard
+        .authenticator
+        .as_ref()
+        .map(|authenticator| authenticator.authenticate(request.headers()));
+    if let Some(Err(Refusal { check })) = &admitted {
+        if let (Some(throttle), Some(peer)) = (&guard.throttle, peer) {
+            throttle.failed(peer);
+        }
+        debug!(
+            event = "download.refused",
+            peer = peer.map(tracing::field::display),
+            path,
+            check = *check,
+            "refused a download: the authenticator refused it"
+        );
+        return refused();
+    }
     let certificate = request
         .extensions()
         .get::<PeerCertificate>()
@@ -268,6 +333,8 @@ async fn admit_download(
         }
         None => !guard.require_client_certificate,
     };
+    let admitted = admitted.and_then(Result::ok);
+    let member = member || admitted.is_some();
     if !member {
         if let (Some(throttle), Some(peer)) = (&guard.throttle, peer) {
             throttle.failed(peer);
@@ -282,15 +349,18 @@ async fn admit_download(
     }
     // What the certificate proves, read once: counted here, and handed to the route, which serves
     // only what is offered to an Agent of the host it names (ADR-0026 clause 37).
-    let proofs = certificate.map(|cert| Proofs {
-        der: Some(Arc::from(cert.as_ref())),
-        host: facts.as_ref().and_then(|facts| facts.host.clone()),
-        subject_values: facts
-            .as_ref()
-            .map(|facts| facts.subject_values.clone())
-            .unwrap_or_default(),
-        certificate: facts.map(|facts| (facts.id, facts.not_after_ms)),
-    });
+    let proofs = match admitted {
+        Some(admitted) => Some(admitted_proofs(admitted)),
+        None => certificate.map(|cert| Proofs {
+            der: Some(Arc::from(cert.as_ref())),
+            host: facts.as_ref().and_then(|facts| facts.host.clone()),
+            subject_values: facts
+                .as_ref()
+                .map(|facts| facts.subject_values.clone())
+                .unwrap_or_default(),
+            certificate: facts.map(|facts| (facts.id, facts.not_after_ms)),
+        }),
+    };
     if let Some(agent_rate) = &guard.agent_rate {
         let proofs = proofs.clone().unwrap_or_default();
         let subject = proofs.subject(peer);
@@ -410,12 +480,43 @@ async fn gateway_revocations(State(state): State<Arc<AppState>>, request: Reques
         .into_response()
 }
 
-/// The peer's address, as the listener put it into the request.
+/// The peer's address: the left-most valid address of `X-Forwarded-For` when the request has the
+/// header, else the address of the connection the listener put into the request.
+///
+/// The header is trusted from any source (ADR-0064 clause 3): the Server is reached through a
+/// reverse proxy, which is the one peer on its connections, and it counts failed attempts per
+/// address. Whoever can reach the port can write the header, and so name any address — and so
+/// keep a failure count from ever filling for them.
 pub fn peer_ip(request: &Request) -> Option<std::net::IpAddr> {
-    request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(addr)| addr.ip())
+    forwarded_for(request.headers()).or_else(|| {
+        request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ConnectInfo(addr)| addr.ip())
+    })
+}
+
+/// The first address that parses in the `X-Forwarded-For` values, in the order they were sent: a
+/// bare address, an address with a port, or a bracketed IPv6 address.
+fn forwarded_for(headers: &axum::http::HeaderMap) -> Option<IpAddr> {
+    headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .find_map(|entry| {
+            entry
+                .parse::<IpAddr>()
+                .ok()
+                .or_else(|| entry.parse::<SocketAddr>().ok().map(|addr| addr.ip()))
+                .or_else(|| {
+                    entry
+                        .strip_prefix('[')
+                        .and_then(|rest| rest.strip_suffix(']'))
+                        .and_then(|inner| inner.parse::<IpAddr>().ok())
+                })
+        })
 }
 
 /// The answer while the Server cannot take a decision now — too many password hashes under way on
@@ -490,6 +591,26 @@ async fn admit(
         .get(header::UPGRADE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    // Behind a proxy that terminates TLS the authenticator is the proof, and the only one
+    // (ADR-0064): no certificate is read, no revocation consulted.
+    if let Some(authenticator) = &admission.authenticator {
+        return match authenticator.authenticate(request.headers()) {
+            Ok(admitted) => {
+                debug!(
+                    event = "admission.admitted",
+                    peer = peer.map(tracing::field::display),
+                    transport = if websocket { "websocket" } else { "http" },
+                    admitted_as = "member",
+                    host = admitted.host.as_deref().map(bounded),
+                    "admitted a request"
+                );
+                request.extensions_mut().insert(Peer::Member);
+                request.extensions_mut().insert(admitted_proofs(admitted));
+                next.run(request).await
+            }
+            Err(Refusal { check }) => refuse(check, refused()),
+        };
+    }
     let certificate = request
         .extensions()
         .get::<PeerCertificate>()

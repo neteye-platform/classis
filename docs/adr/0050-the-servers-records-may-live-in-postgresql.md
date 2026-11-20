@@ -1,6 +1,7 @@
 # ADR-0050: The Server's records may live in PostgreSQL
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clause 6 superseded by
+  [ADR-0062](0062-the-server-waits-for-the-databases-lock-at-startup-and-exits-when-it-loses-it.md)
 - **Date:** 2026-10-23
 - **Deciders:** Davide Zeni
 - **Applies to:** every storage port in `crates/classis-server/src/`

@@ -445,11 +445,13 @@ Use these exact words in code, comments, documentation, and ADRs.
 
 ## Quality Goals
 
-1. **Q-1** — **Secure by default.** Whatever its configuration, neither end
-   sends a credential, a configuration or a package unencrypted beyond the
-   loopback, admits an Agent onto the Server or a Gateway without a client
-   certificate, or installs a package without a valid signature. A configuration
-   that would do any of these is refused at startup, naming the setting.
+1. **Q-1** — **Secure by default.** The Server speaks plain HTTP and is reached
+   only through a reverse proxy that terminates TLS 1.3 and authenticates the
+   Agents; a Server configuration that carries TLS or client-certificate
+   settings is refused at startup, naming the setting. Whatever its
+   configuration, a Client sends no credential, configuration or package
+   unencrypted beyond the loopback, admits no Agent onto a Gateway without a
+   client certificate, and installs no package without a valid signature.
 2. **Q-2** — **Untrusted input is bounded and fuzzed.** Every parser that reads
    bytes from the network or from a downloaded artifact enforces its size limit
    before it allocates, and has a fuzz target that runs in CI.
