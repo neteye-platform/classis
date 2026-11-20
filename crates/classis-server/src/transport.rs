@@ -2,8 +2,8 @@
 //!
 //! `/v1/opamp` serves the whole protocol: a request carrying the protobuf `Content-Type` is the
 //! plain-HTTP transport, a WebSocket upgrade is the other — exactly the detection the Baseline
-//! describes. The communication is `opamp::server`'s, shared with the Gateway and the Supervisor
-//! Endpoint (ADR-0010); what is the Server's is the [`Fleet`] handler, which hands every decoded
+//! describes. The communication is `opamp::server`'s, shared with the Supervisor Endpoint
+//! (ADR-0010); what is the Server's is the [`Fleet`] handler, which hands every decoded
 //! report to the same [`AppState::process`], so transport is carriage, never semantics.
 
 use std::net::{IpAddr, SocketAddr};
@@ -31,7 +31,8 @@ use crate::throttle::Throttle;
 use crate::tls::{Issuers, Peer};
 
 /// The endpoint path the Baseline names as the default, and the protobuf media type it requires —
-/// both from the shared crate, because the Gateway serves the same endpoint (ADR-0010).
+/// both from the shared crate, because the Supervisor Endpoint serves the same endpoint
+/// (ADR-0010).
 pub use opamp::endpoint::{OPAMP_PATH, PROTOBUF_CONTENT_TYPE};
 
 /// What a peer must prove to reach `/v1/opamp` (ADR-0021 clauses 1, 6): a client certificate the
@@ -323,91 +324,17 @@ async fn admit_download(
     next.run(request).await
 }
 
-/// Where a Gateway fetches the revoked certificates it refuses (ADR-0021 clause 43).
-pub const GATEWAY_REVOCATIONS_PATH: &str = "/v1/gateway/revocations";
-
 pub fn router(state: Arc<AppState>, admission: Admission) -> Router {
     // The limits the Baseline requires of the Server, on both transports and in both directions.
     let settings = Settings::new(state.max_message_size());
-    let gateways = Router::new()
-        .route(
-            GATEWAY_REVOCATIONS_PATH,
-            axum::routing::get(gateway_revocations),
-        )
-        .with_state(state.clone());
     let fleet = Fleet(state, admission.issuers.clone());
-    let mut router = opamp::server::router(Arc::new(fleet), settings).merge(gateways);
+    let mut router = opamp::server::router(Arc::new(fleet), settings);
     if admission.required() {
         // The outermost layer: every plain-HTTP POST and the upgrade GET — checked before the
         // WebSocket upgrade completes — answers 401 without a certificate that admits.
         router = router.layer(middleware::from_fn_with_state(Arc::new(admission), admit));
     }
     router
-}
-
-/// The revoked certificates of the client CA, chains resolved, for a host marked as a Gateway
-/// (ADR-0021 clause 43). Admitted as `/v1/opamp` is, by the layer around both; what is checked
-/// here is that the member is a Gateway. The `ETag` is the SHA-256 of the body, so it changes with
-/// the list and survives a restart.
-async fn gateway_revocations(State(state): State<Arc<AppState>>, request: Request) -> Response {
-    use sha2::Digest as _;
-
-    let forbidden = || {
-        (
-            StatusCode::FORBIDDEN,
-            "the revocation list is for hosts marked as Gateways",
-        )
-            .into_response()
-    };
-    // Without a register nothing is revoked, so the empty list reveals nothing to anyone. With one,
-    // the list is a member's whose host is marked as a Gateway, and nobody else's.
-    let certificates: Vec<serde_json::Value> = match state.revocations() {
-        None => Vec::new(),
-        Some(revocations) => {
-            let host = match request.extensions().get::<Peer>() {
-                Some(Peer::Member) => request
-                    .extensions()
-                    .get::<Proofs>()
-                    .and_then(|proofs| proofs.host.clone()),
-                _ => None,
-            };
-            if !host
-                .as_ref()
-                .is_some_and(|host| revocations.is_gateway(host))
-            {
-                // A member asking for what only a Gateway is handed is a refusal like any other.
-                debug!(
-                    event = "gateway_list.refused",
-                    peer = peer_ip(&request).map(tracing::field::display),
-                    host = host.as_deref(),
-                    "refused the revocation list: not a Gateway"
-                );
-                return forbidden();
-            }
-            revocations
-                .revoked_certificates("client")
-                .into_iter()
-                .map(|id| serde_json::json!({ "issuer": id.issuer, "serial": id.serial }))
-                .collect()
-        }
-    };
-    let body = serde_json::json!({ "certificates": certificates }).to_string();
-    let etag = format!("\"{}\"", hex::encode(sha2::Sha256::digest(body.as_bytes())));
-    if request
-        .headers()
-        .get(header::IF_NONE_MATCH)
-        .is_some_and(|value| value.as_bytes() == etag.as_bytes())
-    {
-        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
-    }
-    (
-        [
-            (header::CONTENT_TYPE, "application/json".to_string()),
-            (header::ETAG, etag),
-        ],
-        body,
-    )
-        .into_response()
 }
 
 /// The peer's address, as the listener put it into the request.

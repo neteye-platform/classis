@@ -25,8 +25,8 @@ true.
  operator ── REST / bundled UI ──▶ Operator plane :4321 ─┐
                                                          │  Server (Linux)
  Client ──── OpAMP, mTLS ──────────────▶ Agent plane :4320 ─┘   │
-   │  ▲                                                          └─▶ data_dir: fleet state,
-   │  └── Gateway (a Client) ◀── OpAMP, mTLS ── other Clients        register,
+   │                                                             └─▶ data_dir: fleet state,
+   │                                                                 register,
    │                                                                 artifacts by SHA-256
    ├── Supervisor Endpoint (loopback) ◀── a Collector's opampextension
    ├── Managed Processes: Collector, any command — where a process account is registered, under
@@ -42,16 +42,16 @@ true.
 - **Clients** reach the Agent plane over OpAMP — WebSocket or plain HTTP —
   admitted by the client certificate in the TLS 1.3 handshake alone
   ([ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md),
-  ADR-0021). A Client in Gateway Mode carries other Clients' Agents over its own
-  upstream connections and refuses what the Server revoked
-  ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
+  ADR-0021). Gateway Mode is removed
+  ([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)):
+  every Client connects to the Server directly.
 - **Managed Processes** run on the Client's host under a Supervisor each; a
   Collector reports through its own `opampextension` to the Supervisor Endpoint,
   which admits only the process its Supervisor started
   ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
 - **Package downloads** come from the Server alone: every artifact is uploaded
-  to it, and a Client fetches only from its own Server's origin, or from its
-  Gateway. What arrives is checked against its hash and the operator's signature
+  to it, and a Client fetches only from its own Server's origin. What arrives
+  is checked against its hash and the operator's signature
   ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
   [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)).
 - **The service manager** starts the Client and restarts it after a self-update
@@ -183,6 +183,10 @@ module has no role.
   mark and the Agents bound to it — behind the `LedgerStore` port
   ([ADR-0021](adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md),
   [ADR-0035](adr/0035-a-host-is-what-a-client-certificate-names-and-its-agents-inherit-from-it.md)).
+  The Gateway mark outlives the Client's Gateway Mode, which ADR-0064 removed:
+  it is part of the certificate model, and goes with it; until then a marked
+  host still speaks for any Agent, and its rate and fleet-view placement still
+  follow the mark.
   `agent_rate` holds the token buckets that bound how often an admitted host, an
   Agent behind a marked Gateway, and the Gateway as a whole are heard;
   `transport` takes a token for each message before the handler does anything
@@ -267,30 +271,12 @@ module has no role.
 - **Client connection** — `tls` decides which CA and which identity are in
   force, and `transport` describes the upstream `Connection` from
   `supervisor.toml` and runs the Engine over it. The settings verification in
-  `connection`, the Gateway's upstream pool and its downstream listener, and the
-  Supervisor Endpoint use the same `opamp` building blocks
+  `connection` and the Supervisor Endpoint use the same `opamp` building blocks
   ([ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)).
-  The Gateway's `revocations` keeps the list it fetches from its Server and
-  refuses what that list names
-  ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
-  The Gateway's `cache` sees every offer `registry` hands down, fetches each
-  artifact offered on the Server's route once into the state directory, and
-  serves it on the downstream download route to the hosts it was offered to
-  ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
-  Which host the Gateway takes to speak for an `instance_uid` is decided in the
-  core module `gateway::policy`; the cache holds the bindings and keeps them
-  across restarts in the journal `gateway::store` reads and writes beside the
-  artifacts; while that journal cannot be read the Gateway carries no downstream
-  Agent
-  ([ADR-0058](adr/0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)).
-  With a bootstrap CA the Gateway tells an enrolling peer from a member and
-  relays its one plain-HTTP enrolment request without a binding
-  ([ADR-0039](adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)).
 - **Client engine** — `engine` routes the Server's replies to the Agents over
   one connection
   ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
-  The transports, the Gateway, telemetry and the service runtime are adapters
-  around it.
+  The transports, telemetry and the service runtime are adapters around it.
 - **Client service** — `service::manager` registers, starts, stops and
   deregisters the Client's service and, where a process account is named, the
   second service `<PRODUCT_NAME>-agents` beside it, and writes both systemd
@@ -357,11 +343,10 @@ and nowhere else, and `api` serves it only when `fleet` finds it offered to an
 Agent the certificate's host speaks for, by the test `packages` shares with the
 offer
 ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
-[ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md));
-behind a Gateway the Client downloads it from the Gateway's cache, which
-`gateway` fetched once from the Server. The Client checks hash and signature in
-`packages`, and the Supervisor swaps the program, keeps the previous one for its
-grace period and rolls back if the new one does not stay up. The Client's own
+[ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)).
+The Client checks hash and signature in `packages`, and the Supervisor swaps
+the program, keeps the previous one for its grace period and rolls back if the
+new one does not stay up. The Client's own
 package goes through `update` instead: a version directory beside the running
 one, a self-check, the `current` pointer moved, and a restart on probation that
 commits or rolls back.
@@ -373,8 +358,7 @@ in `ca` — to make the key, sign, and seal both into the PKCS#12 file it keeps,
 the key's only way out
 ([ADR-0028](adr/0028-one-operator-program-that-makes-the-fleets-certificates.md)).
 A fresh host presents a bootstrap certificate while an operator has the
-enrolment window open — to the Server, or to a Gateway that relays its request —
-and proves it in its CSR
+enrolment window open to the Server, and proves it in its CSR
 ([ADR-0039](adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md));
 the request is filed under the certificate it proves and waits until an operator
 approves it, and the certificate it gets names a new host and carries the

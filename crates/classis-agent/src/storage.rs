@@ -1848,7 +1848,6 @@ mod tests {
             Some(CONFIG_DIR),
             staged,
             Some(crate::logging::DIR_NAME),
-            Some(crate::gateway::cache::DIR),
             default_root,
         ] {
             let name = name.expect("a name in the state directory");

@@ -1466,7 +1466,7 @@ mod tests {
         }
     }
 
-    /// No code of the Server, of `classis-core` or of the Gateway — its tests included — reads PEM
+    /// No code of the Server or of `classis-core` — its tests included — reads PEM
     /// with a reader of its own but `classis_core::csr::der`: a request is decoded there alone, so
     /// two readers cannot read two requests from one. A certificate's PEM is read by
     /// `opamp::tls::certificates`, which no request reaches.
@@ -1497,11 +1497,7 @@ mod tests {
             .expect("crates");
         let the_reader = crates.join("classis-core/src/csr.rs");
         let mut files = Vec::new();
-        for tree in [
-            "classis-server/src",
-            "classis-core/src",
-            "classis-agent/src/gateway",
-        ] {
+        for tree in ["classis-server/src", "classis-core/src"] {
             walk(&crates.join(tree), &mut files);
         }
         assert!(files.contains(&the_reader), "{files:#?}");
