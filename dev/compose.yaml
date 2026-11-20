@@ -21,7 +21,7 @@ services:
   # image makes both, `fleet`, on its first start. The password is a development one. Plaintext:
   # the Server reaches it on the loopback with `tls = false`.
   postgres:
-    image: postgres:18.6@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+    image: postgres:19.0@sha256:bb6e70add742cd868fb62cb3b2f67d1dd2bdd2b65a521e778420748753687c60
     restart: unless-stopped
     environment:
       POSTGRES_USER: fleet
