@@ -18,6 +18,9 @@ opamp = { path = "../crates/opamp", features = ["client", "server"] }
 classis-agent = { path = "../crates/classis-agent" }
 classis-server = { path = "../crates/classis-server" }
 classis-core = { path = "../crates/classis-core" }
+oauth-token = { path = "../crates/oauth-token", features = ["server"] }
+oauth-registration = { path = "../crates/oauth-registration", features = ["server"] }
+http = "1"
 prost = "0.14"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 tempfile = "3"
@@ -104,6 +107,27 @@ bench = false
 [[bin]]
 name = "renewal_proof"
 path = "fuzz_targets/renewal_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token_request"
+path = "fuzz_targets/token_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bearer_challenge"
+path = "fuzz_targets/bearer_challenge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registration_request"
+path = "fuzz_targets/registration_request.rs"
 test = false
 doc = false
 bench = false

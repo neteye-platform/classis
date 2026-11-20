@@ -15,7 +15,10 @@ all-features = true
 unmaintained = "all"
 yanked = "deny"
 unused-ignored-advisory = "deny"
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2026-0542", reason = "Unmaintained humantime is required by object_store 0.14.2; no patched version is available." },
+    { id = "RUSTSEC-2026-0543", reason = "Unmaintained chrono is required by object_store 0.14.2; no patched version is available." },
+]
 
 [licenses]
 # Permissive licences only. A crate offering several licences passes when one of them is here.

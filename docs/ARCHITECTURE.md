@@ -68,8 +68,11 @@ vocabulary of [`GLOSSARY.md`](GLOSSARY.md). One level deep, deeper only where
 the size of a part earns it. The golden path and the test pattern an agent
 copies from are named here.
 
-Five crates in one workspace
-([ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)):
+Seven crates in one workspace: the five of
+[ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)
+and the two standalone OAuth crates of
+[ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md),
+neither yet wired into the product — no Server or Client code depends on them:
 
 - **`opamp`** — the OpAMP communication layer, publishable on its own
   ([ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)).
@@ -91,6 +94,17 @@ Five crates in one workspace
   called — and the bootstrap certificate's PKCS#12 file, whose rule is core and
   whose reading and writing with `p12-keystore` is the adapter `pkcs12::file`
   (ADR-0029).
+- **`oauth-registration`** — RFC 7591 dynamic client registration and nothing
+  more, with no word of Classis in it: a `server` module, the registration
+  route over a storage trait the application implements, and a `client` module,
+  the one request a host makes.
+- **`oauth-token`** — the client-credentials grant of RFC 6749 §4.4 and the
+  bearer credential of RFC 6750, likewise with no word of Classis in it:
+  `server`, the token route over a storage trait; `client`, the one request a
+  host makes; `bearer`, the reading of a presented credential and of the
+  `WWW-Authenticate` challenges that refuse one, which the registration route
+  uses; and `secret`, the generator of the 256-bit credentials and their
+  SHA-256 hash.
 - **`classis-server`** — the Server: the fleet and its Hosts, its Configurations,
   labels, packages and Deployments, the Agent plane and the Operator plane.
 - **`classis-agent`** — the Client in all its modes, the program `supervisor`.
