@@ -6,10 +6,19 @@ mod support;
 use classis_server::api::OperatorAuth;
 use classis_server::config::RestAuthConfig;
 use classis_server::fleet::{AppState, RecordsReady};
+use classis_server::throttle::{Limits, Throttle};
 use std::sync::Arc;
 use support::TestServer;
 
 async fn spawn(records_ready: Option<RecordsReady>) -> TestServer {
+    spawn_with(records_ready, None).await
+}
+
+/// [`spawn`], the Operator plane's sign-ins counted by `throttle` when one is given.
+async fn spawn_with(
+    records_ready: Option<RecordsReady>,
+    throttle: Option<Arc<Throttle>>,
+) -> TestServer {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(
@@ -25,7 +34,10 @@ async fn spawn(records_ready: Option<RecordsReady>) -> TestServer {
     let (addr, rest_addr) = support::serve_guarded(
         state.clone(),
         classis_server::transport::Admission::open(),
-        Some(OperatorAuth::from_config(&auth).expect("auth")),
+        Some(throttle.into_iter().fold(
+            OperatorAuth::from_config(&auth).expect("auth"),
+            OperatorAuth::with_throttle,
+        )),
     )
     .await;
     TestServer {
@@ -93,10 +105,40 @@ async fn readiness_names_the_failed_check_and_nothing_else() {
 /// Verifies: ADR-0063
 #[tokio::test]
 async fn probes_are_not_counted_by_the_admission_throttle() {
-    let server = spawn(None).await;
-    // Far more requests than the throttle allows failures: none of them is one.
+    let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
+    let throttle = Arc::new(Throttle::new(
+        Limits {
+            max_failures: 3,
+            window_secs: 60,
+            backoff_secs: 60,
+        },
+        clock,
+    ));
+    let server = spawn_with(None, Some(throttle)).await;
+    // Far more probes than the throttle allows failures: none of them is one.
     for _ in 0..50 {
         assert_eq!(get(&server, "/livez").await.status(), 200);
+        assert_eq!(get(&server, "/readyz").await.status(), 200);
     }
-    assert_eq!(get(&server, "/api/v1/agents").await.status(), 401);
+    // The budget is whole: three refused sign-ins, not fewer, put the address in back-off.
+    for _ in 0..3 {
+        assert_eq!(sign_in(&server, "wrong").await.status(), 401);
+    }
+    assert_eq!(
+        sign_in(&server, "secret").await.status(),
+        429,
+        "the throttle counts sign-ins"
+    );
+    // And an address in back-off is still probed.
+    assert_eq!(get(&server, "/livez").await.status(), 200);
+    assert_eq!(get(&server, "/readyz").await.status(), 200);
+}
+
+async fn sign_in(server: &TestServer, password: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .get(format!("http://{}/api/v1/agents", server.rest_addr))
+        .basic_auth("fleet-admin", Some(password))
+        .send()
+        .await
+        .expect("get")
 }

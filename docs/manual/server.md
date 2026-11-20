@@ -2140,18 +2140,23 @@ new one, hand it out, remove the old — or how one operator's is withdrawn
 without touching anyone else's.
 
 **The operator tools carry it in the URL** they are given, which needs no new
-flag:
+flag. On the Server's host, or through an SSH tunnel to it, the plane answers in
+plain HTTP:
 
 ```sh
-curl --cacert ca.pem -u "fleet-admin:$PASSWORD" https://127.0.0.1:4321/api/v1/agents
-classisctl package fetch … --server "https://fleet-admin:$PASSWORD@127.0.0.1:4321"
+curl -u "fleet-admin:$PASSWORD" http://127.0.0.1:4321/api/v1/agents
+classisctl package fetch … --server "http://fleet-admin:$PASSWORD@127.0.0.1:4321"
 ```
+
+From anywhere else, name the HTTPS address of the reverse proxy in front of it
+instead, `https://classis.example.org` for instance.
 
 Two limits worth stating plainly. It is **authentication, not authorization**:
 everyone listed can do everything the plane offers — there are no roles, and one
 Server still manages one fleet. And Basic sends a reusable password on **every**
-request. The plane always serves TLS 1.3, so the password never crosses the
-network in cleartext, and `server.toml` holds only its Argon2id hash.
+request. The Server serves no TLS: the password is protected only as far as the
+proxy's TLS reaches, crosses the hop between the proxy and the Server in the
+clear, and `server.toml` holds only its Argon2id hash.
 
 ## Plain HTTP behind a reverse proxy
 

@@ -93,9 +93,10 @@ the peer by the address in `X-Forwarded-For`.
   admission throttle and the Operator plane's throttle count; without the
   header, the connection's address. The header is trusted from any source.
 - **The Operator plane keeps its Basic credential.** `[rest.auth]` stays as
-  ADR-0021 clause 15 and ADR-0063 say; off the loopback it is still required.
-  The password now crosses the network between the proxy and the Server in the
-  clear.
+  ADR-0021 clause 15 and
+  [ADR-0063](0063-the-operator-plane-answers-liveness-and-readiness-without-credentials.md)
+  say; off the loopback it is still required. The password now crosses the
+  network between the proxy and the Server in the clear.
 - **What depends on a certificate is disabled, not removed.** With `[client_ca]`
   and `[enrolment]` refused, the Server signs no CSR, issues no bootstrap
   certificate, opens no enrolment window and declares no

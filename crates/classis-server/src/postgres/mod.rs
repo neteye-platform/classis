@@ -210,9 +210,11 @@ impl Database {
         // reason when the database did not answer.
         let mut unreached: Option<String> = None;
         let (lock, lost, closing, lock_pid) = retry_until(policy.wait, START_RETRY, || {
-            // One flag pair per attempt: the connection of an attempt that did not get the lock
-            // ends when it is dropped, and that is no loss of a lock.
-            let (lost, closing) = (
+            // One set of flags per attempt: the connection of an attempt that did not get the lock
+            // ends when it is dropped, or when the database goes away while the lock is asked
+            // for, and that is no loss of a lock — only `held` makes its end one.
+            let (lost, closing, armed) = (
+                Arc::new(AtomicBool::new(false)),
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(AtomicBool::new(false)),
             );
@@ -222,6 +224,7 @@ impl Database {
                     name: name.clone(),
                     lost: lost.clone(),
                     closing: closing.clone(),
+                    held: armed.clone(),
                     exit_on_loss: policy.exit_on_loss,
                 };
                 bounded_attempt(bound, async move {
@@ -258,6 +261,25 @@ impl Database {
                 Err(failure) => return Err(format!("cannot reach the {name}: {}", failure.why)),
             };
             if held {
+                // Armed before `lost` is read, as the watch sets `lost` before it reads `held`: a
+                // connection that ends in between is seen by one side at least.
+                armed.store(true, Ordering::SeqCst);
+                if lost.load(Ordering::SeqCst) {
+                    closing.store(true, Ordering::SeqCst);
+                    let why = "the connection ended as the lock was taken".to_string();
+                    if left.is_zero() {
+                        return Err(format!("cannot reach the {name}: {why}"));
+                    }
+                    tracing::warn!(
+                        database = %name,
+                        error = %why,
+                        retry_in_secs = START_RETRY.as_secs(),
+                        left_secs = left.as_secs(),
+                        "cannot reach the database yet; asking again"
+                    );
+                    unreached = Some(why);
+                    return Ok(None);
+                }
                 unreached = None;
                 Ok(Some((client, lost, closing, lock_pid)))
             } else {
@@ -472,6 +494,9 @@ struct LockWatch {
     name: String,
     lost: Arc<AtomicBool>,
     closing: Arc<AtomicBool>,
+    /// Set once the connection holds the lock: before, its end is a failed attempt, asked again
+    /// within the wait, and no loss.
+    held: Arc<AtomicBool>,
     /// Whether the process exits once the loss is logged (ADR-0062).
     exit_on_loss: bool,
 }
@@ -680,6 +705,9 @@ async fn connect_watched(
             return;
         }
         watch.lost.store(true, Ordering::SeqCst);
+        if !watch.held.load(Ordering::SeqCst) {
+            return;
+        }
         let why = result
             .err()
             .map_or_else(|| "it was closed".to_string(), sql);
@@ -1364,6 +1392,93 @@ mod tests {
         );
         assert!(err.contains("UnknownIssuer"), "{err}");
         assert!(took < Duration::from_secs(5), "refused at once: {took:?}");
+    }
+
+    /// A database that accepts every connection and closes it once the lock is asked for: what a
+    /// database that goes away mid-attempt looks like. Needs no database.
+    fn database_that_closes_on_the_query() -> u16 {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                // The startup message: its length, then the rest of it.
+                let mut length = [0u8; 4];
+                if stream.read_exact(&mut length).is_err() {
+                    continue;
+                }
+                let mut startup =
+                    vec![0u8; (u32::from_be_bytes(length) as usize).saturating_sub(4)];
+                if stream.read_exact(&mut startup).is_err() {
+                    continue;
+                }
+                // AuthenticationOk, then ReadyForQuery.
+                if stream
+                    .write_all(b"R\0\0\0\x08\0\0\0\0Z\0\0\0\x05I")
+                    .is_err()
+                {
+                    continue;
+                }
+                // The first bytes of the lock's query, then the connection ends.
+                let mut query = [0u8; 1];
+                let _ = stream.read(&mut query);
+            }
+        });
+        port
+    }
+
+    /// The marker that makes [`ended_attempt_child`] run.
+    const ENDED_ATTEMPT_CHILD: &str = "CLASSIS_TEST_ENDED_ATTEMPT_CHILD";
+
+    /// A connection that ends while the lock is asked for is a failed attempt, asked again until
+    /// the wait has passed, not a lost lock: the Server's own policy, which exits on a loss, does
+    /// not exit. Run in a child process, which such an exit would end.
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_connection_that_ends_while_the_lock_is_asked_for_is_asked_again() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "postgres::tests::ended_attempt_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(ENDED_ATTEMPT_CHILD, "1")
+            .output()
+            .expect("run the child");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The child of [`a_connection_that_ends_while_the_lock_is_asked_for_is_asked_again`]; it
+    /// passes trivially when run by itself.
+    #[test]
+    fn ended_attempt_child() {
+        if std::env::var_os(ENDED_ATTEMPT_CHILD).is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut closing = config("127.0.0.1", false);
+        closing.port = database_that_closes_on_the_query();
+        closing.password_file = password_file(dir.path(), "secret");
+        let wait = Duration::from_millis(700);
+        let started = std::time::Instant::now();
+        let err = Database::connect_within(
+            &closing,
+            None,
+            Duration::from_secs(5),
+            LockPolicy {
+                wait,
+                exit_on_loss: true,
+            },
+        )
+        .map(|_| ())
+        .expect_err("the lock is never taken");
+        assert!(err.contains("cannot reach the database fleet"), "{err}");
+        assert!(started.elapsed() >= wait, "it asked again for the wait");
     }
 
     /// A password the database refuses is no reason to ask again: startup fails at once, naming
