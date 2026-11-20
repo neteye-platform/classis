@@ -1,7 +1,6 @@
 //! The Client's own configuration file — TOML (ADR-0010).
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -52,8 +51,6 @@ pub struct ClientConfig {
     /// `attributes` fails at startup: tagging one Agent is a Server label's job.
     #[serde(default)]
     pub attributes: BTreeMap<String, String>,
-    /// Optional Gateway Mode (ADR-0015); absent means this Client gateways for nobody.
-    pub gateway: Option<GatewayConfig>,
     /// Optional TLS trust override for `wss://` / `https://` endpoints.
     pub tls: Option<TlsConfig>,
     /// An `[auth]` section a file written for an earlier version still holds. The Client sends
@@ -232,12 +229,11 @@ const SUPERVISORS_DIR: &str = "supervisors";
 /// ([`ClientConfig::check_supervisor_dir`]). The rest of what is kept there has a `.` in its name,
 /// which no Supervisor's name holds ([`parse_instance_name`]). Spelled here, in the core, and held
 /// to the adapters' own constants by a test of `storage`.
-pub(crate) const CLIENT_ENTRIES: [(&str, &str); 6] = [
+pub(crate) const CLIENT_ENTRIES: [(&str, &str); 5] = [
     ("instance-uid", "the Client's own identity"),
     ("config", "the Client's own configuration entries"),
     (PACKAGES_DIR, "the staging of the Client's self-update"),
     ("logs", "the Client's default log directory"),
-    ("gateway-packages", "the Gateway's package cache"),
     (SUPERVISORS_DIR, "the default Supervisors' root"),
 ];
 
@@ -733,105 +729,6 @@ impl Default for UpdatesConfig {
     }
 }
 
-/// The `[gateway]` section (ADR-0015): the Client stands at a network boundary, accepts OpAMP from
-/// other Clients, and folds them onto a small pool of upstream connections. Present arms the mode;
-/// it composes with `[[supervisor]]` blocks on the same host, since the two modes are orthogonal
-/// (ADR-0015).
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GatewayConfig {
-    /// Where the downstream OpAMP endpoint binds. No default: a Gateway that binds nothing is a
-    /// configuration error, and loopback is the Supervisor Endpoint's job.
-    pub listen: SocketAddr,
-    /// The **cap** on upstream connections, not the count. The pool grows to it as Agents appear
-    /// and never beyond, so a Gateway in front of three Agents holds three connections.
-    #[serde(default = "default_upstream_connections")]
-    pub upstream_connections: usize,
-    /// The most distinct Agents a single downstream connection may carry. It bounds the routing
-    /// state one peer can make this Gateway hold: a misbehaving or hostile downstream Client
-    /// streaming reports under endless fabricated `instance_uid`s would otherwise grow the registry
-    /// and pool maps without limit. Generous for a nested Gateway carrying a real sub-fleet; a
-    /// report for a *new* Agent past the cap is dropped, the ones already carried keep working. `0`
-    /// is refused at load.
-    #[serde(default = "default_max_carried_agents")]
-    pub max_carried_agents: usize,
-    /// The most bytes of package artifacts this Gateway holds for the Agents behind it
-    /// (ADR-0026 clause 47), under `<state_dir>/gateway-packages`. An artifact larger than this, or
-    /// than `max_artifact_size_bytes`, is not cached and not delivered through the Gateway. `0` is
-    /// refused at load.
-    #[serde(default = "default_package_cache_bytes")]
-    pub package_cache_bytes: u64,
-    /// TLS for the downstream hop, required (ADR-0015). Mutual TLS is per hop: what this verifies
-    /// is the Agents connecting *here*, and the identity presented *upstream* is the Client's own.
-    /// An `Option` only so its absence can be named at load.
-    pub tls: Option<GatewayTlsConfig>,
-}
-
-/// The downstream hop's TLS material (ADR-0015). Separate from the top-level `[tls]`, which is
-/// about reaching the Server: this is about being reached.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GatewayTlsConfig {
-    /// PEM certificate chain this Gateway presents to the Agents that connect to it.
-    pub cert_file: PathBuf,
-    /// PEM private key for it.
-    pub key_file: PathBuf,
-    /// PEM bundle a downstream Agent's client certificate must chain to, required (ADR-0015): a
-    /// peer without one fails the handshake. An `Option` only so its absence can be named.
-    pub client_ca_file: Option<PathBuf>,
-    /// The public certificate of the Server's `[enrolment] bootstrap_ca_file`, optional (ADR-0039
-    /// clause 1): a peer whose certificate chains to it alone passes the handshake as an enrolling
-    /// peer, which may relay one plain-HTTP enrolment request and nothing else.
-    #[serde(default)]
-    pub bootstrap_ca_file: Option<PathBuf>,
-}
-
-impl GatewayConfig {
-    /// Loud validation (ADR-0010): a pool of zero would carry nothing, and the pool is a WebSocket
-    /// pool — a polling upstream cannot carry the Server's pushes to the Agents behind it.
-    fn check(&self, endpoint: &str) -> Result<(), String> {
-        if self.upstream_connections == 0 {
-            return Err("[gateway] upstream_connections must be at least 1".to_string());
-        }
-        if self.max_carried_agents == 0 {
-            return Err(
-                "[gateway] max_carried_agents must be at least 1 — it bounds routing state, not a \
-                 switch"
-                    .to_string(),
-            );
-        }
-        if self.package_cache_bytes == 0 {
-            return Err(
-                "[gateway] package_cache_bytes must be greater than zero — it bounds the package \
-                 cache, not a switch"
-                    .to_string(),
-            );
-        }
-        if !endpoint.starts_with("ws://") && !endpoint.starts_with("wss://") {
-            return Err(format!(
-                "[gateway] needs a WebSocket endpoint upstream, and this Client's is {endpoint} — \
-                 a polling connection cannot carry the Server's pushes to the Agents behind a \
-                 Gateway"
-            ));
-        }
-        // A Gateway admits Agents, so the downstream hop is mutual TLS 1.3 and nothing less — on the
-        // loopback too (ADR-0015).
-        match &self.tls {
-            None => Err(
-                "[gateway.tls] is required — a Gateway admits Agents over mutual TLS only; set \
-                 cert_file, key_file and client_ca_file"
-                    .to_string(),
-            ),
-            Some(tls) if tls.client_ca_file.is_none() => Err(
-                "[gateway.tls] client_ca_file is required — every downstream Agent presents a \
-                 certificate that chains to it"
-                    .to_string(),
-            ),
-            Some(_) => Ok(()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TlsConfig {
@@ -895,24 +792,6 @@ fn default_heartbeat_interval_secs() -> u64 {
     30
 }
 
-/// The pool cap when none is configured — the OpAMP Gateway Extension's default (ADR-0015). It is
-/// a ceiling, not a cost: connections are opened as Agents appear.
-fn default_upstream_connections() -> usize {
-    10
-}
-
-/// Generous enough for a nested Gateway carrying a real sub-fleet, small enough that a single
-/// hostile connection cannot grow the routing maps without bound.
-fn default_max_carried_agents() -> usize {
-    10_000
-}
-
-/// Ten gibibytes: room for a handful of releases of a large Agent across a few Platforms, which is
-/// what one rollout behind a Gateway asks for (ADR-0026 clause 47).
-fn default_package_cache_bytes() -> u64 {
-    10 * 1024 * 1024 * 1024
-}
-
 fn default_state_dir() -> PathBuf {
     PathBuf::from("client-state")
 }
@@ -949,7 +828,6 @@ impl Default for ClientConfig {
             state_dir: default_state_dir(),
             supervisor_dir: None,
             attributes: BTreeMap::new(),
-            gateway: None,
             tls: None,
             leftover_auth: None,
             packages: None,
@@ -1027,11 +905,6 @@ impl ClientConfig {
                  (ADR-0033). Remove the key.",
                 path.display()
             ));
-        }
-        if let Some(gateway) = &config.gateway {
-            gateway
-                .check(&config.endpoint)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         // Decode the package verification key once — a malformed key must fail startup, not the
         // first package offer.
@@ -1498,74 +1371,11 @@ mod tests {
         assert!(err.contains("max_artifact_size_bytes"), "{err}");
     }
 
-    /// A single downstream connection's Agent cap bounds the routing state one peer can create; it
-    /// has a generous default, and zero is a bound that could carry nothing rather than "unlimited",
-    /// so it fails startup.
-    /// Verifies: ADR-0015
+    /// Gateway Mode is removed (ADR-0064): a file still arming it fails startup rather than
+    /// running a Client that gateways for nobody while its operator believes otherwise.
+    /// Verifies: ADR-0064
     #[test]
-    fn the_gateway_agent_cap_defaults_and_rejects_zero() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("supervisor.toml");
-
-        let tls = "[gateway.tls]\ncert_file = \"g.pem\"\nkey_file = \"g-key.pem\"\n\
-                   client_ca_file = \"ca.pem\"\n";
-        std::fs::write(
-            &path,
-            format!("endpoint = \"wss://s/v1/opamp\"\n[gateway]\nlisten = \"127.0.0.1:9\"\n{tls}"),
-        )
-        .expect("write");
-        let config = ClientConfig::load(&path).expect("loads with the default cap");
-        assert_eq!(config.gateway.expect("gateway").max_carried_agents, 10_000);
-
-        std::fs::write(
-            &path,
-            format!(
-                "endpoint = \"wss://s/v1/opamp\"\n[gateway]\nlisten = \"127.0.0.1:9\"\n\
-                 max_carried_agents = 0\n{tls}"
-            ),
-        )
-        .expect("write");
-        let err = ClientConfig::load(&path).expect_err("zero must fail startup");
-        assert!(err.contains("max_carried_agents"), "{err}");
-    }
-
-    /// The Gateway's package cache holds ten gibibytes by default, and zero is a bound that could
-    /// hold nothing rather than "unlimited", so it fails startup.
-    /// Verifies: ADR-0026
-    #[test]
-    fn the_package_cache_defaults_to_ten_gib_and_rejects_zero() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("supervisor.toml");
-        let tls = "[gateway.tls]\ncert_file = \"g.pem\"\nkey_file = \"g-key.pem\"\n\
-                   client_ca_file = \"ca.pem\"\n";
-        std::fs::write(
-            &path,
-            format!("endpoint = \"wss://s/v1/opamp\"\n[gateway]\nlisten = \"127.0.0.1:9\"\n{tls}"),
-        )
-        .expect("write");
-        let config = ClientConfig::load(&path).expect("loads with the default bound");
-        assert_eq!(
-            config.gateway.expect("gateway").package_cache_bytes,
-            10_737_418_240
-        );
-
-        std::fs::write(
-            &path,
-            format!(
-                "endpoint = \"wss://s/v1/opamp\"\n[gateway]\nlisten = \"127.0.0.1:9\"\n\
-                 package_cache_bytes = 0\n{tls}"
-            ),
-        )
-        .expect("write");
-        let err = ClientConfig::load(&path).expect_err("zero must fail startup");
-        assert!(err.contains("package_cache_bytes"), "{err}");
-    }
-
-    /// A Gateway admits Agents, so it never serves without TLS, nor without a client CA to verify
-    /// them against — on the loopback neither (ADR-0015).
-    /// Verifies: ADR-0015, Q-1
-    #[test]
-    fn a_gateway_without_mutual_tls_is_refused_at_load() {
+    fn a_gateway_section_is_refused_at_load() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("supervisor.toml");
         std::fs::write(
@@ -1573,17 +1383,8 @@ mod tests {
             "endpoint = \"wss://s/v1/opamp\"\n[gateway]\nlisten = \"127.0.0.1:9\"\n",
         )
         .expect("write");
-        let err = ClientConfig::load(&path).expect_err("no TLS");
-        assert!(err.contains("[gateway.tls] is required"), "{err}");
-
-        std::fs::write(
-            &path,
-            "endpoint = \"wss://s/v1/opamp\"\n[gateway]\nlisten = \"127.0.0.1:9\"\n\
-             [gateway.tls]\ncert_file = \"g.pem\"\nkey_file = \"g-key.pem\"\n",
-        )
-        .expect("write");
-        let err = ClientConfig::load(&path).expect_err("no client CA");
-        assert!(err.contains("client_ca_file is required"), "{err}");
+        let err = ClientConfig::load(&path).expect_err("a [gateway] section must fail startup");
+        assert!(err.contains("unknown field `gateway`"), "{err}");
     }
 
     /// Both keys that would configure package delivery on the host are refused rather than ignored:
@@ -2191,14 +1992,7 @@ mod tests {
             state_dir: state.to_path_buf(),
             ..ClientConfig::default()
         };
-        for name in [
-            "instance-uid",
-            "config",
-            "packages",
-            "logs",
-            "gateway-packages",
-            "supervisors",
-        ] {
+        for name in ["instance-uid", "config", "packages", "logs", "supervisors"] {
             parse_instance_name(name).expect("a name a Supervisor could carry");
             let error = shared
                 .check_supervisor_dir(name)

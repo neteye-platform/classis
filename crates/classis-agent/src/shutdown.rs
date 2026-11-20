@@ -1,5 +1,5 @@
 //! The shutdown handle every long-running task selects on (ADR-0019): the transports, the
-//! Gateway, the Supervisor and its Plugins. It is a value of the core rather than of the service
+//! Supervisor and its Plugins. It is a value of the core rather than of the service
 //! runtime that flips it, so a Port can name it without depending on how a process is stopped.
 
 use tokio::sync::watch;

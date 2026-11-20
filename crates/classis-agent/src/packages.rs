@@ -283,9 +283,8 @@ pub(crate) async fn send_download(
 }
 
 /// [`send_download`], waiting out a `429` or `503` with `Retry-After` in seconds from the Server's
-/// own origin — a Gateway behind one, whose cache is still fetching, or the Server's rate limit —
-/// within `patience` (ADR-0026 clause 49). Anything else is returned as it came, for the caller to
-/// fail on.
+/// own origin — the Server's rate limit, for one — within `patience` (ADR-0026 clause 49). Anything
+/// else is returned as it came, for the caller to fail on.
 pub(crate) async fn send_patiently(
     origin: &ServerOrigin,
     client: &reqwest::Client,
