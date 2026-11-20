@@ -552,7 +552,7 @@ pub fn read_secret_file(key: &str, file: &Path) -> Result<zeroize::Zeroizing<Str
 
 /// The adapter behind [`SignatureVerifier`](crate::packages::SignatureVerifier):
 /// `classis_core::package::chain::verify_now` up to a set of Package Roots, at the current time —
-/// the check the Client makes (ADR-0063 clause 4).
+/// the check the Client makes (ADR-0066 clause 4).
 #[derive(Debug, Clone)]
 pub struct RootsVerifier(classis_core::package::Roots);
 

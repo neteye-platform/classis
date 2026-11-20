@@ -5,17 +5,17 @@ name: Release
 # for Linux and macOS beside it (ADR-0028).
 #
 # The version comes from `[workspace.package] version` in Cargo.toml. A release starts only when a
-# person pushes the `v<version>` tag for it on a commit of `main` (ADR-0062 clause 3); the run checks
+# person pushes the `v<version>` tag for it on a commit of `main` (ADR-0065 clause 3); the run checks
 # that the tag and the file agree and checks the tag out, so ADR-0012's `build.rs` finds it on HEAD
 # and bakes the same number into the binary with its commit metadata. The workflow pushes no tag.
-# A run started by hand is a dry run and nothing else (ADR-0062 clause 5).
+# A run started by hand is a dry run and nothing else (ADR-0065 clause 5).
 #
 # The `sign` job signs every entry of the Client's own Package — the `supervisor_*.tar.gz` archives —
 # with the key of the GitHub environment `Package Signing`, which a second person with write access releases
-# by approving the job (ADR-0062 clauses 2 and 6). That key is a Package Signer's, whose certificate
+# by approving the job (ADR-0065 clauses 2 and 6). That key is a Package Signer's, whose certificate
 # a Package Root issued and is tracked as packaging/package-signer.der; each `.sig` is a
 # PackageSignature, the certificate and the signature together, which the Client and the Server
-# verify up to the Package Roots compiled into them (ADR-0062 clauses 1 and 6).
+# verify up to the Package Roots compiled into them (ADR-0065 clauses 1 and 6).
 #
 # The artifacts are packed by this project's own `classisctl package pack`, so each Client archive
 # is also a valid package artifact for a fleet self-update (ADR-0026, ADR-0018) — the file an operator
@@ -32,9 +32,9 @@ name: Release
 # with the version (ADR-0052).
 
 on:
-  # A dry run: builds and packs every target, and neither signs nor publishes (ADR-0062 clause 5).
+  # A dry run: builds and packs every target, and neither signs nor publishes (ADR-0065 clause 5).
   workflow_dispatch:
-  # A release: the tag a person pushed on a commit of `main` (ADR-0062 clause 3).
+  # A release: the tag a person pushed on a commit of `main` (ADR-0065 clause 3).
   push:
     # `v` and three numbers: `v0.1.0`. Any other tag, `very-old` included, starts nothing.
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -77,7 +77,7 @@ jobs:
 
   # Decides the number, checks it against the tag that started the run, and proves the compiler saw
   # it. Everything below is named from this job's answer, so the artifacts cannot disagree with each
-  # other or with the binary. It pushes no tag (ADR-0062 clause 3).
+  # other or with the binary. It pushes no tag (ADR-0065 clause 3).
   version:
     needs: advisories
     runs-on: ubuntu-latest
@@ -110,7 +110,7 @@ jobs:
           esac
 
           # A pushed tag releases only if it and the file agree — the drift ADR-0012 clause 7
-          # refuses to resolve silently. A run started by hand is a dry run (ADR-0062 clause 5),
+          # refuses to resolve silently. A run started by hand is a dry run (ADR-0065 clause 5),
           # even on a tag ref.
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             tagged="${GITHUB_REF_NAME#v}"
@@ -169,7 +169,7 @@ jobs:
             exit 1
           fi
           echo "$tag is free"
-      # ADR-0062 clause 4: a release tag names a commit of `main`. This guards against a mistake
+      # ADR-0065 clause 4: a release tag names a commit of `main`. This guards against a mistake
       # only — the workflow that runs is the tagged commit's, and a changed one can drop the check —
       # which is why the reviewer of the environment `Package Signing` checks it too (clause 2).
       - name: The tag is on main
@@ -178,17 +178,17 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
-            echo "::error::$GITHUB_REF_NAME names ${GITHUB_SHA:0:7}, which is not on main — tag a commit of main (ADR-0062)"
+            echo "::error::$GITHUB_REF_NAME names ${GITHUB_SHA:0:7}, which is not on main — tag a commit of main (ADR-0065)"
             exit 1
           fi
           echo "$GITHUB_REF_NAME names ${GITHUB_SHA:0:7}, on main"
-      # ADR-0062 clause 1: the certificate every signature carries is the tracked, reviewed file,
+      # ADR-0065 clause 1: the certificate every signature carries is the tracked, reviewed file,
       # never one taken from anywhere else. This job has the checkout; `sign` has none.
       - name: The tracked Package Signer certificate
         run: |
           set -euo pipefail
           if ! openssl x509 -inform DER -in packaging/package-signer.der -noout 2>/dev/null; then
-            echo "::error::packaging/package-signer.der is not a DER certificate (ADR-0062 clause 1)"
+            echo "::error::packaging/package-signer.der is not a DER certificate (ADR-0065 clause 1)"
             exit 1
           fi
           mkdir -p package-signer
@@ -520,7 +520,7 @@ jobs:
           # Every row produces the archive; only some produce installers. The archive is what
           # `error` is guarding here.
           if-no-files-found: error
-      # ADR-0062 clause 6: the archive's checksum alone, as an artifact of its own, so the job that
+      # ADR-0065 clause 6: the archive's checksum alone, as an artifact of its own, so the job that
       # holds the signing key downloads a hash and nothing it could run.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -660,14 +660,14 @@ jobs:
           echo "pushed $IMAGE@$digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-  # ADR-0062 clauses 2, 6 and 7: signs every entry of the Client's own Package. The
+  # ADR-0065 clauses 2, 6 and 7: signs every entry of the Client's own Package. The
   # only job that names the environment `Package Signing`, whose secret it receives once a second person with
   # write access approves it. It checks out no code and builds nothing: it downloads the archives'
   # checksums and the tracked certificate, writes the statement each entry's signature covers, signs
   # it with the runner's OpenSSL, and writes the PackageSignature that carries both.
   sign:
     # Only a release: the push of a `v<version>` tag. A run started by hand never reaches the
-    # environment, on a tag ref neither (ADR-0062 clause 5).
+    # environment, on a tag ref neither (ADR-0065 clause 5).
     if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
     needs: [version, build]
     runs-on: ubuntu-latest
@@ -690,7 +690,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$PACKAGE_SIGNING_KEY" ]; then
-            echo "::error::the environment Package Signing holds no PACKAGE_SIGNING_KEY (ADR-0062 clause 1)"
+            echo "::error::the environment Package Signing holds no PACKAGE_SIGNING_KEY (ADR-0065 clause 1)"
             exit 1
           fi
           umask 077
@@ -700,7 +700,7 @@ jobs:
       # `classis_core::package::statement`, the prefix ADR-0061 names; OpenSSL signs Ed25519
       # only with `-rawin` and from a file. Each `.sig` is the hex of the DER
       # `PackageSignature ::= SEQUENCE { INTEGER 1, Certificate, OCTET STRING (64) }`
-      # (ADR-0063 clause 3), as `classis_core::package::encode_signature` writes it.
+      # (ADR-0066 clause 3), as `classis_core::package::encode_signature` writes it.
       - name: Sign every entry
         env:
           AGENT_TYPE: ${{ env.ARTIFACT }}
@@ -723,7 +723,7 @@ jobs:
           esac
           body=$(( 3 + ${#cert} / 2 + 66 ))
           if [ "$body" -gt 2040 ]; then
-            echo "::error::$CERT is too long for a PackageSignature (ADR-0063 clause 3)"
+            echo "::error::$CERT is too long for a PackageSignature (ADR-0066 clause 3)"
             exit 1
           fi
           # The public key every signature is checked against before it is kept: the certificate's.
@@ -754,7 +754,7 @@ jobs:
               exit 1
             fi
             if ! openssl pkeyutl -verify -rawin -pubin -inkey "$pub" -in "$name.statement" -sigfile "$name.sig.bin" > /dev/null; then
-              echo "::error::the signature of $name does not verify under $CERT — PACKAGE_SIGNING_KEY is not this Package Signer's key (ADR-0062 clause 6)"
+              echo "::error::the signature of $name does not verify under $CERT — PACKAGE_SIGNING_KEY is not this Package Signer's key (ADR-0065 clause 6)"
               exit 1
             fi
             sig=$(od -An -v -tx1 "$name.sig.bin" | tr -d ' \n')
@@ -799,7 +799,7 @@ jobs:
     steps:
       # What it publishes and attests, and nothing else: the Server's binaries reach the release
       # inside the image alone, and the archives' lone checksums (`sha256_*`) were the signing job's.
-      # The signatures are ADR-0062's (clauses 6 and 9).
+      # The signatures are ADR-0065's (clauses 6 and 9).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: '{sbom,signatures,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'
@@ -811,7 +811,7 @@ jobs:
           cat -- *.sha256 | sort -k2 > SHA256SUMS
           rm -f -- *.sha256
           ls -l
-      # ADR-0045, ADR-0062 clause 8: one SLSA build-provenance attestation over every published
+      # ADR-0045, ADR-0065 clause 8: one SLSA build-provenance attestation over every published
       # asset, the signatures and SHA256SUMS included, its digests computed from the
       # files themselves.
       - name: Attest the assets
@@ -890,7 +890,7 @@ jobs:
           \`${{ needs.version.outputs.version }}\`, for \`linux/amd64\` and \`linux/arm64\`.
 
           The assets come in five kinds, and picking the wrong one is the only way to get this wrong
-          (ADR-0019, ADR-0028, ADR-0045, ADR-0052, ADR-0063):
+          (ADR-0019, ADR-0028, ADR-0045, ADR-0052, ADR-0066):
 
           | you want to | take |
           |---|---|
@@ -994,7 +994,7 @@ jobs:
 
           \`--interactive\` asks for the endpoint, the private CA, the client certificate and its key.
           Package signatures need nothing configured: the Client verifies them up to the Package
-          Roots compiled into it (ADR-0063). The Server admits a host by its client certificate alone,
+          Roots compiled into it (ADR-0066). The Server admits a host by its client certificate alone,
           so a new host is given a bootstrap certificate and enrols on an operator's approval;
           \`docs/manual/setup.md\` walks through the certificates and the enrolment. In a provisioning
           run, \`service install --endpoint wss://<server>:4320/v1/opamp\` writes the endpoint alone,
@@ -1032,7 +1032,7 @@ jobs:
           reads them out of the name. Each entry takes the signature in the \`.sig\` of the same name:
           the certificate of this release's Package Signer and its signature, which the Server and
           every Client verify up to the Package Roots compiled into them; the Server refuses one that
-          does not verify (ADR-0063). Then put the Package in a Deployment
+          does not verify (ADR-0066). Then put the Package in a Deployment
           and roll it out; nothing reaches the fleet before that last call (ADR-0026). The Deployment
           below reaches the hosts whose \`channel\` is \`stable\`: set it in a host's \`[attributes]\`,
           or as a Server label with \`PUT /api/v1/agents/<uid>/labels\`.

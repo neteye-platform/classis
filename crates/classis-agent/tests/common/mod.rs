@@ -117,7 +117,7 @@ pub fn release_to_every_agent(
     release(state, FLEET_DEPLOYMENT, &[CHANNEL], configurations)
 }
 
-/// The Package Roots of these tests (ADR-0063): `ours`, which the Client under test trusts through
+/// The Package Roots of these tests (ADR-0066): `ours`, which the Client under test trusts through
 /// [`classis_core::package::DEBUG_ROOT_ENV`] — a debug build only — and the Server too, and
 /// `theirs`, which only the Server trusts, so a signature it holds can still fail the Client's own
 /// check.
@@ -170,7 +170,7 @@ pub fn package_root_file(dir: &Path) -> std::path::PathBuf {
     path
 }
 
-/// A Server's package store on `dir`, checking signatures up to both test Roots (ADR-0063).
+/// A Server's package store on `dir`, checking signatures up to both test Roots (ADR-0066).
 #[allow(dead_code)]
 pub fn server_store(dir: &Path) -> classis_server::packages::PackageStore {
     let roots = package_roots();

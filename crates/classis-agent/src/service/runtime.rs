@@ -352,17 +352,17 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
         ));
     }
     if let Some(path) = classis_core::package::chain::debug_root() {
-        // ADR-0063 clause 1: a debug build only.
+        // ADR-0066 clause 1: a debug build only.
         tracing::warn!(
             "a debug build: also trusting the Package Root in {} ({})",
             path.display(),
             classis_core::package::DEBUG_ROOT_ENV
         );
     }
-    // ADR-0063 clause 1: a Root that cannot be read stops the Client here, naming it.
+    // ADR-0066 clause 1: a Root that cannot be read stops the Client here, naming it.
     if crate::packages::package_roots(&config)?.is_empty() {
         tracing::warn!(
-            "this build carries no Package Root: every package will be refused (ADR-0063)"
+            "this build carries no Package Root: every package will be refused (ADR-0066)"
         );
     }
     if let Some(outcome) = &owed_outcome {

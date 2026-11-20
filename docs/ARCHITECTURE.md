@@ -55,7 +55,7 @@ true.
   Package Signer that a Package Root compiled into the Client issued
   ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
   [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md),
-  [ADR-0063](adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
+  [ADR-0066](adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
 - **The service manager** starts the Client and restarts it after a self-update
   ([ADR-0018](adr/0018-the-client-updates-itself-under-its-own-agent-type.md)).
   Where a process account is registered, it also runs the second service, which
@@ -95,7 +95,7 @@ Five crates in one workspace
   (ADR-0029). The `PackageSignature` and its parser are core; verifying one up to
   the compiled-in Package Roots, with `rustls-webpki`, the clock and a debug
   build's Root from the environment, is the adapter `package::chain`
-  ([ADR-0063](adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
+  ([ADR-0066](adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
 - **`classis-server`** — the Server: the fleet and its Hosts, its Configurations,
   labels, packages and Deployments, the Agent plane and the Operator plane.
 - **`classis-agent`** — the Client in all its modes, the program `supervisor`.

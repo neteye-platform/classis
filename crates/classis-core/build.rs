@@ -8,7 +8,7 @@
 
 use git2::Repository;
 
-// A release tag is `v` and the version (ADR-0062, restating ADR-0012 clause 2). Only a `v` followed
+// A release tag is `v` and the version (ADR-0065, restating ADR-0012 clause 2). Only a `v` followed
 // by a digit is one: `very-old` is no release tag, whatever it points at.
 const TAG_PREFIX: &str = "v";
 

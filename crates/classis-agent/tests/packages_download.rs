@@ -431,7 +431,7 @@ async fn an_absolute_url_on_another_origin_is_refused_without_a_request() {
 }
 
 /// There is no unsigned posture: an offer carrying no signature is refused before a request
-/// reaches the source, naming what is missing (ADR-0026, ADR-0063).
+/// reaches the source, naming what is missing (ADR-0026, ADR-0066).
 /// Verifies: ADR-0026, ADR-0018
 #[tokio::test]
 async fn an_unsigned_offer_fetches_nothing() {

@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
   · clauses 2, 3 and 5 superseded by
-  [ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+  [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-10-11
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** crates/classis-agent/src/update/ (mod.rs and installer.rs), the

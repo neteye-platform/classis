@@ -4521,7 +4521,7 @@ mod tests {
         Platform::new("linux", "amd64").expect("platform")
     }
 
-    /// The test Package Signer's signature over `id`'s linux/amd64 entry as stored (ADR-0063).
+    /// The test Package Signer's signature over `id`'s linux/amd64 entry as stored (ADR-0066).
     fn signed_for(state: &AppState, id: &PackageId) -> Vec<u8> {
         let summary = state
             .package_store()

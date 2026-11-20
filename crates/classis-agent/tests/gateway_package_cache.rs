@@ -942,7 +942,7 @@ async fn a_client_behind_a_gateway_installs_from_an_upstream_slower_than_its_rea
     });
     let bytes = b"the-binary-over-a-slow-link".to_vec();
     upstream.serve(PATH_1, &bytes);
-    // A Package Signer of a test Root (ADR-0063).
+    // A Package Signer of a test Root (ADR-0066).
     let root = classis_core::package::testing::TestRoot::new();
     let signature = root
         .signer()
@@ -1165,7 +1165,7 @@ async fn a_client_behind_a_marked_gateway_receives_an_uploaded_artifact_through_
     std::fs::write(pki.join("edge-key.pem"), &edge_key).expect("write");
 
     // The Server checks signatures up to a test Root, as the binary does up to the compiled-in
-    // ones (ADR-0063).
+    // ones (ADR-0066).
     let root = classis_core::package::testing::TestRoot::new();
     let store = classis_server::packages::PackageStore::open(pki.join("packages"))
         .expect("store")

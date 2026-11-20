@@ -1,5 +1,5 @@
 //! The adapter that verifies a [`PackageSignature`](super::PackageSignature) up to the Package
-//! Roots (ADR-0063 clause 4): `rustls-webpki` for the path, the host's clock for the dates, and
+//! Roots (ADR-0066 clause 4): `rustls-webpki` for the path, the host's clock for the dates, and
 //! the Roots compiled in — plus, in a debug build only, one named by
 //! [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV).
 
@@ -8,7 +8,7 @@ use webpki::{EndEntityCert, ExtendedKeyUsageValidator, KeyPurposeIdIter};
 
 use super::{parse_signature, Roots, SignatureError};
 
-/// The Package Roots compiled into every binary (ADR-0063 clause 1), each a DER certificate. A
+/// The Package Roots compiled into every binary (ADR-0066 clause 1), each a DER certificate. A
 /// Root is added or dropped only by a reviewed change; the test below pins each by its SHA-256.
 const COMPILED_ROOTS: &[&[u8]] = &[
     // CN=Signing Packages Root CA, Ed25519, 2026-11-16 to 2066-11-16; its key is the custodian's.
@@ -20,7 +20,7 @@ const COMPILED_ROOTS: &[&[u8]] = &[
 const COMPILED_ROOT_FINGERPRINTS: &[&str] =
     &["16b7c670cbd11cbe9724dc4e2366bddea0352e7ac67fe9b23d18cb2c7e4a810f"];
 
-/// The Package Roots compiled into this binary (ADR-0063 clause 1). A debug build adds the one
+/// The Package Roots compiled into this binary (ADR-0066 clause 1). A debug build adds the one
 /// [`DEBUG_ROOT_ENV`](super::DEBUG_ROOT_ENV) names, if it is set; see [`debug_root`]. The Client
 /// and the Server ask it once at startup, and refuse to start on an error.
 ///
@@ -74,7 +74,7 @@ fn anchors(roots: &Roots) -> Result<Vec<TrustAnchor<'_>>, SignatureError> {
         .collect()
 }
 
-/// A Package Signer carries no extendedKeyUsage (ADR-0063 clause 2): any one refuses it.
+/// A Package Signer carries no extendedKeyUsage (ADR-0066 clause 2): any one refuses it.
 struct NoExtendedKeyUsage;
 
 impl ExtendedKeyUsageValidator for NoExtendedKeyUsage {
@@ -88,7 +88,7 @@ impl ExtendedKeyUsageValidator for NoExtendedKeyUsage {
 }
 
 /// Why the chain was refused, in words. Never prints an OID through `rustls-webpki`'s `Debug`,
-/// which misprints it (ADR-0063 clause 4).
+/// which misprints it (ADR-0066 clause 4).
 fn chain_error(error: &webpki::Error) -> String {
     #[allow(deprecated)]
     match error {
@@ -111,7 +111,7 @@ fn chain_error(error: &webpki::Error) -> String {
     }
 }
 
-/// Verifies a `PackageSignature` over `statement` up to `roots`, at `now` (ADR-0063 clause 4):
+/// Verifies a `PackageSignature` over `statement` up to `roots`, at `now` (ADR-0066 clause 4):
 /// the value, then the chain — Ed25519 only, no intermediate, no extendedKeyUsage, the
 /// certificate's own dates — then the Package Signer's Ed25519 signature, the algorithm pinned.
 ///
@@ -173,7 +173,7 @@ mod tests {
         statement("supervisor", "1.2.3", &[7; 32])
     }
 
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn a_package_signer_of_a_root_verifies() {
         let root = TestRoot::new();
@@ -184,7 +184,7 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn a_signature_over_another_type_version_or_hash_is_refused() {
         let root = TestRoot::new();
@@ -201,7 +201,7 @@ mod tests {
         }
     }
 
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn a_package_signer_of_another_root_is_refused() {
         let ours = TestRoot::new();
@@ -220,7 +220,7 @@ mod tests {
         ));
     }
 
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn a_package_signer_off_the_profile_is_refused() {
         let root = TestRoot::new();
@@ -240,7 +240,7 @@ mod tests {
             );
         }
         // An Ed25519 Root's certificate for a P-256 key: the chain holds, the pinned algorithm
-        // refuses the key (ADR-0063 clause 4).
+        // refuses the key (ADR-0066 clause 4).
         let p256 = root.signer_with(Deviation::EcdsaKey);
         assert_eq!(
             verify_now(
@@ -261,7 +261,7 @@ mod tests {
     /// An intermediate between the Root and the Package Signer is refused: the value carries one
     /// certificate, and no intermediate is passed.
     ///
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn a_package_signer_under_an_intermediate_is_refused() {
         let root = TestRoot::new();
@@ -274,7 +274,7 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn the_value_is_strict_der_and_bounded() {
         let root = TestRoot::new();
@@ -331,7 +331,7 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn the_compiled_in_roots_are_certificates() {
         let roots = compiled().expect("the compiled-in Roots");
@@ -340,7 +340,7 @@ mod tests {
 
     /// A debug build's extra Root that cannot be read, or is no certificate, is an error naming
     /// the variable and the file — the Client and the Server then refuse to start.
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[cfg(debug_assertions)]
     #[test]
     fn a_debug_root_that_cannot_be_read_is_an_error_naming_its_file() {
@@ -361,8 +361,8 @@ mod tests {
     }
 
     /// The compiled-in Roots are the custodian's, byte for byte: a change to the list is a
-    /// change to this test too (ADR-0063 clause 1).
-    /// Verifies: ADR-0063
+    /// change to this test too (ADR-0066 clause 1).
+    /// Verifies: ADR-0066
     #[test]
     fn the_compiled_in_roots_are_the_custodians() {
         use sha2::{Digest, Sha256};

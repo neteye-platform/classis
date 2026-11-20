@@ -254,7 +254,7 @@ fn action(uses: &str) -> &str {
 }
 
 /// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8, with
-/// the signatures ADR-0062 clause 9 keeps).
+/// the signatures ADR-0065 clause 9 keeps).
 const PUBLISHED: [&str; 7] = [
     "*.tar.gz",
     "*.tar.gz.sig",
@@ -319,7 +319,7 @@ fn only_the_publish_job_may_attest() {
         ]
     );
 
-    // It downloads the SBOMs, the two programs' archives and the signatures (ADR-0062 clause 9),
+    // It downloads the SBOMs, the two programs' archives and the signatures (ADR-0065 clause 9),
     // and not the tracked certificate, which travels inside each signature, nor the Server's binaries, which ship inside the image alone,
     // nor the archives' lone checksums, which were the signing job's. Every artifact the workflow
     // uploads under another name is one of those, and the pattern names each.
@@ -1003,7 +1003,7 @@ fn actions(job: &str) -> Vec<&str> {
         .collect()
 }
 
-// Verifies: ADR-0062
+// Verifies: ADR-0065
 #[test]
 fn a_release_starts_only_from_a_tag_a_person_pushed() {
     let workflow = workflow();
@@ -1054,7 +1054,7 @@ fn a_release_starts_only_from_a_tag_a_person_pushed() {
     );
 }
 
-// Verifies: ADR-0062
+// Verifies: ADR-0065
 #[test]
 fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_repository() {
     let workflow = workflow();
@@ -1086,7 +1086,7 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
     assert_eq!(grants(permissions(sign)), ["contents: read"]);
 
     // No checkout, no build, two kinds of action: it fetches the archives' checksums and the
-    // tracked certificate, and hands back the signatures (ADR-0062 clause 6).
+    // tracked certificate, and hands back the signatures (ADR-0065 clause 6).
     assert!(!sign.contains("actions/checkout"), "{sign}");
     assert!(!sign.contains("cargo "), "{sign}");
     assert_eq!(
@@ -1138,7 +1138,7 @@ fn openssl_3() {
     );
 }
 
-// Verifies: ADR-0062, ADR-0063
+// Verifies: ADR-0065, ADR-0066
 #[test]
 fn the_signing_step_signs_the_statement_the_client_verifies() {
     use classis_core::package::testing::TestRoot;
@@ -1236,7 +1236,7 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
         .expect("remove");
 
     // A key that is not the tracked certificate's is refused: each signature is verified under the
-    // certificate before it is kept (ADR-0062 clause 6).
+    // certificate before it is kept (ADR-0065 clause 6).
     let other = root.signer();
     std::fs::write(&key_file, other.pkcs8_v1()).expect("another key");
     let sig_file = entries.join("supervisor_1.2.3_linux_amd64.tar.gz.sig");
@@ -1257,7 +1257,7 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
     assert!(!run().success(), "a non-certificate was carried");
 }
 
-// Verifies: ADR-0062, ADR-0063
+// Verifies: ADR-0065, ADR-0066
 #[test]
 fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
     let workflow = workflow();
@@ -1297,7 +1297,7 @@ fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
     assert!(!notes.contains("package-signing-key.pub"), "{notes}");
 }
 
-// Verifies: ADR-0062, ADR-0063
+// Verifies: ADR-0065, ADR-0066
 #[test]
 fn the_tracked_certificate_is_a_package_signer() {
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signer.der");
@@ -1340,7 +1340,7 @@ fn the_tracked_certificate_is_a_package_signer() {
 /// A release is started by a signed tag, which is an annotated one: `ls-remote` lists it as its
 /// tag object and as the commit it names. The step that refuses a spent number takes the tag that
 /// started the run, whichever of the two `GITHUB_SHA` holds, and refuses one on another commit.
-// Verifies: ADR-0062
+// Verifies: ADR-0065
 #[test]
 fn the_version_step_takes_the_annotated_tag_that_started_the_run() {
     let workflow = workflow();

@@ -27,7 +27,7 @@ use classis_server::packages::Platform;
 /// name. Aim belongs to the Deployment now (ADR-0026): a Package reaches nobody by itself, so a
 /// test that wants one delivered has to say which ring the host is in — which is the model.
 /// The same, recording the artifact's signature on the ring — where a signature lives since
-/// ADR-0026. A Client refuses an artifact not signed up to its Package Roots (ADR-0063), so the
+/// ADR-0026. A Client refuses an artifact not signed up to its Package Roots (ADR-0066), so the
 /// ring is what has to carry it.
 fn ring_holding_signed(
     state: &classis_server::fleet::AppState,

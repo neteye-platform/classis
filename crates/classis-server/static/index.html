@@ -1350,7 +1350,7 @@
         return channels.map((r) => `<span class="pill">${esc(r)}</span>`).join(" ");
       }
 
-      // An entry's signature as the Server holds it (ADR-0063 clause 10): one that verifies up to
+      // An entry's signature as the Server holds it (ADR-0066 clause 10): one that verifies up to
       // the Package Roots compiled into the Server, or none. The Server refuses any other, and
       // the Client's own check still decides.
       const SIG_STATES = {
@@ -1362,7 +1362,7 @@
         return `<span class="pill ${tone}" title="${esc(why)}">${label}</span>`;
       }
 
-      // Whether every entry carries a valid signature (ADR-0063 clause 16), in one pill per row.
+      // Whether every entry carries a valid signature (ADR-0066 clause 16), in one pill per row.
       function signaturesCell(p) {
         const entries = p.entries || [];
         if (!entries.length) return "";

@@ -40,7 +40,7 @@ use classis_agent::service::layout::BINARY_FILENAME as CLIENT_BINARY;
 use classis_agent::update::EXIT_RESTART_FOR_UPDATE;
 
 /// Puts a Package into a ring aimed at the Agent type it is built for, signed by the test Package
-/// Signer the Client trusts (ADR-0063), and hands back the ring's name. A Package reaches nobody by itself, so a test
+/// Signer the Client trusts (ADR-0066), and hands back the ring's name. A Package reaches nobody by itself, so a test
 /// that wants one delivered has to say which ring the host is in — which is the model.
 fn ring_holding(
     state: &classis_server::fleet::AppState,
@@ -783,9 +783,9 @@ async fn a_set_at_the_running_version_reaches_nobody() {
 
 /// A self-update whose signature does not verify up to the Client's Package Roots fails with
 /// `InstallFailed` naming the signature, nothing is staged, and the Client keeps running the
-/// version it runs. The Server holds only a signature it verified (ADR-0063 clause 10), so the
+/// version it runs. The Server holds only a signature it verified (ADR-0066 clause 10), so the
 /// case that reaches the Client is a Package Signer the Server trusts and the Client does not.
-/// Verifies: ADR-0018, ADR-0063
+/// Verifies: ADR-0018, ADR-0066
 #[tokio::test]
 async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client_keeps_running() {
     let _serial = one_at_a_time().await;

@@ -381,7 +381,7 @@ async fn main() {
         // ADR-0016.
         info!("offering the fleet somewhere to send its own telemetry");
     }
-    // ADR-0063 clause 1: a Root that cannot be read stops the Server here, naming it.
+    // ADR-0066 clause 1: a Root that cannot be read stops the Server here, naming it.
     let roots = match classis_core::package::chain::compiled() {
         Ok(roots) => roots,
         Err(e) => {
@@ -390,14 +390,14 @@ async fn main() {
         }
     };
     if let Some(path) = classis_core::package::chain::debug_root() {
-        // ADR-0063 clause 1: a debug build only.
+        // ADR-0066 clause 1: a debug build only.
         warn!(
             "a debug build: also trusting the Package Root in {} ({})",
             path.display(),
             classis_core::package::DEBUG_ROOT_ENV
         );
     }
-    // ADR-0063 clause 1.
+    // ADR-0066 clause 1.
     info!(
         roots = roots.len(),
         "checking package signatures up to the compiled-in Package Roots"

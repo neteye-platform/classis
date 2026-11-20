@@ -164,7 +164,7 @@ pub fn build_engine(
     // anything else is refused rather than written over this binary (ADR-0018). The consent stands
     // unless `[packages] self_update = false` withdraws it, so this is the ordinary path rather
     // than the opted-into one. A package verifies up to the compiled-in Package Roots, with
-    // nothing to configure (ADR-0063 clause 7).
+    // nothing to configure (ADR-0066 clause 7).
     if let Some(package) = config.self_update_package() {
         self_state.accept_packages_named(package.to_string());
     }
@@ -403,7 +403,7 @@ pub fn start_supervisor(
     // live tree arrives by renaming a directory over that name (ADR-0026).
     install.prepare(config.process_account_group)?;
     // Every Supervisor takes packages, each verified up to the compiled-in Package Roots: there is
-    // no unsigned posture and no setting that turns packages off (ADR-0063 clause 6).
+    // no unsigned posture and no setting that turns packages off (ADR-0066 clause 6).
     state.accept_packages();
     info!(
         supervisor = %block.name,
@@ -990,9 +990,9 @@ mod tests {
 
     /// Every Agent of a Client takes packages without any key — each Supervisor, and the Client's
     /// own Agent while its consent stands — because every package is verified up to the
-    /// compiled-in Package Roots and there is no setting that turns packages off (ADR-0063 clauses
+    /// compiled-in Package Roots and there is no setting that turns packages off (ADR-0066 clauses
     /// 6 and 7).
-    /// Verifies: ADR-0063, Q-1
+    /// Verifies: ADR-0066, Q-1
     #[tokio::test]
     async fn without_any_key_every_agent_takes_packages() {
         let dir = tempfile::tempdir().expect("tempdir");
