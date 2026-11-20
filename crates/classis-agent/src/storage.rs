@@ -1184,7 +1184,7 @@ pub(crate) mod handle {
 ///
 /// A file with a second hard link is left as it is and named in a warning, as the hand-over leaves
 /// one (ADR-0059 clause 10): its other name may be one of the Client's own records — a link to
-/// `client-key.pem` placed while the Managed Process still ran as the Client — and sharing it would
+/// `state.json` placed while the Managed Process still ran as the Client — and sharing it would
 /// share that record too.
 #[cfg(unix)]
 fn share_file(path: &Path, group: ProcessAccountGroup) -> io::Result<()> {

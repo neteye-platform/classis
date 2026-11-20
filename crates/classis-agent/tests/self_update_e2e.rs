@@ -128,7 +128,9 @@ async fn wait_until<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
     panic!("timed out waiting for {what}");
 }
 
-async fn spawn_server(store: PackageStore) -> (std::net::SocketAddr, Arc<AppState>) {
+async fn spawn_server(
+    store: PackageStore,
+) -> (std::net::SocketAddr, Arc<AppState>, common::Admission) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs"))
@@ -137,9 +139,10 @@ async fn spawn_server(store: PackageStore) -> (std::net::SocketAddr, Arc<AppStat
                 PackageOffering::new(dir.path(), store).expect("deployments"),
             )),
     );
+    let admission = common::Admission::new(dir.path());
     // The configuration directory only has to outlive the Server, which outlives the test.
     std::mem::forget(dir);
-    let app = common::app(state.clone());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -147,7 +150,7 @@ async fn spawn_server(store: PackageStore) -> (std::net::SocketAddr, Arc<AppStat
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
-    (addr, state)
+    (addr, state, admission)
 }
 
 /// The version this Client binary reports for itself (ADR-0012, baked in at build time). The
@@ -500,16 +503,13 @@ async fn the_client_installs_a_version_of_itself_and_reports_it_installed() {
         .put_entry(&set, &this_host(), artifact)
         .expect("put entry");
 
-    let (addr, state) = spawn_server(store).await;
+    let (addr, state, admission) = spawn_server(store).await;
     let root = dir.path().join("install");
     let program = install_layout(&root, &client);
     let state_dir = dir.path().join("client-state");
+    admission.enrol(addr, &state_dir).await;
     let config = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path(), &state_dir),
-    )
-    .expect("write config");
+    std::fs::write(&config, config_toml(addr, &state_dir)).expect("write config");
 
     let mut service = Supervised::start(&program, &config);
 
@@ -602,10 +602,11 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
         .put_entry(&set, &this_host(), artifact)
         .expect("put entry");
 
-    let (addr, state) = spawn_server(store).await;
+    let (addr, state, admission) = spawn_server(store).await;
     let root = dir.path().join("install");
     let program = install_layout(&root, &client);
     let state_dir = dir.path().join("client-state");
+    admission.enrol(addr, &state_dir).await;
     let config = dir.path().join("supervisor.toml");
 
     // A supervised Managed Process that stays up and records its pid — rewritten with a fresh one
@@ -644,7 +645,7 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
             key = signing_key().1,
             stub = stub,
             marker = marker.to_string_lossy(),
-        ) + &common::client_identity(dir.path(), &state_dir),
+        ),
     )
     .expect("write config");
 
@@ -735,16 +736,13 @@ async fn a_set_at_the_running_version_reaches_nobody() {
     let older = set_of("0.0.1");
     let newer = set_of("9.9.9");
 
-    let (addr, state) = spawn_server(store).await;
+    let (addr, state, admission) = spawn_server(store).await;
     let root = dir.path().join("install");
     let program = install_layout(&root, &client);
     let state_dir = dir.path().join("client-state");
+    admission.enrol(addr, &state_dir).await;
     let config = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path(), &state_dir),
-    )
-    .expect("write config");
+    std::fs::write(&config, config_toml(addr, &state_dir)).expect("write config");
 
     // A Client installed the way a package manager installs one: a layout, a binary, and no record
     // of any package ever having been installed over it.
@@ -821,17 +819,14 @@ async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client
         .put_entry(&set, &this_host(), artifact)
         .expect("put entry");
 
-    let (addr, state) = spawn_server(store).await;
+    let (addr, state, admission) = spawn_server(store).await;
     let root = dir.path().join("install");
     let program = install_layout(&root, &client);
     let previous = std::fs::canonicalize(root.join("current")).expect("current resolves");
     let state_dir = dir.path().join("client-state");
+    admission.enrol(addr, &state_dir).await;
     let config = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path(), &state_dir),
-    )
-    .expect("write config");
+    std::fs::write(&config, config_toml(addr, &state_dir)).expect("write config");
 
     let mut service = Supervised::start(&program, &config);
 

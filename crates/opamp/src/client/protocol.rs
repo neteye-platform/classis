@@ -69,8 +69,6 @@ pub struct AgentProtocol {
     settings_offered: bool,
     remote_config_status: Option<RemoteConfigStatus>,
     connection_settings_status: Option<ConnectionSettingsStatus>,
-    /// A certificate signing request to send once (ADR-0021).
-    pending_csr: Option<Vec<u8>>,
     // What the next report owes: a full snapshot, or each part that changed.
     send_full: bool,
     send_config_status: bool,
@@ -93,7 +91,6 @@ impl AgentProtocol {
             settings_offered: false,
             remote_config_status: None,
             connection_settings_status: None,
-            pending_csr: None,
             send_full: true,
             send_config_status: false,
             send_health: false,
@@ -174,20 +171,6 @@ impl AgentProtocol {
         self.send_components_full = true;
     }
 
-    /// Queues a certificate signing request for the next report (ADR-0021).
-    pub fn request_certificate(&mut self, csr: Vec<u8>) {
-        self.pending_csr = Some(csr);
-    }
-
-    /// Whether the Server has *declared* `capability`. Pessimistic, unlike the gates on what a
-    /// report carries: exercising what a peer never declared is what the specification's
-    /// negotiation rule forbids, so a request the Server may not take waits for its word.
-    #[must_use]
-    pub fn server_declared(&self, capability: ServerCapabilities) -> bool {
-        self.server_capabilities
-            .is_some_and(|caps| caps & capability as u64 != 0)
-    }
-
     /// The next `AgentToServer`. Unchanged fields are omitted, as the specification recommends: a
     /// routine report carries only identity and sequence number; a full snapshot goes out when one
     /// was forced, and each status whenever it changed.
@@ -224,13 +207,6 @@ impl AgentProtocol {
         {
             msg.connection_settings_status = self.connection_settings_status.clone();
         }
-        if let Some(csr) = self.pending_csr.take() {
-            msg.connection_settings_request = Some(crate::proto::ConnectionSettingsRequest {
-                opamp: Some(crate::proto::OpAmpConnectionSettingsRequest {
-                    certificate_request: Some(crate::proto::CertificateRequest { csr }),
-                }),
-            });
-        }
         // A status suppressed here is *not* held for later: the dirty flag clears as usual, and the
         // report returns with the full snapshot that follows any reconnect or `ReportFullState`.
         // Holding the flag would deliver a stale status the moment the bit appeared.
@@ -258,25 +234,6 @@ impl AgentProtocol {
         self.send_settings_status = false;
         self.send_package_status = false;
         msg
-    }
-
-    /// A report carrying `csr` and nothing else but the Agent's identity, sequence number and
-    /// capabilities — what an application sends where only a certificate signing request may pass,
-    /// as through a gateway that relays an enrolment. What the next full report owes is left as it
-    /// was, so the report after this one carries it.
-    pub fn csr_report(&mut self, csr: Vec<u8>) -> AgentToServer {
-        self.sequence_num += 1;
-        AgentToServer {
-            instance_uid: self.uid.as_bytes().to_vec(),
-            sequence_num: self.sequence_num,
-            capabilities: self.capabilities,
-            connection_settings_request: Some(crate::proto::ConnectionSettingsRequest {
-                opamp: Some(crate::proto::OpAmpConnectionSettingsRequest {
-                    certificate_request: Some(crate::proto::CertificateRequest { csr }),
-                }),
-            }),
-            ..Default::default()
-        }
     }
 
     /// The final message of a connection: the specification requires `agent_disconnect` in it.
@@ -364,8 +321,8 @@ impl AgentProtocol {
 
     /// A **received offer outranks the bitmask** (ADR-0014 clause 13). Gating on the capability alone
     /// would deadlock against Servers that offer without declaring it — including this project's
-    /// own, which sets the bit from `[connection_offer]` and so omits it for a telemetry-only or
-    /// `[client_ca]`-only configuration.
+    /// own, which sets the bit from `[connection_offer]` and so omits it for a telemetry-only
+    /// configuration.
     fn server_accepts_connection_settings_status(&self) -> bool {
         self.settings_offered || self.server_accepts(ServerCapabilities::OffersConnectionSettings)
     }
@@ -429,36 +386,6 @@ mod tests {
         assert_eq!(second.sequence_num, 2);
         assert_eq!(second.instance_uid, agent.uid().as_bytes());
         assert!(second.agent_description.is_none() && second.health.is_none());
-    }
-
-    #[test]
-    fn a_csr_report_carries_the_request_alone_and_leaves_the_full_report_owed() {
-        let mut agent = protocol();
-        let content = Content::default();
-        let report = agent.csr_report(b"csr".to_vec());
-        assert_eq!(report.sequence_num, 1);
-        assert_eq!(
-            report,
-            AgentToServer {
-                instance_uid: agent.uid().as_bytes().to_vec(),
-                sequence_num: 1,
-                capabilities: AgentCapabilities::ReportsStatus as u64,
-                connection_settings_request: Some(crate::proto::ConnectionSettingsRequest {
-                    opamp: Some(crate::proto::OpAmpConnectionSettingsRequest {
-                        certificate_request: Some(crate::proto::CertificateRequest {
-                            csr: b"csr".to_vec()
-                        }),
-                    }),
-                }),
-                ..Default::default()
-            }
-        );
-        let next = agent.next_report(&content);
-        assert_eq!(next.sequence_num, 2);
-        assert!(
-            next.agent_description.is_some(),
-            "the full report is still owed"
-        );
     }
 
     #[test]
@@ -627,25 +554,6 @@ mod tests {
             .available_components
             .expect("map");
         assert_eq!(map.components.len(), 1);
-    }
-
-    #[test]
-    fn a_certificate_request_goes_out_once_and_only_to_a_server_that_declared_signing() {
-        let mut agent = protocol();
-        assert!(!agent.server_declared(ServerCapabilities::AcceptsConnectionSettingsRequest));
-        agent.receive(&declaring(
-            ServerCapabilities::AcceptsConnectionSettingsRequest as u64,
-        ));
-        assert!(agent.server_declared(ServerCapabilities::AcceptsConnectionSettingsRequest));
-        agent.request_certificate(b"csr".to_vec());
-        assert!(agent
-            .next_report(&Content::default())
-            .connection_settings_request
-            .is_some());
-        assert!(agent
-            .next_report(&Content::default())
-            .connection_settings_request
-            .is_none());
     }
 
     #[test]

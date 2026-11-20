@@ -2222,7 +2222,7 @@ mod tests {
 
     /// ADR-0014 clause 13, and the reason the naive gate is wrong: a Server may send an offer
     /// *without* declaring `OffersConnectionSettings` — this project's own does exactly that for a
-    /// `[telemetry_offer]`-only or `[client_ca]`-only configuration. Withholding the acknowledgement
+    /// `[telemetry_offer]`-only configuration. Withholding the acknowledgement
     /// would leave its hash gate open and have it re-offer for ever, so the offer arms the report.
     /// Verifies: ADR-0014
     #[test]

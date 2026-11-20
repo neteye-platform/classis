@@ -6,11 +6,6 @@ use std::path::Path;
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub const SPACE: &str = "lab";
 
-/// The host of the `state.json` [`write_state_json`] writes, and the host [`app`] admits every
-/// request as.
-#[allow(dead_code)] // each integration-test binary uses a different subset of this support
-pub const DEVICE_ID: &str = "0193a6f0-0000-7000-8000-000000000000";
-
 /// What admits the hosts of a test to the Server under test (ADR-0064): a real
 /// [`Enrolment`](classis_server::enrolment::Enrolment) over a Space of its own, behind the Agent
 /// plane exactly as the binary builds it. A test serves its Agent plane through [`app`](Self::app),
@@ -91,26 +86,6 @@ impl Admission {
     }
 }
 
-/// The Agent plane over `state`, as these tests serve it to a Client whose admission is not what
-/// they test: every request arrives as [`DEVICE_ID`], the host of the `state.json` that
-/// [`client_identity`] writes, and no token is checked. A test about admission serves the plane
-/// through [`Admission::app`] instead. The certificate cleanup moves these tests to it as well.
-#[allow(dead_code)] // each integration-test binary uses a different subset of this support
-pub fn app(state: std::sync::Arc<classis_server::fleet::AppState>) -> axum::Router {
-    classis_server::agent_app_admitted_as_for_tests(state, Some(DEVICE_ID))
-}
-
-/// What a host needs to start against these tests' Servers, for a Client whose state directory is
-/// `state_dir`: a `state.json` in `state_dir` from [`write_state_json`], which the Client starts
-/// with, and the [`client_certificate`] in `dir`, whose `[tls]` table is returned to be appended
-/// at the end of a `supervisor.toml` and which the Client ignores (ADR-0064).
-#[allow(dead_code)] // each integration-test binary uses a different subset of this support
-pub fn client_identity(dir: &Path, state_dir: &Path) -> String {
-    let tls = client_certificate(dir);
-    write_state_json(state_dir, "http://127.0.0.1:9");
-    tls
-}
-
 /// Writes a `state.json` for a host whose Server is not one of these tests' Servers — a stub that
 /// checks no token — with a token nobody issued.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
@@ -119,7 +94,7 @@ pub fn write_state_json(state_dir: &Path, base_url: &str) {
     let state = serde_json::json!({
         "endpoint": base_url,
         "space": SPACE,
-        "device_id": DEVICE_ID,
+        "device_id": "0193a6f0-0000-7000-8000-000000000000",
         "client_secret": "a-client-secret-nobody-issued",
         "access_token": "a-token-nobody-issued",
     });
@@ -128,29 +103,6 @@ pub fn write_state_json(state_dir: &Path, base_url: &str) {
         serde_json::to_vec_pretty(&state).expect("json"),
     )
     .expect("write state.json");
-}
-
-/// Writes a throwaway self-signed client certificate and key into `dir` and returns the `[tls]`
-/// table that names them, to be appended at the end of a `supervisor.toml`.
-///
-/// A file of the certificate era: the Client still parses `[tls] cert_file` and `key_file` and
-/// ignores both (ADR-0064), and presents no certificate. Kept until the certificate cleanup.
-#[allow(dead_code)] // each integration-test binary uses a different subset of this support
-pub fn client_certificate(dir: &Path) -> String {
-    let key = rcgen::KeyPair::generate().expect("generate a key");
-    let cert = rcgen::CertificateParams::new(vec!["test-agent".into()])
-        .expect("certificate parameters")
-        .self_signed(&key)
-        .expect("self-sign the certificate");
-    let cert_file = dir.join("test-client.pem");
-    let key_file = dir.join("test-client-key.pem");
-    std::fs::write(&cert_file, cert.pem()).expect("write the client certificate");
-    std::fs::write(&key_file, key.serialize_pem()).expect("write the client key");
-    format!(
-        "\n[tls]\ncert_file = {:?}\nkey_file = {:?}\n",
-        cert_file.display().to_string(),
-        key_file.display().to_string(),
-    )
 }
 
 /// The fleet state on `dir` with the Deployments armed, as the binary wires it: the Configuration

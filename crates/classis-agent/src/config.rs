@@ -721,12 +721,6 @@ impl Default for UpdatesConfig {
 pub struct TlsConfig {
     /// PEM CA bundle that *replaces* the built-in webpki roots — the self-signed-deployment case.
     pub ca_file: Option<PathBuf>,
-    /// The client certificate of a certificate-era file. **Ignored**: the Client presents no client
-    /// certificate and reads neither file (ADR-0064); the key is parsed only so that such a file
-    /// still loads, and goes with the certificate cleanup.
-    pub cert_file: Option<PathBuf>,
-    /// The key of [`cert_file`](Self::cert_file). **Ignored**, as it is.
-    pub key_file: Option<PathBuf>,
 }
 
 /// The transport the endpoint's scheme selects (ADR-0013).

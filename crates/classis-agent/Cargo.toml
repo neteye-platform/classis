@@ -168,7 +168,6 @@ sevenz-rust2 = { workspace = true, features = ["compress"] }
 # The interop test makes the CA and the Server certificate it serves TLS with.
 rcgen.workspace = true
 # ADR-0017: the end-to-end test runs the real Server in-process against the real Client binary,
-# which it admits by the bearer token the Server issued it (ADR-0064). Until the certificate
-# cleanup, the tests that are not about admission serve the plane through `test-support`'s
-# `agent_app_admitted_as_for_tests` instead (`tests/common`).
-classis-server = { path = "../classis-server", features = ["test-support"] }
+# which it admits by the bearer token the Server issued it (ADR-0064): no test serves the Agent plane
+# without admission.
+classis-server = { path = "../classis-server" }

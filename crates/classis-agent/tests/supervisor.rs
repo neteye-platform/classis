@@ -19,7 +19,20 @@ fn wait_for(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// The host is enrolled, as the Client requires before it runs anything (ADR-0064): a `state.json`
+/// in the `state` directory beside the configuration, for a Server that is not there to be asked.
+fn enrolled(config_path: &Path) {
+    let state = config_path
+        .parent()
+        .expect("the configuration has a directory")
+        .join("state");
+    if !state.join("state.json").exists() {
+        common::write_state_json(&state, "http://127.0.0.1:1");
+    }
+}
+
 fn spawn_client(config_path: &Path) -> Child {
+    enrolled(config_path);
     Command::new(env!("CARGO_BIN_EXE_supervisor"))
         .arg("--config")
         .arg(config_path)
@@ -60,11 +73,8 @@ fn write_config(dir: &Path, marker: &Path) -> std::path::PathBuf {
         marker = marker.to_string_lossy(),
     );
     let path = dir.join("supervisor.toml");
-    std::fs::write(
-        &path,
-        config + &common::client_identity(dir, &dir.join("state")),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&path, config).expect("write supervisor.toml");
+    enrolled(&path);
     path
 }
 
@@ -89,11 +99,7 @@ fn a_command_supervisors_arguments_are_expanded_to_its_own_directories() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        config + &common::client_identity(dir.path(), &dir.path().join("state")),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&config_path, config).expect("write supervisor.toml");
 
     let mut client = spawn_client(&config_path);
     wait_for("the stub's marker file", Duration::from_secs(20), || {
@@ -152,11 +158,7 @@ fn a_command_supervisor_runs_its_program_from_inside_an_unpacked_tree() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        config + &common::client_identity(dir.path(), &dir.path().join("state")),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&config_path, config).expect("write supervisor.toml");
 
     let mut client = spawn_client(&config_path);
     wait_for("the stub's marker file", Duration::from_secs(20), || {
@@ -204,11 +206,7 @@ fn a_collector_supervisor_passes_each_config_entry_as_a_config_flag() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        toml + &common::client_identity(dir.path(), &dir.path().join("state")),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let mut client = spawn_client(&config_path);
     wait_for(
@@ -251,11 +249,7 @@ fn a_collector_supervisor_leaves_supplementary_entries_out_of_its_config_flags()
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        toml + &common::client_identity(dir.path(), &dir.path().join("state")),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let mut client = spawn_client(&config_path);
     wait_for(
@@ -325,11 +319,7 @@ fn a_listed_collector_runs_on_the_entries_the_operator_placed() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        toml + &common::client_identity(dir.path(), &dir.path().join("state")),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let mut client = spawn_client(&config_path);
     wait_for(

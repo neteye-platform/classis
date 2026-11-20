@@ -311,13 +311,6 @@ module has no role.
   implements the port on the version directories and holds the start-up check of
   the process that follows an install.
 
-Until the next cleanup, certificate code stays compiled but unwired: `opamp`'s
-generic certificate and CSR APIs, `classis-core`'s certificate utilities, and
-the Server's `ca`, `bootstrap`, `revocation` and `certificate_enrolment` with
-their `fs` and `postgres` adapters. Production never calls them.
-Classis presents no TLS client identity and admits only by bearer token.
-Cleanup also removes ignored Client TLS data and non-auth test facades.
-
 ## How it runs
 
 The few paths worth following end to end, such as a request, a job, or a build,
