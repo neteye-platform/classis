@@ -4,6 +4,9 @@
 > alike, uses in code, comments, documentation, and ADRs. It defines words and
 > decides nothing. Whoever resolves a term adds it here in the same change
 > ([ADR-0001](adr/0001-agent-governance-model.md)).
+>
+> **Draft enrolment vocabulary — awaiting human review**, alongside the
+> [specification amendment](SPECIFICATION.md#enrolment-amendment-impact-draft).
 
 One term per concept, only terms specific to this domain. Say what a term _is_
 in one or two sentences, and list under _Avoid:_ the synonyms it displaces,
@@ -21,9 +24,10 @@ terms below are the ones it uses without defining.
 - **Client Agent** — the Agent a Client presents for itself, recognised by the
   `supervisor.kind.*` attributes it alone reports; its Labels hold for the
   Client's other Agents, the Supervisor Agents. _Avoid:_ own agent, main agent.
-- **Effective description** — what a Selector is matched against: its Host's
-  subject values as `fleet.host.*`, an Agent's reported attributes, its Labels,
-  and its Client Agent's Labels. _Avoid:_ attributes (alone), metadata.
+- **Effective description** — what a Selector is matched against: an Agent's
+  reported attributes, its Labels and its Client Agent's Labels, without
+  certificate-derived `fleet.host.*` subject values. _Avoid:_ attributes
+  (alone), metadata.
 - **Entry** — one platform's artifact in a Package: operating system and
   architecture, content hash, size and signature. _Avoid:_ file, asset, build.
 - **High-water mark** — the highest Package version a Client has installed for
@@ -35,15 +39,31 @@ terms below are the ones it uses without defining.
 - **Data directory** — the one directory, `data_dir`, under which the Server
   keeps all of its state, one subdirectory per domain. _Avoid:_ config
   directory, package directory, state directory (that is the Client's).
-- **Bootstrap certificate** — the short-lived certificate a host presents to ask
-  for enrolment; its subject values describe the Host it becomes. _Avoid:_ join
-  token, enrolment token.
-- **Enrolment** — the time-limited, operator-approved exchange in which a host
-  holding a bootstrap certificate obtains its client certificate and becomes a
-  Host. _Avoid:_ registration, onboarding, enrollment.
-- **Enrolling peer** — a peer of a Gateway whose certificate chains to the
-  bootstrap CA alone; the Gateway relays one plain-HTTP enrolment request of it
-  and nothing else. _Avoid:_ bootstrap client, enrolling Agent.
+- **Space** — a named grouping of Hosts on one Server, into which an enrolment
+  key admits new Hosts. A Space is not a separate Fleet or a tenant-isolation
+  boundary. _Avoid:_ tenant, fleet (for a Space).
+- **Enrolment key** — a reusable secret associated with one Space, presented
+  as the initial access token when registering a Host. _Avoid:_ bootstrap
+  certificate, access token (for the enrolment key).
+- **Enrolment** — the exchange in which a host uses its Space's enrolment key
+  to register as an OAuth client and obtain client credentials and an access
+  token, without individual operator approval. _Avoid:_ enrollment, onboarding.
+- **Device ID** — the OAuth `client_id` assigned at enrolment, identifying one
+  Host rather than one Agent. _Avoid:_ instance UID (for a Host's identity).
+- **Client credentials** — the Host's `client_id` and `client_secret` pair, used
+  to obtain or replace an access token without changing the Host's identity.
+  _Avoid:_ enrolment key, access token (for the pair).
+- **Access token** — the opaque bearer credential with which a Host's Agents
+  authenticate to the Server's Agent plane. It is distinct from the enrolment
+  key and client secret. _Avoid:_ enrolment key, client secret (for the token).
+- **State file** (`state.json`) — the file in the Client's state directory that
+  `enrol` writes once: the Server's base URL, the Space, the Device ID, the
+  client secret and the access token. A Host without it is not enrolled and
+  runs nothing. _Avoid:_ config, credentials file.
+- **Revoke** — the Client's local command that forgets the Host: it deletes the
+  State file and every other piece of host state, wherever configured, and
+  never contacts the Server. A new enrolment makes a new Host. _Avoid:_
+  unenrol, deregister (nothing is removed at the Server).
 - **Rollout** — the explicit act that releases a Deployment to Agents and pins
   what each receives. _Avoid:_ publish, push, deploy.
 - **Process account** — the account the operator names at a Client's
@@ -67,7 +87,7 @@ terms below are the ones it uses without defining.
   account dropped or replaced or a Client's account replaced: on Linux and macOS
   by giving what it owns, and what is in its group, to the Client; on Windows by
   removing every entry that allows it anything and giving what it owns to the
-  Administrators. _Avoid:_ revocation (that is a certificate's), cleanup.
+  Administrators. _Avoid:_ revocation (that concerns fleet credentials), cleanup.
 - **Record of what an install left to finish** (_the record_) — on Windows, the
   value `Pending` of `HKLM\SOFTWARE\<PRODUCT_NAME>\WithdrawalPending`: what an
   install left to finish, the former accounts with the roots to withdraw them
