@@ -1,7 +1,8 @@
 //! The enrolment window and its queue in PostgreSQL (ADR-0050 clause 9): the PostgreSQL adapter
-//! behind [`EnrolmentStore`](crate::enrolment::EnrolmentStore) — the window's end in one row, each
-//! pending request in a row of its own, saved in one transaction before the act that changed them
-//! is answered.
+//! behind [`EnrolmentStore`](crate::certificate_enrolment::EnrolmentStore) — the window's end in
+//! one row, each pending request in a row of its own, saved in one transaction before the act that
+//! changed them is answered. Unwired since bearer enrolment (ADR-0064): the Server's schema no
+//! longer creates its tables.
 
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use serde_json::Value;
 use tokio_postgres::GenericClient;
 
 use super::{client, signed, sql, unsigned, Database};
-use crate::enrolment::{EnrolmentStore, Persisted};
+use crate::certificate_enrolment::{EnrolmentStore, Persisted};
 
 /// The window in `enrolment_window`, its requests in `enrolment_requests`.
 pub struct PgEnrolmentStore {
@@ -132,7 +133,7 @@ mod tests {
             .iter()
             .map(|id| {
                 // A host chooses its subject: a NUL is kept, and fails no write.
-                let mut requester = crate::enrolment::tests::requester();
+                let mut requester = crate::certificate_enrolment::tests::requester();
                 requester.bootstrap_subject = "CN=edge\0".to_string();
                 serde_json::json!({
                     "id": id,
@@ -181,6 +182,7 @@ mod tests {
             return;
         };
         let database = test.open();
+        test.sql(crate::postgres::ledger::LEGACY_TABLES);
         contract(&|| Box::new(PgEnrolmentStore::new(database.clone())));
     }
 
@@ -215,8 +217,10 @@ mod tests {
         let Some(test) = TestDatabase::named() else {
             return;
         };
+        let database = test.open();
+        test.sql(crate::postgres::ledger::LEGACY_TABLES);
         fails_part_way(
-            &PgEnrolmentStore::new(test.open()),
+            &PgEnrolmentStore::new(database),
             &|| test.refuse("enrolment_requests", "NEW.id = 'z'"),
             &|| test.mend("enrolment_requests"),
         );

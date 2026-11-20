@@ -12,12 +12,20 @@ publish.workspace = true
 name = "server"
 path = "src/main.rs"
 
+[features]
+# `agent_app_open_for_tests` and `agent_app_admitted_as_for_tests`: the Agent plane without
+# admission. Enabled by the tests of this crate, through its own dev-dependency, and until the
+# certificate cleanup by those of `classis-agent`; never by a build of the Server.
+test-support = []
+
 [dependencies]
 opamp = { workspace = true, features = ["server"] }
 classis-core.workspace = true
 # `secret::generate` and `secret::hash`: the one generator of the enrolment key's secret, and of
-# what a client keeps hashes of (ADR-0064 clauses 1 and 8).
-oauth-token.workspace = true
+# what a client keeps hashes of (ADR-0064 clauses 1 and 8); the `server` halves are the routes
+# `/v1/enrol` and `/v1/token` and the reading of a Bearer credential at admission (clauses 2, 4, 6).
+oauth-token = { workspace = true, features = ["server"] }
+oauth-registration = { workspace = true, features = ["server"] }
 # Streaming a stored package artifact into the response body (ADR-0026) — the same workspace
 # dependency the Client already builds on, promoted from dev-only.
 futures-util.workspace = true
@@ -34,15 +42,15 @@ hex.workspace = true
 ring.workspace = true
 argon2.workspace = true
 libc.workspace = true
-flate2.workspace = true
 base64.workspace = true
 constant_time_eq.workspace = true
-# ADR-0021: which CA issued the certificate a connection carries — the client CA's member, or the
-# bootstrap CA's enrolling host. The parser rcgen itself uses, already in the tree.
+# Reading when a certificate the Server depends on ends (ADR-0028). `verify` and `rcgen` serve only
+# the unwired certificate modules (`ca`, `bootstrap`, `revocation`) until the certificate cleanup
+# removes them.
 x509-parser = { workspace = true, features = ["verify"] }
+rcgen.workspace = true
 # The configuration the listener of `opamp` serves with (ADR-0010).
 rustls.workspace = true
-rcgen.workspace = true
 time.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
@@ -56,11 +64,17 @@ webpki-roots.workspace = true
 tokio-postgres.workspace = true
 deadpool-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
-# ADR-0057: the CA keys, the keys sealed into a PKCS#12 file, a bootstrap password and a Basic
-# password before it is verified are held in buffers wiped on drop. No TLS or crypto backend comes
-# with it (ADR-0013).
+# ADR-0057: the Server's private key and a Basic password before it is verified are held in buffers
+# wiped on drop. No TLS or crypto backend comes with it (ADR-0013).
 zeroize.workspace = true
 
 [dev-dependencies]
+# The integration tests of this crate enable its own `test-support` feature.
+classis-server = { path = ".", features = ["test-support"] }
+flate2.workspace = true
 tokio-tungstenite.workspace = true
+# The two OAuth clients enrol a host and ask for its token in the tests of `/v1/enrol` and `/v1/token`
+# (ADR-0064 Enforcement).
+oauth-token = { workspace = true, features = ["client"] }
+oauth-registration = { workspace = true, features = ["client"] }
 tempfile = "3"

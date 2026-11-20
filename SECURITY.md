@@ -98,42 +98,43 @@ only that the commit was on the branch, not which state of it was reviewed.
 
 ## Fleet trust model
 
-**Admission is a fleet-wide trust boundary; within it the host is the only bound
+**Admission is a fleet-wide trust boundary; within it the host is the bound
 between Agents**
-([ADR-0021](docs/adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)
-clauses 7, 14 and 27). A peer reaches the OpAMP endpoint by proving _fleet
-membership_ with a client certificate in the TLS handshake, the one proof the
-Agent plane admits by. The certificate also names the **host** it was issued to,
-and an `instance_uid` first reported with one host's certificate is not spoken
-for by another's: such a reporter is re-keyed to an identity of its own. A
-certificate is not bound to one `instance_uid`, which is self-asserted and which
-the Server may re-key.
+([ADR-0064](docs/adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)
+clauses 3 and 6). A host registers with its Space's reusable enrolment key,
+obtains client credentials and uses them to obtain an access token. Each OpAMP
+HTTP request or WebSocket upgrade, and each package download, requires that
+active bearer token. The Server keeps only the token's SHA-256 hash and derives
+the host from its client's `client_id`, never from a report or a TLS client
+certificate.
 
-The Client no longer runs as a Gateway (ADR-0064), but the Server still keeps
-the Gateway mark of its certificate model until that model is removed: **a host
-marked as a Gateway can report under any `instance_uid`** and update that
-Agent's Server-side record (health, effective config, remote-config status, and
-so the Configuration offered to it). This is _not_ a cross-fleet or
-unauthenticated exposure: it is bounded by admission.
+An `instance_uid` recorded under one host cannot be reported by another: the
+Server refuses it, rather than re-keying the reporter. One host owns at most
+256 Agent identities. Gateway Mode and its admission exception are unavailable.
+Replacing a token invalidates the previous one and closes its admitted
+WebSocket sessions; expiry is checked on the next request or connection, not
+by ending an already admitted session. No client-certificate fallback is wired
+into the Server.
 
 **A host receives from the Server only what is released to an Agent it speaks
 for**
 ([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
 A composed configuration travels only to the Agent it was released to, and the
 package download serves an uploaded artifact only to a host one of whose Agents
-is offered it; every other request is answered `404`, as for an artifact the
-store does not hold, so a host can neither fetch another partition's builds nor
-list the store. A marked host's certificate speaks for any Agent and may fetch
-what any Agent is offered. The bound is no stronger than the partition: a host
+is offered it. An artifact not offered to that host is answered `404`, as for an
+artifact the store does not hold, so a host can neither fetch another partition's
+builds nor list the store. The bound is no stronger than the partition: a host
 that reports another partition's attributes under a fresh `instance_uid` is
 assigned by that partition's next rollout, and the fleet view shows such an
-Agent waiting before the press.
+Agent waiting before the press. A Space groups registrations; it is not an
+authorization boundary between rollout Selectors.
 
 **What this means for operators:** treat one fleet (one Server, one shared
-admission) as a single trust domain, mark no host as a Gateway
-(`PUT /api/v1/hosts/{host}/gateway`) now that no Client is one, and do not place
-mutually distrusting Agents in one fleet; isolate them by separate Server
-instance or network segment. The alternatives that were weighed are in ADR-0021.
+admission) as a single trust domain, and do not place mutually distrusting
+Agents in one fleet; isolate them by separate Server instance or network
+segment. Protect the Space's reusable enrolment key, the client's secret and
+its access token as credentials. The token authenticates a host, not the truth
+of the attributes its Agents report.
 
 ## Supported versions
 

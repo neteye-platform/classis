@@ -183,8 +183,8 @@ pub fn configure_agents(
         .map_err(|e| format!("cannot set the required privileges of {service_name}: {e}"))
 }
 
-/// Rewrites the program, arguments and start type of the service `service_name`, which the SCM
-/// holds already, keeping its logon account: a re-registration, which `sc create` refuses for a
+/// Rewrites the program and arguments of the service `service_name`, which the SCM holds already,
+/// keeping its start type and its logon account: a re-registration, which `sc create` refuses for a
 /// service that exists. Its display name is set again by [`configure`].
 ///
 /// # Errors
@@ -195,22 +195,29 @@ pub fn reregister(
     program: &std::path::Path,
     args: &[std::ffi::OsString],
 ) -> Result<(), String> {
-    use windows_service::service::{
-        ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType,
-    };
+    use windows_service::service::{ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceType};
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
         .map_err(|e| format!("cannot open the service control manager: {e}"))?;
     let service = manager
-        .open_service(service_name, ServiceAccess::CHANGE_CONFIG)
+        .open_service(
+            service_name,
+            ServiceAccess::CHANGE_CONFIG | ServiceAccess::QUERY_CONFIG,
+        )
         .map_err(|e| format!("cannot open the service {service_name}: {e}"))?;
+    // Kept as it is: `enrol` lets the service start at boot, and a re-registration — an upgrade
+    // among them — must neither take that away nor give it to a host that never enrolled.
+    let start_type = service
+        .query_config()
+        .map_err(|e| format!("cannot read the registration of {service_name}: {e}"))?
+        .start_type;
     service
         .change_config(&ServiceInfo {
             name: service_name.into(),
             display_name: service_name.into(),
             service_type: ServiceType::OWN_PROCESS,
-            start_type: ServiceStartType::AutoStart,
+            start_type,
             error_control: ServiceErrorControl::Normal,
             executable_path: program.to_path_buf(),
             launch_arguments: args.to_vec(),

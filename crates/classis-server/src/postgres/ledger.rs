@@ -343,6 +343,64 @@ pub(crate) async fn write_host(
     Ok(())
 }
 
+/// The tables of the certificate records, which the Server's schema no longer creates (ADR-0064):
+/// the unwired legacy adapters' tests make them in their own test schema, past the migrations,
+/// until the certificate cleanup removes these adapters.
+#[cfg(test)]
+pub(crate) const LEGACY_TABLES: &str = "
+CREATE TABLE hosts (
+    host text PRIMARY KEY,
+    gateway boolean NOT NULL,
+    instance_uids text[] NOT NULL,
+    subject json NOT NULL,
+    approved_ms bigint,
+    valid_until_ms bigint
+);
+CREATE TABLE certificates (
+    issuer text NOT NULL,
+    serial text NOT NULL,
+    issuer_name text NOT NULL,
+    subject bytea NOT NULL,
+    key_fingerprint text NOT NULL,
+    not_after_ms bigint NOT NULL,
+    host text,
+    subject_values json NOT NULL,
+    instance_uid text NOT NULL,
+    predecessor_issuer text,
+    predecessor_serial text,
+    issued_ms bigint NOT NULL,
+    PRIMARY KEY (issuer, serial)
+);
+CREATE TABLE revocations (
+    id text PRIMARY KEY,
+    position integer NOT NULL,
+    revoked json NOT NULL,
+    revoked_ms bigint NOT NULL
+);
+CREATE TABLE bootstrap_certificates (
+    issuer text NOT NULL,
+    id_serial text NOT NULL,
+    serial text NOT NULL,
+    subject text NOT NULL,
+    key_fingerprint text NOT NULL,
+    issued_ms bigint NOT NULL,
+    not_after_ms bigint NOT NULL,
+    ca_key text NOT NULL,
+    p12 boolean NOT NULL,
+    p12_file bytea,
+    PRIMARY KEY (issuer, id_serial)
+);
+CREATE TABLE enrolment_window (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    until_ms bigint
+);
+CREATE TABLE enrolment_requests (
+    id text PRIMARY KEY,
+    position integer NOT NULL,
+    request json NOT NULL
+);
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +508,7 @@ mod tests {
             return;
         };
         let database = test.open();
+        test.sql(LEGACY_TABLES);
         contract(&|| Box::new(PgLedgerStore::new(database.clone())));
     }
 
@@ -462,6 +521,7 @@ mod tests {
             return;
         };
         let store = PgLedgerStore::new(test.open());
+        test.sql(LEGACY_TABLES);
         let before = BTreeMap::from([("a".to_string(), host(&["01"], false))]);
         store.save_hosts(&before).expect("save");
         test.sql("ALTER TABLE hosts ADD CONSTRAINT not_b CHECK (host <> 'b')");

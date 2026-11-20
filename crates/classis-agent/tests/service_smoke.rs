@@ -9,10 +9,6 @@
 //! `ServiceSpecific(10)` on exit so the SCM reads a failure rather than a clean stop. Nothing has
 //! ever proved that this brings a Client back.
 //!
-//! It also installs as a script enrols a host after the package (ADR-0029 clause 11): from
-//! `--fleet-files` with a `bootstrap.p12`, against a Server in the test that the service it
-//! registers then reaches on the certificate the enrolment was issued.
-//!
 //! **Ignored by default, and not part of any ordinary run.** It registers a system service, starts
 //! it, and kills it — it needs root or an Administrator, and it changes the machine. The
 //! `service-smoke` workflow runs it with `--ignored` on an ephemeral runner; locally, run it only
@@ -26,7 +22,6 @@
 //! and hosts with SELinux or AppArmor in the way. The manual checklist in `README.md` keeps those.
 
 mod common;
-mod enrolling;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -164,15 +159,20 @@ fn kill(pid: u32) {
     );
 }
 
+/// A Server the installed service can reach, and the key of the Space its hosts enrol in.
+struct Served {
+    key: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
 /// A Server the installed service can reach. Bound on the loopback interface, so it is reachable
-/// from a service running as `LocalSystem` or `root` — a different account, the same machine.
-fn spawn_server() -> (
-    std::net::SocketAddr,
-    Arc<AppState>,
-    std::thread::JoinHandle<()>,
-) {
+/// from a service running as `LocalSystem` or `root` — a different account, the same machine. It
+/// admits by bearer token, as the binary does (ADR-0064).
+fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, Served) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(AppState::new(dir.path().join("fleet-configs")).expect("configs"));
+    let admission = common::Admission::new(dir.path());
+    let key = admission.key.clone();
     std::mem::forget(dir);
     let (tx, rx) = std::sync::mpsc::channel();
     let served = state.clone();
@@ -183,16 +183,41 @@ fn spawn_server() -> (
                 .await
                 .expect("bind");
             tx.send(listener.local_addr().expect("addr")).expect("send");
-            axum::serve(
-                listener,
-                classis_server::agent_app(served, classis_server::transport::Admission::open()),
-            )
-            .await
-            .expect("serve");
+            axum::serve(listener, admission.app(served))
+                .await
+                .expect("serve");
         });
     });
     let addr = rx.recv().expect("the server's address");
-    (addr, state, handle)
+    (
+        addr,
+        state,
+        Served {
+            key,
+            _thread: handle,
+        },
+    )
+}
+
+/// Enrols the host the install made, through the real `enrol`: it writes `state.json` in the state
+/// directory the registration names, hands it to the account the service runs as, lets the service
+/// start at boot and starts it (ADR-0064 clause 7) — which is how a service installed here is
+/// started.
+fn enrol_installed(addr: std::net::SocketAddr, server: &Served, config: &Path) {
+    let state_dir = classis_agent::service::manager::registered_state_dir(ServiceLevel::System)
+        .expect("read the registration")
+        .expect("the install registered a state directory");
+    client(
+        &[
+            "--state-dir",
+            &state_dir.to_string_lossy(),
+            "enrol",
+            &format!("http://{addr}"),
+            &server.key,
+        ],
+        config,
+    )
+    .expect("enrol the host");
 }
 
 /// Install → start → the Agent is in the fleet → kill it → the manager brings it back → stop →
@@ -214,13 +239,12 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
 
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("install");
-    let (addr, state, _server) = spawn_server();
+    let (addr, state, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
         format!(
-            "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n{}",
-            common::client_certificate(dir.path())
+            "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n"
         ),
     )
     .expect("write supervisor.toml");
@@ -232,9 +256,9 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
     .expect("install the service");
     let _registered = Registered;
 
-    // launchd does not auto-start after an install (a known ADR-0019 gap), so every platform is
-    // started explicitly — which is also what the README's checklist tells an operator to do.
-    client(&["service", "start"], &config).expect("start the service");
+    // An install starts nothing and enables nothing: `enrol` starts the service, and lets it start
+    // at boot (ADR-0064 clause 7).
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the service to report running",
         Duration::from_secs(60),
@@ -433,28 +457,18 @@ fn a_reregistration_keeps_the_account_and_the_service_keeps_its_privileges() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("install");
-    let (addr, state, _server) = spawn_server();
+    let (addr, state, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
         format!(
-            "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n{}",
-            common::client_certificate(dir.path())
+            "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n"
         ),
     )
     .expect("write supervisor.toml");
-    // The account must reach its program and read the identity beside the configuration, which
-    // lie outside the roots the install hands over.
+    // The account must reach its program, which lies outside the roots the install hands over.
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
         .expect("chmod the temporary directory");
-    for file in ["test-client.pem", "test-client-key.pem"] {
-        let status = Command::new("chown")
-            .arg(account.0)
-            .arg(dir.path().join(file))
-            .status()
-            .expect("run chown");
-        assert!(status.success(), "cannot give {file} to the account");
-    }
 
     let root_arg = root.to_string_lossy().into_owned();
     client(
@@ -472,7 +486,7 @@ fn a_reregistration_keeps_the_account_and_the_service_keeps_its_privileges() {
         "{again}"
     );
 
-    client(&["service", "start"], &config).expect("start the service");
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -611,7 +625,7 @@ fn owner_and_mode(path: &Path) -> (u32, u32, u32) {
 /// A Managed Process under a process account (ADR-0059): installed with `--run-as` and
 /// `--process-account` naming two real accounts, the Client starts its program through the second
 /// service, and the program runs as the process account. It reads its `config/`, writes into its
-/// data directory, and can neither read the Client's `client-key.pem` or its log nor write its own
+/// data directory, and can neither read a secret of the Client's or its log nor write its own
 /// `program/`. After a restart of the second service the Client reaches it again and the program
 /// runs again. A re-registration without either flag, as every package upgrade makes, keeps both
 /// accounts and leaves the program its data: what it wrote is still its own, and it writes there
@@ -665,13 +679,9 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o777)).expect("chmod out/");
     let result = out.join("result");
 
-    // The Client's key where ADR-0059 protects it: in the state directory, owner-only.
-    common::client_certificate(dir.path());
-    let key = state.join("client-key.pem");
-    let cert = state.join("client.pem");
-    std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
-    std::fs::rename(dir.path().join("test-client.pem"), &cert).expect("place the certificate");
-    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod key");
+    // The Client's secret where ADR-0059 protects it: `state.json`, which `enrol` writes in the
+    // state directory below, owner-only, with the client secret and the token in it.
+    let key = state.join("state.json");
 
     std::fs::write(config_dir.join("settings"), "from the config\n").expect("config entry");
     let script = program.join("probe.sh");
@@ -703,16 +713,13 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
         .expect("chmod the program");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
         format!(
             "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n\
-             [tls]\ncert_file = {cert:?}\nkey_file = {key:?}\n\n\
              [[supervisor]]\ntype = \"command\"\nname = \"probe\"\ncommand = \"probe.sh\"\n",
-            cert = cert.display().to_string(),
-            key = key.display().to_string(),
         ),
     )
     .expect("write supervisor.toml");
@@ -733,7 +740,16 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     )
     .expect("install the service with a process account");
     let _registered = Registered;
-    client(&["service", "start"], &config).expect("start the service");
+    enrol_installed(addr, &server, &config);
+    assert_eq!(
+        std::fs::metadata(&key)
+            .expect("`enrol` wrote state.json")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
+        "the secret the Managed Process is denied is the real one, owner-only"
+    );
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -925,13 +941,6 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     let result = out.join("result");
     let heard = out.join("impostor.log");
 
-    common::client_certificate(dir.path());
-    let key = state.join("client-key.pem");
-    let cert = state.join("client.pem");
-    std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
-    std::fs::rename(dir.path().join("test-client.pem"), &cert).expect("place the certificate");
-    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod key");
-
     // The impostor: in a session of its own, so the end of the Client's connection, which ends
     // the program's process group, does not end it; it listens at the socket's name and notes how
     // much each peer wrote before closing the connection.
@@ -981,16 +990,13 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
         .expect("chmod the program");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
         format!(
             "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n\
-             [tls]\ncert_file = {cert:?}\nkey_file = {key:?}\n\n\
              [[supervisor]]\ntype = \"command\"\nname = \"probe\"\ncommand = \"probe.sh\"\n",
-            cert = cert.display().to_string(),
-            key = key.display().to_string(),
         ),
     )
     .expect("write supervisor.toml");
@@ -1011,7 +1017,7 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     )
     .expect("install the service with a process account");
     let _registered = Registered;
-    client(&["service", "start"], &config).expect("start the service");
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -1200,7 +1206,7 @@ fn grant_modify(path: &Path, who: &str) {
 /// naming the Client's own virtual account and `--process-account` the second service's, the
 /// Client starts its program through the second service, on its named pipe, and the program runs
 /// as `NT SERVICE\<PRODUCT_NAME>-agents` without `SeImpersonatePrivilege`. It reads its `config/`
-/// and writes into its data directory, and can neither read the Client's `client-key.pem` or its
+/// and writes into its data directory, and can neither read a secret of the Client's or its
 /// log nor write its own `program/`. After the second service's process is killed the SCM
 /// restarts it, the Client reaches it again and the program runs again. The runner's shell is
 /// elevated, as `service install` needs.
@@ -1238,11 +1244,8 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
     grant_modify(&out, "*S-1-1-0");
     let result = out.join("result");
 
-    common::client_certificate(dir.path());
-    let key = state.join("client-key.pem");
-    let cert = state.join("client.pem");
-    std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
-    std::fs::rename(dir.path().join("test-client.pem"), &cert).expect("place the certificate");
+    // The Client's secret: `state.json`, which `enrol` writes in the state directory below.
+    let key = state.join("state.json");
     std::fs::write(config_dir.join("settings"), "from the config\r\n").expect("config entry");
     std::fs::write(
         program.join("probe.cmd"),
@@ -1271,16 +1274,13 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
     )
     .expect("write the program");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
         format!(
             "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n\
-             [tls]\ncert_file = {cert:?}\nkey_file = {key:?}\n\n\
              [[supervisor]]\ntype = \"command\"\nname = \"probe\"\ncommand = \"probe.cmd\"\n",
-            cert = cert.display().to_string(),
-            key = key.display().to_string(),
         ),
     )
     .expect("write supervisor.toml");
@@ -1323,7 +1323,11 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
                 .expect("its required privileges");
         assert_eq!(privileges, ["SeChangeNotifyPrivilege"]);
     }
-    service_on_windows("start", &config, &root);
+    enrol_installed(addr, &server, &config);
+    assert!(
+        key.is_file(),
+        "`enrol` wrote the state.json the program is denied"
+    );
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -1616,11 +1620,6 @@ fn on_windows_a_pipe_the_scm_names_no_process_for_is_refused() {
             .unwrap_or(0)
     };
 
-    common::client_certificate(dir.path());
-    let key = state.join("client-key.pem");
-    let cert = state.join("client.pem");
-    std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
-    std::fs::rename(dir.path().join("test-client.pem"), &cert).expect("place the certificate");
     std::fs::write(
         program.join("probe.cmd"),
         format!(
@@ -1666,16 +1665,13 @@ while ($true) {
     )
     .expect("write the impostor");
 
-    let (addr, state_view, _server) = spawn_server();
+    let (addr, state_view, server) = spawn_server();
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
         format!(
             "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n\
-             [tls]\ncert_file = {cert:?}\nkey_file = {key:?}\n\n\
              [[supervisor]]\ntype = \"command\"\nname = \"probe\"\ncommand = \"probe.cmd\"\n",
-            cert = cert.display().to_string(),
-            key = key.display().to_string(),
         ),
     )
     .expect("write supervisor.toml");
@@ -1696,7 +1692,7 @@ while ($true) {
     )
     .expect("install the service with LocalService as the process account");
     let _registered = Registered;
-    service_on_windows("start", &config, &root);
+    enrol_installed(addr, &server, &config);
     wait_for(
         "the Agent to appear in the fleet",
         Duration::from_secs(60),
@@ -1782,410 +1778,4 @@ while ($true) {
 
     service_on_windows("stop", &config, &root);
     client(&["service", "uninstall"], &config).expect("uninstall the service");
-}
-
-/// The password of the `bootstrap.p12` the enrolment smoke test installs with.
-const P12_PASSWORD: &str = "a password of the operator";
-
-/// The fleet's files a script puts in the directory `--fleet-files` names (ADR-0029 clause 11),
-/// made from what `served` issued: its bootstrap certificate and key as `bootstrap.p12` under
-/// [`P12_PASSWORD`], and the CA of its certificate as `server-ca.pem`. Answers the bootstrap key.
-fn fleet_files(served: &enrolling::Served, dir: &Path) -> rcgen::KeyPair {
-    let pki = served.dir.path();
-    let key = rcgen::KeyPair::from_pem(
-        &std::fs::read_to_string(pki.join("bootstrap-key.pem")).expect("bootstrap key"),
-    )
-    .expect("a key");
-    let cert = std::fs::read(pki.join("bootstrap.pem")).expect("bootstrap certificate");
-    let cert = opamp::tls::certificates(&cert).expect("pem")[0].to_vec();
-    std::fs::create_dir_all(dir).expect("fleet files dir");
-    std::fs::write(
-        dir.join(classis_agent::config_init::BOOTSTRAP_P12_FILE),
-        classis_core::pkcs12::file::seal(&cert, &key.serialize_der(), P12_PASSWORD).expect("seal"),
-    )
-    .expect("write bootstrap.p12");
-    std::fs::copy(
-        pki.join("client-ca.pem"),
-        dir.join(classis_agent::config_init::SERVER_CA_FILE),
-    )
-    .expect("write server-ca.pem");
-    key
-}
-
-/// `service install` running in the background while the test approves its enrolment. Killed
-/// however the test ends, so an install still waiting for an approval does not outlive it.
-struct Installing {
-    child: std::process::Child,
-    stdout: PathBuf,
-    stderr: PathBuf,
-}
-
-impl Installing {
-    fn spawn(args: &[&str], config: &Path, logs: &Path) -> Self {
-        let stdout = logs.join("install.out");
-        let stderr = logs.join("install.err");
-        let child = Command::new(env!("CARGO_BIN_EXE_supervisor"))
-            .arg("--config")
-            .arg(config)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::fs::File::create(&stdout).expect("install.out"))
-            .stderr(std::fs::File::create(&stderr).expect("install.err"))
-            .spawn()
-            .expect("run the client");
-        Installing {
-            child,
-            stdout,
-            stderr,
-        }
-    }
-
-    /// What the install said, once it has ended; `None` while it runs.
-    fn ended(&mut self) -> Option<String> {
-        let status = self.child.try_wait().expect("wait for the install")?;
-        Some(self.said(&status.to_string()))
-    }
-
-    /// Waits for the install to end: its stdout when it succeeded, everything it said when not.
-    fn finish(mut self, timeout: Duration) -> Result<String, String> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.child.try_wait().expect("wait for the install") {
-                return if status.success() {
-                    Ok(std::fs::read_to_string(&self.stdout).unwrap_or_default())
-                } else {
-                    Err(self.said(&status.to_string()))
-                };
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out after {timeout:?} waiting for the install to end: {}",
-                self.said("nothing yet")
-            );
-            std::thread::sleep(Duration::from_millis(250));
-        }
-    }
-
-    fn said(&self, status: &str) -> String {
-        format!(
-            "the install ended with {status}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            std::fs::read_to_string(&self.stdout).unwrap_or_default(),
-            std::fs::read_to_string(&self.stderr).unwrap_or_default()
-        )
-    }
-}
-
-impl Drop for Installing {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-/// Every regular file beneath `dir` for which `holds` answers yes, given its path and content;
-/// links not followed. A file that cannot be read fails the test: it could not be checked.
-fn files_where(dir: &Path, holds: &dyn Fn(&Path, &[u8]) -> bool) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("list {}: {e}", dir.display())) {
-        let path = entry.expect("entry").path();
-        let kind = std::fs::symlink_metadata(&path)
-            .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
-            .file_type();
-        if kind.is_dir() {
-            found.extend(files_where(&path, holds));
-        } else if kind.is_file()
-            && holds(
-                &path,
-                &std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
-            )
-        {
-            found.push(path);
-        }
-    }
-    found
-}
-
-/// A plain scan, compared from each offset. The staged program is the largest file under a root,
-/// some tens of MiB, and a comparison stops at its first byte that differs: well under a second.
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
-/// The arguments of the install a script runs after the package (ADR-0029 clause 11).
-fn install_args(root: &Path, port: u16, fleet_files: &Path, password_file: &Path) -> Vec<String> {
-    vec![
-        "service".into(),
-        "install".into(),
-        "--root".into(),
-        root.to_string_lossy().into_owned(),
-        "--endpoint".into(),
-        format!("wss://localhost:{port}/v1/opamp"),
-        "--fleet-files".into(),
-        fleet_files.to_string_lossy().into_owned(),
-        "--bootstrap-password-file".into(),
-        password_file.to_string_lossy().into_owned(),
-    ]
-}
-
-/// The install a script runs after the package (ADR-0029 clause 11): `service install --endpoint
-/// --fleet-files --bootstrap-password-file` opens the `bootstrap.p12` in that directory, waits for
-/// an operator's approval with nothing staged or registered, and only then stages and registers.
-/// The configuration it wrote names a copy of the CA and no bootstrap identity, the Client's
-/// identity is the certificate the approval issued, the fleet's files are left as they were, and
-/// neither the `bootstrap.p12`, its password nor its key is in any file under the root. The
-/// service started then reaches the Server on the issued certificate: the Server takes it into the
-/// fleet as the Host that certificate names, and has issued no other.
-/// Verifies: ADR-0029, ADR-0020, ADR-0021
-#[test]
-#[ignore = "installs a real system service; run with --ignored in the service-smoke job"]
-fn an_install_enrols_with_a_bootstrap_p12_and_the_service_runs_on_the_issued_certificate() {
-    assert_eq!(
-        service().state().expect("query the service"),
-        ServiceState::NotInstalled,
-        "a leftover {} service from an earlier run — remove it before running this",
-        service_name()
-    );
-    let dir = tempfile::tempdir().expect("tempdir");
-    let server = enrolling::Served::start_on_its_own(600);
-    let fleet = dir.path().join("fleet");
-    let key = fleet_files(&server, &fleet);
-    let password_file = dir.path().join("bootstrap.pass");
-    std::fs::write(&password_file, format!("{P12_PASSWORD}\n")).expect("write the password");
-    let read = |path: &Path| std::fs::read(path).expect("read a fleet file");
-    let p12 = fleet.join(classis_agent::config_init::BOOTSTRAP_P12_FILE);
-    let before = (read(&p12), read(&password_file));
-    let root = dir.path().join("install");
-    let config = root.join(classis_agent::config_init::FILE_NAME);
-    let state_dir = root.join(classis_agent::service::layout::STATE_DIR_NAME);
-
-    // Before the install, so that on a failure the install is killed before the uninstall runs.
-    let _registered = Registered;
-    let args = install_args(&root, server.port, &fleet, &password_file);
-    let mut installing = Installing::spawn(
-        &args.iter().map(String::as_str).collect::<Vec<_>>(),
-        &config,
-        dir.path(),
-    );
-    let id = wait_for(
-        "the install's enrolment request",
-        Duration::from_secs(120),
-        || {
-            if let Some(said) = installing.ended() {
-                panic!("the install ended before it enrolled: {said}");
-            }
-            server
-                .enrolment
-                .pending()
-                .first()
-                .map(|pending| pending.id.clone())
-        },
-    );
-    // Enrolled before anything is staged or registered (ADR-0020 clause 5).
-    assert_eq!(
-        service().state().expect("query the service"),
-        ServiceState::NotInstalled,
-        "registered while the enrolment waits for its approval"
-    );
-    let layout = classis_agent::service::layout::Layout::new(&root);
-    assert!(
-        !layout.versions_dir().exists(),
-        "staged while the enrolment waits for its approval"
-    );
-    server.state.approve_enrolment(&id).expect("approve");
-    let installed = installing
-        .finish(Duration::from_secs(120))
-        .expect("install the service");
-    assert!(
-        installed.contains(&format!(
-            "enrolled: the issued certificate is in {}",
-            state_dir.display()
-        )),
-        "{installed}"
-    );
-
-    let issued = server.revocations.issued();
-    assert_eq!(issued.len(), 1, "the approval issued {}", issued.len());
-    let issued = &issued[0];
-    assert_eq!(
-        issued.facts.key_fingerprint, id,
-        "issued for the approved request"
-    );
-    let host = issued
-        .facts
-        .host
-        .clone()
-        .expect("the issued certificate names a host");
-
-    let mut loaded =
-        classis_agent::config::ClientConfig::load(&config).expect("load the configuration");
-    let tls = loaded.tls.clone().expect("a [tls] table");
-    let ca_copy = root.join(classis_agent::config_init::SERVER_CA_FILE);
-    assert_eq!(
-        tls.ca_file.as_deref(),
-        Some(ca_copy.as_path()),
-        "the configuration names the CA copied from the fleet's files"
-    );
-    assert_eq!(
-        read(&ca_copy),
-        read(&server.dir.path().join("client-ca.pem")),
-        "the copy is not the Server's CA"
-    );
-    assert_eq!(
-        (tls.cert_file, tls.key_file),
-        (None, None),
-        "the bootstrap identity is written into the configuration"
-    );
-    loaded.state_dir.clone_from(&state_dir);
-    assert_eq!(
-        loaded.client_identity(),
-        Some((
-            state_dir.join(classis_agent::tls::ISSUED_CERT_FILE),
-            state_dir.join(classis_agent::tls::ISSUED_KEY_FILE),
-        )),
-        "the Client's identity is not the issued certificate"
-    );
-    let held = read(&state_dir.join(classis_agent::tls::ISSUED_CERT_FILE));
-    let (_, block) = x509_parser::pem::parse_x509_pem(&held).expect("PEM");
-    let held = block.parse_x509().expect("a certificate");
-    assert_eq!(
-        classis_server::revocation::normalize_serial(&hex::encode(held.raw_serial())),
-        issued.facts.id.serial,
-        "the state directory holds another certificate than the one issued"
-    );
-
-    // The fleet's files are read, never copied, changed or removed (ADR-0029 clauses 9 and 10).
-    assert!(
-        (read(&p12), read(&password_file)) == before,
-        "the install changed bootstrap.p12 or the password file"
-    );
-    // The decrypted bootstrap key — as PKCS#8, in DER or in PEM however it is wrapped — the
-    // `bootstrap.p12` and its password are in no file under the root (ADR-0029 clause 7).
-    let key_der = key.serialize_der();
-    let key_body: String = key
-        .serialize_pem()
-        .lines()
-        .filter(|line| !line.starts_with("-----"))
-        .collect();
-    let holding = files_where(&root, &|path, bytes| {
-        let unwrapped: Vec<u8> = bytes
-            .iter()
-            .copied()
-            .filter(|b| !matches!(b, b'\r' | b'\n'))
-            .collect();
-        path.extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("p12"))
-            || contains(bytes, &key_der)
-            || contains(&unwrapped, key_body.as_bytes())
-            || contains(bytes, P12_PASSWORD.as_bytes())
-    });
-    assert!(
-        holding.is_empty(),
-        "the bootstrap identity or its password is in {holding:?}"
-    );
-
-    // Nothing has connected as an Agent yet: the enrolment's connections were no member's, so the
-    // Agent below can only be the started service.
-    assert!(
-        server.state.snapshot().iter().all(|agent| !agent.connected),
-        "an Agent is connected before the service starts"
-    );
-    client(&["service", "start"], &config).expect("start the service");
-    wait_for(
-        "the service to report running",
-        Duration::from_secs(60),
-        || (service().state().ok()? == ServiceState::Running).then_some(()),
-    );
-    wait_for(
-        "the service's process id",
-        Duration::from_secs(30),
-        service_pid,
-    );
-    // A member connection presents a certificate of the client CA, and the Host it arrives over is
-    // the one that certificate names: the issued one, the only one there is.
-    wait_for(
-        "the Agent to arrive on the issued certificate",
-        Duration::from_secs(60),
-        || {
-            server
-                .state
-                .snapshot()
-                .into_iter()
-                .find(|agent| agent.connected && agent.host == host)
-                .map(|_| ())
-        },
-    );
-    assert_eq!(
-        server.revocations.issued().len(),
-        1,
-        "the service was issued another certificate"
-    );
-
-    client(&["service", "stop"], &config).expect("stop the service");
-    wait_for(
-        "the service to report stopped",
-        Duration::from_secs(60),
-        || (service().state().ok()? == ServiceState::Stopped).then_some(()),
-    );
-    client(&["service", "uninstall"], &config).expect("uninstall the service");
-    wait_for(
-        "the service to be deregistered",
-        Duration::from_secs(30),
-        || (service().state().ok()? == ServiceState::NotInstalled).then_some(()),
-    );
-}
-
-/// A `bootstrap.p12` that does not open under the password `--bootstrap-password-file` names fails
-/// the install before anything is written, staged or registered, saying so of the file and naming
-/// the flag (ADR-0029 clause 10, ADR-0020 clause 5).
-/// Verifies: ADR-0029, ADR-0020
-#[test]
-#[ignore = "installs a real system service; run with --ignored in the service-smoke job"]
-fn a_wrong_bootstrap_password_fails_the_install_before_anything_is_written() {
-    assert_eq!(
-        service().state().expect("query the service"),
-        ServiceState::NotInstalled,
-        "a leftover {} service from an earlier run — remove it before running this",
-        service_name()
-    );
-    let dir = tempfile::tempdir().expect("tempdir");
-    let server = enrolling::Served::start_on_its_own(600);
-    let fleet = dir.path().join("fleet");
-    fleet_files(&server, &fleet);
-    let password_file = dir.path().join("bootstrap.pass");
-    std::fs::write(&password_file, "not the password of the file\n").expect("write the password");
-    let root = dir.path().join("install");
-    let config = root.join(classis_agent::config_init::FILE_NAME);
-
-    let _registered = Registered;
-    let args = install_args(&root, server.port, &fleet, &password_file);
-    let output = Command::new(env!("CARGO_BIN_EXE_supervisor"))
-        .arg("--config")
-        .arg(&config)
-        .args(&args)
-        .output()
-        .expect("run the client");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "the install succeeded: {stderr}");
-    // The refusal of the file itself, not merely a failure: the other checks below hold for any
-    // install that stops early.
-    let p12 = fleet.join(classis_agent::config_init::BOOTSTRAP_P12_FILE);
-    assert!(
-        stderr.contains(&format!(
-            "{}: the password does not open it (--bootstrap-password-file)",
-            p12.display()
-        )),
-        "{stderr}"
-    );
-    assert!(!root.exists(), "the install wrote into {}", root.display());
-    assert!(
-        server.enrolment.pending().is_empty(),
-        "the install enrolled"
-    );
-    assert_eq!(
-        service().state().expect("query the service"),
-        ServiceState::NotInstalled,
-        "the install registered the service"
-    );
 }

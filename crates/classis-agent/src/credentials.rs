@@ -1,7 +1,6 @@
 //! What a host is, to its Server, after `enrol` (ADR-0064 clause 7): the five values of
-//! `state.json`. Only the value is here: reading and writing `state.json`, and carrying the token
-//! upstream, arrive with the authentication cutover; until then the Client authenticates by its
-//! client certificate and nothing builds this type.
+//! `state.json`. The file, and everything that reads or writes it, is [`enrolment`](crate::enrolment)'s;
+//! this is the value the rest of the Client carries.
 //!
 //! The client secret and the access token are held in buffers wiped on drop (ADR-0057), and neither
 //! is ever formatted: a `Debug` of this type names them and prints nothing of them.

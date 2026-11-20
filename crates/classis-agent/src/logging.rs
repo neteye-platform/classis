@@ -26,6 +26,24 @@ use tracing_subscriber::fmt::writer::{EitherWriter, MakeWriter};
 const FILE_STEM: &str = "supervisor";
 const FILE_SUFFIX: &str = "log";
 
+/// Whether `name` is the name of one of the Client's own log files, as the daily rotation of
+/// [`open`] makes it — `supervisor.YYYY-MM-DD.log`, the date `tracing-appender` formats as
+/// `[year]-[month]-[day]` — and no other: a log directory the operator chose may hold files named
+/// alike that are not the Client's (`supervisor.notes.log`, `supervisor.2026-11-17.log.1`).
+pub(crate) fn is_log_file(name: &str) -> bool {
+    name.strip_prefix(FILE_STEM)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .and_then(|rest| rest.strip_suffix(FILE_SUFFIX))
+        .and_then(|rest| rest.strip_suffix('.'))
+        .is_some_and(|date| {
+            date.len() == "YYYY-MM-DD".len()
+                && date.bytes().enumerate().all(|(at, byte)| match at {
+                    4 | 7 => byte == b'-',
+                    _ => byte.is_ascii_digit(),
+                })
+        })
+}
+
 /// The open file, once there is one. Set at most once per process.
 static FILE: OnceLock<NonBlocking> = OnceLock::new();
 
@@ -189,6 +207,20 @@ pub fn default_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(DIR_NAME)
 }
 
+/// The directory the Client's log files go to (ADR-0019): `[logging] dir` as written, and
+/// [`default_dir`] when it names none. Written as it is, a relative `dir` means what it does to
+/// the process that opens it — the service manager's working directory for the service, which no
+/// other process can know — so only an absolute one is the same place everywhere. The service and
+/// `revoke` both take the directory from here.
+#[must_use]
+pub fn configured_dir(config: &crate::config::ClientConfig) -> PathBuf {
+    config
+        .logging
+        .dir
+        .clone()
+        .unwrap_or_else(|| default_dir(&config.state_dir))
+}
+
 /// The name of the default log directory in the state directory ([`default_dir`]).
 pub(crate) const DIR_NAME: &str = "logs";
 
@@ -253,6 +285,47 @@ mod tests {
                 .any(|n| n.starts_with(FILE_STEM) && n.ends_with(FILE_SUFFIX)),
             "the file is named after the stem and the day: {written:?}"
         );
+    }
+
+    /// `is_log_file` is true of exactly the names the rotation writes — here the appender itself
+    /// writes one — and of no other file a log directory may hold.
+    /// Verifies: ADR-0064
+    #[test]
+    fn only_the_names_the_rotation_writes_are_log_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix(FILE_STEM)
+            .filename_suffix(FILE_SUFFIX)
+            .max_log_files(7)
+            .build(dir.path())
+            .expect("appender");
+        std::io::Write::write_all(&mut appender, b"line\n").expect("write");
+        let written: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert!(is_log_file(&written[0]), "{written:?}");
+
+        assert!(is_log_file("supervisor.2026-11-17.log"));
+        for other in [
+            "supervisor.log",
+            "supervisor..log",
+            "supervisor.notes.log",
+            "supervisor.backup.log",
+            "supervisor.2026-11-17.log.1",
+            "supervisor.2026-11-17.log~",
+            "supervisor.2026-11-17-09.log",
+            "supervisor.26-11-17.log",
+            "supervisor.2026-1-17.log",
+            "supervisor.2026-11-1x.log",
+            "supervisor.2026_11_17.log",
+            "xsupervisor.2026-11-17.log",
+            "other.2026-11-17.log",
+        ] {
+            assert!(!is_log_file(other), "{other}");
+        }
     }
 
     /// The log is the Client's alone (ADR-0059 clause 6) where a process account passes through

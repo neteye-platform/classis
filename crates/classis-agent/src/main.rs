@@ -4,12 +4,16 @@
 
 use std::path::{Path, PathBuf};
 
-use classis_agent::cli::{self, Command, ConfigArgs, InstallArgs, ServiceAction};
+use classis_agent::cli::{
+    self, Command, ConfigArgs, EnrolArgs, InstallArgs, RevokeArgs, ServiceAction,
+};
 use classis_agent::config::ClientConfig;
 use classis_agent::config_init;
+use classis_agent::enrolment;
+use classis_agent::revoke;
 use classis_agent::service::runtime::{self, RunSpec};
 use classis_agent::service::{
-    enrol, layout, manager, run_as, windows_rights, ServiceControl, ServiceLevel,
+    layout, manager, run_as, windows_rights, ServiceControl, ServiceLevel,
 };
 use classis_agent::update;
 
@@ -84,6 +88,12 @@ fn main() {
         Some(Command::Service { action }) => {
             service_command(&cli.config, config_named, cli.state_dir.as_deref(), &action)
         }
+        Some(Command::Enrol(args)) => {
+            enrol_command(&cli.config, config_named, cli.state_dir.as_deref(), &args)
+        }
+        Some(Command::Revoke(args)) => {
+            revoke_command(&cli.config, config_named, cli.state_dir.as_deref(), &args)
+        }
         // Answer for this executable so a self-update can prove it before pointing at it
         // (ADR-0018). Deliberately does nothing else: it must work on a binary that has no
         // configuration, no state directory, and no Server.
@@ -135,6 +145,114 @@ fn agents_service(socket: &Path, client_uid: u32) -> Result<(), String> {
 #[cfg(windows)]
 fn agents_service(pipe: &Path, client: classis_agent::win32::Sid) -> Result<(), String> {
     classis_agent::service::windows::run_agents_as_service(pipe, client)
+}
+
+/// The configuration `enrol` and `revoke` act under, and with it the state directory (ADR-0064
+/// clause 7): the state directory `--state-dir` names; otherwise, where no configuration is named
+/// and a system service is registered, the one that registration carries and the configuration an
+/// install lays out for it; otherwise the configuration file's, as a foreground run reads it.
+fn host_config(
+    config_path: &Path,
+    config_named: bool,
+    state_dir_named: Option<&Path>,
+) -> Result<ClientConfig, String> {
+    let registered = if config_named || state_dir_named.is_some() {
+        None
+    } else {
+        manager::registered_state_dir(ServiceLevel::System)?
+    };
+    let config_path = if registered.is_some() {
+        manager::default_root(ServiceLevel::System)?.join(config_init::FILE_NAME)
+    } else {
+        config_path.to_path_buf()
+    };
+    let mut config = ClientConfig::load(&config_path)?;
+    if let Some(dir) = state_dir_named.map(absolute).transpose()?.or(registered) {
+        config.state_dir = dir;
+    }
+    Ok(config)
+}
+
+/// `enrol <base-url> <key>` (ADR-0064 clause 7).
+fn enrol_command(
+    config_path: &Path,
+    config_named: bool,
+    state_dir_named: Option<&Path>,
+    args: &EnrolArgs,
+) -> Result<(), String> {
+    let config = host_config(config_path, config_named, state_dir_named)?;
+    let tls = classis_agent::tls::trust(&config)?;
+    let enrolled = runtime::daemon_runtime()?.block_on(enrolment::enrol(
+        &args.base_url,
+        &args.key,
+        &config.state_dir,
+        tls,
+        &enrolment::NativeHost,
+    ))?;
+    for warning in &enrolled.warnings {
+        println!("warning: {warning}");
+    }
+    println!(
+        "enrolled in the space {} as {}",
+        enrolled.space, enrolled.device_id
+    );
+    println!("  state file: {}", enrolled.state_file.display());
+    if enrolled.service_started {
+        println!("  the service is started, and starts at boot");
+    } else {
+        println!(
+            "  no service is registered for this state directory: `supervisor run` runs the \
+             Client in the foreground"
+        );
+    }
+    Ok(())
+}
+
+/// `revoke [--force] [--keep-cache]` (ADR-0064 clause 7).
+fn revoke_command(
+    config_path: &Path,
+    config_named: bool,
+    state_dir_named: Option<&Path>,
+    args: &RevokeArgs,
+) -> Result<(), String> {
+    let config = host_config(config_path, config_named, state_dir_named)?;
+    let revoked = revoke::revoke(
+        &config.state_dir,
+        &revoke::Outside::of(&config),
+        args.force,
+        args.keep_cache,
+        &enrolment::NativeHost,
+        &mut revoke::confirm_on_terminal,
+    )?;
+    println!(
+        "revoked: everything in {} is deleted",
+        config.state_dir.display()
+    );
+    for dir in &revoked.outside {
+        println!(
+            "  also deleted, outside it: what the Client kept in {}",
+            dir.display()
+        );
+    }
+    if classis_agent::logging::configured_dir(&config).is_relative() {
+        println!(
+            "  not deleted: the Client's log files in the relative [logging] dir {}, which the \
+             service resolves against its own working directory; remove them by hand",
+            classis_agent::logging::configured_dir(&config).display()
+        );
+    }
+    if !revoked.kept.is_empty() {
+        let kept: Vec<String> = revoked
+            .kept
+            .iter()
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        println!("  kept (--keep-cache): {}", kept.join(", "));
+    }
+    if revoked.service_disabled {
+        println!("  the service will not start at boot until this host is enrolled again");
+    }
+    Ok(())
 }
 
 /// Dispatch a `service` verb (ADR-0019).
@@ -426,51 +544,25 @@ fn install(
         Some(dir) => config_init::Beside::in_named_dir(&absolute(dir)?)?,
         None => config_init::Beside::the_program(),
     };
-    let password = args
-        .bootstrap_password_file
-        .as_deref()
-        .map(|path| config_init::read_password_file(path, "--bootstrap-password-file"))
-        .transpose()?;
-    // Not asked, the bootstrap identity found enrols a Client that holds no issued certificate,
-    // over TLS (ADR-0029 clause 10) — decided, and a `bootstrap.p12` opened, before anything is
-    // written, against the file this install is about to write or keep.
-    let unasked = if args.interactive {
-        None
-    } else {
-        // An absent file loads as the defaults; `--endpoint` then writes its endpoint, and an
-        // existing file is kept.
-        let mut about_to_run = ClientConfig::load(&config_path)?;
-        if let (false, Some(endpoint)) = (config_path.exists(), &args.endpoint) {
-            about_to_run.endpoint.clone_from(endpoint);
-        }
-        about_to_run.state_dir = about_to_run.service_state_dir(&roots)?;
-        beside.unasked_enrolment(&about_to_run, password.as_deref().map(String::as_str))?
-    };
     // Held from the first write to the last, so the account cannot swap the data root for a link
     // while this privileged run writes into it (ADR-0054).
     let mut held_root = hold_data_root(&data_root)?;
-    let mut written = config_init::Written::default();
+    let mut copies: Vec<PathBuf> = Vec::new();
     if args.interactive {
-        written = ask(
-            &config_path,
-            &roots,
-            &beside,
-            password.as_deref().map(String::as_str),
-        )?;
+        copies = ask(&config_path, &roots, &beside)?;
     } else if let Some(endpoint) = &args.endpoint {
         // The same file, from an answer given rather than asked for (ADR-0019): this is the branch
         // the MSI's custom action and a `%post` script take. The self-update consent travels with
         // it — standing unless this install was told to withdraw it (ADR-0018) — and so do the CA
         // and the verification key beside the program (ADR-0020 clause 3).
         let self_update = !args.no_self_update;
-        written.copies =
-            config_init::run_with_endpoint(&config_path, endpoint, self_update, &beside)?;
+        copies = config_init::run_with_endpoint(&config_path, endpoint, self_update, &beside)?;
     } else if !config_path.exists() {
         // Not an error — automation must not break — but never silent: without this file the
-        // service refuses to start.
+        // service runs on the development defaults.
         println!(
-            "warning: no configuration at {} — the Client refuses to start until it exists with \
-             a client identity (write it, or re-run with --interactive)",
+            "warning: no configuration at {} — the Client runs on its defaults until it exists \
+             (write it, or re-run with --interactive)",
             config_path.display()
         );
     }
@@ -478,8 +570,8 @@ fn install(
     // Fail on a broken configuration now, not at the service's first start. After the write, so
     // that a file just answered into existence is held to the same rule as any other.
     let mut config = ClientConfig::load(&config_path)?;
-    // The state directory the service will run with — where an issued certificate counts. Asked
-    // again of the file as it is now, which the service's account may have rewritten meanwhile.
+    // The state directory the service will run with. Asked again of the file as it is now, which
+    // the service's account may have rewritten meanwhile.
     let state_dir = config.service_state_dir(&roots)?;
     let state_dir_source = config.service_state_dir_source(&roots);
     config.state_dir.clone_from(&state_dir);
@@ -514,9 +606,8 @@ fn install(
     }
     // On Windows every local user inherits read access under %ProgramData%; the data root, a state
     // directory placed elsewhere, and a Supervisors' root this install creates outside both are cut
-    // off from it before anyone is granted anything (H8) — and before an enrolment writes its
-    // private key there. Decided before anything is created. Unix needs nothing here: the Client writes its
-    // secrets owner-only itself.
+    // off from it before anyone is granted anything (H8). Decided before anything is created. Unix
+    // needs nothing here: the Client writes its secrets owner-only itself.
     let restrictions = windows_rights::plan(
         &data_root,
         args.root.is_some() || args.data_root.is_some(),
@@ -554,7 +645,7 @@ fn install(
                 &state_dir,
                 &supervisors_root,
                 &config_path,
-                &written.copies,
+                &copies,
             ),
         );
         halt_recorded(
@@ -604,25 +695,6 @@ fn install(
         let process_sid: Option<String> = None;
         let created_outside =
             windows_rights::restrict(level, &restrictions, process_sid.as_deref())?;
-        if let Some(bootstrap) = unasked {
-            println!("enrolling with {}", bootstrap.describe());
-            written.bootstrap = Some(bootstrap);
-        }
-        // Before anything is staged or registered (ADR-0020 clause 5): an enrolment that is stopped
-        // leaves the answered file and nothing else.
-        if let Some(bootstrap) = &written.bootstrap {
-            enrol::run(&config, bootstrap)?;
-        }
-        // And held to what the Client needs at startup. A packaged install registers the service
-        // even so — it has an endpoint and no client identity to write — but never starts it, and
-        // the service refuses to run until the file names one (ADR-0019). Said loudly here.
-        if let Err(e) = config.check_admission() {
-            println!(
-                "warning: {}: {e}. The service is registered, and refuses to start until this is \
-                 set (or re-run with --interactive).",
-                config_path.display()
-            );
-        }
 
         let layout = layout::Layout::new(&layout_root);
         let program = layout::stage_current_exe(&layout)?;
@@ -681,16 +753,10 @@ fn install(
                 )?,
             );
             // The copy beside a configuration named outside the data root is not under it.
-            skipped.extend(
-                run_as.hand_over(
-                    &written
-                        .copies
-                        .iter()
-                        .map(PathBuf::as_path)
-                        .collect::<Vec<_>>(),
-                    kept,
-                )?,
-            );
+            skipped.extend(run_as.hand_over(
+                &copies.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+                kept,
+            )?);
             for skipped in skipped {
                 println!("warning: {}", skipped.warning(run_as.account()));
             }
@@ -775,10 +841,17 @@ fn install(
             manager::agents_service_name()
         );
     }
-    // Since service-manager 0.10, launchd installs do not auto-start; say the next step instead
-    // of pretending.
-    let user = if args.scope.user { " --user" } else { "" };
-    println!("start it with: supervisor service start{user}");
+    // An install starts nothing and enables nothing (ADR-0064 clause 7); say the next step instead
+    // of pretending. A user-scope service names no state directory `enrol` could match it on, so
+    // it is started by hand once the host is enrolled.
+    if args.scope.user {
+        println!(
+            "enrol this host with: supervisor enrol <base-url> <key>, then start it with: \
+             supervisor service start --user"
+        );
+    } else {
+        println!("enrol this host, which starts the service: supervisor enrol <base-url> <key>");
+    }
     Ok(())
 }
 
@@ -815,8 +888,8 @@ fn agents_spec(
     })
 }
 
-/// `service config`: the questionnaire of `install --interactive` against an installed Client, and
-/// its enrolment when it holds no certificate yet — registering nothing (ADR-0019 clause 15).
+/// `service config`: the questionnaire of `install --interactive` against an installed Client,
+/// registering nothing (ADR-0019 clause 15).
 fn configure(
     config_path: &Path,
     config_named: bool,
@@ -846,18 +919,13 @@ fn configure(
     // Held while this privileged run writes into it, as `install` holds it (ADR-0054).
     let _held_root = hold_data_root(&data_root)?;
     // The installed copy runs from the layout, where no fleet files lie (ADR-0020, out of scope).
-    let written = ask(&config_path, &roots, &config_init::Beside::default(), None)?;
+    let copies = ask(&config_path, &roots, &config_init::Beside::default())?;
 
-    let mut config = ClientConfig::load(&config_path)?;
-    let state_dir = config.service_state_dir(&roots)?;
-    config.state_dir.clone_from(&state_dir);
-    if let Some(bootstrap) = &written.bootstrap {
-        enrol::run(&config, bootstrap)?;
-    }
+    // The file just answered into place must load, as `install` holds it to.
+    ClientConfig::load(&config_path)?;
     // What this run created belongs to whoever owns the configuration — the service's account when
     // it runs as one (ADR-0019 clause 13) — not to the administrator who ran it.
-    let mut created = enrol::written(&state_dir);
-    created.extend(written.copies.iter().cloned());
+    let created = copies;
     let skipped = run_as::match_owner(
         &config_path,
         &data_root,
@@ -870,9 +938,6 @@ fn configure(
             config_path.display()
         );
     }
-    if let Err(e) = config.check_admission() {
-        println!("warning: {}: {e}", config_path.display());
-    }
 
     let user = if args.scope.user { " --user" } else { "" };
     println!(
@@ -882,25 +947,17 @@ fn configure(
     Ok(())
 }
 
-/// The questionnaire against the file at `config_path`, offering what it holds and asking for the
-/// bootstrap identity only while the service's state directory holds no issued certificate
-/// (ADR-0019 clauses 16, 17). That directory is decided, and refused, before anything is asked.
+/// The questionnaire against the file at `config_path`, offering what it holds (ADR-0019
+/// clause 16). The state directory the service would run with is decided, and refused, before
+/// anything is asked. Answers with the files it wrote beside the configuration.
 fn ask(
     config_path: &Path,
     roots: &layout::Roots,
     beside: &config_init::Beside,
-    password: Option<&str>,
-) -> Result<config_init::Written, String> {
+) -> Result<Vec<PathBuf>, String> {
     let current = ClientConfig::load(config_path)?;
-    let mut in_service = current.clone();
-    in_service.state_dir = current.service_state_dir(roots)?;
-    config_init::run(
-        config_path,
-        &current,
-        in_service.is_enrolled(),
-        beside,
-        password,
-    )
+    current.service_state_dir(roots)?;
+    config_init::run(config_path, &current, beside)
 }
 
 /// The data root, held where it exists already; `None` where it does not yet.

@@ -31,7 +31,7 @@ Out of scope, and deliberately so: **authorization and multi-tenancy**, which
 the specification names as non-goals, with one bound on the Agent plane: a host
 receives from the Server only the configurations and packages released to an
 Agent it speaks for (ADR-0026). The boundary is worth stating precisely because
-the host binding (ADR-0021 clause 7) runs close to it — _which Agent is
+the host binding (ADR-0064 clause 3) runs close to it — _which Agent is
 speaking_, and so _what its host may receive from the Server_, is authentication
 and belongs here; _what that Agent is allowed to do_ beyond that is
 authorization and does not.
@@ -43,28 +43,28 @@ the project already has:
 
 - TLS on both transports, on both ends, with a private CA supported on the
   Client (ADR-0013).
-- **One proof on the Agent plane, required in the handshake** (ADR-0021,
-  `transport::Admission`): a client certificate the client CA issued, valid and
-  not revoked. No configuration admits a peer without one. The plane has no
-  credential: `server.toml` refuses an `[auth]` section and a credential key in
-  `[connection_offer]` at startup, and `/v1/opamp` and the download route read
-  no `Authorization` header. The Client sends none, and nothing in
-  `supervisor.toml` admits a host; its only secret on the Agent plane is its
-  private key.
+- **One proof on the Agent plane, required on every request** (ADR-0064,
+  `transport::admit`): an opaque bearer access token, whose SHA-256 is a
+  client's one active token and which has not expired. No configuration admits
+  a peer without one. A host gets its token by enrolling with its Space's key
+  and then with its client credentials at `/v1/token`; the Server keeps only the
+  hashes of the secret and the token. `server.toml` refuses an `[auth]` section
+  and a credential key in `[connection_offer]` at startup. The Client sends the
+  token on every OpAMP exchange on both transports and on every download, a
+  header a package offers cannot replace it, and its own telemetry carries it
+  only to a destination at the Server's origin. The Agent plane asks no peer for
+  a certificate.
 - Basic authentication over the **whole** Operator plane, the UI included
   (`[rest.auth]`, ADR-0021), required beyond the loopback, on a listener that is
   loopback until an operator publishes it (ADR-0013). A verification that
   succeeded is remembered by the SHA-256 of the header and compared in constant
   time (`credentials.rs`).
-- Client certificates the Server issues itself through the Baseline's CSR flow,
-  with the Agent keeping its private key — and with the request's
-  `basicConstraints`, `keyUsage`, `extendedKeyUsage`, and SANs **overwritten**
-  rather than carried over, so a CSR cannot ask for the powers of a CA
-  ([`ca.rs`](../crates/classis-server/src/ca.rs)). Through a Gateway a CSR is
-  signed only with a renewal proof, so a member behind it cannot obtain a
-  certificate for the Gateway's host and its powers; one with a bootstrap proof
-  is an enrolment, which the Server checks and an operator approves for a host
-  of its own (ADR-0039).
+- **Credentials with no value to steal on the Server, and no certificate
+  authority** (ADR-0064): client secrets and access tokens are 256 random bits
+  and the Server stores only their SHA-256; it issues no certificate and
+  holds no CA key for the fleet. Residual: a Space's enrolment key is kept
+  whole on the Server's disk, so it can be shown again, and whoever reads the
+  data directory or a backup of it can enrol hosts until the key is rotated.
 - Message size limits enforced in both directions on both transports, and at the
   Supervisor Endpoint.
 - **TLS 1.3 alone, on every connection of both ends** (ADR-0010, ADR-0013): the
@@ -72,16 +72,18 @@ the project already has:
   configuration pins TLS 1.3, and a peer offering only TLS 1.2 fails the
   handshake. Plaintext is accepted on `127.0.0.1` and `::1` alone and refused at
   startup anywhere else.
-- **A certificate in the handshake, and enrolment by approval** (ADR-0021,
-  ADR-0015): every Agent presents a client certificate the Agent plane asks for
-  in the TLS handshake. A fresh host enrols with a bootstrap certificate from a
-  CA of its own, only inside an operator-opened window, and only once an
-  operator approves its request, which proves the bootstrap certificate it rests
-  on with a signature of its key (ADR-0039). Repeated admission failures from
-  one address are answered `429` before admission checks anything else, on both
-  planes. On the Agent plane the TLS handshake and its client-certificate
-  verification come before that, and a failed handshake is not counted as an
-  admission failure.
+- **Enrolment by key, then a token on every request** (ADR-0064): a host
+  registers with its Space's reusable key at `/v1/enrol` (RFC 7591) and obtains
+  its token at `/v1/token` (RFC 6749 §4.4, HTTP Basic). A key that was rotated
+  enrols nothing, and one rotated between the check and the store refuses the
+  registration. An absent or unsupported credential is answered `401` with
+  `Bearer realm="fleet"`, a wrong, replaced or expired token `401` with
+  `error="invalid_token"`, and a malformed request `400` with
+  `error="invalid_request"`. Refused authentications on `/v1/enrol`,
+  `/v1/token`, `/v1/opamp` and the download are counted per address in one
+  table, and an address past `max_failures` is answered `429` before anything
+  else is checked, as on the Operator plane, which has its own table. The two
+  OAuth routes read at most 8 KiB of body.
 - **Nothing installed unsigned, and downloads only from the Client's own
   Server** (ADR-0026, ADR-0033): a Client without the verification key takes no
   package, the Server offers no entry that carries no signature, and every
@@ -100,30 +102,25 @@ the project already has:
 - Package content hashed and Ed25519-verified always, with no unsigned posture:
   without a verification key, or for an offer without a signature, nothing is
   downloaded. Archive members are validated before anything is written.
-- **Revocation that ends sessions** (ADR-0021): the Server keeps a persisted
-  list of revoked certificates, by issuing CA and serial — at most 20 octets, as
-  RFC 5280 allows — and extended along every renewal it signed. Admission
-  refuses them on both transports and on the download, a revocation closes
-  exactly the WebSocket sessions it concerns with `1008`, every session ends
-  when the certificate that admitted it expires, and a kept-alive connection is
-  refused on both transports and on the download once its certificate has
-  expired.
-- **A CSR's claim to an `instance_uid` is checked** (ADR-0021): a CSR naming any
-  `instance_uid` but its sender's is answered `BadRequest` before it is signed
-  or queued — the Baseline's conditional MUST.
-- **A certificate names its host, and a host speaks only for its own Agents**
-  (ADR-0021 clauses 7, 14 and 27): the Server puts a host of its own in every
-  certificate it signs; an `instance_uid` first reported with one host's
-  certificate is not spoken for by another's — such a reporter is re-keyed — and
-  a host holds at most three valid certificates. A renewal proves the
-  certificate it renews with that certificate's key, so it keeps its host and
-  chain through a Gateway too. An operator marks a Gateway, whose certificate
-  then speaks for any Agent.
-- **Key material and configuration readable by their owner alone** (ADR-0021
-  clause 8, ADR-0019 clause 18): on Unix the private key, the stored connection
-  settings and `supervisor.toml` are written `0600` in `0700` directories, a
-  state directory `0710` that the process account's group only passes through
-  where one is registered (ADR-0059). On Windows a system-scope install gives
+- **A replaced token ends its sessions** (ADR-0064 clause 6): a client has one
+  active token, and issuing a new one overwrites the hash of the old, which is
+  revoked by that. The Server closes exactly the WebSocket sessions admitted
+  with the old token with `1008`; plain HTTP and the download check the token on
+  every request, so an expired or replaced token is refused at the next one. An
+  open WebSocket session outlives its token's expiry and meets it at its next
+  connection. A token that never expires is the default (`token_lifetime_secs =
+  0`).
+
+- **A token names its host, and a host speaks only for its own Agents**
+  (ADR-0064 clause 3): the Server takes the host from the token of the request,
+  never from the report. A report for an `instance_uid` recorded under another
+  client is refused outright, and one client owns at most 256 `instance_uid`s.
+- **Key material and configuration readable by their owner alone** (ADR-0064
+  clause 7, ADR-0019 clause 18): on Unix `state.json`, which holds the client
+  secret and the access token, the stored connection settings and
+  `supervisor.toml` are written `0600` in `0700` directories, a state directory
+  `0710` that the process account's group only passes through where one is
+  registered (ADR-0059). On Windows a system-scope install gives
   the default data root under `%ProgramData%` to the Administrators, whoever
   created it, drops every right in it that the install does not grant, cuts it
   off from the read right every local user inherits there, and leaves it to
@@ -141,8 +138,8 @@ the project already has:
   preflight — runs under it, started by a second service over a Unix socket or
   named pipe that admits the Client's account alone. It reads its own `program/`
   and `config/` and writes its data directories, and nothing else of the
-  Client's: not the private key, the certificates, `supervisor.toml`, the logs
-  or the environment, and no program it runs. On Windows it holds
+  Client's: not `state.json`, `supervisor.toml`, the logs or the environment,
+  and no program it runs. On Windows it holds
   `SeChangeNotifyPrivilege` alone, so no `SeImpersonatePrivilege`, and runs in a
   job that ends with the Client's connection. An install that drops or changes
   the account withdraws what the former one was granted. Residual: the
@@ -208,17 +205,20 @@ the project already has:
   OWASP minimum, and a value in clear is refused at startup without being
   echoed. The Server offers no credential (ADR-0014).
 - **A log event for every security decision** (ADR-0022): admissions and
-  refusals, enrolment, issuance, revocation, operator acts and package outcomes,
-  one structured event each on the Server's log, and no `Authorization` value in
-  any event, not even as a hash. What a peer can repeat at will — refusals
-  before admission, throttles, polls — is logged at `debug`, so a flood stays
-  out of the default log. The Server keeps no audit record: retention and
-  integrity are whatever collects the log, and an edited or removed line is not
-  detectable.
-- **Certificates live 30 days by default** (ADR-0021 clause 9) and are renewed
-  at two thirds of that; a test with lives of seconds watches three generations
-  each replace the one before it expires (`certificate_renewal_e2e.rs`). A soak
-  on real hosts before a rollout is the operator's.
+  refusals, enrolment, token issuance, session ends, operator acts and package
+  outcomes, one structured event each on the Server's log, and no key, client
+  secret or token in any event, not even as a hash. What a peer can repeat at
+  will — refusals before admission, throttles, polls — is logged at `debug`, so
+  a flood stays out of the default log. The Server keeps no audit record:
+  retention and integrity are whatever collects the log, and an edited or
+  removed line is not detectable.
+- **A token is replaced only when the Server refuses it** (ADR-0064 clause 7):
+  the Client keeps no expiry and never renews ahead of time, so its own renewal
+  never cuts an open session; only a `401` whose Bearer challenge says
+  `invalid_token` makes it ask `/v1/token` again with its client secret, and a
+  bare `401`, `invalid_request` or `invalid_client` does not. The tests are
+  `crates/classis-server/tests/enrolment.rs` and
+  `crates/classis-agent/tests/enrolment_e2e.rs`.
 - **An offered move to another TLS endpoint needs the Client's own CA file**
   (ADR-0014 clause 5), so a Server cannot move the fleet to a host only a public
   CA vouches for.
@@ -259,13 +259,12 @@ worth seeing at a glance. ✅ in force, ⚠️ partial, ❌ absent.
 - **Agent plane** — `127.0.0.1:4320` until an operator publishes it (ADR-0013).
   - ✅ TLS handshake ≤ 10 s · ✅ headers ≤ 30 s (HTTP/1) · ✅ message size, in
     both directions · ✅ gzip bounded _after_ decompression · ✅ Admission by
-    client certificate
+    bearer token · ✅ `/v1/enrol` and `/v1/token` bodies ≤ 8 KiB
   - ✅ connections capped (`max_connections`) · ✅ HTTP/2 streams and pings
     bounded
-  - ✅ failed admissions throttled per address · ✅ admitted members
-    rate-limited per host, and per Agent within a Gateway's aggregate
-    (ADR-0013), an enrolment through a Gateway per bootstrap certificate
-    (ADR-0039)
+  - ✅ failed admissions, enrolments and token requests throttled per address ·
+    ✅ admitted hosts rate-limited per host, and a peer without one per address
+    (ADR-0013)
 - **Operator plane** — `127.0.0.1:4321` until an operator publishes it
   (ADR-0013).
   - ✅ TLS handshake ≤ 10 s · ✅ headers ≤ 30 s · ✅ Basic over the whole plane,
@@ -291,7 +290,7 @@ worth seeing at a glance. ✅ in force, ⚠️ partial, ❌ absent.
     ([`endpoint.rs`](../crates/classis-agent/src/supervisor/endpoint.rs))
 
 What follows is therefore not "make it secure" but two narrower things: **close
-the windows during which a revoked certificate still works**, and **shrink the
+the windows during which a leaked token still works**, and **shrink the
 surface that sits beside the protocol**.
 
 **Status of each measure below:** 🔴 not taken · 🟡 partly in force · 🟢 in
@@ -316,8 +315,8 @@ kinds, each running a program from its own `program/` directory, except on a
 host that sets `[supervisors] server_manages_set = false`, whose own Agent takes
 no Supervisor set (ADR-0017); install any package signed with the operator's key
 into a Supervisor, and a newer signed Client build into the Client itself; move
-the fleet to another TLS endpoint its trust accepts, install a certificate for
-the key the Client generated, and set its telemetry destinations; restart a
+the fleet to another TLS endpoint its trust accepts, and set its telemetry
+destinations; restart a
 Managed Process; and re-key an Agent's `instance_uid`. What an Agent's own
 configuration language allows — a Telegraf `inputs.exec`, an Icinga
 `CheckCommand` — it allows as the process's account; that is the product. The
@@ -345,13 +344,16 @@ verification key or `self_update`; apply a set with one bad block; purge outside
 the Supervisors' root; install anything unsigned, from another origin than its
 own Server, or with an archive member that climbs out; serve a host from its
 download route an artifact that is not offered to an Agent the host speaks for;
-downgrade the Client or install a program that is not the Client as the Client;
-install a Supervisor package below the highest version this Client installed for
-its type, or under a version that is not SemVer — not by purging the Supervisor
-and adding it back under any name (ADR-0043); switch to plaintext, on the
-loopback neither, or keep a persisted move to plaintext that `supervisor.toml`
-does not name; weaken TLS verification, set a proxy or plant a header; hand the
-Client a private key. Each of these is enforced in the code, and most by a test.
+take an `instance_uid` another host's token has reported (ADR-0064 clause 3);
+downgrade the Client or
+install a program that is not the Client as the Client; install a Supervisor
+package below the highest version this Client installed for its type, or under a
+version that is not SemVer — not by purging the Supervisor and adding it back
+under any name (ADR-0043); switch to plaintext, on the loopback neither, or keep
+a persisted move to plaintext that `supervisor.toml` does not name; weaken TLS
+verification, set a proxy or plant a header, so it cannot replace the token the
+Client sends. Each
+of these is enforced in the code, and most by a test.
 
 ## Verifying a measure is in force
 

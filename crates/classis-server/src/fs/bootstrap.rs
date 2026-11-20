@@ -1,10 +1,14 @@
 //! The bootstrap certificates the Server issued, on the filesystem (ADR-0028, ADR-0037): the
-//! default adapter behind [`BootstrapStore`](crate::bootstrap::BootstrapStore).
+//! default adapter behind [`BootstrapStore`](crate::bootstrap::BootstrapStore). Unwired since bearer
+//! enrolment (ADR-0064): the data directory's layout no longer names its directory.
 
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{BootstrapStore, Entry};
 use crate::revocation::CertId;
+
+/// The bootstrap certificates the Server issued, with their PKCS#12 files.
+const BOOTSTRAP: &str = "bootstrap";
 
 /// One JSON file per certificate under `<data_dir>/bootstrap/`, named after its issuer and serial
 /// as the register names a certificate, in a directory only its owner enters, and beside it the
@@ -19,7 +23,7 @@ impl FsBootstrapStore {
     /// # Errors
     /// Returns an error when the directory cannot be created.
     pub fn open(root: &Path) -> Result<Self, String> {
-        let dir = root.join(super::BOOTSTRAP);
+        let dir = root.join(BOOTSTRAP);
         super::create_private_dir(&dir)?;
         Ok(FsBootstrapStore { dir })
     }

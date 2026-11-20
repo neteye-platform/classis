@@ -1,9 +1,13 @@
 //! The enrolment window and its queue on the filesystem (ADR-0037 clause 9): the default adapter
-//! behind [`EnrolmentStore`](crate::enrolment::EnrolmentStore).
+//! behind [`EnrolmentStore`](crate::certificate_enrolment::EnrolmentStore). Unwired since bearer
+//! enrolment (ADR-0064): the data directory's layout no longer names its file.
 
 use std::path::{Path, PathBuf};
 
-use crate::enrolment::{EnrolmentStore, Persisted};
+use crate::certificate_enrolment::{EnrolmentStore, Persisted};
+
+/// The enrolment window and its pending requests.
+const ENROLMENT: &str = "enrolment.json";
 
 /// `<data_dir>/enrolment.json`, owner-only, replaced in one step and synced before the act that
 /// changed it is answered.
@@ -16,7 +20,7 @@ impl FsEnrolmentStore {
     #[must_use]
     pub fn open(root: &Path) -> Self {
         FsEnrolmentStore {
-            path: root.join(super::ENROLMENT),
+            path: root.join(ENROLMENT),
         }
     }
 }
@@ -41,7 +45,7 @@ impl EnrolmentStore for FsEnrolmentStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enrolment::Enrolment;
+    use crate::certificate_enrolment::Enrolment;
     use std::sync::Arc;
 
     struct Fixed;

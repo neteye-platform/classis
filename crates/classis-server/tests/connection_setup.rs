@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use classis_server::fleet::AppState;
-use classis_server::transport::Admission;
 use futures_util::{SinkExt, StreamExt};
 use opamp::frame;
 use opamp::proto::{AgentToServer, ServerToAgent};
@@ -28,7 +27,7 @@ async fn spawn() -> (std::net::SocketAddr, tempfile::TempDir) {
     let state = Arc::new(
         AppState::new(dir.path().join("fleet-configs")).expect("open the configuration store"),
     );
-    let app = classis_server::agent_app(state, Admission::open());
+    let app = classis_server::agent_app_open_for_tests(state);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the Agent plane");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(

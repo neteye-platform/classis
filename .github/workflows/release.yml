@@ -765,8 +765,8 @@ jobs:
           ./${{ env.OPERATOR_TOOL }} --version
           \`\`\`
 
-          It replaces \`opamp-package-fetch\`, \`opamp-package-sign\` and the Server's \`pki init\`,
-          \`pki server-cert\` and \`pki bootstrap-cert\`, with no alias: \`opamp-package-fetch …\` is
+          It replaces \`opamp-package-fetch\`, \`opamp-package-sign\` and the Server's \`pki init\`
+          and \`pki server-cert\`, with no alias: \`opamp-package-fetch …\` is
           now \`${{ env.OPERATOR_TOOL }} package fetch …\`, \`opamp-package-sign <command> …\` is
           \`${{ env.OPERATOR_TOOL }} package <command> …\`, and \`server pki <command> …\` is
           \`${{ env.OPERATOR_TOOL }} pki <command> …\` with the same options; the Server keeps
@@ -830,8 +830,10 @@ jobs:
           themselves — the same install every platform gets, not a second one. \`supervisor\` is the
           **program**; what lands on your \`PATH\` is \`classis\`, the **product**, as a symlink
           through the layout's \`current\` pointer, so the command always answers for the version the
-          service runs (ADR-0019). **They register the service and leave it stopped**: a Client with no configuration would dial the development
-          default and manage nothing (ADR-0019), so starting it is the last step and it is yours.
+          service runs (ADR-0019). **They register the service, leave it stopped and disable its
+          start at boot.** Configure the connection, then enrol the host with its Space's key:
+          \`enrol\` writes \`state.json\`, enables the registered service at boot and starts it
+          (ADR-0064). A host without that file cannot run.
 
           \`\`\`console
           # Debian, Ubuntu
@@ -840,16 +842,14 @@ jobs:
           sudo dnf install ./${{ env.ARTIFACT }}_${{ needs.version.outputs.version }}_linux_amd64.rpm
 
           sudo classis service install --interactive
-          sudo systemctl start classis
+          sudo classis enrol https://<server> <key>
           \`\`\`
 
-          \`--interactive\` asks for the endpoint, the private CA, the client certificate and its key,
-          and the package verification key. The Server admits a host by its client certificate alone,
-          so a new host is given a bootstrap certificate and enrols on an operator's approval;
-          \`docs/manual/setup.md\` walks through the certificates and the enrolment. In a provisioning
-          run, \`service install --endpoint wss://<server>:4320/v1/opamp\` writes the endpoint alone,
-          and the service refuses to start until \`[tls] cert_file\` and \`key_file\` are added to the
-          file. Neither form overwrites a configuration that is already there.
+          \`--interactive\` asks for the endpoint, the private CA and the package verification key.
+          In a provisioning run, \`service install --endpoint wss://<server>:4320/v1/opamp\` writes
+          the endpoint alone. Neither form overwrites a configuration that is already there.
+          \`enrol\` takes the Server's base URL, not its OpAMP path; obtain the Space's enrolment key
+          from the operator.
 
           On Windows the \`.msi\` asks for the installation folder and the endpoint. That folder
           holds the program; the configuration and the state go to \`%ProgramData%\classis\`,
@@ -862,11 +862,8 @@ jobs:
             ENDPOINT="wss://<server>:4320/v1/opamp"
           \`\`\`
 
-          As with \`--endpoint\`, the service refuses to start until \`[tls] cert_file\` and \`key_file\`
-          are added to \`%ProgramData%\classis\supervisor.toml\`.
-
           Removing the package stops and unregisters the service and leaves the configuration and
-          state behind, deliberately: they hold the host's identity and its certificate.
+          state behind, deliberately: they hold the host's identity.
 
           ## Updating a fleet
 

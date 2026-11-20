@@ -57,15 +57,13 @@ fn the_post_install_prints_no_endpoint_the_client_refuses_at_startup() {
     }
 }
 
-/// The first step the post-install prints is the questionnaire, which asks for the client identity;
-/// an endpoint alone is never offered as a complete step, since a Client with nothing more refuses
-/// to start. The `--endpoint` it does print is the scripted form, with `--fleet-files`, where the
-/// install finds the bootstrap identity it enrols with. The manual alternative names the identity,
-/// `[tls] cert_file` and `key_file`, and nothing the Client does not read; a password it names is
-/// a `bootstrap.p12`'s, never a credential (ADR-0029 clause 13, which restates ADR-0019 clause 37).
-/// Verifies: ADR-0029
+/// The first step the post-install prints is the questionnaire. The `--endpoint` it does print is
+/// the scripted form, with `--fleet-files`, where the install finds the fleet's files (ADR-0029
+/// clause 6). It names nothing the Client does not read, and no credential: the host's is the
+/// `state.json` that `enrol` writes (ADR-0064 clause 7).
+/// Verifies: ADR-0029, ADR-0064
 #[test]
-fn the_post_install_steps_ask_for_the_client_identity() {
+fn the_post_install_steps_write_the_configuration() {
     let script = post_install();
     let printed = printed(&script);
     let first_step = printed
@@ -87,10 +85,6 @@ fn the_post_install_steps_ask_for_the_client_identity() {
             "an endpoint-only install is not offered as a step: {line}"
         );
     }
-    assert!(
-        text.contains("[tls]") && text.contains("cert_file") && text.contains("key_file"),
-        "{text}"
-    );
     let lower = text.to_lowercase();
     for absent in ["[auth]", "credential", "bearer_token"] {
         assert!(
@@ -98,15 +92,46 @@ fn the_post_install_steps_ask_for_the_client_identity() {
             "the post-install names {absent}: {text}"
         );
     }
-    for line in printed
-        .iter()
-        .filter(|l| l.to_lowercase().contains("password"))
-    {
+}
+
+/// The post-install starts nothing and enables nothing: the service starts when `enrol` has
+/// written `state.json`, so what it tells the operator to run is `enrol`, never `systemctl start`,
+/// and it makes no call that starts or enables the service itself (ADR-0064 clause 7).
+/// Verifies: ADR-0064
+#[test]
+fn the_post_install_tells_the_operator_to_enrol_and_starts_nothing() {
+    let script = post_install();
+    let text = printed(&script).join("\n");
+    assert!(text.contains("classis enrol"), "{text}");
+    assert!(!text.contains("systemctl start"), "{text}");
+    for command in commands(&script) {
         assert!(
-            line.contains("bootstrap"),
-            "a password the post-install names is a bootstrap.p12's: {line}"
+            !command.contains("systemctl enable") && !command.contains("systemctl start"),
+            "{command}"
         );
     }
+}
+
+/// Verifies: ADR-0064
+#[test]
+fn release_installation_instructions_enrol_before_starting() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/release.yml");
+    let text = std::fs::read_to_string(path).expect("read the release workflow");
+    let installation = text
+        .split("## Installing on a host")
+        .nth(1)
+        .expect("installation instructions")
+        .split("## Updating a fleet")
+        .next()
+        .expect("the installation section");
+    assert!(
+        installation.contains("sudo classis enrol https://<server> <key>"),
+        "a new host must enrol before the service runs"
+    );
+    assert!(
+        !installation.contains("sudo systemctl start classis"),
+        "manual start is not the first-start enrolment flow"
+    );
 }
 
 fn maintainer_script(name: &str) -> String {

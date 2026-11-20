@@ -128,11 +128,7 @@ fn start_log_file(config: &crate::config::ClientConfig) {
     if !config.logging.enabled {
         return;
     }
-    let dir = config
-        .logging
-        .dir
-        .clone()
-        .unwrap_or_else(|| crate::logging::default_dir(&config.state_dir));
+    let dir = crate::logging::configured_dir(config);
     let supervisors: Vec<&str> = config
         .supervisors
         .iter()
@@ -167,12 +163,11 @@ fn start_log_file(config: &crate::config::ClientConfig) {
 /// situation that file exists for. The rest of the line is what an operator otherwise has to
 /// reconstruct from the command line of a service they did not start.
 ///
-/// **The second line is the trust and the identity in force**, resolved through the same two
-/// accessors the transports build their TLS from (ADR-0013, ADR-0021) rather than read off the
-/// configuration — so it states what *will* be presented, including a Server-issued certificate
-/// that no `supervisor.toml` mentions. Without it, a handshake that fails because the identity is
-/// not the one anybody assumed is diagnosed from the peer's error message, which is written by the
-/// end that knows least about it.
+/// **The second line is the trust in force**, resolved through the same accessor the transports
+/// build their TLS from (ADR-0013) rather than read off the configuration — so it states what
+/// *will* be trusted. Without it, a handshake that fails because the trust is not the one anybody
+/// assumed is diagnosed from the peer's error message, which is written by the end that knows
+/// least about it.
 fn announce(config: &ClientConfig, config_path: &std::path::Path) {
     // A missing file is not an error — `ClientConfig::load` runs on defaults, deliberately, so a
     // Client can start before anything is written. It is worth a word all the same: a mistyped
@@ -193,27 +188,15 @@ fn announce(config: &ClientConfig, config_path: &std::path::Path) {
         supervisors = config.supervisors.len(),
         "client starting"
     );
-    let (trust, identity) = tls_posture(config);
-    tracing::info!(trust = %trust, client_certificate = %identity, "outbound tls");
+    tracing::info!(trust = %tls_posture(config), "outbound tls");
 }
 
-/// What the transports will trust, and what they will present — as the two strings the line above
-/// reports.
-///
-/// Its own function because it makes a claim worth a test: the certificate named here is whichever
-/// [`ClientConfig::client_identity`] resolves to, which prefers the **Server-issued** one in the
-/// state directory over anything `[tls]` names (ADR-0021). A line that reported the configured
-/// certificate while the connection presented the issued one would be worse than no line at all.
-fn tls_posture(config: &ClientConfig) -> (String, String) {
-    let trust = config.ca_file().map_or_else(
+/// What the transports will trust — as the string the line above reports.
+fn tls_posture(config: &ClientConfig) -> String {
+    config.ca_file().map_or_else(
         || "the built-in roots".to_string(),
         |ca| ca.display().to_string(),
-    );
-    let identity = config.client_identity().map_or_else(
-        || "none".to_string(),
-        |(cert, _)| cert.display().to_string(),
-    );
-    (trust, identity)
+    )
 }
 
 /// What a run does when its configuration cannot be read: resolve the update in flight anyway, so
@@ -282,24 +265,27 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
     if let Some(agents) = &spec.agents {
         config.process_account_group = Some(process_account_group(&agents.process)?);
     }
-    // A certificate swap a crash cut short is completed before the identity in force is read.
-    crate::csr::recover(&config.state_dir)?;
-    // Without a client certificate the Server refuses this Client; it says so and stops rather
-    // than retrying for ever (ADR-0021).
-    config
-        .check_admission()
-        .map_err(|e| format!("{}: {e}", spec.config_path.display()))?;
     if spec.service {
         start_log_file(&config);
     }
     // After the log file, so the line that says which version is running is the first line *in the
     // file* — a log whose opening line is already about work in progress starts one step too late.
     announce(&config, &spec.config_path);
-    // Once per start, not per reconnect: a leftover [auth] is ignored and nothing from it is sent
-    // (ADR-0021 clause 3).
+    // Once per start, not per reconnect: a leftover [auth] is ignored and nothing from it is sent;
+    // the token the Client sends is the one in `state.json` (ADR-0064 clause 7).
     if let Some(notice) = config.leftover_auth_notice() {
         tracing::warn!(config = %spec.config_path.display(), "{notice}");
     }
+    // A host without `state.json` runs nothing, as a service or in the foreground, and the error
+    // names `enrol` (ADR-0064 clause 7). Before the self-update in flight is resolved: a host that
+    // never enrolled has none, and one that lost its file did not lose it to its new version.
+    config = match enrolled(config) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!(error = %error, "the Client does not start");
+            return Err(error);
+        }
+    };
 
     // Resolve any self-update in flight before anything else runs (ADR-0018): this process may be
     // a freshly installed version on probation, or the previous one brought back after a rollback.
@@ -412,10 +398,10 @@ pub async fn run_until_shutdown(spec: RunSpec, mut shutdown: Shutdown) -> Result
                 return Ok(Exit::RestartForUpdate);
             }
             // Verified connection settings took effect (ADR-0014): re-resolve the effective
-            // configuration — endpoint, certificate, intervals, possibly the other transport —
+            // configuration — endpoint, intervals, possibly the other transport —
             // and reconnect. The Engine (and its Managed Processes) carries on.
             RunOutcome::Reconfigured => {
-                config = load_effective_config(&spec)?;
+                config = enrolled(load_effective_config(&spec)?)?;
                 // The telemetry destinations of the same offer are already in force: since
                 // ADR-0014 `process_connection_offer` applies them before it asks for the
                 // reconnect, and it composes the one acknowledgement that names anything refused.
@@ -470,6 +456,17 @@ fn load_effective_config(spec: &RunSpec) -> Result<ClientConfig, String> {
     if let Some(stored) = connection::load(&config.state_dir) {
         connection::apply(&mut config, &stored);
     }
+    Ok(config)
+}
+
+/// `config` with what `state.json` holds: the host's identity and its access token, which the run
+/// presents upstream (ADR-0064 clause 7).
+///
+/// # Errors
+/// Returns the error that names `enrol` where the host has no `state.json`, and why a file that is
+/// there cannot be read.
+fn enrolled(mut config: ClientConfig) -> Result<ClientConfig, String> {
+    config.credentials = Some(crate::enrolment::required(&config.state_dir)?);
     Ok(config)
 }
 
@@ -829,8 +826,8 @@ mod tests {
         );
     }
 
-    /// With nothing configured, the line says so in both halves rather than leaving an operator to
-    /// read an absent field as "unknown".
+    /// With nothing configured, the line says so rather than leaving an operator to read an absent
+    /// field as "unknown".
     #[test]
     fn the_tls_line_reports_the_defaults_as_defaults() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -838,39 +835,20 @@ mod tests {
             state_dir: dir.path().to_path_buf(),
             ..ClientConfig::default()
         };
-        let (trust, identity) = tls_posture(&config);
-        assert_eq!(trust, "the built-in roots");
-        assert_eq!(identity, "none");
+        assert_eq!(tls_posture(&config), "the built-in roots");
     }
 
-    /// And it reports what will actually be presented: a Server-issued pair in the state directory
-    /// outranks the configured one (ADR-0021), so the line has to name the issued one — that is the
-    /// whole reason it resolves the identity instead of printing `[tls] cert_file`.
+    /// And a configured CA is the trust the line names.
     #[test]
-    fn the_tls_line_names_the_issued_certificate_over_the_configured_one() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let configured = dir.path().join("operator-cert.pem");
-        std::fs::write(&configured, b"cert").expect("write");
-        std::fs::write(dir.path().join("operator-key.pem"), b"key").expect("write");
+    fn the_tls_line_names_the_configured_ca() {
         let config = ClientConfig {
-            state_dir: dir.path().to_path_buf(),
             tls: Some(crate::config::TlsConfig {
-                ca_file: None,
-                cert_file: Some(configured.clone()),
-                key_file: Some(dir.path().join("operator-key.pem")),
+                ca_file: Some(PathBuf::from("/etc/fleet/ca.pem")),
+                cert_file: None,
+                key_file: None,
             }),
             ..ClientConfig::default()
         };
-
-        // With no issued pair on disk, the operator's is what gets presented.
-        let (_, identity) = tls_posture(&config);
-        assert_eq!(identity, configured.display().to_string());
-
-        // Once the Server has issued one, that is the pair — and the line must follow.
-        let issued = dir.path().join(crate::tls::ISSUED_CERT_FILE);
-        std::fs::write(&issued, b"cert").expect("write");
-        std::fs::write(dir.path().join(crate::tls::ISSUED_KEY_FILE), b"key").expect("write");
-        let (_, identity) = tls_posture(&config);
-        assert_eq!(identity, issued.display().to_string());
+        assert_eq!(tls_posture(&config), "/etc/fleet/ca.pem");
     }
 }

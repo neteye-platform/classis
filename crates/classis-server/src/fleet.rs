@@ -14,7 +14,7 @@ use opamp::proto::{
     ConnectionSettingsOffers, ConnectionSettingsStatus, KeyValue, OpAmpConnectionSettings,
     PackageStatuses, PackagesAvailable, RemoteConfigStatus, RemoteConfigStatuses,
     ServerCapabilities, ServerErrorResponse, ServerErrorResponseType, ServerToAgent,
-    ServerToAgentFlags, TelemetryConnectionSettings, TlsCertificate,
+    ServerToAgentFlags, TelemetryConnectionSettings,
 };
 use opamp::uid::InstanceUid;
 use prost::Message as _;
@@ -26,10 +26,8 @@ use tracing::{info, warn};
 use crate::agent_store::{AgentStore, PersistedAgent, Pin};
 use crate::configs::{ConfigBackend, ConfigStore, Configuration, DesiredConfig, Revision};
 use crate::deployments::{self, deployment_for, Deployment, DeploymentError, DeploymentStore};
-use crate::enrolment::{DecisionError, Enrolment};
 use crate::labels::{LabelError, Sources};
 use crate::packages::{InstalledVersions, PackageId, PackageStore, Platform, SignatureState};
-use crate::revocation::{CertId, Facts, Presented, Revocations, Signed, SpeaksFor, SubjectValues};
 
 /// The package upload limit in force when nothing configures one — roomy, because a real agent
 /// binary is (see `server.toml`, `max_package_size_bytes`).
@@ -114,10 +112,10 @@ pub struct AgentRecord {
     /// The operator's labels for this Agent (ADR-0024), part of its persisted record (ADR-0035
     /// clause 6): they follow a re-key and leave with a forget.
     pub labels: BTreeMap<String, String>,
-    /// The Host this Agent last arrived over (ADR-0035 clause 2): its own on a direct connection,
-    /// the Gateway's behind one. For the fleet view and label inheritance; it grants nothing.
+    /// The Host this Agent last arrived over (ADR-0035 clause 2). For the fleet view and label
+    /// inheritance; it grants nothing.
     pub host: Option<String>,
-    /// Where the Host and the Client Agent place this Agent — derived, never persisted.
+    /// Where the Client Agent places this Agent — derived, never persisted.
     pub placement: Placement,
     /// What the operator's last rollout released to this Agent (ADR-0034 clause 5). **Every offer
     /// is composed from this**; matching only proposes. Written by the rollout acts, persisted like
@@ -149,25 +147,12 @@ pub struct Assignment {
 /// The configuration map of an Agent nothing was rolled out to.
 static NO_CONFIGURATIONS: BTreeMap<String, String> = BTreeMap::new();
 
-/// The Agents one Client presents (ADR-0035 clause 4), as far as the Server can tell them apart.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Group {
-    /// On a direct connection: the Agents arriving over the same Host.
-    Host(String),
-    /// Behind a Gateway: the Agents arriving over the same Gateway Host that report the same
-    /// machine — `host.id`, else `host.name` ([`crate::labels::machine`]).
-    Behind { gateway: String, machine: String },
-}
-
-/// What the Host an Agent arrived over and its Client Agent add to its effective description
-/// (ADR-0035 clauses 3 and 4). Derived from the records and the host register whenever either
-/// changes; never persisted.
+/// What the Client Agent adds to an Agent's effective description (ADR-0035 clause 4). Derived
+/// from the records whenever one changes; never persisted.
 #[derive(Clone, Debug, Default)]
 pub struct Placement {
-    /// The `fleet.host.*` values of the Host it arrived over directly; empty behind a Gateway.
-    pub host_values: BTreeMap<String, String>,
-    /// The Client it belongs to, when the Server can tell.
-    pub group: Option<Group>,
+    /// The Host whose Agents it is grouped with — the Agents of one Client arrive over one Host.
+    pub group: Option<String>,
     /// Its Client Agent — itself, for the Client Agent — when its group holds exactly one.
     pub client_agent: Option<InstanceUid>,
     /// The labels of its Client Agent; empty for the Client Agent itself.
@@ -177,8 +162,8 @@ pub struct Placement {
 }
 
 impl AgentRecord {
-    /// What a Selector is matched against (ADR-0035 clause 3): the Host's values, what the Agent
-    /// reported, its own labels and its Client Agent's, each key from the first that has it.
+    /// What a Selector is matched against (ADR-0035 clause 3): what the Agent reported, its own
+    /// labels and its Client Agent's, each key from the first that has it.
     ///
     /// Borrowed when it adds nothing to the report, which is the overwhelming majority of Agents —
     /// labelling should cost the fleet view nothing on the hosts nobody has labelled.
@@ -192,7 +177,6 @@ impl AgentRecord {
 
     fn sources(&self) -> Sources<'_> {
         Sources {
-            host: &self.placement.host_values,
             reported: self.description.as_ref(),
             own: &self.labels,
             inherited: &self.placement.inherited,
@@ -372,39 +356,6 @@ pub trait Clock: Send + Sync {
     fn now_ms(&self) -> u64;
 }
 
-/// The CSR flow's port (ADR-0021): what signs an Agent's certificate signing request. The local
-/// CA ([`ClientCa`](crate::ca::ClientCa)) is the adapter the composition root wires when
-/// `[client_ca]` is configured.
-pub trait CertificateSigner: Send + Sync {
-    /// The signed certificate, PEM, for a CSR in PEM, and what it says about itself. Its subject
-    /// carries `subject` — the values copied from the bootstrap certificate or the predecessor
-    /// (ADR-0036 clauses 3 and 4) — and never the request's.
-    ///
-    /// # Errors
-    /// Returns an error when the request does not parse or cannot be signed.
-    fn sign(&self, csr_pem: &str, host: &str, subject: &SubjectValues) -> Result<Signed, String>;
-
-    /// The certificate a CSR proves it renews, when it carries a renewal proof (ADR-0021
-    /// clause 27); `Ok(None)` when it carries none.
-    ///
-    /// # Errors
-    /// Returns the `BadRequest` text for a proof that does not hold.
-    fn renewal_proof(&self, csr_pem: &str) -> Result<Option<Facts>, String>;
-
-    /// The issuer and serial of the bootstrap certificate a CSR's bootstrap proof names (ADR-0039
-    /// clause 1), read without checking the proof; `Ok(None)` when it carries none.
-    ///
-    /// # Errors
-    /// Returns the `BadRequest` text for a proof that does not parse.
-    fn bootstrap_proof_id(&self, csr_pem: &str) -> Result<Option<CertId>, String>;
-
-    /// Checks the request's claims to an `instance_uid` against its sender's (ADR-0021).
-    ///
-    /// # Errors
-    /// Returns the `BadRequest` text for a request that claims another identity.
-    fn check_claims(&self, csr_pem: &str, sender: &[u8]) -> Result<(), String>;
-}
-
 /// Why the package store refuses an upload: its whole-store ceiling (ADR-0026).
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreFull {
@@ -487,7 +438,7 @@ impl Drop for UploadReservation<'_> {
 
 /// The package store and the Deployments that release from it (ADR-0026). Every `download_url`
 /// is a path the Client resolves against its own endpoint — the Agent plane, where the download
-/// is served behind the same handshake as `/v1/opamp` (ADR-0033).
+/// is served (ADR-0033).
 pub struct PackageOffering {
     store: PackageStore,
     deployments: DeploymentStore,
@@ -507,6 +458,10 @@ impl PackageOffering {
     }
 }
 
+/// The Agents a host may speak for at most (ADR-0064 clause 3), which the limit has to carry at
+/// the fleet's heartbeat (ADR-0013 clause 20).
+pub const AGENTS_PER_HOST: u64 = 256;
+
 /// Shared state behind every handler: the fleet, the Configuration store, and the push channel
 /// WebSocket loops subscribe to.
 pub struct AppState {
@@ -518,9 +473,9 @@ pub struct AppState {
     /// heartbeat from reaching any storage backend (ADR-0024). Locked strictly after `fleet`.
     written: Mutex<HashMap<InstanceUid, [u8; 32]>>,
     configs: ConfigStore,
-    /// Which Agents each [`Group`] holds (ADR-0035 clause 4), so placing one Agent touches its
-    /// group alone. Locked strictly after `fleet`, and only while it is held.
-    groups: Mutex<HashMap<Group, HashSet<InstanceUid>>>,
+    /// Which Agents each group holds (ADR-0035 clause 4), so placing one Agent touches its group
+    /// alone. Locked strictly after `fleet`, and only while it is held.
+    groups: Mutex<HashMap<String, HashSet<InstanceUid>>>,
     push: watch::Sender<u64>,
     /// Hands every WebSocket connection its identity for the duplicate detection.
     next_conn: AtomicU64,
@@ -530,18 +485,6 @@ pub struct AppState {
     /// The packages offered to the fleet (ADR-0026); `None` offers nothing and leaves
     /// `OffersPackages` undeclared.
     packages: Option<PackageOffering>,
-    /// The authority that signs Agent CSRs (ADR-0021); `None` signs nothing and leaves
-    /// `AcceptsConnectionSettingsRequest` undeclared.
-    client_ca: Option<Box<dyn CertificateSigner>>,
-    /// The enrolment window and its queue (ADR-0021); `None` while `[enrolment]` is not set, and no
-    /// host enrols.
-    enrolment: Option<Arc<Enrolment>>,
-    /// The bootstrap certificates the Server issued (ADR-0028); `None` while `[enrolment]` is not
-    /// set.
-    bootstrap: Option<Arc<crate::bootstrap::BootstrapCertificates>>,
-    /// What the client CA signed and what is revoked (ADR-0021); `None` only where a test serves
-    /// without it.
-    revocations: Option<Arc<Revocations>>,
     /// How often an admitted peer may be heard (ADR-0013); `None` only in tests.
     agent_rate: Option<Arc<crate::agent_rate::AgentRate>>,
     /// When an Agent is heard from, and how long ago that was.
@@ -567,9 +510,8 @@ pub struct AppState {
     /// The most Agent records the fleet holds at once. A report bearing a new `instance_uid` past
     /// this ceiling is refused `Unavailable` rather than admitted, so a peer cycling fresh UIDs —
     /// each of which would pin an in-memory record and a persisted file — cannot exhaust memory or
-    /// disk (a self-asserted UID is free to mint, ADR-0021). Existing Agents keep reporting; only
-    /// growth past the ceiling is refused. The real defence against a flood is admission by client
-    /// certificate (ADR-0021); this is the backstop that bounds what an admitted peer can do.
+    /// disk (a self-asserted UID is free to mint). Existing Agents keep reporting; only growth past
+    /// the ceiling is refused.
     max_agents: usize,
 }
 
@@ -624,10 +566,6 @@ impl AppState {
             next_conn: AtomicU64::new(1),
             connection_offer: None,
             packages: None,
-            client_ca: None,
-            enrolment: None,
-            bootstrap: None,
-            revocations: None,
             agent_rate: None,
             clock,
             telemetry_offer: TelemetryOffer::default(),
@@ -754,98 +692,14 @@ impl AppState {
         self
     }
 
-    /// Arms the CSR flow (ADR-0021); with it the Server declares
-    /// `AcceptsConnectionSettingsRequest` and signs the requests Agents send.
-    #[must_use]
-    pub fn with_client_ca(mut self, client_ca: Option<impl CertificateSigner + 'static>) -> Self {
-        self.client_ca = client_ca.map(|ca| Box::new(ca) as Box<dyn CertificateSigner>);
-        self
-    }
-
-    /// Arms enrolment (ADR-0021): a host with a bootstrap certificate may ask for its first one,
-    /// and an operator decides.
-    #[must_use]
-    pub fn with_enrolment(mut self, enrolment: Option<Arc<Enrolment>>) -> Self {
-        self.enrolment = enrolment;
-        self
-    }
-
-    /// Arms the issuing of bootstrap certificates and their record (ADR-0028).
-    #[must_use]
-    pub fn with_bootstrap(
-        mut self,
-        bootstrap: Option<Arc<crate::bootstrap::BootstrapCertificates>>,
-    ) -> Self {
-        self.bootstrap = bootstrap;
-        self
-    }
-
-    /// The bootstrap certificates the Server issued, while `[enrolment]` is set.
-    pub fn bootstrap(&self) -> Option<&Arc<crate::bootstrap::BootstrapCertificates>> {
-        self.bootstrap.as_ref()
-    }
-
-    /// Arms the register and the revocation list (ADR-0021).
-    #[must_use]
-    pub fn with_revocations(mut self, revocations: Option<Arc<Revocations>>) -> Self {
-        self.revocations = revocations;
-        // The Hosts the records name are known now: their values and Gateway marks place them.
-        self.place_all();
-        self
-    }
-
-    /// Marks `host` as a Gateway, or not (ADR-0021 clause 7); answers whether this Server knows
-    /// the host. The mark decides whether the Agents arriving over it carry its values and how
-    /// they group (ADR-0035 clauses 3 and 4), so every Agent is placed again.
-    ///
-    /// # Errors
-    /// Returns an error when there is no host register or the change cannot be written.
-    pub fn set_gateway(&self, host: &str, gateway: bool) -> Result<bool, String> {
-        let revocations = self
-            .revocations
-            .as_ref()
-            .ok_or_else(|| "revocation is not configured".to_string())?;
-        let known = revocations.set_gateway(host, gateway)?;
-        if known {
-            self.place_all();
-        }
-        Ok(known)
-    }
-
-    /// Where the Host an Agent arrived over places it (ADR-0035 clauses 3 and 4): the
-    /// `fleet.host.*` values of a Host it arrived over directly, and the group its Client is
-    /// recognised in. Nothing without a host register, and nothing for an Agent that names no
-    /// Host.
-    fn locate(&self, record: &AgentRecord) -> (BTreeMap<String, String>, Option<Group>) {
-        let (Some(host), Some(revocations)) = (&record.host, &self.revocations) else {
-            return (BTreeMap::new(), None);
-        };
-        let (gateway, subject) = revocations.placement(host);
-        if gateway {
-            let group =
-                crate::labels::machine(record.description.as_ref()).map(|machine| Group::Behind {
-                    gateway: host.clone(),
-                    machine,
-                });
-            return (BTreeMap::new(), group);
-        }
-        let values = subject
-            .attributes()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        (values, Some(Group::Host(host.clone())))
-    }
-
-    /// Places every Agent again — at startup, once the host register is known, and when a Gateway
-    /// mark changes.
+    /// Places every Agent — at startup, once the records are restored.
     fn place_all(&self) {
         let mut fleet = self.fleet.lock().expect("fleet lock");
         let mut groups = self.groups.lock().expect("groups lock");
         groups.clear();
         for (uid, record) in fleet.iter_mut() {
-            let (host_values, group) = self.locate(record);
+            let group = record.host.clone();
             record.placement = Placement {
-                host_values,
                 group: group.clone(),
                 ..Placement::default()
             };
@@ -864,8 +718,7 @@ impl AppState {
         let Some(record) = fleet.get_mut(uid) else {
             return;
         };
-        let (host_values, group) = self.locate(record);
-        record.placement.host_values = host_values;
+        let group = record.host.clone();
         let left = std::mem::replace(&mut record.placement.group, group.clone());
         if group.is_none() {
             record.placement.client_agent = None;
@@ -893,7 +746,7 @@ impl AppState {
         &self,
         fleet: &mut HashMap<InstanceUid, AgentRecord>,
         uid: &InstanceUid,
-        group: Option<Group>,
+        group: Option<String>,
     ) {
         let Some(group) = group else {
             return;
@@ -901,11 +754,6 @@ impl AppState {
         let mut groups = self.groups.lock().expect("groups lock");
         unindex(&mut groups, &group, uid);
         inherit(fleet, &groups, &group);
-    }
-
-    /// The register and the revocation list.
-    pub fn revocations(&self) -> Option<&Arc<Revocations>> {
-        self.revocations.as_ref()
     }
 
     /// Arms the rate limit on the Agent plane (ADR-0013).
@@ -921,179 +769,6 @@ impl AppState {
     /// The rate limit on the Agent plane.
     pub fn agent_rate(&self) -> Option<&Arc<crate::agent_rate::AgentRate>> {
         self.agent_rate.as_ref()
-    }
-
-    /// Records a certificate the client CA signed in the register, before it is offered (ADR-0021
-    /// clause 33), and logs its issuance once it is recorded — for an approval and a CSR alike.
-    fn record_issued(
-        &self,
-        signed: &Signed,
-        instance_uid: &[u8],
-        predecessor: Option<CertId>,
-    ) -> Result<(), String> {
-        let kind = if predecessor.is_some() {
-            "renewal"
-        } else {
-            "enrolment"
-        };
-        let predecessor_serial = predecessor.as_ref().map(|id| id.serial.clone());
-        if let Some(revocations) = &self.revocations {
-            revocations
-                .record(signed.facts.clone(), instance_uid, predecessor)
-                .map_err(|e| format!("cannot record the issued certificate: {e}"))?;
-        }
-        info!(
-            event = "issuance.signed",
-            kind,
-            authority = self.revocations.as_ref().and_then(|revocations| revocations
-                .authority_of(&signed.facts.id.issuer)
-                .map(|authority| authority.role.clone())),
-            issuer = %signed.facts.issuer_name,
-            serial = %signed.facts.id.serial,
-            subject = %signed.facts.subject,
-            key_fingerprint = %signed.facts.key_fingerprint,
-            instance_uid = %hex::encode(instance_uid),
-            predecessor_serial,
-            "issued a client certificate"
-        );
-        Ok(())
-    }
-
-    /// What a CSR renews, the host the new certificate is for (ADR-0021 clause 27), and the
-    /// subject values it carries on (ADR-0036 clause 4). A renewal proof names the certificate
-    /// whose key signed the new one — through a Gateway too — and the host and the values carry
-    /// on from it; without one, the certificate the connection presented is renewed, unless its
-    /// host is marked as a Gateway (ADR-0039 clause 1). A bootstrap proof makes the request an
-    /// enrolment, which a member does not make (ADR-0039 clause 12) — unless it proves the very
-    /// certificate the connection presented: a Client cannot tell a certificate an operator
-    /// provisioned from a bootstrap certificate, and proves whichever it holds. A certificate that
-    /// names no host — one an operator provisioned — gets a host derived from its issuer and
-    /// serial, the same on every retry.
-    fn renews(
-        &self,
-        ca: &dyn CertificateSigner,
-        csr: &str,
-        presented: Option<&Presented>,
-    ) -> Result<(Option<CertId>, String, SubjectValues), String> {
-        let derived = |id: &CertId| classis_core::host::derived(&id.issuer, &id.serial);
-        if let Some(old) = ca.renewal_proof(csr)? {
-            if self
-                .revocations
-                .as_ref()
-                .is_some_and(|revocations| revocations.is_certificate_revoked(&old.id))
-            {
-                return Err("the certificate this request renews is revoked".to_string());
-            }
-            let host = old.host.clone().unwrap_or_else(|| derived(&old.id));
-            return Ok((Some(old.id), host, old.subject_values));
-        }
-        // A proof of the certificate presented is that certificate's renewal, and without a
-        // certificate presented — `Admission::open`, which no Server serves — nothing is enrolled.
-        let enrols = match (ca.bootstrap_proof_id(csr)?, presented) {
-            (Some(named), Some(presented)) => named != presented.id,
-            _ => false,
-        };
-        Ok(match presented {
-            Some(presented) => {
-                let host = presented
-                    .host
-                    .clone()
-                    .unwrap_or_else(|| derived(&presented.id));
-                // Behind a Gateway the presented certificate is the Gateway's, and its host carries
-                // the mark: a CSR without a proof would hand the Gateway's powers to whoever sent
-                // it (ADR-0039 clause 1).
-                let gateway = self
-                    .revocations
-                    .as_ref()
-                    .is_some_and(|revocations| revocations.is_gateway(&host));
-                if enrols {
-                    return Err(if gateway {
-                        "a bootstrap proof through a Gateway is an enrolment request, not a renewal"
-                            .to_string()
-                    } else {
-                        MEMBER_DOES_NOT_ENROL.to_string()
-                    });
-                }
-                if gateway {
-                    return Err(NEEDS_A_PROOF.to_string());
-                }
-                (
-                    Some(presented.id.clone()),
-                    host,
-                    presented.subject_values.clone(),
-                )
-            }
-            None => (
-                None,
-                InstanceUid::default().to_string(),
-                SubjectValues::default(),
-            ),
-        })
-    }
-
-    /// The enrolment window and its queue, while `[enrolment]` is set.
-    pub fn enrolment(&self) -> Option<&Arc<Enrolment>> {
-        self.enrolment.as_ref()
-    }
-
-    /// Approves one pending enrolment request: the client CA signs it (ADR-0021 clause 22), with
-    /// the subject values of the bootstrap certificate the request came with (ADR-0036 clause 3).
-    ///
-    /// # Errors
-    /// Returns [`DecisionError::NotFound`] when enrolment is off or the id is unknown,
-    /// [`DecisionError::Subject`] when the bootstrap certificate's subject cannot be carried, and
-    /// [`DecisionError::Sign`] when no CA is configured or it refuses the request.
-    pub fn approve_enrolment(&self, id: &str) -> Result<(), DecisionError> {
-        let enrolment = self.enrolment.as_ref().ok_or(DecisionError::NotFound)?;
-        let signer = self.client_ca.as_deref().ok_or_else(|| {
-            DecisionError::Sign("this Server issues no client certificates".into())
-        })?;
-        // A new host: its identity is minted here and carried by every renewal (ADR-0021 clause 7).
-        let host = InstanceUid::default().to_string();
-        let revoked = |bootstrap: &CertId| {
-            self.revocations
-                .as_ref()
-                .is_some_and(|revocations| revocations.is_certificate_revoked(bootstrap))
-        };
-        enrolment.approve(
-            id,
-            signer,
-            &host,
-            &|signed, instance_uid| self.record_issued(signed, instance_uid, None),
-            &revoked,
-        )
-    }
-
-    /// What an enrolment connection is told (ADR-0021 clause 21): the capabilities that say it may
-    /// send a CSR, and — once its request is approved — the issued certificate, as an ordinary
-    /// connection-settings offer with no private key in it.
-    pub fn enrolment_answer(
-        &self,
-        instance_uid: &[u8],
-        certificate: Option<String>,
-    ) -> ServerToAgent {
-        let mut capabilities = ServerCapabilities::AcceptsStatus as u64;
-        if self.client_ca.is_some() {
-            capabilities |= ServerCapabilities::AcceptsConnectionSettingsRequest as u64
-                | ServerCapabilities::OffersConnectionSettings as u64;
-        }
-        ServerToAgent {
-            instance_uid: instance_uid.to_vec(),
-            capabilities,
-            connection_settings: certificate.map(|cert| {
-                compose_settings_offer(
-                    Some(OpAmpConnectionSettings {
-                        certificate: Some(TlsCertificate {
-                            cert: cert.into_bytes(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
-                    TelemetryOffer::default(),
-                )
-            }),
-            ..Default::default()
-        }
     }
 
     /// Arms package delivery (ADR-0026); with a non-empty store the Server declares
@@ -1120,23 +795,16 @@ impl AppState {
     /// declared one never hollow.
     fn capabilities(&self) -> u64 {
         let mut caps = SERVER_CAPABILITIES;
-        // All three ways a `ConnectionSettingsOffers` leaves this Server (ADR-0014 clause 3): the
-        // standing `[connection_offer]`, the own-telemetry destinations of `[telemetry_offer]`, and
-        // the certificate a `[client_ca]` issues in answer to a CSR — which travels as an ordinary
-        // offer. Keying the bit on the first alone left the other two exercising a capability this
-        // Server had not declared, which is exactly what the sentence above promises never happens.
-        if self.connection_offer.is_some()
-            || !self.telemetry_offer.is_empty()
-            || self.client_ca.is_some()
-        {
+        // Both ways a `ConnectionSettingsOffers` leaves this Server (ADR-0014 clause 3): the
+        // standing `[connection_offer]` and the own-telemetry destinations of `[telemetry_offer]`.
+        // Keying the bit on the first alone left the other exercising a capability this Server had
+        // not declared, which is exactly what the sentence above promises never happens.
+        if self.connection_offer.is_some() || !self.telemetry_offer.is_empty() {
             caps |= ServerCapabilities::OffersConnectionSettings as u64;
         }
         if self.packages.as_ref().is_some_and(|p| !p.store.is_empty()) {
             caps |= ServerCapabilities::OffersPackages as u64
                 | ServerCapabilities::AcceptsPackagesStatus as u64;
-        }
-        if self.client_ca.is_some() {
-            caps |= ServerCapabilities::AcceptsConnectionSettingsRequest as u64;
         }
         caps
     }
@@ -1523,22 +1191,18 @@ impl AppState {
     }
 
     /// Forgets everything this Server knows about one Agent (ADR-0024): the record is dropped and
-    /// the row leaves the fleet view. Nothing reaches the host — no process is stopped and no
-    /// certificate revoked, since a certificate here proves fleet membership and its host, never
-    /// which Agent is speaking (ADR-0021 clause 7). A Client still running therefore reappears on its next
-    /// report, which this Server answers with `ReportFullState` as it does for any unknown Agent.
-    /// The `instance_uid` is released from the Host it was bound to, so that report binds it to
-    /// the host whose certificate carries it (ADR-0047 clause 2).
+    /// the row leaves the fleet view. Nothing reaches the host — no process is stopped. A Client
+    /// still running therefore reappears on its next report, which this Server answers with
+    /// `ReportFullState` as it does for any unknown Agent.
     ///
     /// Refused while the Agent is still reporting: the record holds the hashes that gate
     /// re-offering, so forgetting a live Agent has it offered its configuration again — and the
     /// Collector plugin restarts its Managed Process when a configuration arrives. An operator who
     /// wants a restart asks for one through [`request_restart`](Self::request_restart).
     ///
-    /// `connected` alone would not do. Behind a Gateway the open connection is the *Gateway's*, so
-    /// a Gatewayed Agent that died still reads as connected; and plain-HTTP polling has no socket
-    /// to close, so an Agent that stops polling without saying goodbye stays connected forever.
-    /// Silence is the second half of the test — and it is [`is_silent`], not [`is_stale`]: an
+    /// `connected` alone would not do: plain-HTTP polling has no socket to close, so an Agent that
+    /// stops polling without saying goodbye stays connected forever. Silence is the second half of
+    /// the test — and it is [`is_silent`], not [`is_stale`]: an
     /// Agent that declared no heartbeat is never called stale, and gating on staleness would leave
     /// its row on a decommissioned host permanently unremovable.
     pub fn forget_agent(&self, uid: &InstanceUid) -> Result<(), ForgetError> {
@@ -1552,13 +1216,6 @@ impl AppState {
         // name" ADR-0024 rejected — the record leaves the store with the row, its labels with it
         // (ADR-0024, ADR-0035 clause 6).
         self.unpersist(uid);
-        // Its `instance_uid` leaves the Host it was bound to: whichever host reports it next binds
-        // it (ADR-0047 clause 2).
-        if let Some(revocations) = &self.revocations {
-            if let Err(e) = revocations.release(uid.as_bytes()) {
-                warn!(agent = %uid, error = %e, "cannot write the released host binding");
-            }
-        }
         if let Some(record) = removed {
             // A Client Agent forgotten takes its labels from the Agents that inherited them.
             self.unplace(&mut fleet, uid, record.placement.group.clone());
@@ -1710,31 +1367,36 @@ impl AppState {
     /// then answer with what the Agent still lacks — the config offer gated by the hash comparison.
     /// `conn` identifies the WebSocket connection that carried the report; `None` for plain HTTP.
     ///
-    /// The reported `instance_uid` is taken at face value: admission proved fleet membership, not
-    /// which Agent is speaking, so within an admitted fleet a report's identity is self-asserted and
-    /// not authorized against any other Agent (ADR-0021). The plain-HTTP path in particular offers
-    /// nothing to tell two pollers apart; the WebSocket duplicate-`instance_uid` rekey below is
-    /// collision handling, not authorization.
+    /// With no host named, the reported `instance_uid` is taken at face value: a report's identity
+    /// is self-asserted and not authorized against any other Agent. The plain-HTTP path in
+    /// particular offers nothing to tell two pollers apart; the WebSocket duplicate-`instance_uid`
+    /// rekey below is collision handling, not authorization. A report that arrived over a host is
+    /// bound by [`process_for_host`](Self::process_for_host)'s ownership rule.
     pub fn process(
         &self,
         msg: AgentToServer,
         transport: Transport,
         conn: Option<ConnId>,
     ) -> Processed {
-        self.process_presented(msg, transport, conn, None)
+        self.process_for_host(msg, transport, conn, None)
     }
 
-    /// [`process`](Self::process) for a connection that presented a certificate: the host it was
-    /// issued to binds the Agents it reports for, and a CSR without a renewal proof renews it
-    /// unless its host is a Gateway's (ADR-0021 clause 7, ADR-0039).
-    pub fn process_presented(
+    /// [`process`](Self::process) for a connection that arrived over `host` — the `client_id` of
+    /// the token that admitted it (ADR-0064 clause 3) — which the Agent's record then names.
+    ///
+    /// The record's host is the only binding of an `instance_uid` to a host, so a host owns the
+    /// `instance_uid`s whose records name it. A report for one recorded under another host is
+    /// refused outright with an error: nothing is recorded for the reporter, and the owner's record
+    /// is untouched. A host owns at most
+    /// [`AGENTS_PER_HOST`] of them; a report that would make one more
+    /// is answered with an error.
+    pub fn process_for_host(
         &self,
         msg: AgentToServer,
         transport: Transport,
         conn: Option<ConnId>,
-        presented: Option<&Presented>,
+        host: Option<&str>,
     ) -> Processed {
-        let mut sender = msg.instance_uid.clone();
         let Some(mut uid) = InstanceUid::from_wire(&msg.instance_uid) else {
             warn!(
                 len = msg.instance_uid.len(),
@@ -1756,40 +1418,31 @@ impl AppState {
         let mut reply_flags = 0u64;
         let mut identification = None;
 
-        // An instance_uid belongs to the host whose certificate first reported it (ADR-0021
-        // clause 7): a certificate of another host does not speak for it, nor re-keys it. Such a
-        // reporter is re-keyed — it gets an identity of its own, never the one it claimed. The
-        // binding is made only once the report is admitted below.
-        let mut binding = None;
-        if let (Some(host), Some(revocations)) =
-            (presented.and_then(|p| p.host.as_deref()), &self.revocations)
-        {
-            if revocations.may_report(host, uid.as_bytes()).is_err() {
-                let new_uid = InstanceUid::default();
+        // An instance_uid belongs to the host its record names (ADR-0064 clause 3): another host
+        // does not speak for it. The report is refused outright: the reporter is adopted under no
+        // identity, nothing is recorded for it, and the owner's record stays as it is.
+        if let Some(host) = host {
+            let claimed = fleet
+                .get(&uid)
+                .and_then(|record| record.host.as_deref())
+                .is_some_and(|owner| owner != host);
+            if claimed {
+                drop(fleet);
                 warn!(
-                    event = "identity.claimed", claimed = %uid, new = %new_uid, host,
-                    "an Agent of another host was claimed; rekeying the reporter"
+                    event = "identity.claimed", claimed = %uid, host,
+                    "refusing a report: the Agent it names belongs to another host"
                 );
-                identification = Some(AgentIdentification {
-                    new_instance_uid: new_uid.as_bytes().to_vec(),
-                });
-                uid = new_uid;
-                // A CSR in the same message must not name the claimed identity either.
-                sender = uid.as_bytes().to_vec();
-                if let Err(e) = revocations.may_report(host, uid.as_bytes()) {
-                    return Processed {
-                        reply: bad_request(&e),
-                        uid: None,
-                        disconnected: false,
-                    };
-                }
+                return Processed {
+                    reply: bad_request("this instance_uid belongs to another host"),
+                    uid: None,
+                    disconnected: false,
+                };
             }
-            binding = Some((host, uid));
         }
 
         // The Agent asked the Server to assign its identity (AgentToServerFlags_RequestInstanceUid):
         // mint a UUID v7 and re-key the record; the reply tells the Agent to adopt it.
-        let mut rekeyed = None;
+        let mut rekeyed = false;
         if identification.is_none()
             && msg.flags & AgentToServerFlags::RequestInstanceUid as u64 != 0
         {
@@ -1808,7 +1461,7 @@ impl AppState {
             identification = Some(AgentIdentification {
                 new_instance_uid: new_uid.as_bytes().to_vec(),
             });
-            rekeyed = Some((uid, new_uid));
+            rekeyed = true;
             uid = new_uid;
         }
 
@@ -1834,10 +1487,9 @@ impl AppState {
 
         let known = fleet.contains_key(&uid);
         // Admitting a genuinely new Agent past the ceiling would let a peer cycling self-asserted
-        // UIDs (ADR-0021) grow the in-memory map and its per-Agent disk mirror without bound. Known
-        // Agents keep reporting; only a *new* UID at capacity is refused, `Unavailable` so a Client
-        // that legitimately raced in retries rather than gives up. The real gate is admission
-        // (ADR-0021); this bounds the damage while the endpoint is open.
+        // UIDs grow the in-memory map and its per-Agent disk mirror without bound. Known Agents
+        // keep reporting; only a *new* UID at capacity is refused, `Unavailable` so a Client that
+        // legitimately raced in retries rather than gives up.
         if !known && fleet.len() >= self.max_agents {
             drop(fleet);
             warn!(
@@ -1854,27 +1506,33 @@ impl AppState {
                 disconnected: false,
             };
         }
-        if let Some(revocations) = &self.revocations {
-            if let Some((host, bound)) = binding {
-                let subject = presented
-                    .map(|p| p.subject_values.clone())
-                    .unwrap_or_default();
-                // The binding exists only for a presented certificate that names a host.
-                let not_after_ms = presented.map_or(0, |p| p.not_after_ms);
-                if let Err(e) =
-                    revocations.check_report(host, &subject, not_after_ms, bound.as_bytes())
-                {
+        // A host owns at most AGENTS_PER_HOST of the records: one more, whether new or taken over
+        // from no host, is refused (ADR-0064 clause 3).
+        if let Some(host) = host {
+            let owned = fleet
+                .get(&uid)
+                .is_some_and(|r| r.host.as_deref() == Some(host));
+            if !owned {
+                let count = fleet
+                    .values()
+                    .filter(|record| record.host.as_deref() == Some(host))
+                    .count();
+                if u64::try_from(count).unwrap_or(u64::MAX) >= AGENTS_PER_HOST {
+                    drop(fleet);
+                    warn!(
+                        event = "identity.limit",
+                        host,
+                        limit = AGENTS_PER_HOST,
+                        "refusing a report: the host already speaks for as many Agents as it may"
+                    );
                     return Processed {
-                        reply: bad_request(&e),
+                        reply: bad_request(&format!(
+                            "this host already speaks for {} Agents",
+                            AGENTS_PER_HOST
+                        )),
                         uid: None,
                         disconnected: false,
                     };
-                }
-            }
-            // A re-key an Agent asks for keeps its host (ADR-0021 clause 7).
-            if let Some((old, new)) = rekeyed {
-                if let Err(e) = revocations.rebind(old.as_bytes(), new.as_bytes()) {
-                    warn!(error = %e, "cannot move the host binding to the new instance_uid");
                 }
             }
         }
@@ -1913,11 +1571,8 @@ impl AppState {
             reply_flags |= ServerToAgentFlags::ReportFullState as u64;
         }
 
-        // The Host it arrived over (ADR-0035 clause 2) — none without a host register.
-        let arrived_over = self
-            .revocations
-            .as_ref()
-            .and(presented.and_then(|p| p.host.clone()));
+        // The Host it arrived over (ADR-0035 clause 2).
+        let arrived_over = host.map(str::to_string);
         let moved = record.host != arrived_over;
         record.host = arrived_over;
         let described = msg.agent_description.is_some();
@@ -2006,83 +1661,13 @@ impl AppState {
             }
         }
 
-        // What places it in its Client and under its Host may have changed (ADR-0035): a new
-        // record, a new Host, a new description, or a new identity — a re-key took the old one
-        // out of its group, and a compressed message carries no description to place it by.
-        if !known || moved || described || rekeyed.is_some() {
+        // What places it in its Client may have changed (ADR-0035): a new record, a new Host, a
+        // new description, or a new identity — a re-key took the old one out of its group, and a
+        // compressed message carries no description to place it by.
+        if !known || moved || described || rekeyed {
             self.place(&mut fleet, &uid);
         }
         let record = fleet.get_mut(&uid).expect("the record was just written");
-
-        // The Agent asked to be issued a client certificate (ADR-0021). Signing it here, on the
-        // connection it arrived over, is the whole of the approval: admission already required
-        // every proof this endpoint asks of any message, which is what the Baseline's flow means
-        // by awaiting one.
-        let issued = match msg
-            .connection_settings_request
-            .as_ref()
-            .and_then(|request| request.opamp.as_ref())
-            .and_then(|opamp| opamp.certificate_request.as_ref())
-        {
-            None => None,
-            Some(request) => {
-                // `Ok(Err(..))` is a request the Server refuses; `Err(..)` a register it cannot
-                // write, which the Agent retries (ADR-0021 clause 33).
-                let outcome: Result<Result<Signed, String>, String> = match &self.client_ca {
-                    // The Baseline's MUST when the Server cannot act on the request. An Agent
-                    // reaching here ignored the undeclared capability, so it is a client error.
-                    None => Ok(Err("this Server issues no client certificates".to_string())),
-                    Some(ca) => match String::from_utf8(request.csr.clone())
-                        .map_err(|_| "the certificate signing request is not PEM".to_string())
-                        .and_then(|csr| {
-                            // The message's own instance_uid, before any re-key (ADR-0021).
-                            ca.check_claims(&csr, &sender)?;
-                            let (predecessor, host, subject) =
-                                self.renews(ca.as_ref(), &csr, presented)?;
-                            Ok((ca.sign(&csr, &host, &subject)?, predecessor))
-                        }) {
-                        Err(e) => Ok(Err(e)),
-                        Ok((signed, predecessor)) => self
-                            .record_issued(&signed, &sender, predecessor)
-                            .map(|()| Ok(signed)),
-                    },
-                };
-                let outcome = match outcome {
-                    Ok(outcome) => outcome,
-                    Err(e) => {
-                        warn!(agent = %uid, error = %e, "held back a certificate: it cannot be recorded");
-                        self.persist_if_dirty(&uid, record);
-                        return Processed {
-                            reply: unavailable(&msg.instance_uid, &e),
-                            uid: Some(uid),
-                            disconnected: false,
-                        };
-                    }
-                };
-                match outcome {
-                    Ok(signed) => {
-                        Some(TlsCertificate {
-                            cert: signed.pem.into_bytes(),
-                            // The Agent generated its own key and keeps it — the point of the CSR
-                            // flow — so the Server has nothing to put here and must not invent it.
-                            private_key: Vec::new(),
-                            ..Default::default()
-                        })
-                    }
-                    Err(e) => {
-                        warn!(event = "issuance.refused", agent = %uid, error = %e, "refused a certificate signing request");
-                        // The report's updates above are already in the record, so they are
-                        // persisted even though the CSR is refused (ADR-0024).
-                        self.persist_if_dirty(&uid, record);
-                        return Processed {
-                            reply: bad_request(&e),
-                            uid: Some(uid),
-                            disconnected: false,
-                        };
-                    }
-                }
-            }
-        };
 
         let disconnected = msg.agent_disconnect.is_some();
         if disconnected {
@@ -2145,7 +1730,7 @@ impl AppState {
         let connection_settings = if disconnected {
             None
         } else {
-            self.settings_offer(record, issued)
+            self.settings_offer(record)
         };
 
         // The package offer (ADR-0026), gated by capability and the reported
@@ -2203,41 +1788,34 @@ impl AppState {
         offering.store.offer_for_assigned(assigned, description)
     }
 
-    /// Whether a certificate naming `host` may fetch the artifact `(id, platform)` from the download
-    /// route (ADR-0026): it is offered to an Agent the host speaks for. The offer's own test
-    /// decides (ADR-0033 clause 10), for each such Agent — the `instance_uid`s bound to the host, or
-    /// every Agent for a host marked as a Gateway. Nothing is offered without package delivery or a
-    /// host register.
+    /// Whether `host` may fetch the artifact `(id, platform)` from the download route
+    /// (ADR-0026): it is offered to an Agent of that host — an Agent whose record names it as the
+    /// Host it last arrived over. The offer's own test decides (ADR-0033 clause 10), for each such
+    /// Agent. Nothing is offered without package delivery.
     ///
-    /// The package store and the host register are read first and released before the fleet is
-    /// locked: no two of those locks are held together here.
+    /// The package store is read first and released before the fleet is locked: no two of those
+    /// locks are held together here.
     pub fn offers_artifact(&self, host: &str, id: &PackageId, platform: &Platform) -> bool {
-        let (Some(offering), Some(revocations)) = (&self.packages, &self.revocations) else {
+        let Some(offering) = &self.packages else {
             return false;
         };
         // What does not depend on the Agent is resolved once, before the fleet is locked.
         let Some(artifact) = offering.store.offerable(id, platform) else {
             return false;
         };
-        let speaks_for = revocations.speaks_for(host);
         let fleet = self.fleet.lock().expect("fleet lock");
-        let offered = |record: &AgentRecord| {
-            // The cheap half of the test first: most Agents are assigned something else.
-            accepts_packages(record)
-                && record.assigned_package() == Some(id)
-                && artifact.offered_to(
-                    record.assigned_package(),
-                    record.effective_description().as_deref(),
-                )
-        };
-        match speaks_for {
-            SpeaksFor::Any => fleet.values().any(offered),
-            SpeaksFor::Agents(uids) => uids
-                .iter()
-                .filter_map(|uid| <[u8; 16]>::try_from(hex::decode(uid).ok()?).ok())
-                .filter_map(|uid| fleet.get(&InstanceUid(uid)))
-                .any(offered),
-        }
+        fleet
+            .values()
+            .filter(|record| record.host.as_deref() == Some(host))
+            .any(|record| {
+                // The cheap half of the test first: most Agents are assigned something else.
+                accepts_packages(record)
+                    && record.assigned_package() == Some(id)
+                    && artifact.offered_to(
+                        record.assigned_package(),
+                        record.effective_description().as_deref(),
+                    )
+            })
     }
 
     /// Why this Agent is **proposed** nothing: more than one Deployment claims it, and an Agent
@@ -2257,15 +1835,7 @@ impl AppState {
     /// The connection-settings offer for one Agent, or `None` when it cannot accept one or its
     /// reported hash says it already runs (or refused) exactly this offer.
     ///
-    /// `issued` is a certificate just signed for this Agent (ADR-0021). It overrides the hash gate
-    /// — the Agent asked for it in this very exchange — and rides whatever else the standing offer
-    /// carries, so one message can hand over a certificate and the endpoint or heartbeat that go
-    /// with it, exactly as the Baseline describes.
-    fn settings_offer(
-        &self,
-        record: &AgentRecord,
-        issued: Option<TlsCertificate>,
-    ) -> Option<ConnectionSettingsOffers> {
+    fn settings_offer(&self, record: &AgentRecord) -> Option<ConnectionSettingsOffers> {
         // The own-telemetry destinations (ADR-0016), offered only for the signals this Agent says
         // it can report — the protocol's negotiation rule, and an offer for a capability the peer
         // lacks is one nobody will ever act on.
@@ -2280,18 +1850,6 @@ impl AppState {
                 record.capabilities & opamp::proto::AgentCapabilities::ReportsOwnLogs as u64 != 0
             }),
         };
-
-        if let Some(certificate) = issued {
-            let mut settings = self
-                .connection_offer
-                .as_ref()
-                .map(|offer| offer.settings.clone())
-                .unwrap_or_default();
-            settings.certificate = Some(certificate);
-            // Not gated, and hashed over the settings as sent: the standing offer's hash would
-            // tell the Agent nothing changed, and it would never adopt the certificate.
-            return Some(compose_settings_offer(Some(settings), telemetry));
-        }
 
         // An Agent that accepts no OpAMP settings may still report telemetry, so the two are
         // gated separately: with only a telemetry destination to offer, that is the whole offer.
@@ -2543,58 +2101,6 @@ impl AppState {
         }
     }
 
-    /// The Agents each Host carries (ADR-0035 clause 7) — those whose record names it as the Host
-    /// they last arrived over — and the name it is displayed by: the `host.name` its Client Agent
-    /// reports, when it has exactly one on a direct connection. Shown only; it decides nothing.
-    pub fn host_agents(&self) -> BTreeMap<String, HostAgents> {
-        let fleet = self.fleet.lock().expect("fleet lock");
-        let mut hosts: BTreeMap<String, HostAgents> = BTreeMap::new();
-        for (uid, record) in fleet.iter() {
-            let Some(host) = &record.host else { continue };
-            let reported = |key: &str| {
-                record
-                    .description
-                    .as_ref()
-                    .and_then(|d| {
-                        attributes::string_value(&d.identifying_attributes, key).or_else(|| {
-                            attributes::string_value(&d.non_identifying_attributes, key)
-                        })
-                    })
-                    .unwrap_or_default()
-                    .to_string()
-            };
-            let entry = hosts.entry(host.clone()).or_default();
-            let is_client_agent = record.placement.client_agent == Some(*uid);
-            if is_client_agent && record.placement.group == Some(Group::Host(host.clone())) {
-                entry.name = Some(reported("host.name")).filter(|name| !name.is_empty());
-            }
-            entry.agents.push(HostAgentView {
-                instance_uid: uid.to_string(),
-                service_name: reported(attributes::SERVICE_NAME),
-                service_instance_name: reported(attributes::SERVICE_INSTANCE_NAME),
-                host_name: reported("host.name"),
-                client: crate::labels::is_client_agent(record.description.as_ref()),
-                client_agent: record
-                    .placement
-                    .client_agent
-                    .map(|uid| uid.to_string())
-                    .unwrap_or_default(),
-                machine: match &record.placement.group {
-                    Some(Group::Behind { machine, .. }) => machine.clone(),
-                    _ => String::new(),
-                },
-                ambiguous: record.placement.ambiguous,
-                connected: record.connected,
-            });
-        }
-        for entry in hosts.values_mut() {
-            entry
-                .agents
-                .sort_by(|a, b| a.instance_uid.cmp(&b.instance_uid));
-        }
-        hosts
-    }
-
     /// The REST view of the fleet (`GET /api/v1/agents`).
     pub fn snapshot(&self) -> Vec<AgentView> {
         let fleet = self.fleet.lock().expect("fleet lock");
@@ -2653,7 +2159,7 @@ impl AppState {
 }
 
 /// Takes `uid` out of `group`, and the group out of the index once it holds nobody.
-fn unindex(groups: &mut HashMap<Group, HashSet<InstanceUid>>, group: &Group, uid: &InstanceUid) {
+fn unindex(groups: &mut HashMap<String, HashSet<InstanceUid>>, group: &str, uid: &InstanceUid) {
     if let Some(members) = groups.get_mut(group) {
         members.remove(uid);
         if members.is_empty() {
@@ -2667,8 +2173,8 @@ fn unindex(groups: &mut HashMap<Group, HashSet<InstanceUid>>, group: &Group, uid
 /// marked ambiguous; with none, nobody inherits.
 fn inherit(
     fleet: &mut HashMap<InstanceUid, AgentRecord>,
-    groups: &HashMap<Group, HashSet<InstanceUid>>,
-    group: &Group,
+    groups: &HashMap<String, HashSet<InstanceUid>>,
+    group: &str,
 ) {
     let Some(members) = groups.get(group) else {
         return;
@@ -2841,35 +2347,6 @@ fn display_version(reported: &str) -> String {
         .to_string()
 }
 
-/// The Agents one Host carries, and the name it is shown by (ADR-0035 clause 7).
-#[derive(Default)]
-pub struct HostAgents {
-    /// The `host.name` its Client Agent reports; `None` for a Gateway, and while it has no single
-    /// Client Agent.
-    pub name: Option<String>,
-    pub agents: Vec<HostAgentView>,
-}
-
-/// One Agent under the Host it arrived over (ADR-0035 clause 7): enough to group it by its
-/// Client Agent.
-pub struct HostAgentView {
-    pub instance_uid: String,
-    pub service_name: String,
-    pub service_instance_name: String,
-    /// The `host.name` it reports, or empty.
-    pub host_name: String,
-    /// Whether it is a Client Agent: it reports `supervisor.kind.*`.
-    pub client: bool,
-    /// The Instance UID of its Client Agent — its own, for the Client Agent — or empty.
-    pub client_agent: String,
-    /// Behind a Gateway, the machine it is grouped by (`host.id=…` or `host.name=…`); empty on
-    /// a direct connection.
-    pub machine: String,
-    /// Its group holds more than one Client Agent.
-    pub ambiguous: bool,
-    pub connected: bool,
-}
-
 /// One Agent as the REST API and the UI see it.
 #[derive(Serialize)]
 pub struct AgentView {
@@ -2980,9 +2457,10 @@ pub struct AgentView {
     /// Nothing has been heard from this Agent for longer than its staleness budget (ADR-0024).
     ///
     /// Beside [`connected`](Self::connected), never instead of it: that one says a connection
-    /// carrying this Agent is open — behind a Gateway, the *Gateway's* — and this one says whether
-    /// the Agent itself is still talking. `connected: true, stale: true` is precisely the gatewayed
-    /// case, and precisely what an operator needs to be told.
+    /// carrying this Agent is open — one connection carries every Agent of a Client — and this one
+    /// says whether the Agent itself is still talking. `connected: true, stale: true` is a
+    /// connection that is up while its Agent has gone quiet, and precisely what an operator needs to
+    /// be told.
     ///
     /// Only an Agent declaring `ReportsHeartbeat` can be stale: that capability is the promise that
     /// makes silence mean something. Derived on read, never stored.
@@ -3008,12 +2486,8 @@ pub struct AgentView {
     /// The group this Agent's Client is recognised in holds more than one Client Agent, so it
     /// inherits nothing (ADR-0035 clause 4).
     pub ambiguous: bool,
-    /// The Host this Agent last arrived over (ADR-0035 clause 2), or empty. Behind a Gateway, the
-    /// Gateway's.
+    /// The Host this Agent last arrived over (ADR-0035 clause 2), or empty.
     pub host: String,
-    /// The `fleet.host.*` values its effective description takes from that Host (ADR-0035
-    /// clause 3); empty behind a Gateway.
-    pub host_attributes: BTreeMap<String, String>,
     /// Reported attributes in the Server's `fleet.` space, left out of what Selectors match
     /// (ADR-0035 clause 5).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -3305,7 +2779,6 @@ impl AgentView {
                 .unwrap_or_default(),
             ambiguous: record.placement.ambiguous,
             host: record.host.clone().unwrap_or_default(),
-            host_attributes: record.placement.host_values.clone(),
             ignored_attributes: crate::labels::ignored(record.description.as_ref()),
         }
     }
@@ -3389,22 +2862,13 @@ pub fn bad_request(message: &str) -> ServerToAgent {
     }
 }
 
-/// What a CSR with a bootstrap proof over a member's certificate is answered (ADR-0039 clause 12).
-pub const MEMBER_DOES_NOT_ENROL: &str =
-    "a certificate signing request with a bootstrap proof is an enrolment, and a member does not \
-     enrol";
-
-/// What a CSR with neither proof over a Gateway's certificate is answered (ADR-0039 clause 1).
-pub const NEEDS_A_PROOF: &str =
-    "a certificate requested through a Gateway needs a renewal proof or a bootstrap proof";
-
 /// How long an Agent told `Unavailable` waits before it asks again.
 pub const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The `ServerToAgent` for a report the Server is momentarily unable to accept — the Baseline's
 /// `Unavailable`, which unlike `BadRequest` tells the Agent to **retry later** rather than give up,
 /// and with `retry_info` says when. It carries the `instance_uid` of the message it answers, the
-/// field a Client and a Gateway route a reply by (ADR-0013 clause 25).
+/// field a Client routes a reply by (ADR-0013 clause 25).
 pub fn unavailable(instance_uid: &[u8], message: &str) -> ServerToAgent {
     ServerToAgent {
         instance_uid: instance_uid.to_vec(),
@@ -3514,20 +2978,6 @@ fn refuse_unreleasable(
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// The host derived for a certificate that names none is the one this Server derived before
-    /// the derivation moved into `classis-core`: hosts already in the register keep their ids.
-    /// Verifies: ADR-0039
-    #[test]
-    fn a_derived_host_is_the_one_the_register_already_holds() {
-        use sha2::Digest as _;
-        let (issuer, serial) = ("5f0a", "1c");
-        let digest = sha2::Sha256::digest(format!("{issuer}\n{serial}"));
-        let before = opamp::uid::InstanceUid::from_wire(&digest[..16])
-            .expect("16 bytes")
-            .to_string();
-        assert_eq!(classis_core::host::derived(issuer, serial), before);
-    }
-
     fn now_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3551,8 +3001,8 @@ mod tests {
         assert_eq!(map["host.ip"], "10.0.0.7, 192.168.1.140");
     }
 
-    /// The gatewayed case, which is why this exists: the connection is up — it is the Gateway's —
-    /// and the Agent behind it has stopped talking. Both facts are reported, neither overwrites
+    /// The case this exists for: the connection is up — it is the Client's, shared by all its
+    /// Agents — and this Agent has stopped talking. Both facts are reported, neither overwrites
     /// the other (ADR-0024).
     // Verifies: ADR-0024
     #[test]
@@ -3630,8 +3080,8 @@ mod tests {
         assert_eq!(state.snapshot().len(), 1, "the row stays");
     }
 
-    /// The gatewayed case: the connection is up because it is the *Gateway's*, and the Agent behind
-    /// it stopped talking long ago. `connected` alone would refuse this forever.
+    /// The connection is up because it is the Client's, shared by all its Agents, and this Agent
+    /// stopped talking long ago. `connected` alone would refuse this forever.
     #[test]
     fn a_connected_agent_that_went_quiet_is_forgotten() {
         let state = forgettable_state();
@@ -3772,9 +3222,8 @@ mod tests {
         assert!(cut.chars().all(|c| c == '€'));
     }
 
-    /// Every `Unavailable` — a full enrolment queue, the record ceiling, a register that cannot
-    /// be written — tells the Agent when to ask again, so it retries instead of giving up or
-    /// hammering (ADR-0021 clause 21).
+    /// Every `Unavailable` — the record ceiling, a message past the rate limit — tells the Agent
+    /// when to ask again, so it retries instead of giving up or hammering (ADR-0021 clause 21).
     /// Verifies: ADR-0021, ADR-0013
     #[test]
     fn unavailable_tells_the_agent_when_to_retry() {
@@ -4245,31 +3694,15 @@ mod tests {
         ));
     }
 
-    /// A certificate of one host does not speak for another host's Agent: the reporter is re-keyed
-    /// to an identity of its own, and the Agent it claimed keeps its record.
-    /// Verifies: ADR-0021, G-17
+    /// A host does not speak for another host's Agent: the report is refused with an error, nothing
+    /// is recorded for the reporter, and the Agent it claimed keeps its record.
+    /// Verifies: ADR-0064, ADR-0021, G-17
     #[test]
     fn a_host_cannot_report_for_another_hosts_agent() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let revocations = Arc::new(
-            Revocations::open(
-                Box::new(crate::fs::FsLedgerStore::open(dir.path()).expect("ledger")),
-                Arc::new(crate::clock::SystemClock),
-                Vec::new(),
-            )
-            .expect("revocations"),
-        );
-        let state = AppState::new(dir.path().join("configs"))
-            .expect("state")
-            .with_revocations(Some(revocations));
-        let presented = |host: &str, serial: &str| Presented {
-            id: CertId::new(b"CA", serial),
-            host: Some(host.to_string()),
-            subject_values: crate::revocation::SubjectValues::default(),
-            not_after_ms: u64::MAX,
-        };
+        let state = AppState::new(dir.path().join("configs")).expect("state");
         let victim = InstanceUid::default();
-        let own = state.process_presented(
+        let own = state.process_for_host(
             {
                 let mut first = AgentToServer {
                     instance_uid: victim.as_bytes().to_vec(),
@@ -4280,83 +3713,48 @@ mod tests {
             },
             Transport::Http,
             None,
-            Some(&presented("h1", "01")),
+            Some("h1"),
         );
         assert_eq!(own.uid, Some(victim));
         assert!(own.reply.agent_identification.is_none());
 
-        let claimed = state.process_presented(
+        let before = serde_json::to_value(view(&state, &victim)).expect("the view serializes");
+        let claimed = state.process_for_host(
             AgentToServer {
                 instance_uid: victim.as_bytes().to_vec(),
+                sequence_num: 7,
                 flags: AgentToServerFlags::RequestInstanceUid as u64,
                 ..Default::default()
             },
             Transport::Http,
             None,
-            Some(&presented("h2", "02")),
-        );
-        let new_uid = claimed.uid.expect("an identity");
-        assert_ne!(new_uid, victim, "another host spoke for the Agent");
-        assert_eq!(
-            claimed.reply.instance_uid,
-            victim.as_bytes().to_vec(),
-            "the reply is addressed to the identity the reporter sent, or it routes to no one"
+            Some("h2"),
         );
         assert_eq!(
-            claimed
-                .reply
-                .agent_identification
-                .expect("told to adopt it")
-                .new_instance_uid,
-            new_uid.as_bytes().to_vec()
+            claimed.uid, None,
+            "the reporter is adopted under no identity"
         );
         assert!(
-            state
-                .snapshot()
-                .iter()
-                .any(|agent| agent.instance_uid == victim.to_string()),
-            "the claimed Agent's record moved"
+            claimed.reply.agent_identification.is_none(),
+            "no identity is offered either"
         );
-
-        // Having adopted it, the reporter speaks under its new identity and is re-keyed no more:
-        // no further record appears for it.
-        let adopted = state.process_presented(
-            AgentToServer {
-                instance_uid: new_uid.as_bytes().to_vec(),
-                ..Default::default()
-            },
-            Transport::Http,
-            None,
-            Some(&presented("h2", "02")),
+        assert_eq!(
+            claimed.reply.error_response.expect("an error").r#type,
+            ServerErrorResponseType::BadRequest as i32
         );
-        assert_eq!(adopted.uid, Some(new_uid));
-        assert!(adopted.reply.agent_identification.is_none());
-        assert_eq!(state.snapshot().len(), 2, "one record per Agent, no more");
+        assert_eq!(state.snapshot().len(), 1, "nothing is recorded for it");
+        let after = serde_json::to_value(view(&state, &victim)).expect("the view serializes");
+        assert_eq!(after, before, "the owner's record was not touched");
+        assert_eq!(after["host"], "h1", "the owner keeps its Agent");
     }
 
-    /// Forgetting an Agent releases its binding: another host's report for it binds it, under the
-    /// identity it reported, where before it would have been re-keyed.
+    /// Forgetting an Agent releases it: another host's report for it names that host, under the
+    /// identity it reported, where before it would have been refused.
     /// Verifies: ADR-0047
     #[test]
     fn forgetting_an_agent_releases_its_binding() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let revocations = Arc::new(
-            Revocations::open(
-                Box::new(crate::fs::FsLedgerStore::open(dir.path()).expect("ledger")),
-                Arc::new(crate::clock::SystemClock),
-                Vec::new(),
-            )
-            .expect("revocations"),
-        );
-        let state = AppState::new(dir.path().join("configs"))
-            .expect("state")
-            .with_revocations(Some(revocations.clone()));
-        let presented = |host: &str| Presented {
-            id: CertId::new(b"CA", host),
-            host: Some(host.to_string()),
-            subject_values: crate::revocation::SubjectValues::default(),
-            not_after_ms: u64::MAX,
-        };
+        let state = AppState::new(dir.path().join("configs")).expect("state");
         let uid = InstanceUid::default();
         let message = || AgentToServer {
             instance_uid: uid.as_bytes().to_vec(),
@@ -4364,115 +3762,79 @@ mod tests {
             ..Default::default()
         };
         let conn = state.connection_id();
-        let first = state.process_presented(
-            message(),
-            Transport::WebSocket,
-            Some(conn),
-            Some(&presented("h1")),
-        );
+        let first = state.process_for_host(message(), Transport::WebSocket, Some(conn), Some("h1"));
         assert_eq!(first.uid, Some(uid));
+        assert_eq!(view(&state, &uid).host, "h1");
         state.mark_disconnected(&[uid], conn);
         assert!(state.forget_agent(&uid).is_ok(), "forgotten");
-        assert_eq!(
-            revocations.speaks_for("h1"),
-            crate::revocation::SpeaksFor::Agents(std::collections::BTreeSet::new()),
+        assert!(
+            state.snapshot().iter().all(|agent| agent.host != "h1"),
             "released from h1"
         );
 
-        let other = state.process_presented(
+        let other = state.process_for_host(
             message(),
             Transport::WebSocket,
             Some(state.connection_id()),
-            Some(&presented("h2")),
+            Some("h2"),
         );
         assert_eq!(other.uid, Some(uid), "bound by h2, not re-keyed");
         assert!(other.reply.agent_identification.is_none());
-        assert_eq!(
-            revocations.speaks_for("h2"),
-            crate::revocation::SpeaksFor::Agents([uid.to_string().replace('-', "")].into())
-        );
+        assert_eq!(view(&state, &uid).host, "h2");
     }
 
-    /// A report refused at the record ceiling binds no `instance_uid` to the host that sent it,
-    /// so it cannot speak for that Agent once there is room — nor lock out the host it belongs to.
+    /// A report refused at the record ceiling names no host for the `instance_uid` it carried, so
+    /// it cannot speak for that Agent once there is room — nor lock out the host it belongs to.
+    /// The refusal names the Agent it answers: the field the Client routes a reply by.
     /// Verifies: ADR-0021, ADR-0024
     #[test]
     fn a_report_refused_at_the_ceiling_binds_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let revocations = Arc::new(
-            Revocations::open(
-                Box::new(crate::fs::FsLedgerStore::open(dir.path()).expect("ledger")),
-                Arc::new(crate::clock::SystemClock),
-                Vec::new(),
-            )
-            .expect("revocations"),
-        );
         let state = AppState::new(dir.path().join("configs"))
             .expect("state")
-            .with_max_agents(1)
-            .with_revocations(Some(revocations.clone()));
-        let presented = |host: &str| Presented {
-            id: CertId::new(b"CA", host),
-            host: Some(host.to_string()),
-            subject_values: crate::revocation::SubjectValues::default(),
-            not_after_ms: u64::MAX,
-        };
+            .with_max_agents(1);
         let first = InstanceUid::default();
-        let accepted = state.process_presented(
-            report(&first, 1),
-            Transport::Http,
-            None,
-            Some(&presented("h1")),
-        );
+        let accepted = state.process_for_host(report(&first, 1), Transport::Http, None, Some("h1"));
         assert!(accepted.reply.error_response.is_none());
 
         for flags in [0, AgentToServerFlags::RequestInstanceUid as u64] {
             let refused_uid = InstanceUid::default();
             let mut refused = report(&refused_uid, 1);
             refused.flags = flags;
-            let refused =
-                state.process_presented(refused, Transport::Http, None, Some(&presented("h2")));
+            let refused = state.process_for_host(refused, Transport::Http, None, Some("h2"));
+            assert_eq!(
+                refused.reply.instance_uid,
+                refused_uid.as_bytes(),
+                "the refusal names the Agent it answers (flags {flags})"
+            );
             assert_eq!(
                 refused.reply.error_response.expect("refused").r#type,
                 ServerErrorResponseType::Unavailable as i32
             );
-            assert_eq!(
-                revocations.speaks_for("h2"),
-                SpeaksFor::Agents(BTreeSet::new()),
+            assert!(
+                state.snapshot().iter().all(|agent| agent.host != "h2"),
                 "a refused report bound an instance_uid (flags {flags})"
             );
         }
-        assert_eq!(
-            revocations.speaks_for("h1"),
-            SpeaksFor::Agents([hex::encode(first.as_bytes())].into())
-        );
+        assert_eq!(view(&state, &first).host, "h1");
     }
 
     // ---- Who may fetch an uploaded artifact (ADR-0026) ----
 
     /// A fleet delivering `otelcol@1.0.0`, uploaded and signed for linux/amd64 and held by the
-    /// `stable` channel that claims every `otelcol`, with a host register.
-    fn delivering_fleet(dir: &std::path::Path) -> (AppState, Arc<Revocations>, PackageId) {
+    /// `stable` channel that claims every `otelcol`.
+    fn delivering_fleet(dir: &std::path::Path) -> (AppState, PackageId) {
         let store = PackageStore::open(dir.join("packages")).expect("store");
         let id = PackageId::new("otelcol", "1.0.0").expect("id");
         store.create(&id).expect("create");
         store
             .put_entry(&id, &linux(), b"v1".to_vec())
             .expect("entry");
-        let revocations = Arc::new(
-            Revocations::open(
-                Box::new(crate::fs::FsLedgerStore::open(dir).expect("ledger")),
-                Arc::new(crate::clock::SystemClock),
-                Vec::new(),
-            )
-            .expect("revocations"),
-        );
         let state = AppState::new(dir.join("configs"))
             .expect("state")
             .with_packages(Some(
                 PackageOffering::new(&dir.join("packages"), store).expect("offering"),
-            ))
-            .with_revocations(Some(revocations.clone()));
+            ));
         state
             .deployment_store()
             .expect("deployments")
@@ -4482,7 +3844,7 @@ mod tests {
             )
             .expect("deployment");
         put_signed(&state, &id);
-        (state, revocations, id)
+        (state, id)
     }
 
     fn linux() -> Platform {
@@ -4499,11 +3861,11 @@ mod tests {
             .expect("package");
     }
 
-    /// One report of an `otelcol` Agent on linux/amd64 that accepts packages, over a certificate
-    /// naming `host`, echoing `echoed` as the aggregate hash it holds.
+    /// One report of an `otelcol` Agent on linux/amd64 that accepts packages, arriving over
+    /// `host`, echoing `echoed` as the aggregate hash it holds.
     fn report_from(state: &AppState, host: &str, uid: InstanceUid, echoed: &[u8]) -> Processed {
         let attr = opamp::attributes::string_attr;
-        state.process_presented(
+        state.process_for_host(
             AgentToServer {
                 instance_uid: uid.as_bytes().to_vec(),
                 capabilities: opamp::proto::AgentCapabilities::ReportsStatus as u64
@@ -4524,27 +3886,22 @@ mod tests {
             },
             Transport::Http,
             None,
-            Some(&Presented {
-                id: CertId::new(b"CA", host),
-                host: Some(host.to_string()),
-                subject_values: crate::revocation::SubjectValues::default(),
-                not_after_ms: u64::MAX,
-            }),
+            Some(host),
         )
     }
 
-    /// An artifact is fetched by a host only through an Agent it speaks for: the host whose Agent
-    /// it was released to, not another host, not a host the register does not know, and not for
-    /// another Platform or version — until that other host is marked as a Gateway.
+    /// An artifact is fetched by a host only through one of its Agents: the host whose Agent it
+    /// was released to, not another host, not a host with no Agent, and not for another Platform
+    /// or version.
     /// Verifies: ADR-0026
     #[test]
     fn an_artifact_is_offered_to_a_host_only_through_an_agent_it_speaks_for() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (state, revocations, id) = delivering_fleet(dir.path());
+        let (state, id) = delivering_fleet(dir.path());
         report_from(&state, "h1", InstanceUid([1; 16]), &[]);
         assert_eq!(state.rollout_deployment("stable").expect("rollout"), 1);
         // h2 reports an Agent of its own, released nothing.
-        state.process_presented(
+        state.process_for_host(
             AgentToServer {
                 instance_uid: vec![2; 16],
                 capabilities: opamp::proto::AgentCapabilities::ReportsStatus as u64,
@@ -4552,12 +3909,7 @@ mod tests {
             },
             Transport::Http,
             None,
-            Some(&Presented {
-                id: CertId::new(b"CA", "h2"),
-                host: Some("h2".to_string()),
-                subject_values: crate::revocation::SubjectValues::default(),
-                not_after_ms: u64::MAX,
-            }),
+            Some("h2"),
         );
 
         assert!(state.offers_artifact("h1", &id, &linux()));
@@ -4567,12 +3919,6 @@ mod tests {
         assert!(!state.offers_artifact("h1", &id, &windows));
         let v2 = PackageId::new("otelcol", "2.0.0").expect("id");
         assert!(!state.offers_artifact("h1", &v2, &linux()));
-
-        assert!(revocations.set_gateway("h2", true).expect("mark"));
-        assert!(
-            state.offers_artifact("h2", &id, &linux()),
-            "a Gateway speaks for any Agent"
-        );
     }
 
     /// The offer and the download agree on the capability half of the test (ADR-0033 clause 10): an
@@ -4582,13 +3928,13 @@ mod tests {
     #[test]
     fn an_agent_that_accepts_no_packages_is_neither_offered_nor_fetched_for() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (state, _, id) = delivering_fleet(dir.path());
+        let (state, id) = delivering_fleet(dir.path());
         let uid = InstanceUid([1; 16]);
         report_from(&state, "h1", uid, &[]);
         assert_eq!(state.rollout_deployment("stable").expect("rollout"), 1);
         assert!(state.offers_artifact("h1", &id, &linux()));
         let attr = opamp::attributes::string_attr;
-        let reply = state.process_presented(
+        let reply = state.process_for_host(
             AgentToServer {
                 instance_uid: uid.as_bytes().to_vec(),
                 sequence_num: 1,
@@ -4604,12 +3950,7 @@ mod tests {
             },
             Transport::Http,
             None,
-            Some(&Presented {
-                id: CertId::new(b"CA", "h1"),
-                host: Some("h1".to_string()),
-                subject_values: crate::revocation::SubjectValues::default(),
-                not_after_ms: u64::MAX,
-            }),
+            Some("h1"),
         );
         assert!(reply.reply.packages_available.is_none(), "no offer");
         assert!(!state.offers_artifact("h1", &id, &linux()), "and no fetch");
@@ -4621,7 +3962,7 @@ mod tests {
     #[test]
     fn an_offer_still_stands_after_its_hash_is_echoed() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (state, _, id) = delivering_fleet(dir.path());
+        let (state, id) = delivering_fleet(dir.path());
         let uid = InstanceUid([1; 16]);
         report_from(&state, "h1", uid, &[]);
         state.rollout_deployment("stable").expect("rollout");
@@ -4635,15 +3976,13 @@ mod tests {
     }
 
     /// A version saved into the channel but not yet released by an operator's press is no one's
-    /// offer: not the Agent's host's, not a Gateway's — while the version released before stays.
+    /// offer: not the Agent's host's — while the version released before stays.
     /// Verifies: ADR-0026
     #[test]
     fn a_version_waiting_for_its_press_is_offered_to_no_host() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (state, revocations, v1) = delivering_fleet(dir.path());
+        let (state, v1) = delivering_fleet(dir.path());
         report_from(&state, "h1", InstanceUid([1; 16]), &[]);
-        report_from(&state, "gw", InstanceUid([9; 16]), &[]);
-        assert!(revocations.set_gateway("gw", true).expect("mark"));
         state.rollout_deployment("stable").expect("rollout");
 
         let v2 = PackageId::new("otelcol", "2.0.0").expect("id");
@@ -4653,18 +3992,16 @@ mod tests {
             .put_entry(&v2, &linux(), b"v2".to_vec())
             .expect("entry");
         put_signed(&state, &v2);
-        for host in ["h1", "gw"] {
-            assert!(!state.offers_artifact(host, &v2, &linux()), "{host}");
-            assert!(state.offers_artifact(host, &v1, &linux()), "{host}");
-        }
-        assert_eq!(state.rollout_deployment("stable").expect("the press"), 2);
+        assert!(!state.offers_artifact("h1", &v2, &linux()));
+        assert!(state.offers_artifact("h1", &v1, &linux()));
+        assert_eq!(state.rollout_deployment("stable").expect("the press"), 1);
         assert!(state.offers_artifact("h1", &v2, &linux()));
     }
 
     // ---- A Deployment carries Configurations beside its Packages (ADR-0034) ----
 
-    /// One report of an `otelcol` Agent on linux/amd64 over a certificate naming `h1` that takes
-    /// both remote configuration and packages, echoing the hashes it holds.
+    /// One report of an `otelcol` Agent on linux/amd64 arriving over `h1` that takes both remote
+    /// configuration and packages, echoing the hashes it holds.
     fn report_holding(
         state: &AppState,
         uid: InstanceUid,
@@ -4673,7 +4010,7 @@ mod tests {
     ) -> Processed {
         use opamp::proto::AgentCapabilities as C;
         let attr = opamp::attributes::string_attr;
-        state.process_presented(
+        state.process_for_host(
             AgentToServer {
                 instance_uid: uid.as_bytes().to_vec(),
                 capabilities: C::ReportsStatus as u64
@@ -4700,12 +4037,7 @@ mod tests {
             },
             Transport::Http,
             None,
-            Some(&Presented {
-                id: CertId::new(b"CA", "h1"),
-                host: Some("h1".to_string()),
-                subject_values: crate::revocation::SubjectValues::default(),
-                not_after_ms: u64::MAX,
-            }),
+            Some("h1"),
         )
     }
 
@@ -4726,7 +4058,7 @@ mod tests {
     /// `delivering_fleet` with two Configurations in `stable`: `base`, for the Agent's type, and
     /// `telegraf-conf`, typed for another Agent type.
     fn mixed_fleet(dir: &std::path::Path) -> (AppState, PackageId) {
-        let (state, _, id) = delivering_fleet(dir);
+        let (state, id) = delivering_fleet(dir);
         state
             .save_configuration("base", body("receivers: {}\n"))
             .expect("base");
@@ -5180,36 +4512,12 @@ mod tests {
         assert!(state.delete_deployment("stable").expect("deleted"));
     }
 
-    // ---- Hosts, the effective description and label inheritance (ADR-0035) ----
+    // ---- The effective description, labels and their inheritance (ADR-0035) ----
 
-    /// A fleet whose host register is kept in `dir`, so a reopen restores both.
-    fn hosted_fleet(dir: &std::path::Path) -> AppState {
-        let revocations = Arc::new(
-            Revocations::open(
-                Box::new(crate::fs::FsLedgerStore::open(dir).expect("ledger")),
-                Arc::new(crate::clock::SystemClock),
-                Vec::new(),
-            )
-            .expect("revocations"),
-        );
-        AppState::new(dir.join("configs"))
-            .expect("state")
-            .with_revocations(Some(revocations))
-    }
-
-    fn organization(name: &str) -> crate::revocation::SubjectValues {
-        crate::revocation::SubjectValues {
-            organization: name.to_string(),
-            ..Default::default()
-        }
-    }
-
-    /// A full report from `uid` describing itself with `pairs`, over a certificate naming `host`
-    /// whose subject carries `subject`.
+    /// A full report from `uid` describing itself with `pairs`, arriving over `host`.
     fn report_over(
         state: &AppState,
         host: &str,
-        subject: crate::revocation::SubjectValues,
         uid: InstanceUid,
         pairs: &[(&str, &str)],
     ) -> Processed {
@@ -5222,17 +4530,7 @@ mod tests {
             .iter()
             .map(|(key, value)| opamp::attributes::string_attr(key, value))
             .collect();
-        state.process_presented(
-            message,
-            Transport::Http,
-            None,
-            Some(&Presented {
-                id: CertId::new(b"CA", host),
-                host: Some(host.to_string()),
-                subject_values: subject,
-                not_after_ms: u64::MAX,
-            }),
-        )
+        state.process_for_host(message, Transport::Http, None, Some(host))
     }
 
     /// Whether a Selector of `pairs` matches this Agent — the one test every Selector is decided by.
@@ -5264,76 +4562,34 @@ mod tests {
         }
     }
 
-    /// An Agent on a direct connection carries its Host's subject values as `fleet.host.*`; an
-    /// Agent that reports `fleet.host.organization` itself is not selected by it, and the attribute
-    /// is listed as ignored. Without a host register an Agent names no Host.
+    /// An Agent that reports a `fleet.*` attribute is not selected by it, and the attribute is
+    /// listed as ignored; its record names the host it arrived over.
     /// Verifies: ADR-0035
     #[test]
-    fn a_direct_agent_matches_its_hosts_values_and_none_it_reports_itself() {
+    fn a_reported_fleet_attribute_selects_nothing_and_is_listed_as_ignored() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let state = hosted_fleet(dir.path());
-        let honest = InstanceUid::default();
-        report_over(&state, "h1", organization("Kunde GmbH"), honest, &[]);
-        assert!(selects(
-            &state,
-            &honest,
-            &[("fleet.host.organization", "Kunde GmbH")]
-        ));
-        assert_eq!(view(&state, &honest).host, "h1");
-        assert_eq!(
-            view(&state, &honest).host_attributes["fleet.host.organization"],
-            "Kunde GmbH"
-        );
-
-        // On a Host of its own whose certificate carries no organization.
-        let claimant = InstanceUid::default();
-        report_over(
-            &state,
-            "h2",
-            crate::revocation::SubjectValues::default(),
-            claimant,
-            &[("fleet.host.organization", "Kunde GmbH")],
-        );
-        assert!(!selects(
-            &state,
-            &claimant,
-            &[("fleet.host.organization", "Kunde GmbH")]
-        ));
-        assert_eq!(
-            view(&state, &claimant).ignored_attributes,
-            ["fleet.host.organization"]
-        );
-
-        // On the Host whose values it would contradict, the Host's value is what matches.
-        let liar = InstanceUid::default();
-        report_over(
-            &state,
-            "h1",
-            organization("Kunde GmbH"),
-            liar,
-            &[("fleet.host.organization", "Mitbewerber AG")],
-        );
-        assert!(selects(
-            &state,
-            &liar,
-            &[("fleet.host.organization", "Kunde GmbH")]
-        ));
-        assert!(!selects(
-            &state,
-            &liar,
-            &[("fleet.host.organization", "Mitbewerber AG")]
-        ));
-
-        // A Server without a host register has no Hosts, and its records name none.
-        let bare = AppState::new(dir.path().join("bare")).expect("state");
+        let state = AppState::new(dir.path().join("configs")).expect("state");
         let uid = InstanceUid::default();
-        report_over(&bare, "h1", organization("Kunde GmbH"), uid, &[]);
-        assert_eq!(view(&bare, &uid).host, "");
+        let mut message = report(&uid, 1);
+        message
+            .agent_description
+            .as_mut()
+            .expect("described")
+            .non_identifying_attributes = vec![opamp::attributes::string_attr(
+            "fleet.host.organization",
+            "Kunde GmbH",
+        )];
+        state.process_for_host(message, Transport::Http, None, Some("h1"));
         assert!(!selects(
-            &bare,
+            &state,
             &uid,
             &[("fleet.host.organization", "Kunde GmbH")]
         ));
+        assert_eq!(view(&state, &uid).host, "h1");
+        assert_eq!(
+            view(&state, &uid).ignored_attributes,
+            ["fleet.host.organization"]
+        );
     }
 
     /// A Supervisor Agent matches a Selector on a label set only on its Client Agent, its own label
@@ -5346,15 +4602,14 @@ mod tests {
         let client = InstanceUid::default();
         let supervisor = InstanceUid::default();
         {
-            let state = hosted_fleet(dir.path());
+            let state = AppState::new(dir.path().join("configs")).expect("state");
             report_over(
                 &state,
-                "h1",
-                organization("Kunde GmbH"),
+                "client-a",
                 client,
                 &[("supervisor.kind.collector", "true")],
             );
-            report_over(&state, "h1", organization("Kunde GmbH"), supervisor, &[]);
+            report_over(&state, "client-a", supervisor, &[]);
             label(&state, &client, &[("ring", "early"), ("site", "wien")]);
             label(&state, &supervisor, &[("ring", "late")]);
             assert!(selects(&state, &supervisor, &[("site", "wien")]));
@@ -5362,7 +4617,7 @@ mod tests {
             assert!(!selects(&state, &supervisor, &[("ring", "early")]));
             assert!(selects(&state, &client, &[("ring", "early")]));
         }
-        let state = hosted_fleet(dir.path());
+        let state = AppState::new(dir.path().join("configs")).expect("state");
         assert!(
             selects(&state, &supervisor, &[("site", "wien"), ("ring", "late")]),
             "restored with its own labels and its Client Agent's"
@@ -5383,58 +4638,27 @@ mod tests {
         assert!(!selects(&state, &supervisor, &[("site", "wien")]));
     }
 
-    /// Behind a Gateway an Agent carries no `fleet.host.*`; the Agents sharing a `host.id` inherit
-    /// their Client Agent's labels, and two Client Agents with one `host.id` leave every Agent of it
-    /// inheriting nothing and marked ambiguous.
+    /// Two Client Agents arriving over one host leave every Agent of it inheriting nothing and
+    /// marked ambiguous; an Agent of another host is neither.
     /// Verifies: ADR-0035
     #[test]
-    fn behind_a_gateway_agents_sharing_a_host_id_inherit_unless_ambiguous() {
+    fn two_client_agents_on_one_host_leave_nobody_inheriting_and_everyone_ambiguous() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let state = hosted_fleet(dir.path());
-        let gateway = InstanceUid::default();
-        report_over(
-            &state,
-            "gw",
-            organization("Gateway GmbH"),
-            gateway,
-            &[("supervisor.kind.collector", "true"), ("host.id", "gw-1")],
-        );
-        assert!(state.set_gateway("gw", true).expect("marked"));
-        assert!(
-            !selects(
-                &state,
-                &gateway,
-                &[("fleet.host.organization", "Gateway GmbH")]
-            ),
-            "nothing arrives over a Gateway directly"
-        );
-
+        let state = AppState::new(dir.path().join("configs")).expect("state");
         let client = InstanceUid::default();
         let supervisor = InstanceUid::default();
         let elsewhere = InstanceUid::default();
-        let behind = |uid, pairs: &[(&str, &str)]| {
-            report_over(&state, "gw", organization("Gateway GmbH"), uid, pairs);
-        };
-        behind(
-            client,
-            &[("supervisor.kind.collector", "true"), ("host.id", "m-1")],
-        );
-        behind(supervisor, &[("host.id", "m-1")]);
-        behind(elsewhere, &[("host.id", "m-2")]);
+        let collector = [("supervisor.kind.collector", "true")];
+        report_over(&state, "client-a", client, &collector);
+        report_over(&state, "client-a", supervisor, &[]);
+        report_over(&state, "client-b", elsewhere, &[]);
         label(&state, &client, &[("site", "linz")]);
         assert!(selects(&state, &supervisor, &[("site", "linz")]));
         assert!(!selects(&state, &elsewhere, &[("site", "linz")]));
-        let seen = view(&state, &supervisor);
-        assert_eq!(seen.host, "gw");
-        assert!(seen.host_attributes.is_empty());
-        assert!(!seen.ambiguous);
+        assert!(!view(&state, &supervisor).ambiguous);
 
-        // A second Client on the same machine: nobody of it can be told apart.
         let second = InstanceUid::default();
-        behind(
-            second,
-            &[("supervisor.kind.collector", "true"), ("host.id", "m-1")],
-        );
+        report_over(&state, "client-a", second, &collector);
         assert!(!selects(&state, &supervisor, &[("site", "linz")]));
         for uid in [client, supervisor, second] {
             assert!(view(&state, &uid).ambiguous, "{uid}");
@@ -5449,17 +4673,16 @@ mod tests {
     #[test]
     fn a_client_agent_rekeyed_without_a_description_keeps_its_group_inheriting() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let state = hosted_fleet(dir.path());
+        let state = AppState::new(dir.path().join("configs")).expect("state");
         let client = InstanceUid::default();
         let supervisor = InstanceUid::default();
         report_over(
             &state,
-            "h1",
-            organization("Kunde GmbH"),
+            "client-a",
             client,
             &[("supervisor.kind.collector", "true")],
         );
-        report_over(&state, "h1", organization("Kunde GmbH"), supervisor, &[]);
+        report_over(&state, "client-a", supervisor, &[]);
         label(&state, &client, &[("site", "wien")]);
         assert!(selects(&state, &supervisor, &[("site", "wien")]));
 
@@ -5471,17 +4694,7 @@ mod tests {
             ..Default::default()
         };
         let rekeyed = state
-            .process_presented(
-                rekey,
-                Transport::Http,
-                None,
-                Some(&Presented {
-                    id: CertId::new(b"CA", "h1"),
-                    host: Some("h1".to_string()),
-                    subject_values: organization("Kunde GmbH"),
-                    not_after_ms: u64::MAX,
-                }),
-            )
+            .process_for_host(rekey, Transport::Http, None, Some("client-a"))
             .uid
             .expect("the new identity");
         assert_ne!(rekeyed, client);
