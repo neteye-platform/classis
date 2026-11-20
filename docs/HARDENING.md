@@ -83,8 +83,9 @@ the project already has:
   client-certificate verification come before that, and a failed handshake is
   not counted as an admission failure.
 - **Nothing installed unsigned, and downloads only from the Client's own
-  Server** (ADR-0026, ADR-0033): a Client without the verification key takes no
-  package, the Server offers no entry that carries no signature, and every
+  Server** (ADR-0026, ADR-0033, ADR-0066): every package is verified up to the
+  Package Roots compiled into the Client, the Server offers no entry that
+  carries no signature, and every
   download hop is held to `https://` and the Client's own Server origin before a
   request is sent. Every artifact is uploaded: the Server sends no request for a
   package anywhere and holds no source credential.
@@ -97,9 +98,10 @@ the project already has:
   complete the TLS handshake, before it is hung up on — enforced below every
   other limit in this list, because it applies before a request exists and
   therefore before Admission ever runs.
-- Package content hashed and Ed25519-verified always, with no unsigned posture:
-  without a verification key, or for an offer without a signature, nothing is
-  downloaded. Archive members are validated before anything is written.
+- Package content hashed and verified up to the compiled-in Package Roots
+  always, with no unsigned posture and no setting: for an offer without a
+  signature, nothing is downloaded. Archive members are validated before
+  anything is written.
 - **Revocation that ends sessions** (ADR-0021): the Server keeps a persisted
   list of revoked certificates, by issuing CA and serial — at most 20 octets, as
   RFC 5280 allows, so the list stays within what a Gateway reads — and extended
@@ -376,8 +378,8 @@ sanitized), or store there an entry Windows cannot hold or two entries in one
 file (such an offer is refused); name a program outside a Supervisor's
 `program/`, by absolute, rooted or escaping path, or a wrapped kind's program at
 all; start a kind that is not compiled in; change any key of `supervisor.toml`
-but the `[[supervisor]]` array — not the endpoint, `state_dir`, `[tls]`, the
-verification key or `self_update`; apply a set with one bad block; purge outside
+but the `[[supervisor]]` array — not the endpoint, `state_dir`, `[tls]` or
+`self_update`; apply a set with one bad block; purge outside
 the Supervisors' root; install anything unsigned, from another origin than its
 own Server, or with an archive member that climbs out; serve a host from its
 download route an artifact that is not offered to an Agent the host speaks for,

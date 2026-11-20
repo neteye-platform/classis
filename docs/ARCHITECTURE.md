@@ -51,9 +51,11 @@ true.
   ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
 - **Package downloads** come from the Server alone: every artifact is uploaded
   to it, and a Client fetches only from its own Server's origin, or from its
-  Gateway. What arrives is checked against its hash and the operator's signature
+  Gateway. What arrives is checked against its hash and its signature, made by a
+  Package Signer that a Package Root compiled into the Client issued
   ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
-  [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)).
+  [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md),
+  [ADR-0066](adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
 - **The service manager** starts the Client and restarts it after a self-update
   ([ADR-0018](adr/0018-the-client-updates-itself-under-its-own-agent-type.md)).
   Where a process account is registered, it also runs the second service, which
@@ -90,13 +92,16 @@ Five crates in one workspace
   is taken for, when a certificate counts as ending, and what a certificate is
   called — and the bootstrap certificate's PKCS#12 file, whose rule is core and
   whose reading and writing with `p12-keystore` is the adapter `pkcs12::file`
-  (ADR-0029).
+  (ADR-0029). The `PackageSignature` and its parser are core; verifying one up to
+  the compiled-in Package Roots, with `rustls-webpki`, the clock and a debug
+  build's Root from the environment, is the adapter `package::chain`
+  ([ADR-0066](adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
 - **`classis-server`** — the Server: the fleet and its Hosts, its Configurations,
   labels, packages and Deployments, the Agent plane and the Operator plane.
 - **`classis-agent`** — the Client in all its modes, the program `supervisor`.
 - **`classis-tools`** — the operator tool, the one program `classisctl`: its
   `package` commands fetch, pack, hash and sign package artifacts — or sign a
-  Package's signing file from the UI (ADR-0027) — its `pki` commands make the
+  Package's signing file (ADR-0027) — its `pki` commands make the
   fleet's certificates (ADR-0028).
 
 Inside the Server and the Client the code is ports and adapters
@@ -334,8 +339,9 @@ fleet-wide pass
 ([ADR-0035](adr/0035-a-host-is-what-a-client-certificate-names-and-its-agents-inherit-from-it.md)).
 
 **A package reaches an Agent.** An operator uploads an artifact into `packages`
-and signs its entry there — `packages` checks the signature against
-`[packages] verification_key` when the Server holds one, and only reports — then
+and signs its entry there with the release's `.sig` — `packages` refuses a
+signature that does not verify up to the compiled-in Package Roots, through the
+adapter `config::RootsVerifier` — then
 puts the Package into a Deployment with a Selector and releases it, together
 with the Configurations the Deployment holds. The Agent is offered the package
 with its entry's signature; the Client downloads it from its own Server's origin

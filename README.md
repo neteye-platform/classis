@@ -231,13 +231,21 @@ and macOS and the Server for Linux.
 **Releases**
 ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md),
 [ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)): the
-version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml), and the
-`Release` workflow makes the `version/*` tag from it before it builds — so
-bumping the version is an ordinary reviewed commit and nobody types a tag.
-Running it publishes one archive per platform,
-`supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows on the
-architectures each ships on, a CycloneDX SBOM `<stem>.cdx.json` beside each
-archive of the Client and of the operator tool, and a `SHA256SUMS` file. Every
+version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). A
+release starts when a person with write access pushes the `v<version>` tag,
+`v0.1.0` say, on the commit of `main` that carries it, and the run fails when
+the tag and the file disagree or the commit is not on `main`
+([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+Its `sign` job waits until a second person with write
+access approves it in the environment `Package Signing`, then signs every Client
+archive with the key that environment holds. A release publishes one archive per
+platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
+on the architectures each ships on, a `.sig` beside each Client archive, which
+carries the certificate of the release's Package Signer and which the Server and
+every Client verify up to the Package Roots compiled into them
+([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)),
+a CycloneDX SBOM `<stem>.cdx.json` beside each archive of the Client and of the
+operator tool, and a `SHA256SUMS` file. Every
 asset is a subject of one build-provenance attestation, which the workflow
 verifies before it creates the release
 ([ADR-0045](docs/adr/0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md));
@@ -259,9 +267,9 @@ and the last two are exactly what an Agent reports as `os.type` and `host.arch`
 (`linux_amd64`, `darwin_arm64`, …), so uploading a whole release under one
 package name needs no translation
 ([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
-Started with `dry_run` (the default) it builds and packs everything and
+Started by hand it is a dry run: it builds and packs everything, and signs and
 publishes nothing. Before it builds anything at all it checks that the version
-is still free — a `version/*` tag or a release already carrying that number
+is still free — a `v<version>` tag or a release already carrying that number
 fails the run on the spot, dry or not, so a forgotten bump costs seconds rather
 than five build jobs — and the built binary must report the version the
 artifacts are named after. Each archive is also a ready package artifact: the
@@ -350,20 +358,20 @@ $ curl -X PUT -H 'Content-Type: application/json' \
        -d '{"service_name": "otelcol", "body": "rules: []", "role": "supplementary"}' \
        http://127.0.0.1:4321/api/v1/configurations/ruleset
 
-# A package defines a Set (ADR-0026), identified by name, Agent type, and version, with one entry
-# per platform (ADR-0026); each Agent is offered the entry that fits it. Saving stages a draft —
-# nothing reaches the fleet until the Set is published (ADR-0025).
-$ curl -X PUT -H 'Content-Type: application/json' -d '{}' \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0
-$ curl -X PUT --data-binary @otelcol-linux-amd64.tar.gz \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0/entries/linux/amd64
-$ curl -X PUT -H 'Content-Type: application/json' -d '{"published": true}' \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0/publication
-
-# Rolling back is a publication move (ADR-0026): retract the newest version, and the fleet falls
-# back to the newest one still published under the same name.
-$ curl -X PUT -H 'Content-Type: application/json' -d '{"published": false}' \
-       http://127.0.0.1:4321/api/v1/packages/otelcol/otelcol-contrib/0.109.0/publication
+# A Package is identified by its Agent type and version, with one entry per platform (ADR-0026);
+# each Agent is offered the entry that fits it. An entry is offered only with a signature that
+# verifies up to the Package Roots compiled into the Server and the Client — the `.sig` a release
+# publishes beside each archive (ADR-0066). Only the Client's own Package, `supervisor`, is signed
+# today; no other Package can be delivered yet. Saving stages it: nothing reaches the fleet until
+# a Deployment holding it is rolled out (ADR-0025).
+$ curl -X PUT http://127.0.0.1:4321/api/v1/packages/supervisor/0.1.0
+$ curl -X PUT --data-binary @supervisor_0.1.0_linux_amd64.tar.gz \
+       http://127.0.0.1:4321/api/v1/packages/supervisor/0.1.0/entries/linux/amd64
+$ curl -X PUT -H 'Content-Type: application/json' \
+       -d "{\"signature\": \"$(cat supervisor_0.1.0_linux_amd64.tar.gz.sig)\"}" \
+       http://127.0.0.1:4321/api/v1/packages/supervisor/0.1.0/entries/linux/amd64/signature
+$ curl -X PUT http://127.0.0.1:4321/api/v1/deployments/linux/packages/supervisor/0.1.0
+$ curl -X POST http://127.0.0.1:4321/api/v1/deployments/linux/rollout
 ```
 
 For TLS, give the Server a certificate (`[tls]` in `server.toml`) and the Client
@@ -413,15 +421,13 @@ supervisor service uninstall                                   # never deletes l
   ([ADR-0018](docs/adr/0018-the-client-updates-itself-under-its-own-agent-type.md)):
   the Client is always its own Agent, so the Server can see which version each
   host runs. Letting the Server _replace_ that version is a consent that stands
-  by default, takes effect once a verification key is set, and takes only the
-  package named after the Client's own Agent type, `supervisor` — anything else
-  is refused, because a package aimed at the whole fleet would otherwise be
-  written over the Client itself:
+  by default and takes only the package named after the Client's own Agent
+  type, `supervisor` — anything else is refused, because a package aimed at the
+  whole fleet would otherwise be written over the Client itself:
 
   ```toml
   [packages]
   self_update = true               # the default; false keeps this Client's update manual
-  verification_key = "<hex-encoded Ed25519 public key>"
   ```
 
   A new version is staged beside the running one under `versions/`, run once to
@@ -580,6 +586,23 @@ repository move or transfer:
   the **Checks** and **CI** workflows run on every pull request but are not
   required by the ruleset;
 - a **ruleset on every branch** that requires signed commits;
+- a **ruleset on tags** that blocks updates, deletions and force pushes and
+  requires signatures. It leaves creating a tag to everyone with write access,
+  who may release;
+- the **environment `Package Signing`**
+  ([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
+  clauses 1 and 2). Its deployment rule admits the tags
+  `v[0-9]*.[0-9]*.[0-9]*` and no branch. It has one required reviewer, from a
+  team of the people with write access, with _Prevent self-review_, and
+  administrators may not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the
+  base64 of a Package Signer's Ed25519 key in PKCS#8 DER, made by an admin on a
+  machine of their own and then deleted; the certificate the Package Root's
+  custodian issues for it is `packaging/package-signer.der`
+  ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+  clause 12). Replacing it is a new key, a new certificate from the same Root,
+  a new secret and a reviewed change to that file; no installation changes.
+  The reviewer approves a run only when the push of a `v<version>` tag started
+  it and the tag names a commit of `main`;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
   otherwise carried by review alone;

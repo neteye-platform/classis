@@ -457,7 +457,7 @@ mod tests {
                         platform,
                         content_hash: hex::decode(&sha256).expect("hex"),
                         size,
-                        signature: Some(vec![7; 64]),
+                        signature: Some(crate::packages::Signature::Withheld(vec![7; 64])),
                     },
                 )]),
             })
@@ -607,7 +607,7 @@ mod tests {
                                 entry.platform.tag(),
                                 hex::encode(&entry.content_hash),
                                 entry.size,
-                                entry.signature.clone(),
+                                entry.signature.as_ref().map(|s| s.bytes().to_vec()),
                             )
                         })
                         .collect();

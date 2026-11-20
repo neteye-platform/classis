@@ -1275,30 +1275,25 @@ struct PackageEntryView {
     /// sync, and the Server stops re-offering while the two agree — so a rollout that seems not to
     /// travel is answered here rather than by reading logs.
     package_hash: String,
-    /// The operator's Ed25519 signature over this entry, hex, as `classisctl package sign`
-    /// prints it (ADR-0033); absent while the entry is unsigned. An unsigned entry is offered to
-    /// nobody.
+    /// The entry's `PackageSignature`, hex, as a release's `.sig` holds it (ADR-0066); absent
+    /// while the entry carries none. Only a signature that verified up to the Package Roots is
+    /// held, and an entry without one is offered to nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
-    /// What the Server found when it checked that signature against `[packages] verification_key`
-    /// (ADR-0033). Feedback only: an `invalid` one is stored and offered, and the Agent's own check
-    /// decides.
+    /// Whether the entry carries a signature that verified up to the Package Roots (ADR-0066
+    /// clause 10): `valid` or `missing`.
     signature_state: SignatureStateView,
 }
 
-/// What the Server found when it checked an entry's signature (ADR-0033).
+/// Whether an entry carries a signature (ADR-0066 clause 10): the Server holds only one that
+/// verified up to the Package Roots.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 enum SignatureStateView {
     /// The entry carries no signature; it is offered to nobody.
     Missing,
-    /// The signature verifies against the Server's `[packages] verification_key`.
+    /// The signature verified up to the Package Roots.
     Valid,
-    /// The signature does not verify against that key. Stored, shown as a warning, and never
-    /// refused: the Agent's check decides.
-    Invalid,
-    /// The entry carries a signature and the Server holds no key to check it with.
-    Unchecked,
 }
 
 impl From<SignatureState> for SignatureStateView {
@@ -1306,8 +1301,6 @@ impl From<SignatureState> for SignatureStateView {
         match state {
             SignatureState::Missing => SignatureStateView::Missing,
             SignatureState::Valid => SignatureStateView::Valid,
-            SignatureState::Invalid => SignatureStateView::Invalid,
-            SignatureState::Unchecked => SignatureStateView::Unchecked,
         }
     }
 }
@@ -1675,14 +1668,13 @@ async fn delete_package_entry(
     }
 }
 
-/// Writes the operator's Ed25519 signature onto one entry of a Package (ADR-0033), as
-/// `classisctl package sign` prints it. One signature serves every Deployment that holds the
-/// Package; an entry without one is offered to nobody.
+/// Writes a `PackageSignature` onto one entry of a Package, in hex, as a release's `.sig` holds
+/// it (ADR-0066). One signature serves every Deployment that holds the Package; an entry without
+/// one is offered to nobody.
 ///
-/// With `[packages] verification_key` set the Server checks it and answers the entry's
-/// `signature_state`. An `invalid` signature is stored all the same: the Server only reports, and
-/// the Agent's own verification decides. Refused while the Package is assigned to an Agent, like
-/// any other write to its entries (ADR-0025).
+/// The Server verifies it up to the Package Roots compiled into it. One that does not verify is
+/// refused with `400` and not stored, and the entry keeps what it had. Refused while the Package
+/// is assigned to an Agent, like any other write to its entries (ADR-0025).
 #[utoipa::path(
     put,
     path = "/api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature",
@@ -1696,7 +1688,7 @@ async fn delete_package_entry(
     request_body = SignatureSpec,
     responses(
         (status = 200, description = "The Set, with the signed entry and its signature_state", body = PackageSetView),
-        (status = 400, description = "Invalid identity or platform, or a signature that is empty, not hex, or not 64 bytes", body = ErrorBody),
+        (status = 400, description = "Invalid identity or platform, or a signature that is empty, not hex, or does not verify up to the Package Roots (ADR-0066)", body = ErrorBody),
         (status = 404, description = "No such Set or entry, or package delivery is not configured", body = ErrorBody),
         (status = 409, description = "The Set is assigned to an Agent and its entries are immutable", body = ErrorBody),
         (status = 500, description = "The signature could not be persisted", body = ErrorBody)
@@ -1717,7 +1709,7 @@ async fn put_entry_signature(
         Err(e) => {
             return error(
                 StatusCode::BAD_REQUEST,
-                format!("the signature must be hex, as `classisctl package sign` prints it: {e}"),
+                format!("the signature must be hex, as a release's .sig holds it: {e}"),
             );
         }
     };
@@ -2063,12 +2055,12 @@ struct DeploymentSpec {
     selector: std::collections::BTreeMap<String, String>,
 }
 
-/// One artifact's Ed25519 signature, as the operator supplies it (ADR-0033).
+/// One artifact's signature, as a release's `.sig` holds it (ADR-0066 clause 9).
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct SignatureSpec {
-    /// The signature over the entry's statement — the Agent type, the version and the artifact's
-    /// SHA-256 — hex-encoded, as `classisctl package sign` prints it.
+    /// A `PackageSignature` over the entry's statement — the Agent type, the version and the
+    /// artifact's SHA-256 — hex-encoded: a Package Signer's certificate and its Ed25519 signature.
     signature: String,
 }
 

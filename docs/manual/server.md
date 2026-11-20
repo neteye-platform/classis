@@ -296,20 +296,6 @@ Removed
 The section is refused at startup, naming it: the proxy in front of the Operator
 plane serves the UI's certificate.
 
-### `[packages]`
-
-Optional. The operator's public package-signing key, against which the Server
-checks every entry's signature — as feedback, never as a gate.
-
-```toml
-[packages]
-verification_key = "<hex-encoded Ed25519 public key>"
-```
-
-| Key                | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verification_key` | unset   | The hex-encoded Ed25519 public key — the same value as the Clients' `[packages] verification_key`, as `classisctl package keygen` prints it. With it, each entry's signature is checked when it is written and when the store is loaded, and reported `valid` or `invalid`; without it, `unchecked`. An `invalid` signature is stored and offered all the same: each Client's own check decides what is installed. A key that is not hex, or not 32 bytes, fails startup naming it. |
-
 ### `[blobs]`
 
 Optional. Where the artifacts' bytes are kept: one file per artifact under
@@ -1520,8 +1506,10 @@ run a system nobody here anticipated.
 request for a package anywhere; a Client fetches from its own Server's origin
 alone (see [the Client](client.md#where-a-download-may-come-from)).
 
-**Sign each entry** on its own route, with the hex signature
-`classisctl package sign` prints:
+**Sign each entry** on its own route. A signature is the certificate of the
+Package Signer that made it and that signer's Ed25519 signature, in one DER
+value written as lowercase hex; a release's `.sig` holds one for each of the
+Client's archives:
 
 ```console
 $ curl --cacert ca.pem -X PUT -H 'Content-Type: application/json' -d "{\"signature\": \"$sig\"}" \
@@ -1537,12 +1525,26 @@ an empty or malformed one `400`. Uploading new bytes to an entry removes its
 signature, because it covered the old hash. Supplying a signature on the
 artifact upload instead answers `400` naming the route that takes it.
 
-Each entry reports its `signature_state`: `missing`; `valid` or `invalid` when
-`[packages] verification_key` is set; `unchecked` when it is not. An `invalid`
-one is stored, offered, and shown on the Packages tab as a warning — **the
-Server only reports**, and each Client's own check decides. A Client with the
-right key refuses that artifact, so the warning is the moment to sign the entry
-again.
+**The Server refuses a signature that does not verify.** It checks each one up
+to the Package Roots compiled into it, over the entry's Agent type, version and
+SHA-256: the Package Signer's certificate must be issued by one of those Roots
+and not expired, and its signature must cover that entry. One that fails
+answers `400`, naming the step that failed, and nothing is stored. Each
+Client's own check still decides what is installed. Today the release run holds
+the only Package Signer, and it signs the Client's own archives alone: a
+signature made with a key of your own, as `classisctl package sign` makes one,
+is refused, so a Package of any other Agent type, the Collector's above
+included, cannot be signed yet.
+
+Each entry reports its `signature_state`: `valid` or `missing`. At startup the
+Server checks every stored signature again and sets aside one that does not
+verify, one whose Package Signer has expired among them, with a warning in its
+log naming the entry and the step.
+That entry is offered to nobody and reported `missing` while the Server runs;
+the signature stays in the store, so a Server started with a wrong clock loses
+nothing: once the clock is right, restart the Server to offer the entry again,
+or upload the release's `.sig` to replace it. An entry of a Package already
+assigned to an Agent is not writable, so release a new version instead.
 
 A Package is one file, `data_dir/packages/<agent type>@<version>.json`, naming
 each entry's artifact by its SHA-256; the bytes are `data_dir/blobs/<sha256>`.
@@ -1743,7 +1745,9 @@ $ sig=$(classisctl package sign --key fleet-signing.pk8 --agent-type promtail --
 `pack` writes `.tar.gz` or an AES-256-encrypted `.7z`, and names the member the
 way the receiving Supervisor will look for it. A Client opens those two and
 `.zip`; an artifact that is none of the three is taken to _be_ the program.
-[The rollout walkthrough](rollout.md) puts the whole sequence together.
+[The rollout walkthrough](rollout.md) puts the whole sequence together. `keygen`
+and `sign` still exist, but a signature they make comes from no Package Signer,
+and this Server and every Client refuse it.
 
 The download route sits on the **Agent plane**, outside `[rest.auth]` and behind
 the same TLS handshake as `/v1/opamp`. A downloading Client presents its client
@@ -1751,9 +1755,8 @@ certificate, and it presents it to this Server's own origin and to no other
 host. Guarding the Operator plane therefore cannot break a rollout. The content
 hash and the signature are what protect an installed binary.
 
-`keygen` prints the public key as hex — that value is the Client's
-`[packages] verification_key`. A Client without it takes no package at all, its
-own update included, and says so at startup. Give every Client the key.
+No key is given to a Client: each one checks a signature up to the Package
+Roots compiled into it, and every Client takes packages.
 
 ### A host fetches only what its Agents are offered
 
@@ -1824,11 +1827,11 @@ loopback.
 | `GET /api/v1/configurations/{name}`                                                    | One Configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `PUT /api/v1/configurations/{name}`                                                    | Create it, or replace its saved revision. Body: `{"body": "…", "service_name": "…", "role": "…"}` — `role` may be omitted; without `service_name` it is refused `400`, as is a `selector`. **Distributes nothing**.                                                                                                                                                                                                                                                            |
 | `DELETE /api/v1/configurations/{name}`                                                 | Remove it, and take it out of every Deployment that holds it. `409` while an Agent's assignment pins it, saying how many.                                                                                                                                                                                                                                                                                                                                                      |
-| `GET /api/v1/packages`                                                                 | Every stored Package (never the artifact bytes), each with its entries — their hash, size, signature and `signature_state` — and the Deployments that hold it.                                                                                                                                                                                                                                                                                                                 |
+| `GET /api/v1/packages`                                                                 | Every stored Package (never the artifact bytes), each with its entries — their hash, size, signature and `signature_state` (`valid` or `missing`) — and the Deployments that hold it.                                                                                                                                                                                                                                                                                          |
 | `PUT /api/v1/packages/{agent_type}/{version}`                                          | Create a Package. The body has no writable field — `{}`. **Distributes nothing**. The version is SemVer 2.0.0: any other is answered `400`, naming it — `1.19.0` for upstream's `1.19`.                                                                                                                                                                                                                                                                                        |
 | `GET /api/v1/packages/{agent_type}/{version}`                                          | One Package.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}`                      | Upload one platform's artifact (the raw body); new bytes remove the entry's signature. `409` while the Package is rolled out to an Agent. The signature is written through the entry's signature route.                                                                                                                                                                                                                                                                        |
-| `PUT` / `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature` | Record or remove that entry's Ed25519 signature. Body: `{"signature": "<hex>"}`. `404` for an entry that does not exist, `400` for an empty or malformed signature, `409` while the Package is rolled out to an Agent. The answer is the Package, with the entry's `signature_state`.                                                                                                                                                                                          |
+| `PUT` / `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature` | Record or remove that entry's signature: the Package Signer's certificate and its Ed25519 signature in one DER value, as a release's `.sig` holds it. Body: `{"signature": "<hex>"}`, lowercase. `404` for an entry that does not exist, `400` for an empty or malformed signature or one that does not verify up to the Package Roots, naming the step, `409` while the Package is rolled out to an Agent. The answer is the Package, with the entry's `signature_state`.     |
 | `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}`                   | Remove one entry. `409` while the Package is rolled out to an Agent.                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `DELETE /api/v1/packages/{agent_type}/{version}`                                       | Remove the Package, and take it out of every Deployment that holds it. `409` while an Agent's assignment pins it, saying how many. Uninstalls nothing.                                                                                                                                                                                                                                                                                                                         |
 | `GET /api/v1/packages/{agent_type}/{version}/file?os=…&arch=…`                         | The artifact bytes — where an offered `download_url` points. **The one route on the Agent plane** (`:4320`), and never guarded by `[rest.auth]`: it is not in the OpenAPI document for the same reason. It requires a client certificate from the client CA in the handshake; a bootstrap certificate is answered `401`. It serves only an artifact offered to an Agent the host speaks for, and answers every other request `404`, as for an artifact that does not exist.    |
@@ -2285,9 +2288,9 @@ Agent's signing request.
 - **It does not fetch packages from anywhere.** Every artifact is uploaded to
   it; it makes no outbound request for a package and holds no credential for a
   source.
-- **It does not refuse an invalid signature.** With
-  `[packages] verification_key` it reports one; each Client's own check decides
-  what is installed.
+- **It does not have the last word on a signature.** It refuses one that does
+  not verify, but each Client checks again, and its own check decides what is
+  installed.
 - **It does not install itself as a service.** Run it under whatever supervises
   services on the host — the Client is the end that ships its own service
   integration.

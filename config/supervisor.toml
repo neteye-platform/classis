@@ -128,14 +128,12 @@ state_dir = "client-state"
 # approves the request with that fingerprint; the issued certificate arrives through the ordinary
 # offer flow and is used from then on, renewed the same way two thirds through its life.
 
-# Package verification. REQUIRED to take packages: every Server-offered package MUST
-# carry a valid Ed25519 signature over its artifact, and without a key this Client takes no
-# package at all — its own self-update included — and says so at startup. A [[supervisor]] block
+# Package verification: every Server-offered package MUST carry a signature by a Package Signer
+# that a Package Root compiled into this Client issued, over the artifact's Agent type, version
+# and SHA-256, or it is refused. There is nothing to configure. A [[supervisor]] block
 # takes package delivery by naming its program with a bare file name (see the blocks below);
 # *which* artifact it then receives is the Server's decision, expressed as that package's
 # Deployment — never a key in this file.
-# Generate a key and sign artifacts with the operator tool (`classisctl package keygen`, then
-# `classisctl package sign`): its keygen output is this value.
 #
 # A download goes to this Client's own Server origin — the scheme, host and port of its endpoint —
 # and nowhere else, every redirect hop included: every artifact is uploaded to the Server. There
@@ -143,7 +141,7 @@ state_dir = "client-state"
 #
 # self_update is the consent for the Server to replace *this Client's own* binary. **Absent — as
 # here — means the consent stands**: a Client the fleet cannot update is the one program
-# on the host that has to be patched by hand. It takes effect once verification_key is set. Write
+# on the host that has to be patched by hand. Write
 # `self_update = false` to withdraw it, and the Client's own Agent then declares no package
 # capability at all — no offer can reach it; the Supervisors still take theirs.
 #
@@ -162,7 +160,6 @@ state_dir = "client-state"
 # that will not stay up is rolled back to its predecessor after three attempts.
 # [packages]
 # self_update = true                 # the default; false withdraws the consent entirely
-# verification_key = "<hex-encoded Ed25519 public key>"
 # archive_key = "the key an encrypted .7z was packed with"   # opens an encrypted
 #                          # artifact. One secret for the fleet — a single archive serves every
 #                          # Agent. The Server never learns this key; the artifact stays encrypted

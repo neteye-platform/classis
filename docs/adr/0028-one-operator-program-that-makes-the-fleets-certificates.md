@@ -8,6 +8,8 @@
   [ADR-0036](0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md)
   · clause 20 superseded by
   [ADR-0045](0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md)
+  · clause 3 superseded by
+  [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
 - **Applies to:** the `pki` commands of `classisctl` in
