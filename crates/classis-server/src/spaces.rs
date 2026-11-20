@@ -195,18 +195,23 @@ impl Spaces {
 pub(crate) mod tests {
     use std::sync::Arc;
 
+    use oauth_registration::server::{NewClient, RegistrationStore as _};
+    use oauth_token::server::{Lifetime, TokenStore as _};
+
     use super::*;
     use crate::client_store::{ActiveToken, ClientRecord, ClientStore, TokenReplaced};
+    use crate::enrolment::Enrolment;
     use crate::fs::{FsClientStore, FsSpaceStore};
+    use crate::throttle::{Limits, Throttle};
 
     /// A Space service and the client store beside it, both reopened by calling `open` again, which
     /// is what a Server restart does.
     pub(crate) type Open<'a> = &'a dyn Fn() -> (Spaces, Box<dyn ClientStore>);
 
     /// ADR-0064's server store tests, through the service: on either backend, a Space's complete
-    /// key is recoverable after reopening; reading it, resolving it and storing a client enrolled
-    /// with it leaves it unchanged; an explicit rotation persists a different key that survives
-    /// reopening, resolves instead of the old one, and changes no client and no token.
+    /// key is recoverable after reopening; reading it, resolving it and enrolling a client leaves
+    /// it unchanged; an explicit rotation persists a different key that survives reopening,
+    /// resolves instead of the old one, and changes no client and no token.
     pub(crate) fn contract(open: Open<'_>) {
         let (spaces, clients) = open();
         assert_eq!(spaces.list().expect("list"), Vec::<String>::new());
@@ -231,14 +236,25 @@ pub(crate) mod tests {
         );
         assert_eq!(spaces.list().expect("list"), ["Prod_EU", "lab"]);
 
-        // Reading the key does not change it, and neither does storing a client enrolled with it.
-        // The client is stored here at the storage boundary alone: added to the client store while
-        // the key is current, then given its token. No route of the Agent plane takes part.
+        // Reading the key does not change it, and neither does enrolling a host, which here goes
+        // the way a host does: through the registration of the Agent plane, then a token request.
         assert_eq!(*spaces.key("Prod_EU").expect("key"), *prod);
         assert_eq!(
             spaces.resolve(&prod).expect("resolve").as_deref(),
             Some("Prod_EU")
         );
+        let clock: Arc<dyn crate::fleet::Clock> = Arc::new(crate::clock::SystemClock);
+        let enrolment = Enrolment::new(
+            spaces,
+            clients,
+            Lifetime::Never,
+            clock.clone(),
+            Arc::new(Throttle::new(Limits::default(), clock)),
+        );
+        let grant = enrolment
+            .authorise(&prod)
+            .expect("authorise")
+            .expect("the key is current");
         let enrolled = ClientRecord {
             client_id: "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8091".to_string(),
             space: "Prod_EU".to_string(),
@@ -246,28 +262,29 @@ pub(crate) mod tests {
             issued_at: 1_790_000_001,
             token: None,
         };
-        assert_eq!(
-            spaces
-                .while_current(&prod, "Prod_EU", || clients.insert(&enrolled))
-                .expect("read")
-                .expect("the key is current"),
-            Ok(true),
-            "the key enrols"
-        );
+        enrolment
+            .register(
+                &grant,
+                NewClient {
+                    client_id: enrolled.client_id.clone(),
+                    client_secret_hash: enrolled.secret_hash,
+                    client_id_issued_at: enrolled.issued_at,
+                    metadata: oauth_registration::server::Metadata::REGISTERED,
+                },
+            )
+            .expect("register")
+            .expect("the key enrols");
         let token = ActiveToken {
             hash: oauth_token::secret::hash("a token"),
             expires_at: Some(2_000_000_000),
         };
-        assert_eq!(
-            clients
-                .replace_token(&enrolled.client_id, &token)
-                .expect("a token"),
-            TokenReplaced::Replaced { previous: None }
-        );
-        assert_eq!(*spaces.key("Prod_EU").expect("key"), *prod);
+        enrolment
+            .replace_token(&enrolled.client_id, token.hash, token.expires_at)
+            .expect("a token");
+        assert_eq!(*enrolment.spaces().key("Prod_EU").expect("key"), *prod);
 
         // The key is recoverable after the stores are reopened.
-        drop((spaces, clients));
+        drop(enrolment);
         let (spaces, clients) = open();
         assert_eq!(*spaces.key("Prod_EU").expect("key"), *prod);
         assert_eq!(*spaces.key("lab").expect("key"), *lab);

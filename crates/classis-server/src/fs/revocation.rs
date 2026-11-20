@@ -1,5 +1,6 @@
 //! The register, the revocation list and the Hosts on the filesystem (ADR-0021, ADR-0035,
-//! ADR-0037): the default adapter behind [`LedgerStore`](crate::revocation::LedgerStore).
+//! ADR-0037): the default adapter behind [`LedgerStore`](crate::revocation::LedgerStore). Unwired
+//! since bearer enrolment (ADR-0064): the data directory's layout no longer names its entries.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,13 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::revocation::{CertId, Host, Issued, Ledger, LedgerStore, Revocation};
+
+/// One Host per file.
+const HOSTS: &str = "hosts";
+/// The certificate register: one file per certificate the Server signed.
+const CERTIFICATES: &str = "certificates";
+/// The revocation list.
+const REVOCATIONS: &str = "revocations.json";
 
 /// Three places in the data directory, each owner-only: the register in `certificates/`, one file
 /// per certificate, so a renewal writes one small file; the list in `revocations.json`; and the
@@ -59,13 +67,13 @@ impl FsLedgerStore {
     /// # Errors
     /// Returns an error when a directory cannot be created.
     pub fn open(root: &Path) -> Result<Self, String> {
-        let certificates = root.join(super::CERTIFICATES);
-        let hosts = root.join(super::HOSTS);
+        let certificates = root.join(CERTIFICATES);
+        let hosts = root.join(HOSTS);
         super::create_private_dir(&certificates)?;
         super::create_private_dir(&hosts)?;
         Ok(FsLedgerStore {
             certificates,
-            revocations: root.join(super::REVOCATIONS),
+            revocations: root.join(REVOCATIONS),
             hosts,
             written_hosts: Mutex::new(BTreeMap::new()),
         })

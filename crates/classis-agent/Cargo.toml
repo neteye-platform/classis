@@ -48,13 +48,7 @@ tracing-appender.workspace = true
 hex.workspace = true
 tokio-tungstenite.workspace = true
 reqwest.workspace = true
-base64.workspace = true
 ring.workspace = true
-rcgen.workspace = true
-time.workspace = true
-# `verify` served Gateway Mode alone, which ADR-0064 removes; the feature goes with the certificate
-# cleanup, which owns this crate's PKI dependencies.
-x509-parser = { workspace = true, features = ["verify"] }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
@@ -76,9 +70,12 @@ flate2.workspace = true
 tar.workspace = true
 sevenz-rust2.workspace = true
 zip.workspace = true
-# ADR-0057: the Client's keys, the password and bytes of a `bootstrap.p12` and the Supervisor
-# Endpoint token are held in buffers wiped on drop. No TLS or crypto backend comes with it
-# (ADR-0013).
+# ADR-0064 clause 7: `enrol` registers with the Space's key and asks for the token (RFC 7591, RFC 6749
+# section 4.4), and the Client asks again when the Server says the token is invalid.
+oauth-registration = { workspace = true, features = ["client"] }
+oauth-token = { workspace = true, features = ["client"] }
+# ADR-0057: the Supervisor Endpoint token and `[packages] archive_key` are held in buffers wiped on
+# drop. No TLS or crypto backend comes with it (ADR-0013).
 zeroize.workspace = true
 
 # ADR-0017: the graceful SIGTERM → wait → kill stop of Managed Processes. Not compiled on Windows,
@@ -164,12 +161,14 @@ tempfile = "3"
 # ADR-0059: a test reads the process account back from a plist as `service-manager` writes it,
 # through the crate it writes with.
 plist = "1"
-# Served the Gateway's TLS test alone, which went with Gateway Mode (ADR-0064); the dependency goes
-# with the certificate cleanup, which owns this crate's PKI dependencies.
-rustls.workspace = true
 # Tests build the `.7z` fixtures they then open; the daemon itself only ever decompresses. The
 # encoder rides here alone, since `pack` lives in its own crate (ADR-0010) — a dev-dependency
 # reaches the tests and no shipped binary.
 sevenz-rust2 = { workspace = true, features = ["compress"] }
-# ADR-0017: the end-to-end test runs the real Server in-process against the real Client binary.
-classis-server = { path = "../classis-server" }
+# The interop test makes the CA and the Server certificate it serves TLS with.
+rcgen.workspace = true
+# ADR-0017: the end-to-end test runs the real Server in-process against the real Client binary,
+# which it admits by the bearer token the Server issued it (ADR-0064). Until the certificate
+# cleanup, the tests that are not about admission serve the plane through `test-support`'s
+# `agent_app_admitted_as_for_tests` instead (`tests/common`).
+classis-server = { path = "../classis-server", features = ["test-support"] }

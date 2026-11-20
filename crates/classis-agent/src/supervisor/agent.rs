@@ -16,8 +16,7 @@ use std::time::Duration;
 use opamp::proto::{
     AgentCapabilities, AgentDescription, AgentRemoteConfig, AgentToServer, AvailableComponents,
     ComponentHealth, ConnectionSettingsOffers, ConnectionSettingsStatuses, EffectiveConfig,
-    PackageDownloadDetails, PackageStatuses, RemoteConfigStatuses, ServerCapabilities,
-    ServerToAgent,
+    PackageDownloadDetails, PackageStatuses, RemoteConfigStatuses, ServerToAgent,
 };
 use opamp::uid::InstanceUid;
 use tracing::{info, warn};
@@ -419,11 +418,6 @@ impl AgentState {
         self.protocol.next_report(&self.local)
     }
 
-    /// A report carrying `csr` alone, as an enrolling host sends it (ADR-0039 clause 11).
-    pub fn csr_report(&mut self, csr: Vec<u8>) -> AgentToServer {
-        self.protocol.csr_report(csr)
-    }
-
     /// The final message of a connection: the Baseline requires `agent_disconnect` in it.
     pub fn disconnect_message(&mut self) -> AgentToServer {
         self.protocol.disconnect_message()
@@ -562,20 +556,6 @@ impl AgentState {
             true => self.local.process_pid,
         }
     }
-
-    /// Queues a certificate signing request for the next report (ADR-0021).
-    pub fn request_certificate(&mut self, csr: Vec<u8>) {
-        self.protocol.request_certificate(csr);
-    }
-
-    /// Whether this Server signs certificates at all. Starts pessimistic: sending a CSR to a
-    /// Server that never declared the capability would be answered with the Baseline's
-    /// `BadRequest`, and the protocol's negotiation rule says not to exercise what the peer has not
-    /// declared.
-    pub fn server_signs_certificates(&self) -> bool {
-        self.protocol
-            .server_declared(ServerCapabilities::AcceptsConnectionSettingsRequest)
-    }
 }
 
 impl ReportContent for Local {
@@ -634,7 +614,7 @@ mod tests {
     use crate::storage::Storage;
     use opamp::attributes::string_attr;
     use opamp::proto::{AgentConfigMap, AgentConfigObject, KeyValue, PackageType};
-    use opamp::proto::{ServerErrorResponseType, ServerToAgentFlags};
+    use opamp::proto::{ServerCapabilities, ServerErrorResponseType, ServerToAgentFlags};
     use std::collections::HashMap;
 
     /// ADR-0014 clause 4: an offer that names a telemetry destination is actionable, whether or not

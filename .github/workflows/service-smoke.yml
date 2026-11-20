@@ -38,20 +38,16 @@ jobs:
         # Linux: the unit the Client writes itself (ADR-0042) — a re-registration keeps its
         # account, the service keeps the privileges `sudo` and setuid helpers need, and systemd
         # accepts the unit. And the process account (ADR-0059): with two real accounts, a Managed
-        # Process runs under the process account through the second service, cannot read the
-        # Client's key or write its program, reads its config and writes its data, runs again after
-        # the second service restarts, keeps its data across a re-registration as a package upgrade
-        # makes one, and runs under the Client's account once the process account is dropped. The
-        # run step needs `sudo -E` there, which the Windows runner does not (its shell is already
-        # elevated).
+        # Process runs under the process account through the second service, cannot read a secret
+        # of the Client's or write its program, reads its config and writes its data, runs again
+        # after the second service restarts, keeps its data across a re-registration as a package
+        # upgrade makes one, and runs under the Client's account once the process account is
+        # dropped. The run step needs `sudo -E` there, which the Windows runner does not (its shell
+        # is already elevated).
         # macOS: the same for launchd — both plists from `service-manager`, the second service's
         # with the process account in `UserName`, and two role accounts made with `dseditgroup`
         # and `sysadminctl -roleAccount` as the refusal of a missing process account says. The
         # runner's `sudo` asks no password, as on Linux.
-        # Every platform: the install a script runs after the package (ADR-0029 clause 11) enrols
-        # with a `bootstrap.p12` and its password file from `--fleet-files`, against a Server in
-        # the test, and the service it registers reaches that Server on the issued certificate; a
-        # wrong password fails the install before anything is written.
         os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

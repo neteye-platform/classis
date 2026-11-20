@@ -292,6 +292,7 @@ mod tests {
             return;
         };
         let database = test.open();
+        test.sql(crate::postgres::ledger::LEGACY_TABLES);
         contract(&|| Box::new(PgBootstrapStore::new(database.clone())));
     }
 
@@ -304,6 +305,7 @@ mod tests {
             return;
         };
         let store = PgBootstrapStore::new(test.open());
+        test.sql(crate::postgres::ledger::LEGACY_TABLES);
         let issued = entry("a1", true);
         store.put_with_p12(&issued, b"file").expect("issue");
         assert_eq!(

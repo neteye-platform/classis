@@ -12,13 +12,12 @@ foreground process — unlike the Client, it does not install itself as a servic
 - [Configuration reference](#configuration-reference)
 - [Where the Server keeps its state](#where-the-server-keeps-its-state)
 - [Upgrading to one data directory](#upgrading-to-one-data-directory)
-- [Mutual TLS: proving who is on the connection](#mutual-tls-proving-who-is-on-the-connection)
-- [Enrolment: a new host, approved by an operator](#enrolment-a-new-host-approved-by-an-operator)
+- [How a host joins the fleet](#how-a-host-joins-the-fleet)
+- [Security decisions in the log](#security-decisions-in-the-log)
 - [Configurations: what the fleet runs](#configurations-what-the-fleet-runs)
 - [Packages and Deployments: distributing software](#packages-and-deployments-distributing-software)
 - [The REST API](#the-rest-api)
 - [Authentication](#authentication)
-- [Upgrading to admission by certificate alone](#upgrading-to-admission-by-certificate-alone)
 - [TLS](#tls)
 - [The fleet's own telemetry](#the-fleets-own-telemetry)
 - [Moving the fleet: connection settings](#moving-the-fleet-connection-settings)
@@ -43,12 +42,14 @@ foreground process — unlike the Client, it does not install itself as a servic
 - **Offers new connection settings**: a heartbeat interval or an entirely
   different endpoint, which each Agent verifies by connecting before it
   switches.
-- **Admits an Agent on one proof**: a client certificate in the TLS handshake.
-  It signs Agent certificates as a local CA, and enrols a new host only on an
-  operator's approval.
-- **Serves two listeners over TLS 1.3**: OpAMP over both transports and the
-  package download on one, the REST API, the OpenAPI document and its docs page,
-  and a rudimentary UI on the other.
+- **Enrols a host with its Space's key and admits it by a bearer token**: a host
+  that presents a valid enrolment key registers itself as a client and receives
+  credentials, with no operator approval; every request an Agent then sends
+  carries an access token
+  ([How a host joins the fleet](#how-a-host-joins-the-fleet)).
+- **Serves two listeners over TLS 1.3**: OpAMP over both transports, the package
+  download and the enrolment routes on one, the REST API, the OpenAPI document
+  and its docs page, and a rudimentary UI on the other.
 
 ## Running it
 
@@ -71,33 +72,37 @@ Stopping the Server is `SIGTERM`/`Ctrl-C`. Configurations and packages are
 persisted to disk, so a restart resumes with the same fleet state; Agents
 reconnect on their own.
 
-The Server refuses to start without `[tls]` and `[tls] client_ca_file`, and the
-refusal names what is missing. It also refuses an `[auth]` section, and a
-credential key in `[connection_offer]`: the Agent plane admits by client
-certificate alone (see
-[Upgrading to admission by certificate alone](#upgrading-to-admission-by-certificate-alone)).
-For a fleet, `classisctl pki init` makes every certificate the Server and a
-new host need ([Setting up a fleet](setup.md#1-make-the-certificates)); for a
-first run on one machine, [`scripts/dev-pki.sh`](../../scripts/dev-pki.sh) makes
-a development set with it, and a `server.toml` that uses it; the
+The Server refuses to start without `[tls]`, and the refusal names what is
+missing. It also refuses an `[auth]` section, and a credential key in
+`[connection_offer]`: no credential is offered to the fleet, and the Agent plane
+admits by the access token each host holds
+([How a host joins the fleet](#how-a-host-joins-the-fleet)). For a fleet,
+`classisctl pki init` makes the Server's certificate and the CA that signs it
+([Setting up a fleet](setup.md#1-make-the-certificates)); for a first run on one
+machine, [`scripts/dev-pki.sh`](../../scripts/dev-pki.sh) makes a development
+set with it, and a `server.toml` that uses it; the
 [quick start](README.md#quick-start-a-closed-loop-on-one-machine) walks through
 it.
 
 There are **two listeners, split by audience**: the one the fleet talks to, and
 the one you talk to. Both serve TLS 1.3 and nothing older, with the same
-certificate.
+certificate unless [`[rest.tls]`](#resttls) gives the Operator plane its own.
 
 **The Agent plane** — `listen`, `127.0.0.1:4320` by default. Serving the fleet
 is one deliberate line, `listen = "0.0.0.0:4320"`.
 
-| Path                                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/v1/opamp`                                    | The OpAMP endpoint. `GET` upgrades to WebSocket, `POST` is the plain-HTTP exchange — the same path serves both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `/api/v1/packages/{agent_type}/{version}/file` | An artifact's bytes: the one `/api/v1` route that belongs to the Agents, because the `download_url` in a package offer is a path the Client resolves against _its own_ endpoint. It sits outside the Operator plane's `[rest.auth]` and behind the same TLS handshake as `/v1/opamp`, so a downloading Client presents its client certificate. A certificate from the client CA is required; a bootstrap certificate is answered `401`. A host is served only the artifact offered to one of its own Agents, and every other request is answered `404` ([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)). |
+| Path                                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/v1/enrol`                                    | Where a host registers with its Space's enrolment key ([How a host joins the fleet](#how-a-host-joins-the-fleet)). `POST` only; the key is the credential.                                                                                                                                                                                                                                                                                                                                                      |
+| `/v1/token`                                    | Where a registered host asks for its access token, with its client credentials. `POST` only.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `/v1/opamp`                                    | The OpAMP endpoint. `GET` upgrades to WebSocket, `POST` is the plain-HTTP exchange — the same path serves both. Needs `Authorization: Bearer <access token>`.                                                                                                                                                                                                                                                                                                                                                   |
+| `/api/v1/packages/{agent_type}/{version}/file` | An artifact's bytes: the one `/api/v1` route that belongs to the Agents, because the `download_url` in a package offer is a path the Client resolves against _its own_ endpoint. It sits outside the Operator plane's `[rest.auth]` and, like `/v1/opamp`, needs the host's access token. A host is served only the artifact offered to one of its own Agents, and every other request is answered `404` ([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)). |
 
-The Agent plane asks every peer for a client certificate in the TLS handshake. A
-peer without one fails the handshake and reaches no route (see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection)).
+The Agent plane asks no peer for a client certificate. `/v1/enrol` and
+`/v1/token` authenticate by what they carry, an enrolment key and a client
+secret; `/v1/opamp` and the download route admit a request by its access token,
+and answer one without a valid token `401` ([How a host joins the
+fleet](#how-a-host-joins-the-fleet)).
 
 **The Operator plane** — `[rest] listen`, `127.0.0.1:4321` by default:
 
@@ -109,14 +114,14 @@ peer without one fails the handshake and reaches no route (see
 | `/`                                          | The bundled UI: one embedded page, no frontend toolchain. It is deliberately rudimentary — the API is the product.                   |
 | `/ui.css`, `/ui-carbon.css`, `/ui-quiet.css` | The bundled UI's three looks, embedded beside the page; its style combo chooses between them.                                        |
 
-The Agent plane has no credential; the Operator plane has one of its own,
-[`[rest.auth]`](#the-operator-plane-restauth). This port carries the authority
-to reconfigure and re-package the whole fleet, so its default address is the
-**loopback**. There `[rest.auth]` is optional, and the address is what protects
-the plane. Reach it from another host through an SSH tunnel
-(`ssh -L 4321:127.0.0.1:4321 <server-host>`), or publish it deliberately with
-`[rest] listen = "0.0.0.0:4321"`. Off the loopback `[rest.auth]` is required,
-and a Server without it is refused at startup with a message naming both keys.
+The Agent plane is guarded by access tokens; the Operator plane has a credential
+of its own, [`[rest.auth]`](#the-operator-plane-restauth). This port carries the
+authority to reconfigure and re-package the whole fleet, so its default address
+is the **loopback**. There `[rest.auth]` is optional, and the address is what
+protects the plane. Reach it from another host through an SSH tunnel (`ssh -L
+4321:127.0.0.1:4321 <server-host>`), or publish it deliberately with `[rest]
+listen = "0.0.0.0:4321"`. Off the loopback `[rest.auth]` is required, and a
+Server without it is refused at startup with a message naming both keys.
 
 Each plane holds a bounded number of connections: `max_connections` for the
 Agent plane and `[rest] max_connections` for the Operator plane. A connection
@@ -192,9 +197,8 @@ $ docker buildx build --platform linux/amd64 --load -t classis-server:dev \
 ## Configuration reference
 
 The full annotated example is [`config/server.toml`](../../config/server.toml).
-Every key is shown below with its default. `[tls]` with its `client_ca_file` is
-required; every other key is optional. An unknown key fails startup rather than
-being ignored.
+Every key is shown below with its default. `[tls]` is required; every other key
+is optional. An unknown key fails startup rather than being ignored.
 
 ### Configuration from the environment
 
@@ -242,8 +246,9 @@ other variable configures the Server.
 | `max_message_size_bytes`  | `67108864` (64 MiB)    | The largest OpAMP message accepted or sent, in either direction and on either transport. The protocol requires a limit and recommends this value; a fleet of status reports needs far less. An oversized HTTP request is answered `413`, an oversized WebSocket message closes the connection with `1009`. A request or message that has begun and delivers less than 64 KiB in a minute is answered `408`, or closes its connection with `1008`. |
 | `max_package_size_bytes`  | `1073741824` (1 GiB)   | The largest artifact the package-upload route accepts. A package is a program, not a message — an `otelcol-contrib` binary is a few hundred megabytes — so this bound is far larger, and it applies to that one route. The upload has no deadline, but like every request body it must deliver 64 KiB in each minute once it has begun, or it is answered `408`.                                                                                  |
 | `max_total_package_bytes` | `17179869184` (16 GiB) | The total size of all stored artifacts before a new upload is refused `507`. Where `max_package_size_bytes` bounds one artifact, this bounds the whole store, so no caller fills the disk by uploading many artifacts under distinct names. Identical bytes are stored once and counted once. `0` is refused at startup.                                                                                                                          |
-| `max_agents`              | `100000`               | The most Agent records the fleet holds at once. A report bearing a **new** `instance_uid` past this ceiling is answered `Unavailable` rather than admitted, so an admitted peer minting fresh self-asserted UIDs cannot exhaust memory and disk; Agents already known keep reporting. The defence against an anonymous flood is [admission](#authentication) by client certificate; this is the backstop behind it. `0` is refused at startup.    |
+| `max_agents`              | `100000`               | The most Agent records the fleet holds at once. A report bearing a **new** `instance_uid` past this ceiling is answered `Unavailable` rather than admitted, so an admitted peer minting fresh self-asserted UIDs cannot exhaust memory and disk; Agents already known keep reporting. The defence against an anonymous flood is [admission](#authentication) by access token; this is the backstop behind it. `0` is refused at startup.          |
 | `stale_after_secs`        | `90`                   | How long an Agent that declares `ReportsHeartbeat` may be silent before the fleet view marks it **stale**. Ignored when `[connection_offer]` names a heartbeat interval — then the budget is three of those. Only heartbeating Agents can go stale: one that promised no periodic report is never late.                                                                                                                                           |
+| `token_lifetime_secs`     | `0`                    | How long an access token is accepted after it is issued, in seconds. `0` — the default — means it never expires. A token ends when its client is issued a new one all the same ([How a host joins the fleet](#how-a-host-joins-the-fleet)).                                                                                                                                                                                                       |
 
 ### `[rest]`
 
@@ -446,8 +451,8 @@ the database answers.
 
 With `"postgres"`, `data_dir` holds the artifacts (`blobs/`) with the filesystem
 blob store, and nothing else. A record of
-the filesystem store found there — `agents/`, `configurations/`,
-`revocations.json` and the rest — stops the start, naming it and
+the filesystem store found there — `agents/`, `configurations/`, `spaces/`,
+`clients/` and the rest — stops the start, naming it and
 `server migrate-to-postgres`. A backup takes the database and `data_dir`
 together.
 
@@ -456,16 +461,22 @@ together.
 Required. The Agent plane serves HTTPS and WSS in TLS 1.3 with this certificate
 and key, and so does the Operator plane unless [`[rest.tls]`](#resttls) names
 its own. A Server without the section is refused at startup with a message
-naming it. `client_ca_file` is required too. It belongs to the Agent plane
-alone, which asks every peer for a client certificate in the handshake (see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection)).
+naming it. Neither plane asks a peer for a client certificate: a host proves
+itself with an access token, not in the TLS handshake (see
+[How a host joins the fleet](#how-a-host-joins-the-fleet)).
 
 ```toml
 [tls]
 cert_file = "cert.pem"
 key_file = "key.pem"
-client_ca_file = "client-ca.pem"   # the CA every Agent's certificate chains to
 ```
+
+`server pki status [--config <server.toml>]` prints when each certificate the
+Server serves ends — `[tls]`'s and, when it is set, `[rest.tls]`'s — and exits
+`0` when none is ending, `1` when one is, and `2` when one has ended. The
+running Server reads the same ends at startup and once a day, and logs a warning
+(`pki.expiring`) or an error (`pki.expired`). `classisctl pki` makes the
+certificates; the Server makes none.
 
 ### `[telemetry_offer]`
 
@@ -485,50 +496,6 @@ The headers can instead come from a file,
 `headers` table with no section header. Never beside `headers`: both fail
 startup, naming both. It is the one way the environment names the headers.
 
-### `[client_ca]`
-
-Optional. Present makes the Server a local CA that signs Agent certificate
-requests — see [Issuing certificates](#issuing-certificates-the-csr-flow).
-
-```toml
-[client_ca]
-cert_file = "client-ca.pem"
-key_file = "client-ca-key.pem"
-validity_days = 30
-```
-
-Without it, every host holds a certificate an operator provisioned, and such a
-certificate is served an uploaded artifact only when it names its host as a URI
-SAN, `urn:classis:host:<id>`. A certificate that names no host fetches
-nothing from the download route. A Server started without `[client_ca]` says so
-once at startup.
-
-### `[enrolment]`
-
-Optional. Present lets a new host enrol with a bootstrap certificate from this
-CA — see [Enrolment](#enrolment-a-new-host-approved-by-an-operator). It needs
-`[client_ca]`, which signs the approved request.
-
-```toml
-[enrolment]
-bootstrap_ca_file = "bootstrap-ca.pem"
-bootstrap_ca_key_file = "bootstrap-ca-key.pem"   # optional: the Server issues bootstrap certificates
-max_pending_per_bootstrap = 256                  # optional: requests of one bootstrap certificate
-```
-
-`bootstrap_ca_key_file` is the CA's key, PKCS#8 PEM. With it the Server issues
-bootstrap certificates on request
-([Bootstrap certificates](#bootstrap-certificates-issued-by-the-server));
-without it, hosts enrol with bootstrap certificates made elsewhere from the same
-CA. A key that is not the CA's, or that is the client CA's, is refused at
-startup.
-
-`max_pending_per_bootstrap` is the most requests of one bootstrap certificate,
-by its issuer and serial, the pending queue holds at once: 256 by default, a
-quarter of the queue, from 1 to 1024. Anything else fails startup naming the
-key. Raise it when one bootstrap certificate enrols more than 256 hosts in one
-window and you would rather not approve them in batches.
-
 ### `[admission_throttle]`
 
 Optional; absent means the defaults shown. See
@@ -544,14 +511,12 @@ backoff_secs = 300
 ### `[agent_rate_limit]`
 
 Optional; absent means the defaults shown. See
-[How often a member may be heard](#how-often-a-member-may-be-heard).
+[How often a host may be heard](#how-often-a-host-may-be-heard).
 
 ```toml
 [agent_rate_limit]
 messages_per_sec = 10
 burst = 300
-gateway_messages_per_sec = 500
-gateway_burst = 10000
 ```
 
 ### `[connection_offer]`
@@ -576,23 +541,18 @@ in a fixed layout — or, with [`[database]`](#database) `store = "postgres"`, i
 the database, with at most `blobs/` left under `data_dir`. With the filesystem
 store the layout is:
 
-| Path                                       | One file per          | Holds                                                                                                                        |
-| ------------------------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `configurations/<name>.json`               | Configuration         | Its saved revision and every revision still rolled out somewhere                                                             |
-| `deployments/<name>.json`                  | Deployment            | Its Selector, its Packages and its Configurations                                                                            |
-| `packages/<agent type>@<version>.json`     | Package               | Its identity and entries, each naming its artifact by SHA-256 and carrying its signature                                     |
-| `blobs/<sha256>`                           | artifact              | The bytes, named by their SHA-256 — identical bytes are stored once; unused while [`[blobs]`](#blobs) keeps them in a bucket |
-| `agents/<instance_uid>.json`               | Agent                 | What it reported, its assignment, its labels                                                                                 |
-| `hosts/<host>.json`                        | Host                  | What its certificate says, and which Agents it speaks for                                                                    |
-| `certificates/<issuer>-<serial>.json`      | certificate           | The register of what the client CA signed                                                                                    |
-| `revocations.json`                         | —                     | The revocation list                                                                                                          |
-| `bootstrap/<issuer>-<serial>.json`, `.p12` | bootstrap certificate | Its record, and its PKCS#12 file when one was made                                                                           |
-| `enrolment.json`                           | —                     | The enrolment window and its pending requests                                                                                |
+| Path                                   | One file per  | Holds                                                                                                                        |
+| -------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `configurations/<name>.json`           | Configuration | Its saved revision and every revision still rolled out somewhere                                                             |
+| `deployments/<name>.json`              | Deployment    | Its Selector, its Packages and its Configurations                                                                            |
+| `packages/<agent type>@<version>.json` | Package       | Its identity and entries, each naming its artifact by SHA-256 and carrying its signature                                     |
+| `blobs/<sha256>`                       | artifact      | The bytes, named by their SHA-256 — identical bytes are stored once; unused while [`[blobs]`](#blobs) keeps them in a bucket |
+| `agents/<instance_uid>.json`           | Agent         | What it reported, its assignment, its labels, and the Device ID of the host it reported under                                |
+| `spaces/<name>.json`                   | Space         | Its name and its whole enrolment key — a secret, kept so that it can be read again                                           |
+| `clients/<client_id>.json`             | client        | A host's Device ID, its Space, the SHA-256 of its client secret, and the SHA-256 and expiry of its one active access token   |
 
-`<issuer>` is the first 16 hex characters of the SHA-256 of the issuer's
-DER-encoded name, and `<serial>` the certificate's serial in lowercase hex. A
-Host whose name holds a character outside letters, digits, `.`, `_` and `-` has
-it written as `%XX` in its file name.
+A Space's file is named by its name in lowercase; the name as it was created is
+inside.
 
 - **Owner-only.** The Server creates `data_dir` and every directory in it `0700`
   and writes every file `0600`: an Agent's reported configuration may hold
@@ -600,10 +560,10 @@ it written as `%XX` in its file name.
   ships for Linux; built for Windows it sets no ACL, so give `data_dir` one that
   admits only the Server's account and the administrators.
 - **One step per write.** Every record is written to a temporary file beside it
-  and renamed into place, so a crash leaves the old document or the new one. The
-  register, the revocation list, the Hosts, the bootstrap records and the
-  enrolment window reach the disk before the decision they answer is. A
-  temporary file a crash left behind is removed at the next start.
+  and renamed into place, so a crash leaves the old document or the new one. A
+  Space, a client and a token reach the disk before the request that created
+  them is answered. A temporary file a crash left behind is removed at the next
+  start.
 - **Nothing else is read.** A file or directory the layout does not name, a file
   that does not parse, or one whose name disagrees with what it holds stops the
   start, naming the path — a store that merely looked empty would be worse.
@@ -611,7 +571,8 @@ it written as `%XX` in its file name.
   artifact no Package entry names is deleted then.
 - **Backup** is a copy of `data_dir` taken while the Server is stopped;
   restoring it is putting the copy back. A copy taken while it runs may hold an
-  Agent record mid-write.
+  Agent record mid-write. A backup holds every Space's enrolment key in
+  `spaces/`: keep it as you keep the key.
 
 ## Moving the records into PostgreSQL
 
@@ -665,9 +626,10 @@ reads neither: a `server.toml` naming either key stops it at startup.
 
    It copies and never moves: the old directories stay as they were, as your
    backup. It prints one line per thing it carried, dropped or listed:
-   - **Trust data** — the certificate register, the revocation list, the Hosts,
-     and the bootstrap certificates with their PKCS#12 files — is carried
-     whole.
+   - **Certificate data** — the certificate register, the revocation list, the
+     Hosts and the bootstrap certificates with their PKCS#12 files — is not
+     carried: this Server admits no client certificate. The migration names
+     what it skips and leaves it in the old directory.
    - **Audit files** are not carried: this Server keeps no audit record
      ([Security decisions in the log](#security-decisions-in-the-log)). The
      migration names them and leaves them in the old directory; keep them there
@@ -697,8 +659,8 @@ reads neither: a `server.toml` naming either key stops it at startup.
      until a Deployment holding those Configurations is rolled out to it.
 
    When it is done it opens the new directory as the Server will. It exits
-   non-zero when it could not carry trust data or the new directory would not
-   open — then empty the new directory, fix what it named, and run it again.
+   non-zero when the new directory would not open — then empty the new
+   directory, fix what it named, and run it again.
 
 3. **Edit `server.toml`**: remove `config_dir` and `packages_dir`, and set
    `data_dir = "/var/lib/classis-server/data"`.
@@ -706,479 +668,150 @@ reads neither: a `server.toml` naming either key stops it at startup.
    any entry named unsigned, and roll the Deployments out. Keep the old
    directories until you are satisfied, then delete them.
 
-## Mutual TLS: proving who is on the connection
+## How a host joins the fleet
 
-`[tls] client_ca_file` is required, and the Agent plane asks every peer for a
-client certificate **in the TLS handshake**:
+A host belongs to one **Space**, a named grouping of hosts on this Server. A
+Space is not a separate fleet and not an isolation boundary: it appears in no
+Selector and in no REST response, and is recorded on each host's client and
+returned to the host when it enrols. A host joins with its Space's **enrolment
+key**, with no operator approval, and is admitted from then on by an **access
+token**
+([ADR-0064](../adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
+Each step is one request on the Agent plane, over TLS:
 
-```toml
-[tls]
-cert_file = "cert.pem"
-key_file = "key.pem"
-client_ca_file = "client-ca.pem"
-```
+1. **Enrol** — `POST /v1/enrol`, with the enrolment key as a bearer token. The
+   host registers itself as an OAuth 2.0 client (RFC 7591) and receives a
+   `client_id` and a `client_secret`.
+2. **Get a token** — `POST /v1/token`, with those client credentials (RFC 6749
+   §4.4). The host receives its access token.
+3. **Everything else** carries that token: every OpAMP exchange on `/v1/opamp`,
+   on either transport, and every package download, in
+   `Authorization: Bearer <token>`.
 
-The handshake accepts a certificate that chains to `client_ca_file`, and, while
-`[enrolment]` is configured, one that chains to the bootstrap CA. A peer that
-presents no certificate, or one that chains to neither, fails the handshake and
-reaches no route. That covers the package download as much as `/v1/opamp`. The
-Operator plane asks for no client certificate; a browser reaches it with the
-password of [`[rest.auth]`](#the-operator-plane-restauth).
+On the host, `supervisor enrol <base-url> <key>` makes the first two requests and
+keeps what it receives in `state.json` ([the Client](client.md)). Nothing on the
+host states which Space it joins: the key names it.
 
-**The certificate is the whole of admission.** A connection is a member's when
-its certificate was issued directly by the client CA, is valid, and is not
-[revoked](#revocation-withdrawing-a-certificate); any other certificate that
-passes the handshake makes an enrolment connection. No configuration admits a
-peer without a certificate. `/v1/opamp` and the download route read no
-`Authorization` header: one a Client sends is ignored, never refused, and no
-refusal carries a `WWW-Authenticate` challenge.
+### The enrolment key
 
-A certificate proves **fleet membership, not identity**. Its subject is the
-Server's, the client CA's name with ` CA` turned into ` Certificate`, whatever
-the request asks for, and the Server does not match it against an Agent's
-`instance_uid`: the Server itself may re-key an Agent at any time
-(`AgentIdentification`), and a certificate that a re-key invalidates is an
-outage of your own making.
-
-### Issuing certificates: the CSR flow
-
-Add a `[client_ca]` section and the Server becomes a local CA:
-
-```toml
-[client_ca]
-cert_file = "client-ca.pem"
-key_file = "client-ca-key.pem"
-validity_days = 30
-```
-
-Use a **separate** CA, not the listener's certificate and key: a CA private key
-stored where the server certificate lives means compromising the Server mints
-fleet members at will. Then point `[tls] client_ca_file` at that CA's
-certificate, so the certificates it issues are the ones the listener accepts.
-
-With the section present the Server declares `AcceptsConnectionSettingsRequest`.
-A Client whose certificate is two thirds through its validity generates a key
-**that never leaves its host**, sends a signing request, and receives the
-certificate as an ordinary connection-settings offer. It proves the new
-certificate by connecting with it before it replaces the one in force. A request
-from a peer whose certificate chains to the client CA is signed at once: renewal
-is automatic. A request from a host that holds only a bootstrap certificate
-waits for an operator, as the next section describes. The Server signs a
-client-authentication certificate only, and drops any alternative names the
-request asks for.
-
-A request is exactly one PEM block labelled `CERTIFICATE REQUEST`, with nothing
-but whitespace around it. Anything else — text before or after the block, a
-second block, another label — is answered with the protocol's `BadRequest` error
-response naming that rule, as is a request that does not parse or one arriving
-at a Server with no `[client_ca]`.
-
-### The first certificate on a host
-
-A host needs a certificate before it can connect at all, and it gets one in one
-of two ways:
-
-1. **An operator provisions it.** Sign a client certificate with the client CA
-   and write it, with its key, into the Client's `[tls] cert_file` and
-   `key_file`. The Client connects with it at once and renews it through the CSR
-   flow.
-2. **The host enrols.** It is given a bootstrap certificate, and an operator
-   approves its request — see
-   [Enrolment](#enrolment-a-new-host-approved-by-an-operator).
-
-**A certificate names its host.** The Server puts `urn:classis:host:<id>`
-into every certificate it signs: a host is minted when an operator approves an
-enrolment, a certificate an operator provisioned is given one on its first
-renewal, and every renewal keeps it — the Client proves with its current key
-which certificate it renews. An Agent belongs to the host that first reported
-it, until it is forgotten or that host's last certificate has ended: a
-connection with another host's certificate that reports for it is given an
-`instance_uid` of its own instead. A host holds at most three valid
-certificates:
-
-```console
-$ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/hosts
-[{"host":"0192…","name":"edge-01","gateway":false,"instance_uids":["0192…","0193…"],"certificates":1,
-  "subject":{"country":"","state":"","locality":"","organization":"","organizational_unit":"","organization_identifier":""},
-  "approved_ms":1760000000000,
-  "agents":[{"instance_uid":"0192…","client":true,"client_agent":"0192…","machine":"",…},…]}]
-```
-
-**The Gateway mark is left over from the removed Gateway Mode.** No Client runs
-as a Gateway any more (ADR-0064), but the Server still keeps a host's `gateway`
-mark (`PUT /api/v1/hosts/<host>/gateway`) until its certificate model is
-removed. Leave it unset: a marked host's certificate speaks for any Agent, may
-fetch the artifact offered to any Agent, and renews only with a renewal proof.
-A third-party client that sends no renewal proof renews the certificate it
-presents. A request with a bootstrap proof over a member's certificate whose
-host is not marked is refused, since a member does not enrol, unless the proof
-names the certificate the connection presents: a Client on a certificate an
-operator provisioned cannot tell it from a bootstrap certificate, and that
-request renews it.
-
-### Hosts
-
-A **Host** is what a client certificate of this Server names: one Client
-installation that connects directly. The Server writes it when an operator
-approves its enrolment, with the time of the approval and the subject values of
-the certificate it was issued — country (`C`), state (`ST`), locality (`L`),
-organization (`O`), organizational unit (`OU`) and organization identifier. A
-host certificate the Server issues carries the values of the bootstrap
-certificate the host enrolled with, and every renewal carries them on unchanged
-(see
-[Bootstrap certificates](#bootstrap-certificates-issued-by-the-server)); a
-Host's values change only when it enrols again. A certificate an operator
-provisioned with a host id makes its Host at its first report, with the values
-of that certificate. Each Host records how long it is valid: the latest end of a
-certificate naming it that the Server issued or that the host presented, moved
-forward by every issuance and every connection. Once that has passed, nobody can
-speak as the host again, so a Host that is not marked as a Gateway is forgotten,
-and every Agent bound to it is released for whichever host reports it next. A
-Gateway's Host stays until its mark is taken away, since its certificate may be
-one you provisioned and the Server never saw. A Host written by an earlier
-version takes the latest end the register holds for it, and stays until it next
-connects when the register holds none.
-
-Every Agent record names the Host it last arrived over: its own on a direct
-connection, the Gateway's behind one. This places the Agent in the fleet view
-and decides which labels it inherits (see
-[Labels](#labels-rollout-channels-without-touching-the-host)). It grants
-nothing: what a certificate may report for and fetch is decided by the host
-register as above.
-
-**The Hosts tab** of the bundled UI lists every Host: its name — the `host.name`
-its Client's own Agent reports, else the host id — its subject values, whether
-it is a Gateway, its valid certificates and when each ends, and how many Agents
-arrived over it. Marking a Gateway and revoking a Host's valid certificates are
-presses on its row. Selecting a Host shows its Agents, grouped by their Client
-Agent with that Client's Supervisor Agents beneath it. For a Gateway these are
-the Agents behind it, grouped by the machine they report. `GET /api/v1/hosts`
-answers the same.
-
-**A certificate lives 30 days by default** and is renewed at two thirds of that;
-a host is ejected sooner by revoking its certificate
-([Revocation](#revocation-withdrawing-a-certificate)). An expired certificate
-locks a host out: a Client switched off longer than its validity enrols again
-with a bootstrap certificate, or is given a new certificate by an operator.
-
-## Enrolment: a new host, approved by an operator
-
-Enrolment is how a fresh host obtains its first certificate without an operator
-signing one by hand. It is armed by `[enrolment]`, and it needs `[client_ca]`,
-which signs the approved request:
-
-```toml
-[enrolment]
-bootstrap_ca_file = "bootstrap-ca.pem"
-bootstrap_ca_key_file = "bootstrap-ca-key.pem"
-```
-
-The **bootstrap CA** is a CA of its own, never the client CA; a bootstrap CA
-that shares a certificate or a key with the client CA is refused at startup. A
-bootstrap certificate opens nothing by itself. It needs an open enrolment window
-and an operator's approval, so one bootstrap certificate may serve many hosts.
-Keep its validity short. Without `[enrolment]` no bootstrap certificate passes
-the handshake.
-
-### Bootstrap certificates, issued by the Server
-
-With `bootstrap_ca_key_file` set, ask the Server for a bootstrap certificate,
-name whom it is for, and name the password its PKCS#12 file is encrypted under.
-The subject takes six attributes, each at most once; `organization` and
-`organizational_unit` are required, so every Host names a customer and a site
-its Selectors can rely on, and the others are optional:
-
-| Key                       | Attribute                           | Value                                                                       |
-| ------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| `country`                 | `C`                                 | two upper-case letters, an ISO 3166-1 alpha-2 code such as `AT`             |
-| `state`                   | `ST`                                | 1 to 64 characters without a control character                              |
-| `locality`                | `L`                                 | likewise                                                                    |
-| `organization`            | `O`                                 | likewise; typically the customer                                            |
-| `organizational_unit`     | `OU`                                | likewise; typically the site                                                |
-| `organization_identifier` | `organizationIdentifier` (2.5.4.97) | likewise, in any format; a customer or contract number, a UUID for instance |
-
-A request without `organization`, without `organizational_unit` or without
-`password` is answered `400` naming it, as is any other key. The certificate
-lists them in that order, the country as a `PrintableString` and every other
-value as a `UTF8String`. The Server sets the common name: the bootstrap CA's
-name with ` CA` turned into ` Certificate`. `validity_days` runs from 1 to 90,
-10 by default, and never past the bootstrap CA's end.
-
-#### The PKCS#12 file: `bootstrap.p12`
-
-The `password`, 8 to 128 characters without a control character, is required,
-and the key is in no answer at all. The Server makes the key, signs the
-certificate, puts both into one PKCS#12 file encrypted under that password,
-keeps the file, and hands it out as often as it is asked, until the certificate
-ends or is revoked. It keeps the certificate's serial, subject, key fingerprint
-and end beside it. The answer carries the certificate and no `private_key_pem`,
-with `Cache-Control: no-store`. A host or a tool that needs the pair as PEM
-takes it out of the file with `classisctl pki p12-extract`
-([`pki`](tools.md#pki)).
-
-A short password is quicker to break offline. Eight characters are out of
-practical reach of an offline attack on one file, but should the file leak with
-a weak password, whoever opens it can file enrolment requests while the window
-is open, and your approval of each request is then what stands in the way.
-Choose a longer password where you can, and check each host before you approve
-it. The rule applies when a certificate is issued: a file issued before opens
-with the password it was issued under.
-
-```console
-$ cat request.json        # written with an editor, so the password stays out of the shell's history
-{"subject": {"country": "AT", "organization": "Example Customer", "organizational_unit": "Vienna",
-             "organization_identifier": "K-4711"},
- "validity_days": 14, "password": "correct horse battery staple"}
-$ curl --cacert ca.pem -X POST -H 'Content-Type: application/json' -d @request.json \
-       https://127.0.0.1:4321/api/v1/bootstrap-certificates
-{"serial":"6723…","subject":"C=AT, O=Example Customer, OU=Vienna, organizationIdentifier=K-4711, CN=Classis Bootstrap Certificate",
- "not_before_ms":…,"not_after_ms":…,"certificate_pem":"-----BEGIN CERTIFICATE-----…"}
-$ curl --cacert ca.pem -o bootstrap.p12 \
-       https://127.0.0.1:4321/api/v1/bootstrap-certificates/6723…/p12
-```
-
-The file holds the certificate and its key and nothing else, not the server CA:
-a host gets `server-ca.pem` from you as before. It is encrypted with AES-256
-under a key derived from the password (PBKDF2-HMAC-SHA-256, 600 000 iterations)
-and carries an HMAC-SHA-256 MAC, so OpenSSL 3 opens it with its defaults
-(`openssl pkcs12 -in bootstrap.p12 -info`). The Server keeps it beside the
-certificate's record under `data_dir/bootstrap/`, as `<issuer>-<serial>.p12`,
-readable by its own account only. **The password is kept nowhere** — not in the
-file's directory, not in a log — so give it to the host by another way than the
-file. Every download is logged as `enrolment.bootstrap_p12_downloaded` with the
-serial. A download is answered `404` for a certificate with no file, a revoked
-one, an ended one, an unknown serial, or a certificate an older Server issued
-without a file. A revocation removes the file before it is answered; lifting the
-revocation does not bring it back.
-
-**Every host certificate issued from it carries its subject values.** Approving
-an enrolment copies the six values from the bootstrap certificate the host
-enrolled with into the host certificate, and every renewal carries them on
-unchanged, so the Host and its Agents carry them as `fleet.host.*` (see
-[Hosts](#hosts)). The common name is never copied, nor anything the host's own
-request names. A value fixed at issue stays until the host enrols again: put
-what is stable and says whom the host belongs to into the subject, and nothing
-that changes. The values describe and select; they authorize nothing. They show
-on every enrolment request the certificate carries, as `bootstrap_subject` with
-its `bootstrap_serial`, so the approver sees whose request it is and what the
-host certificate will carry. A bootstrap certificate of your own PKI whose
-subject breaks these rules — an attribute twice, a value of the wrong string
-type or length, no organization or no organizational unit — lists no
-`bootstrap_subject` but a `subject_refusal` naming the attribute: approving it
-is refused `409`, so reject it and give the host a certificate that follows
-them. A renewal carries the values of the certificate it renews as they are,
-without checking them again. Every issuance is logged as
-`enrolment.bootstrap_issued`, with its serial, subject and `not_after_ms`.
-
-The UI's **Enrolments** tab does the same: it issues a certificate with the
-values you type, the customer, the site and the password required and the
-country chosen from a list, and lists the valid ones with a **Revoke** press.
-The password is typed twice. The row of each certificate offers **Save
-bootstrap.p12** in this page and in every later one, until the certificate ends
-or is revoked; the page never holds a private key. A certificate issued
-elsewhere offers nothing to save.
-
-```console
-$ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/bootstrap-certificates
-[{"serial":"6723…","subject":"O=Example Customer, OU=Vienna, CN=Classis Bootstrap Certificate",
-  "key_fingerprint":"…","issued_ms":…,"not_after_ms":…,"revoked":false,"p12":true}]
-```
-
-The list holds every valid bootstrap certificate the Server issued, oldest
-first; an ended one is dropped, and so is every one of a bootstrap CA since
-replaced. Revoke one by its serial with the authority `bootstrap`
-([Revocation](#revocation-withdrawing-a-certificate)).
-
-A revoked one stays in the list, marked revoked, until it ends. To drop it
-sooner, delete it — **Delete** in its row, or:
-
-```sh
-curl --cacert ca.pem -X DELETE https://127.0.0.1:4321/api/v1/bootstrap-certificates/6723…
-```
-
-Deleting removes the entry and any `bootstrap.p12` of it, answered `204`, and is
-logged as `enrolment.bootstrap_deleted`. **The revocation stays**: the
-certificate is still refused for as long as it would be valid, and `GET
-/api/v1/revocations` still lists it. A request that carries it shows _not issued
-here_. Only a revoked certificate is deleted; a valid one is answered `409` —
-revoke it first — and an unknown serial `404`.
-
-When issuing, the Server holds at most 10 000 valid ones, revoked ones included
-until they end or are deleted, and answers a request beyond that `409`. It
-answers `409` too while it holds no `bootstrap_ca_key_file` or once the
-bootstrap CA has ended, and `400` for a subject attribute it does not know, a
-value out of bounds, `validity_days` outside 1 to 90, or a password outside 8 to
-128 characters.
-
-**The window is closed by default.** Open it for as long as you are enrolling
-hosts, from 1 to 86400 seconds:
-
-```console
-$ curl --cacert ca.pem -X POST -H 'Content-Type: application/json' \
-       -d '{"open_for_secs": 3600}' https://127.0.0.1:4321/api/v1/enrolment/window
-{"open":true,"until_ms":1790000000000}
-$ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/enrolment/window
-$ curl --cacert ca.pem -X DELETE https://127.0.0.1:4321/api/v1/enrolment/window
-```
-
-`POST` opens the window, or moves its end to `open_for_secs` from now. `GET`
-says whether it is open and until when. `DELETE` closes it early. The window's
-end and its pending requests — an approved one with its certificate included —
-are written to `data_dir/enrolment.json` before the act that changes them is
-answered, so a Server restart keeps an open window open until its end and keeps
-its requests: a host whose approval it had not collected yet is handed its
-certificate after the restart. A window whose end passed while the Server was
-down is closed when it starts. When it closes, every enrolling connection is
-closed and every pending request expires, an approved one whose certificate its
-host has not collected included; that host enrols again in the next window.
-Closing a window that is not open is answered `204` as well. An approval that
-cannot be written is answered `500`, and it stands all the same: its certificate
-is signed and recorded, and its host collects it. A restart before the next
-write may list the request again; do not approve it twice.
-
-**While it is open, an enrolling host may send a certificate request and nothing
-else.** The Server creates no Agent record for it and offers it nothing but the
-issued certificate. The request waits in a queue of at most 1024 requests
-waiting for an operator, of which the requests of one bootstrap certificate hold
-at most `max_pending_per_bootstrap`, 256 by default; a request an operator
-approved or rejected holds no place. A request beyond either bound is answered
-`Unavailable` and the host retries later; one beyond its bootstrap certificate's
-share is logged as `enrolment.refused` with `reason` `bootstrap_share` and the
-certificate's serial, once per certificate and window. A re-sent request that
-already waits is never refused. The Client keeps its pending key and re-sends
-the same request until it is answered.
-
-**Match the request to the host by its fingerprint.** The enrolling Client logs
-the SHA-256 fingerprint of the key it generated:
+A Space's name is 1 to 32 letters, digits and underscores, starting and ending
+with a letter or a digit. It keeps the case it was created with, and two Spaces
+may not have names that differ only in case. Its key looks like this:
 
 ```text
-INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
+cle1_<space>_<secret>
 ```
 
-The Server lists each pending request with that fingerprint as its `id`, beside
-its arrival time, the peer address, and the bootstrap certificate's six subject
-values, fingerprint and serial. The request's own subject is not listed: the
-host chose it, and nothing copies it. The Client sends its request as soon as
-the Server's first answer says it signs certificates, so the request is listed
-moments after the host connects:
+`cle1_` is a fixed prefix, so that secret scanners and log redaction recognise a
+key; the secret is 256 random bits written as 43 base64url characters. A Space
+has exactly one active key, reusable without limit: a host that presents it is
+enrolled at once.
 
-```console
-$ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/enrolments
-[{"id":"3f9a…","arrived_ms":1789996400000,"peer":"10.0.4.17","key_fingerprint":"3f9a…",
-  "bootstrap_subject":{"country":"AT","state":"","locality":"","organization":"Example Customer",
-                       "organizational_unit":"Vienna","organization_identifier":"K-4711"},
-  "bootstrap_fingerprint":"…","bootstrap_serial":"6723…"}]
-$ curl --cacert ca.pem -X POST https://127.0.0.1:4321/api/v1/enrolments/3f9a…/approve
-$ curl --cacert ca.pem -X POST https://127.0.0.1:4321/api/v1/enrolments/3f9a…/reject
-```
+- **The Server keeps the whole key**, not only a hash of it, so that the same key
+  can be read again after a restart. It lives in `spaces/` under `data_dir` (or
+  in the table `spaces`), readable by the Server's account alone, and so in every
+  copy of the records. **Treat the key as a secret**: anyone who has it can enrol
+  hosts into the Space until the key is rotated.
+- **Reading the key, enrolling a host and restarting the Server never change
+  it.** Only a rotation does. The old key then enrols nothing, and the hosts
+  already enrolled keep their client and their token.
+- **This build has no command, and no REST route, that creates a Space, shows
+  its key or rotates it.** The Server enrols a host only into a Space that
+  exists in its records, and none of the Server's commands or routes writes one.
 
-The UI's **Enrolments** tab shows the same queue: each request with its full key
-fingerprint, the bootstrap certificate it carries — its subject values, and its
-serial and end when the Server issued it — and an **Approve** and a **Reject**
-press on its row. Approving asks once more, quoting the fingerprint to compare
-with the Client's log. The tab also says whether the window is open, and opens
-and closes it.
+### `/v1/enrol`
 
-Approving signs the request with `[client_ca]`, with the bootstrap certificate's
-subject values, and offers the certificate on that host's connection. A
-bootstrap certificate from another PKI is read under the same rules as one the
-Server issues, except that a value other than the country may also be a
-`PrintableString`, as older PKIs write it; the host certificate carries it as a
-`UTF8String`. An attribute that appears twice, a value of another string type or
-of the wrong length, or a country that is not two upper-case letters makes the
-approval fail with `409` naming the attribute, nothing is signed, and the
-request waits. Issue the host a bootstrap certificate that fits, and reject the
-request. The host stores it as `client-cert.pem` in its state directory and
-reconnects with it as a member; from then on it renews by itself. Rejecting
-answers the request `BadRequest` and closes the connection. An unknown or
-expired id is answered `404`, and every enrolment route answers `404` while
-`[enrolment]` is not configured. A bootstrap certificate that arrives while the
-window is closed is answered `503`, and does not count toward the throttle.
+The request is `application/json`, with the key in
+`Authorization: Bearer cle1_…` — never in the URL — and
+`grant_types: ["client_credentials"]`. The `token_endpoint_auth_method` is
+`client_secret_basic`, and may be left out. A request that is not a JSON object,
+or that gives another value of either field, or no `grant_types`, is refused
+`400` with `{"error": "invalid_client_metadata"}`: the RFC's default grant is not
+one this Server supports. Metadata the Server does not understand is ignored.
 
-A request whose subject or SANs name an `instance_uid` other than the host's own
-is answered `BadRequest` and never enters the queue. The same holds for a
-renewal.
+On success the answer is `201 Created` with the `client_id`, the `client_secret`,
+`client_id_issued_at`, a `client_secret_expires_at` of `0` and the registered
+metadata, and with the Space the key named as `space`. The Space comes from the
+key, never from what the host sends. The `client_id` is a UUID version 7 and is
+the host's identity, its **Device ID**: the Server derives it from the token a
+request presents, and a host never states one. The Server keeps the client — its
+Device ID, its Space, when it was issued — and only the SHA-256 of its secret.
 
-**A request proves the bootstrap certificate it rests on.** The Client adds a
-bootstrap proof to its request: the certificate it enrols with, and a signature
-made with that certificate's key over the key it asks to be certified. The
-Server checks the proof itself, that the certificate is valid now, is not
-revoked, and that its key signed the request, and files the request under that
-certificate: the subject values, fingerprint and serial listed are the proven
-certificate's. On a direct connection the proof must name the certificate the
-connection presented. A request whose proof names another certificate or does
-not verify, and one that carries a renewal proof beside it, is answered
-`BadRequest` and never enters the queue. A request without a proof, as a
-third-party OpAMP client sends it, is filed under the certificate the connection
-presented.
+| Status | Header or body                                     | When                                                                          |
+| ------ | -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `201`  | the client's credentials                           | The key is the Space's active key                                             |
+| `401`  | `WWW-Authenticate: Bearer realm="fleet"`           | No bearer credential, or one of another scheme                                |
+| `401`  | `WWW-Authenticate: Bearer error="invalid_token"`   | A key that is malformed, unknown, wrongly spelt or rotated away               |
+| `400`  | `WWW-Authenticate: Bearer error="invalid_request"` | More than one `Authorization` header, or one beside `access_token` in the URL |
+| `400`  | `{"error": "invalid_client_metadata"}`             | Metadata the Server does not support                                          |
+| `413`  | none                                               | A body over 8 KiB                                                             |
 
-The bootstrap certificate stays in the host's `supervisor.toml`, unused once the
-issued pair is stored. Approve only what you can match to a host you are setting
-up.
+Every response carries `Cache-Control: no-store` and `Pragma: no-cache`.
 
-## Revocation: withdrawing a certificate
+### `/v1/token`
 
-A certificate stays valid until it expires. To shut a host out sooner, revoke
-its certificate. The Server refuses it from then on, on both transports and on
-the package download, and closes at once every WebSocket session it admitted,
-with close code `1008`. No other session is touched, and no restart is needed.
-The list lives in `data_dir/revocations.json` and survives a restart.
+The request is a form (`application/x-www-form-urlencoded`) with
+`grant_type=client_credentials`. The client authenticates with HTTP Basic, its
+`client_id` and `client_secret` each form-encoded before they become the Basic
+user name and password; credentials in the body are not read. Empty parameters
+count as omitted, unknown ones are ignored, and repeated ones are refused.
 
-Every certificate the client CA signs is in a register, with the certificate the
-host presented when it renewed. Its `key_fingerprint` is the one the request was
-listed and approved by:
+| Status | Header or body                                                                  | When                                                           |
+| ------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `200`  | `access_token`, `token_type: "Bearer"`, and `expires_in` when the token expires | The credentials are right                                      |
+| `401`  | `{"error": "invalid_client"}`, `WWW-Authenticate: Basic realm="token"`          | An unknown client, a wrong secret, or no client authentication |
+| `400`  | `{"error": "invalid_request"}`                                                  | A missing `grant_type`, repeated parameters, a malformed form  |
+| `400`  | `{"error": "unsupported_grant_type"}`                                           | Any grant other than `client_credentials`                      |
+| `400`  | `{"error": "invalid_scope"}`                                                    | A non-empty `scope`: this Server defines no scopes             |
+| `413`  | none                                                                            | A body over 8 KiB                                              |
 
-```console
-$ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/certificates
-[{"authority":"client","issuer":"CN=Classis Client CA","serial":"5c0f…",
-  "subject":"CN=Classis Client Certificate",
-  "key_fingerprint":"…","not_after_ms":1797772400000,"instance_uid":"0192…",
-  "issued_ms":1789996400000,"predecessor":{"authority":"client","serial":"41ab…"},
-  "host":"0192…"}]
-```
+The access token is opaque — 256 random bits — and no refresh token is issued.
+**A client holds exactly one active token.** A new request at `/v1/token`
+replaces the token, and the replacement is the revocation of the old one: there
+is no list of issued tokens. The Server keeps only the SHA-256 of the token and
+its expiry, beside the hash of the client secret. `token_lifetime_secs` sets how
+long a token is accepted; `0`, the default, means never.
 
-Revoke a certificate by the CA that issued it — `client` for the client CA,
-`bootstrap` for the bootstrap CA of `[enrolment]` — and its serial. A revocation
-reaches every renewal of that certificate too, so revoking the one a host
-enrolled with is enough even after it renewed, and it stays in force until the
-last of those renewals has expired. `GET /api/v1/bootstrap-certificates` lists
-the serial of every bootstrap certificate the Server issued; colons, case and
-leading zeros do not matter. A serial is at most 20 octets, 40 hex digits, as
-RFC 5280 allows; a longer one is answered `400`, and a certificate with one is
-not admitted. A renewal descends from the certificate its renewal proof names;
-a client that sends no proof renews from the certificate its connection
-presented, except over the certificate of a host marked as a Gateway, where only
-a renewal with a proof is signed. A revoked certificate's proof renews nothing.
+### Admission
 
-```console
-$ curl --cacert ca.pem -X POST -H 'Content-Type: application/json' \
-       -d '{"certificate": {"authority": "client", "serial": "5c0f…"}}' \
-       https://127.0.0.1:4321/api/v1/revocations
-{"id":"9d2e…","kind":"certificate","revoked_ms":1790000000000,
- "certificate":{"authority":"client","serial":"5c0f…"}}
-```
+`/v1/opamp` (WebSocket and plain HTTP) and the package download route admit a
+request only with `Authorization: Bearer <token>`, whose hash is a client's
+active token and has not expired. The scheme name is case-insensitive and the
+token is case-sensitive. A token in the URL is not read.
 
-There is no credential to revoke. A request naming `"credential"` is answered
-`400`, naming the field and saying that the Agent plane admits by client
-certificate alone. A credential entry `revocations.json` holds is dropped when
-the list is loaded, with one log line giving the number dropped, and the list is
-written back without it.
+| Status | `WWW-Authenticate`               | When                                                                          |
+| ------ | -------------------------------- | ----------------------------------------------------------------------------- |
+| `401`  | `Bearer realm="fleet"`           | No credential, or one of another scheme                                       |
+| `401`  | `Bearer error="invalid_token"`   | A token that is wrong, malformed, replaced or expired                         |
+| `400`  | `Bearer error="invalid_request"` | More than one `Authorization` header, or one beside `access_token` in the URL |
 
-`GET /api/v1/revocations` lists every entry, and `DELETE
-/api/v1/revocations/<id>` lifts one; the next connection is admitted again. A
-lifted bootstrap certificate gets no PKCS#12 file back: one its revocation could
-not remove is removed first, and while that fails the lift is answered `500` and
-the revocation stays. A Server without `[enrolment]` cannot remove it, so it
-answers `500` to the lift of any bootstrap certificate's revocation and keeps
-it. The list holds at most 100 000 entries; an entry for a certificate the
-register held is dropped once neither that certificate nor any renewal of it is
-valid. The register holds at most 100 000 certificates and at most 10 000 in one
-renewal chain, and keeps the last 1 000 places for enrolments.
+The check happens when a request is admitted: on every plain-HTTP exchange and
+every download, and for a WebSocket session once, at its upgrade.
 
-Every WebSocket session also ends when the certificate that admitted it expires,
-with `1008` and the reason `certificate expired`. A Client renews at two thirds
-of the life and reconnects with the new certificate, so a healthy fleet never
-sees this.
+- **A session outlives the expiry of its token.** An open WebSocket session is not
+  ended when its token expires; the Client meets the expiry at its next
+  connection.
+- **A session ends when its token is replaced.** When a client is issued a new
+  token, the Server closes every WebSocket session admitted with the old one,
+  with close code `1008` (policy violation) and the reason `token replaced`. That
+  is how a stolen token is cut off.
+- **Refusals are counted per address.** An authentication refusal on `/v1/enrol`,
+  `/v1/token`, `/v1/opamp` or the download counts toward the back-off of the
+  peer's address ([Repeated failures are
+  throttled](#repeated-failures-are-throttled)).
+
+The host of an admitted request is the client that holds its token. An Agent's
+record names the host it reported under, and an `instance_uid` belongs to the
+host that reported it first until the Agent is forgotten: a report for an
+`instance_uid` recorded under another host is refused, and so is a report that
+would make a host speak for more than 256 Agents. Both are logged at `warn`
+(`identity.claimed`, `identity.limit`). `GET /api/v1/agents` shows each Agent's
+host, as `host`. A host downloads only the artifacts offered to its own Agents
+([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)).
+
+A host that loses its `state.json` is lost for good: its client stays in the
+Server's records, with nothing left that can present its secret or its token. A
+client is never deleted.
 
 ## Security decisions in the log
 
@@ -1186,54 +819,57 @@ The Server keeps no audit record and writes nothing for one. Every security
 decision it takes is one structured event on its log, which goes to standard
 error with everything else it logs ([Running it](#running-it)): each admission
 and refusal on the Agent plane, each refused or throttled operator sign-in, each
-enrolment request, approval and rejection, each certificate issued, each
-revocation and the session it ended, each download a host may not fetch,
-each operator act — every `POST`, `PUT`, `PATCH` and `DELETE` on the REST API,
-once it has run, with its method, path and status but not the operator's name —
-each package an Agent reports installed or failed, and each of the Server's own
-certificates that is ending or has ended.
+host enrolled and each token issued, each WebSocket session that starts and each
+that a replaced token ends, each download a host may not fetch, each report
+refused for claiming another host's Agent, each operator act — every `POST`,
+`PUT`, `PATCH` and `DELETE` on the REST API, once it has run, with its method,
+path and status and the user name of the Basic credential when one was
+presented — each package an Agent reports installed or failed, and each of the
+Server's own certificates that is ending or has ended.
 
 Each event names itself in its `event` field — `admission.refused`,
-`enrolment.approved`, `revocation.revoked` and so on — and carries, where they
-apply, the peer address, the Agent's `instance_uid`, and the certificate's CA
-role (`authority`) and serial. No event holds a secret in any form — an
-`Authorization` value is never logged, not even as a hash, whether an operator
-presented it or an Agent sent it unasked — nor a key or a CSR body. A text a peer
-chose, such as a user name, a path, a request's subject or the error an Agent
-reports, is cut at 256 bytes.
+`enrolment.registered`, `token.issued` and so on — and carries, where they
+apply, the peer address, the Device ID of the client, the Space and the Agent's
+`instance_uid`. `admission.refused` says in `check` which check refused:
+`absent`, `scheme`, `malformed`, `invalid_request`, `unknown` or `expired`. No
+event holds a secret in any form: an enrolment key, a client secret, an access
+token or an `Authorization` value is never logged, not even as a hash. A text a
+peer chose, such as a user name, a path or the error an Agent reports, is cut at
+256 bytes.
 
 The level says whether a peer can repeat it at will. Nothing aggregates the
 events and the log has no rate limit, so what a peer can cause as often as it
 likes stays out of the default `info`:
 
 - **`debug`** — a refusal or a throttle of a peer that was not admitted, on the
-  Agent plane, on the download route and at an operator sign-in; a message or a
-  download over a host's rate (`agent_rate.throttled`); a download a host may
-  not fetch; an enrolment request refused, or asked again while it waits;
-  and each admitted request (`admission.admitted`): a plain-HTTP poll, a
-  download, or a WebSocket upgrade before its session starts. Set
-  `RUST_LOG=info,classis_server=debug` while you investigate.
-- **`info`** — every decision taken: a WebSocket session started or ended
-  (`session.started`, `session.ended`), a new enrolment request, a request
-  refused for its bootstrap certificate's share of the queue (once per
-  certificate and window), an approval or rejection, the window, every issuance,
-  revocation and bootstrap-certificate event, an operator act, a package
-  outcome.
-- **`warn`** — what an admitted host should never ask for: a certificate
-  request refused, a report that claims an `instance_uid` bound to another host;
-  and a certificate the Server depends on that is ending (`pki.expiring`).
-- **`error`** — such a certificate that has ended (`pki.expired`).
+  Agent plane (`admission.refused`, `admission.throttled`, `enrolment.refused`
+  and `token.refused`, with the status) and at an operator sign-in
+  (`operator.refused`, `operator.throttled`); a message or a download over a
+  host's rate (`agent_rate.throttled`); a download a host may not fetch
+  (`download.refused`); and each admitted request (`admission.admitted`): a
+  plain-HTTP poll, a download, or a WebSocket upgrade before its session starts.
+  Set `RUST_LOG=info,classis_server=debug` while you investigate.
+- **`info`** — every decision taken: a host enrolled (`enrolment.registered`), a
+  token issued (`token.issued`), a WebSocket session started or ended
+  (`session.started`, `session.ended` with the reason `token replaced`), an
+  operator act (`operator.act`), a package outcome (`package.outcome`).
+- **`warn`** — what an admitted host should never ask for: a report that claims
+  an `instance_uid` recorded under another host (`identity.claimed`), or that
+  would make a host speak for more Agents than it may (`identity.limit`); and a
+  certificate the Server depends on that is ending (`pki.expiring`).
+- **`error`** — such a certificate that has ended (`pki.expired`), and a store
+  that failed under a request: `admission.failed`, `enrolment.failed`,
+  `token.failed`.
 
 ```sh
-docker logs classis-server 2>&1 | grep 'revocation.revoked'
+docker logs classis-server 2>&1 | grep 'token.issued'
 ```
 
 What keeps these lines, for how long, and who may change them is whatever
 collects the Server's output — journald, the container runtime, a log shipper.
 Nothing makes a line edited or removed afterwards visible; if you need that,
 ship the log off the host to a store the Server's host cannot rewrite. A
-decision never waits for its line: no request is answered `503`, and no
-certificate request `Unavailable`, for want of one.
+decision never waits for its line: no request is answered `503` for want of one.
 
 ## Configurations: what the fleet runs
 
@@ -1658,10 +1294,10 @@ way the receiving Supervisor will look for it. A Client opens those two and
 `.zip`; an artifact that is none of the three is taken to _be_ the program.
 [The rollout walkthrough](rollout.md) puts the whole sequence together.
 
-The download route sits on the **Agent plane**, outside `[rest.auth]` and behind
-the same TLS handshake as `/v1/opamp`. A downloading Client presents its client
-certificate, and it presents it to this Server's own origin and to no other
-host. Guarding the Operator plane therefore cannot break a rollout. The content
+The download route sits on the **Agent plane**, outside `[rest.auth]`. A
+downloading Client presents its access token, and it presents it to this
+Server's own origin and to no other host. Guarding the Operator plane therefore
+cannot break a rollout. The content
 hash and the signature are what protect an installed binary.
 
 `keygen` prints the public key as hex — that value is the Client's
@@ -1670,38 +1306,32 @@ own update included, and says so at startup. Give every Client the key.
 
 ### A host fetches only what its Agents are offered
 
-The download route serves an uploaded artifact only to a host whose certificate
-speaks for an Agent that is offered that artifact — its Agent type, version and
-Platform — by a rollout. A host speaks for the Agents that reported with its
-certificate, and a host marked as a Gateway for any Agent. An artifact stays
-offered until the Agent's assignment changes, so an Agent that echoed its offer
-and then failed to install can fetch it again. A version saved in a Deployment
-but not yet released by a rollout is offered to no one and cannot be fetched by
-anyone.
+The download route serves an uploaded artifact only to a host whose Agents are
+offered that artifact — its Agent type, version and Platform — by a rollout. A
+host is the client whose token the request carries, and it is served for the
+Agents that reported under it. An artifact stays offered until the Agent's
+assignment changes, so an Agent that echoed its offer and then failed to install
+can fetch it again. A version saved in a Deployment but not yet released by a
+rollout is offered to no one and cannot be fetched by anyone.
 
 Every other request for an artifact is answered `404` with the same status, body
 and headers as a request for an artifact the store does not hold: an artifact
-released to another host's Agents, one released to nobody yet, an entry that
-carries no signature, and any request over a certificate that names no host. A
-malformed type, version or Platform is still answered `400`, and a certificate
-that is not a member's still `401`. Each refused fetch leaves a
+released to another host's Agents, one released to nobody yet, and an entry that
+carries no signature. A malformed type, version or Platform is still answered
+`400`, and a request without a valid token `401`. Each refused fetch leaves a
 `download.refused` event at `debug` in [the log](#security-decisions-in-the-log)
-with `check` `not offered`, the host, the certificate's serial and CA role, and
-the type, version and Platform asked for. The certificate is admitted before the
-route decides what it may fetch, so a refused fetch leaves both a
-`download.admitted` and a `download.refused` event: a `download.admitted` says
-the certificate was let in, not that an artifact was served. Such a refusal is
-no failed admission, so it does not count toward
-[the throttle](#repeated-failures-are-throttled). Each download, served or
-refused, takes a token from the host's bucket
-([How often a member may be heard](#how-often-a-member-may-be-heard)); for a
-Gateway, from its aggregate bucket.
+with `check` `not offered`, the host, and the type, version and Platform asked
+for. The token is admitted before the route decides what it may fetch, so a
+refused fetch leaves both an `admission.admitted` and a `download.refused`
+event: an `admission.admitted` says the token was let in, not that an artifact
+was served. Such a refusal is no failed authentication, so it does not count
+toward [the throttle](#repeated-failures-are-throttled). Each download, served
+or refused, takes a token from the host's bucket
+([How often a host may be heard](#how-often-a-host-may-be-heard)).
 
-A `404` for an Agent that was offered an artifact therefore means one of three
-things: its host's certificate names no host (provision it with
-`urn:classis:host:<id>`, see [`[client_ca]`](#client_ca)), the Agent now
-reports another Agent type than the Package was built for, or a later rollout
-changed what it is offered.
+A `404` for an Agent that was offered an artifact therefore means one of two
+things: the Agent now reports another Agent type than the Package was built for,
+or a later rollout changed what it is offered.
 
 ## The REST API
 
@@ -1713,38 +1343,33 @@ plane (`127.0.0.1:4321` by default), over TLS 1.3, and, when
 credentials. `[rest.auth]` is required whenever the plane listens off the
 loopback.
 
-| Method & path                                                                          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/v1/agents`                                                                   | The whole fleet: every Agent, its attributes, capabilities, the Deployment that claims it, what is rolled out to it and what waits, package installations, health, and sync state.                                                                                                                                                                                                                                                                                             |
-| `POST /api/v1/agents/{instance_uid}/restart`                                           | Queue a restart of that Agent's Managed Process. Delivered on the next exchange — pushed over WebSocket, on the next poll over plain HTTP. Only Supervisor-backed Agents accept it; a Client's own Agent has no process to restart.                                                                                                                                                                                                                                            |
-| `PUT /api/v1/agents/{instance_uid}/labels`                                             | Set this Agent's labels — see [Labels: rollout channels without touching the host](#labels-rollout-channels-without-touching-the-host). Body: `{"labels": {…}}`; an empty map clears them.                                                                                                                                                                                                                                                                                     |
-| `DELETE /api/v1/agents/{instance_uid}`                                                 | Forget this Agent — see [Forgetting an Agent](#forgetting-an-agent) below. Reaches no host. `409` while it is still reporting.                                                                                                                                                                                                                                                                                                                                                 |
-| `POST /api/v1/agents/{instance_uid}/rollout`                                           | The per-Agent rollout act: releases the Deployment that claims this Agent to it, replacing its assignment. Empty body, or `{"deployment": "…"}` naming that Deployment. `409` when the Agent is in no Deployment, in a conflict, or in another one than named, when the Deployment holds nothing or a Package with an unsigned entry, and when the press would change nothing because the Package it holds is no upgrade (the reason names the version).                       |
-| `GET /api/v1/configurations`                                                           | Every Configuration — the saved revision each, with the Deployments that hold it.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `GET /api/v1/configurations/{name}`                                                    | One Configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `PUT /api/v1/configurations/{name}`                                                    | Create it, or replace its saved revision. Body: `{"body": "…", "service_name": "…", "role": "…"}` — `role` may be omitted; without `service_name` it is refused `400`, as is a `selector`. **Distributes nothing**.                                                                                                                                                                                                                                                            |
-| `DELETE /api/v1/configurations/{name}`                                                 | Remove it, and take it out of every Deployment that holds it. `409` while an Agent's assignment pins it, saying how many.                                                                                                                                                                                                                                                                                                                                                      |
-| `GET /api/v1/packages`                                                                 | Every stored Package (never the artifact bytes), each with its entries — their hash, size, signature and `signature_state` — and the Deployments that hold it.                                                                                                                                                                                                                                                                                                                 |
-| `PUT /api/v1/packages/{agent_type}/{version}`                                          | Create a Package. The body has no writable field — `{}`. **Distributes nothing**. The version is SemVer 2.0.0: any other is answered `400`, naming it — `1.19.0` for upstream's `1.19`.                                                                                                                                                                                                                                                                                        |
-| `GET /api/v1/packages/{agent_type}/{version}`                                          | One Package.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}`                      | Upload one platform's artifact (the raw body); new bytes remove the entry's signature. `409` while the Package is rolled out to an Agent. The signature is written through the entry's signature route.                                                                                                                                                                                                                                                                        |
-| `PUT` / `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature` | Record or remove that entry's Ed25519 signature. Body: `{"signature": "<hex>"}`. `404` for an entry that does not exist, `400` for an empty or malformed signature, `409` while the Package is rolled out to an Agent. The answer is the Package, with the entry's `signature_state`.                                                                                                                                                                                          |
-| `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}`                   | Remove one entry. `409` while the Package is rolled out to an Agent.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `DELETE /api/v1/packages/{agent_type}/{version}`                                       | Remove the Package, and take it out of every Deployment that holds it. `409` while an Agent's assignment pins it, saying how many. Uninstalls nothing.                                                                                                                                                                                                                                                                                                                         |
-| `GET /api/v1/packages/{agent_type}/{version}/file?os=…&arch=…`                         | The artifact bytes — where an offered `download_url` points. **The one route on the Agent plane** (`:4320`), and never guarded by `[rest.auth]`: it is not in the OpenAPI document for the same reason. It requires a client certificate from the client CA in the handshake; a bootstrap certificate is answered `401`. It serves only an artifact offered to an Agent the host speaks for, and answers every other request `404`, as for an artifact that does not exist.    |
-| `GET /api/v1/deployments`                                                              | Every Deployment, with its channel, its Packages, its Configurations, and the three reach counts.                                                                                                                                                                                                                                                                                                                                                                              |
-| `PUT /api/v1/deployments/{name}`                                                       | Create one or re-aim it. Body: `{"selector": {…}}` — **never empty** (`400`). **Distributes nothing**.                                                                                                                                                                                                                                                                                                                                                                         |
-| `GET` / `DELETE /api/v1/deployments/{name}`                                            | One Deployment; `DELETE` is `409` while an Agent's assignment names it, saying how many, and uninstalls nothing.                                                                                                                                                                                                                                                                                                                                                               |
-| `PUT /api/v1/deployments/{name}/selector`                                              | Re-aim it. Never distributes.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `PUT /api/v1/deployments/{name}/packages/{agent_type}/{version}`                       | Put a Package in the channel. `409` on a second of an Agent type it already holds; `?replace=true` swaps it. `404` for a Package nobody uploaded.                                                                                                                                                                                                                                                                                                                              |
-| `DELETE /api/v1/deployments/{name}/packages/{agent_type}/{version}`                    | Take it out. Never refused for being rolled out: the next press drops it from the Agents' release.                                                                                                                                                                                                                                                                                                                                                                             |
-| `PUT` / `DELETE /api/v1/deployments/{name}/configurations/{configuration}`             | Put a Configuration in the channel, or take it out. `404` for a Configuration the Server does not hold, or, on `DELETE`, one the channel does not hold. **Distributes nothing**.                                                                                                                                                                                                                                                                                               |
-| `POST /api/v1/deployments/{name}/rollout`                                              | Roll it out to every Agent it claims and would move — its Packages and Configurations in one release, the moment a rollout starts. Agents another Deployment also claims are skipped and reported as conflicts. `409` while the channel holds no Package and no Configuration, and `409` naming each Package and platform while any entry of a Package it holds lacks a signature.                                                                                             |
-| `GET` / `POST` / `DELETE /api/v1/enrolment/window`                                     | Read, open or close the enrolment window — see [Enrolment](#enrolment-a-new-host-approved-by-an-operator). `POST` body: `{"open_for_secs": n}`, 1 to 86400. `404` while `[enrolment]` is not configured.                                                                                                                                                                                                                                                                       |
-| `GET /api/v1/enrolments`                                                               | The pending enrolment requests, oldest first, each with its `id` — the fingerprint the enrolling Client logs.                                                                                                                                                                                                                                                                                                                                                                  |
-| `POST /api/v1/enrolments/{id}/approve`                                                 | Sign that request and hand the host its certificate. `404` for an unknown or expired id. `500` when the approval could not be written: it stands all the same and the host collects its certificate, but a restart may list the request again — do not approve it twice.                                                                                                                                                                                                       |
-| `POST /api/v1/enrolments/{id}/reject`                                                  | Refuse that request and close its connection. `404` for an unknown or expired id.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `GET` / `POST /api/v1/bootstrap-certificates`                                          | List the valid bootstrap certificates the Server issued, or issue one — see [Bootstrap certificates](#bootstrap-certificates-issued-by-the-server). `POST` body: `{"subject": {…}, "validity_days": n, "password": "…"}`, `subject.organization`, `subject.organizational_unit` and `password` required (`400` naming the one missing); the answer carries the certificate and never its key, which is in the PKCS#12 file. `409` without `[enrolment] bootstrap_ca_key_file`. |
+| Method & path                                                                          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/agents`                                                                   | The whole fleet: every Agent, its attributes, capabilities, the Deployment that claims it, what is rolled out to it and what waits, package installations, health, and sync state.                                                                                                                                                                                                                                                                       |
+| `POST /api/v1/agents/{instance_uid}/restart`                                           | Queue a restart of that Agent's Managed Process. Delivered on the next exchange — pushed over WebSocket, on the next poll over plain HTTP. Only Supervisor-backed Agents accept it; a Client's own Agent has no process to restart.                                                                                                                                                                                                                      |
+| `PUT /api/v1/agents/{instance_uid}/labels`                                             | Set this Agent's labels — see [Labels: rollout channels without touching the host](#labels-rollout-channels-without-touching-the-host). Body: `{"labels": {…}}`; an empty map clears them.                                                                                                                                                                                                                                                               |
+| `DELETE /api/v1/agents/{instance_uid}`                                                 | Forget this Agent — see [Forgetting an Agent](#forgetting-an-agent) below. Reaches no host. `409` while it is still reporting.                                                                                                                                                                                                                                                                                                                           |
+| `POST /api/v1/agents/{instance_uid}/rollout`                                           | The per-Agent rollout act: releases the Deployment that claims this Agent to it, replacing its assignment. Empty body, or `{"deployment": "…"}` naming that Deployment. `409` when the Agent is in no Deployment, in a conflict, or in another one than named, when the Deployment holds nothing or a Package with an unsigned entry, and when the press would change nothing because the Package it holds is no upgrade (the reason names the version). |
+| `GET /api/v1/configurations`                                                           | Every Configuration — the saved revision each, with the Deployments that hold it.                                                                                                                                                                                                                                                                                                                                                                        |
+| `GET /api/v1/configurations/{name}`                                                    | One Configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `PUT /api/v1/configurations/{name}`                                                    | Create it, or replace its saved revision. Body: `{"body": "…", "service_name": "…", "role": "…"}` — `role` may be omitted; without `service_name` it is refused `400`, as is a `selector`. **Distributes nothing**.                                                                                                                                                                                                                                      |
+| `DELETE /api/v1/configurations/{name}`                                                 | Remove it, and take it out of every Deployment that holds it. `409` while an Agent's assignment pins it, saying how many.                                                                                                                                                                                                                                                                                                                                |
+| `GET /api/v1/packages`                                                                 | Every stored Package (never the artifact bytes), each with its entries — their hash, size, signature and `signature_state` — and the Deployments that hold it.                                                                                                                                                                                                                                                                                           |
+| `PUT /api/v1/packages/{agent_type}/{version}`                                          | Create a Package. The body has no writable field — `{}`. **Distributes nothing**. The version is SemVer 2.0.0: any other is answered `400`, naming it — `1.19.0` for upstream's `1.19`.                                                                                                                                                                                                                                                                  |
+| `GET /api/v1/packages/{agent_type}/{version}`                                          | One Package.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `PUT /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}`                      | Upload one platform's artifact (the raw body); new bytes remove the entry's signature. `409` while the Package is rolled out to an Agent. The signature is written through the entry's signature route.                                                                                                                                                                                                                                                  |
+| `PUT` / `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}/signature` | Record or remove that entry's Ed25519 signature. Body: `{"signature": "<hex>"}`. `404` for an entry that does not exist, `400` for an empty or malformed signature, `409` while the Package is rolled out to an Agent. The answer is the Package, with the entry's `signature_state`.                                                                                                                                                                    |
+| `DELETE /api/v1/packages/{agent_type}/{version}/entries/{os}/{arch}`                   | Remove one entry. `409` while the Package is rolled out to an Agent.                                                                                                                                                                                                                                                                                                                                                                                     |
+| `DELETE /api/v1/packages/{agent_type}/{version}`                                       | Remove the Package, and take it out of every Deployment that holds it. `409` while an Agent's assignment pins it, saying how many. Uninstalls nothing.                                                                                                                                                                                                                                                                                                   |
+| `GET /api/v1/packages/{agent_type}/{version}/file?os=…&arch=…`                         | The artifact bytes — where an offered `download_url` points. **The one route on the Agent plane** (`:4320`), and never guarded by `[rest.auth]`: it is not in the OpenAPI document for the same reason. It requires the host's access token, and a request without a valid one is answered `401`. It serves only an artifact offered to an Agent of the host, and answers every other request `404`, as for an artifact that does not exist.             |
+| `GET /api/v1/deployments`                                                              | Every Deployment, with its channel, its Packages, its Configurations, and the three reach counts.                                                                                                                                                                                                                                                                                                                                                        |
+| `PUT /api/v1/deployments/{name}`                                                       | Create one or re-aim it. Body: `{"selector": {…}}` — **never empty** (`400`). **Distributes nothing**.                                                                                                                                                                                                                                                                                                                                                   |
+| `GET` / `DELETE /api/v1/deployments/{name}`                                            | One Deployment; `DELETE` is `409` while an Agent's assignment names it, saying how many, and uninstalls nothing.                                                                                                                                                                                                                                                                                                                                         |
+| `PUT /api/v1/deployments/{name}/selector`                                              | Re-aim it. Never distributes.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `PUT /api/v1/deployments/{name}/packages/{agent_type}/{version}`                       | Put a Package in the channel. `409` on a second of an Agent type it already holds; `?replace=true` swaps it. `404` for a Package nobody uploaded.                                                                                                                                                                                                                                                                                                        |
+| `DELETE /api/v1/deployments/{name}/packages/{agent_type}/{version}`                    | Take it out. Never refused for being rolled out: the next press drops it from the Agents' release.                                                                                                                                                                                                                                                                                                                                                       |
+| `PUT` / `DELETE /api/v1/deployments/{name}/configurations/{configuration}`             | Put a Configuration in the channel, or take it out. `404` for a Configuration the Server does not hold, or, on `DELETE`, one the channel does not hold. **Distributes nothing**.                                                                                                                                                                                                                                                                         |
+| `POST /api/v1/deployments/{name}/rollout`                                              | Roll it out to every Agent it claims and would move — its Packages and Configurations in one release, the moment a rollout starts. Agents another Deployment also claims are skipped and reported as conflicts. `409` while the channel holds no Package and no Configuration, and `409` naming each Package and platform while any entry of a Package it holds lacks a signature.                                                                       |
 
 The package routes answer `404` while package delivery is not configured on this
 Server.
@@ -1814,26 +1439,21 @@ the Server's own.
 reports `supervisor.kind.*` — and one per Supervisor. The labels set on the
 Client's own Agent hold for its other Agents too, below their own labels: a
 Supervisor Agent labelled `ring = late` stays in that ring whatever its Client
-is labelled. The Server tells a Client's Agents apart by the Host they arrived
-over. Behind a Gateway it groups them by the `host.id` they report, or by
-`host.name` where they report no `host.id`. Where such a group holds more than
-one Client Agent — two Clients on one machine behind one Gateway — no Agent of
-it inherits anything, and the fleet view marks them as ambiguous. The Agents tab
+is labelled. The Server tells a Client's Agents apart by the host they
+reported under: the Agents of one host are one group. Where a group holds more
+than one Client Agent, no Agent of it inherits anything, and the fleet view
+marks them as ambiguous. The Agents tab
 shows inherited labels on each Agent, marked as such.
 
 **What a Selector matches** is each Agent's effective description, the same for
 every Deployment. For each key it takes the first source that has it:
 
-1. `fleet.host.country`, `fleet.host.state`, `fleet.host.locality`,
-   `fleet.host.organization`, `fleet.host.site` (the organizational unit) and
-   `fleet.host.organization_id` — the subject values of the Host the Agent
-   arrived over directly. An Agent behind a Gateway has none.
-2. What the Agent reported: identifying attributes, then non-identifying ones. A
+1. What the Agent reported: identifying attributes, then non-identifying ones. A
    reported attribute whose key starts with `fleet.` is left out and listed in
-   `ignored_attributes` on its fleet row, so no Agent can claim another Host's
-   values.
-3. The Agent's own labels.
-4. The labels of its Client Agent.
+   `ignored_attributes` on its fleet row, so no Agent can speak in the Server's
+   name.
+2. The Agent's own labels.
+3. The labels of its Client Agent.
 
 **Labels are yours, not the Agent's.** They never travel to it; the Agent only
 ever experiences the effect, which is the configuration and the software it is
@@ -1850,13 +1470,11 @@ A host that was decommissioned leaves a row behind, and nothing ages it out.
 drops what this Server knows about that Agent.
 
 **It does nothing on the machine.** No process is stopped, nothing is
-uninstalled, and nothing is revoked: a certificate proves _fleet membership_ and
-its host, never which Agent is speaking, so forgetting one Agent has nothing of
-it to take away. To shut a host out,
-[revoke its certificate](#revocation-withdrawing-a-certificate). A Client that
-is still running and still pointed at this Server reports again within its
-polling or heartbeat interval and the row comes back. Forgetting tidies the
-view; **to remove an agent for good, stop it on the host**
+uninstalled, and nothing is revoked: a token proves the host, never which Agent
+is speaking, so forgetting one Agent leaves the host's client and token as they
+are. A Client that is still running and still pointed at this Server reports
+again within its polling or heartbeat interval and the row comes back.
+Forgetting tidies the view; **to remove an agent for good, stop it on the host**
 (`supervisor service uninstall`) and then forget it here.
 
 It is refused with `409` while the Agent is still reporting — connected, and
@@ -1874,29 +1492,26 @@ configuration is applied again, which for a managed agent is one restart. That
 is the price of forgetting something that was not really gone.
 
 **Its labels go with it.** They are part of the Agent's record, so an Agent that
-comes back is labelled only by what its Client Agent's labels give it. The Host
-it arrived over stays until no certificate naming it is valid (see
-[Hosts](#hosts)).
+comes back is labelled only by what its Client Agent's labels give it.
 
 **Its binding goes with it.** The Agent's `instance_uid` is released from the
-Host it was bound to, so its next report binds it to the host whose certificate
-carries that report. Forgetting an Agent that still runs elsewhere lets the next
-host that reports it take it.
+host it was recorded under, so its next report records it under the host whose
+token carries that report. Forgetting an Agent that still runs elsewhere lets
+the next host that reports it take it.
 
 Nothing expires on its own: there is no retention sweep and no inactivity
 timeout, so a row stays until someone forgets it.
 
 ## Authentication
 
-The Agent plane admits by **client certificate alone**; see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection). It has no credential
-of its own, and `server.toml` has no `[auth]` section: one that is present is
-refused at startup, naming `[auth]`. `/v1/opamp` and the download route read no
-`Authorization` header and send no `WWW-Authenticate` challenge. A refusal
-behind the handshake — a revoked certificate, or a bootstrap certificate on the
-download route — is answered `401`.
+The Agent plane admits by **access token**; see
+[How a host joins the fleet](#how-a-host-joins-the-fleet). `server.toml` holds no
+credential for it, and an `[auth]` section is refused at startup, naming
+`[auth]`. `/v1/opamp` and the download route read `Authorization: Bearer
+<token>`, and a request without a valid token is answered `401` with a
+`WWW-Authenticate: Bearer` challenge.
 
-The Operator plane is the one with a credential,
+The Operator plane is the one with a credential in `server.toml`,
 [`[rest.auth]`](#the-operator-plane-restauth) below. It never reaches an Agent's
 host.
 
@@ -1919,12 +1534,17 @@ $argon2id$v=19$m=19456,t=2,p=1$…
 showing it on a terminal, and prints the hash to paste.
 
 The package download route sits outside `[rest.auth]`: it is guarded by the
-client certificate the handshake requires, and its content hash and signature
-protect what it serves.
+host's access token, and its content hash and signature protect what it serves.
+
+The records in `data_dir` are not `server.toml`. A Space's enrolment key is
+stored whole in `spaces/`, so it can be read again, and every client keeps only
+the SHA-256 of its secret and of its token ([How a host joins the
+fleet](#how-a-host-joins-the-fleet)).
 
 ### Repeated failures are throttled
 
-`[admission_throttle]` limits how often one peer address may fail admission:
+`[admission_throttle]` limits how often one peer address may fail to
+authenticate:
 
 ```toml
 [admission_throttle]
@@ -1933,85 +1553,65 @@ window_secs = 60
 backoff_secs = 300     # how long the address is answered 429
 ```
 
-Every `401` on `/v1/opamp` and on the download route counts as a failure of the
-peer's IP address. An address that reaches `max_failures` within `window_secs`
-is in back-off for `backoff_secs`. During the back-off each request is answered
-`429` with `Retry-After` set to the seconds remaining, before anything else is
-checked. A WebSocket upgrade is refused the same way before it completes. A
-successful admission clears nothing — behind a shared address a member's success
-would wipe a guesser's count — so failures only age out of the window. On the
-Agent plane a `401` follows a handshake that succeeded, so the throttle bounds
-what a refused host that keeps retrying costs in handshakes, revocation lookups
-and log lines. The Operator plane counts its own `401`s the same way, in a
-table of its own. `0` for any of the three keys is refused at startup.
+On the Agent plane a refused authentication counts as a failure of the peer's
+IP address: a `401`, or a `400` that carries a `WWW-Authenticate` challenge, from
+`/v1/enrol`, `/v1/token`, `/v1/opamp` (either transport) or the package
+download. An address that reaches `max_failures` within `window_secs` is in
+back-off for `backoff_secs`. During the back-off each request to those routes is
+answered `429` with `Retry-After` set to the seconds remaining, before anything
+else is checked. A WebSocket upgrade is refused the same way before it
+completes. A successful request clears nothing — behind a shared address one
+host's success would wipe another's count — so failures only age out of the
+window. An IPv6 address is counted by its /64.
 
-### How often a member may be heard
+A refusal that comes after authentication counts for nothing: an
+`invalid_client_metadata` or an `invalid_scope`, a `400 invalid_request` of
+`/v1/token` that carries no challenge, or a download answered `404`. The Operator
+plane counts its own `401`s the same way, in a table of its own: an address in
+back-off on one plane is still answered on the other. `0` for any of the three
+keys is refused at startup.
 
-A certificate admits a member; `[agent_rate_limit]` bounds how often it is heard
-after that:
+### How often a host may be heard
+
+Admission lets a host in; `[agent_rate_limit]` bounds how often it is heard after
+that:
 
 ```toml
 [agent_rate_limit]
-messages_per_sec = 10            # tokens a host's or an Agent's bucket gains per second
-burst = 300                      # that bucket's capacity; a new bucket starts full
-gateway_messages_per_sec = 500   # tokens a marked Gateway's aggregate gains per second
-gateway_burst = 10000            # the aggregate's capacity
+messages_per_sec = 10   # tokens a host's bucket gains per second
+burst = 300             # that bucket's capacity; a new bucket starts full
 ```
 
 Each message on `/v1/opamp`, over either transport, takes one token before
 anything else is done with it, and so does each request on the package download
-route once the certificate is admitted. A message that cannot be decoded is
-counted too. The bucket is:
+route once its token is admitted. A message that cannot be decoded is counted
+too. The bucket is the host's — the client the token names — so every Agent of a
+host shares it.
 
-- the host the certificate names;
-- the certificate's issuer and serial, for a certificate an operator provisioned
-  that names no host yet;
-- the peer address, an IPv6 one by its /64, on an enrolment connection: one
-  bootstrap certificate may serve the whole fleet;
-- for a host marked as a Gateway, two buckets, and a message takes a token from
-  both: the bucket of the Agent it names, sized by `messages_per_sec` and
-  `burst`, and the Gateway's aggregate, sized by the `gateway_` keys. A message
-  naming no valid `instance_uid`, an undecodable one and a download count in the
-  aggregate alone. A message carrying an enrolment request through the Gateway
-  takes from neither, so enrolments never spend what the Gateway's members need.
-  Once the bootstrap certificate its proof names parses and a bootstrap CA of
-  `[enrolment]` issued it, it takes a token from that certificate's bucket,
-  sized by `messages_per_sec` and `burst`, and one from the Gateway's enrolment
-  aggregate, sized by the `gateway_` keys, so one bootstrap certificate cannot
-  spend another's tokens. One that fails that check takes a token from the
-  Gateway's bucket for unchecked enrolments alone, sized by `messages_per_sec`
-  and `burst`, and is answered `BadRequest`. Marking or unmarking a Gateway
-  takes effect at its next message.
+A message past the limit is not processed: no record changes. It is answered with
+the message's own `instance_uid` and `error_response` `Unavailable` with
+`retry_info` of 30 seconds, on plain HTTP in the body of a `200`. The connection
+stays open. A Client waits the 30 seconds, and the next message the Server
+processes from that Agent is asked for a full report, so nothing is lost. A
+download past the limit is answered `429` with `Retry-After: 30`; it is no
+failure toward `[admission_throttle]`, and the Client waits it out before it asks
+again, for up to 30 minutes per download. Beyond this limit the Server honours
+the protocol's error and retry semantics as well, and answers malformed input
+with `BAD_REQUEST`.
 
-A message past the limit is not processed: no record changes and no certificate
-is signed. It is answered with the message's own `instance_uid` and
-`error_response` `Unavailable` with `retry_info` of 30 seconds, on plain HTTP in
-the body of a `200`. The connection stays open. A Client waits the 30 seconds,
-and the next message the Server processes from that Agent is asked for a full
-report, so nothing is lost. A download past the limit is answered `429` with
-`Retry-After: 30`; it is no failure toward `[admission_throttle]`, and the
-Client waits it out before it asks again, for up to 30 minutes per download.
-Beyond this limit the Server honours the protocol's error and retry semantics as
-well, and answers malformed input with `BAD_REQUEST`.
-
-Every refusal is logged as `agent_rate.throttled`, naming the host, the
-certificate's serial and CA role (`authority`), the `instance_uid`, the `bucket`
-that was empty (`agent`, `host` or `gateway`; for an enrolment request through a
-Gateway `bootstrap` for its certificate's bucket, `enrolment` for the Gateway's
-enrolment aggregate, `unchecked_enrolment` for its bucket for unchecked
-enrolments) and the `route` (`opamp` with its `transport`, or `download`), at
-`debug`. Nothing aggregates them: a host that floods writes one line per
-refusal.
+Every refusal is logged as `agent_rate.throttled`, naming the host, the peer
+address and the route (`opamp` with its `transport` and the `instance_uid`, or
+`download`), at `debug`. Nothing aggregates them: a host that floods writes one
+line per refusal.
 
 The default `burst` lets one full report from each of the 256 Agents a host may
 speak for through after a reconnect. `messages_per_sec` times the offered
 `[connection_offer] heartbeat_interval_secs`, or 30 seconds without one, is how
 many Agents one host can report for at that interval; the Server logs a warning
-at startup naming both keys when that is below 256. The buckets live in memory:
-the subjects and aggregates up to the certificate register's 100 000, the Agents
-behind Gateways up to `max_agents`, and a full table forgets the bucket used
-least recently. `0` for any key is refused at startup; no value switches the
-limit off.
+at startup naming both keys when that is below 256. The buckets live in memory,
+at most 100 000 of them, and a full table forgets the bucket used least
+recently. `0` for any key is refused at startup; no value switches the limit
+off.
 
 ### The Operator plane: `[rest.auth]`
 
@@ -2050,37 +1650,6 @@ Server still manages one fleet. And Basic sends a reusable password on **every**
 request. The plane always serves TLS 1.3, so the password never crosses the
 network in cleartext, and `server.toml` holds only its Argon2id hash.
 
-## Upgrading to admission by certificate alone
-
-The Agent plane admits a Client by its client certificate alone and reads no
-`Authorization` header: a Client that sends one is admitted on its certificate,
-and the header is ignored. A Client sends no credential, so a Server that still
-demands one answers it `401`. **Upgrade the Server first, then its Clients.**
-
-1. **Delete the credential from `server.toml`.** Remove the `[auth]` section,
-   and the credential keys `bearer_token_file`, `username`, `password_file`,
-   `bearer_token` and `password` from `[connection_offer]`; a
-   `[connection_offer]` left with neither `heartbeat_interval_secs` nor
-   `endpoint` goes whole. The Server refuses to start while either remains, and
-   says which:
-
-   ```text
-   server.toml: [auth] is refused — the Agent plane admits by client certificate alone; remove the section
-   server.toml: [connection_offer] bearer_token_file is refused — the Agent plane admits by client certificate alone, so no credential is offered; remove the key
-   ```
-
-   A file the offered credential was read from can be deleted. `[rest.auth]`
-   stays as it is.
-
-2. **Start the Server.** Every Client that holds a valid certificate keeps
-   connecting. A credential revocation in the persisted list is dropped when it
-   is loaded, with one log line, and the list is written back without it.
-3. **Upgrade the Clients**, through the self-update or by package. A Client
-   sends no credential, ignores a leftover `[auth]` in `supervisor.toml` with a
-   notice at startup, and drops an `Authorization` header a credential rotation
-   left in its persisted connection settings, rewriting the file without it (see
-   [the Client](client.md#a-leftover-auth)).
-
 ## TLS
 
 `[tls]` is required, and it turns **both listeners** into HTTPS/WSS listeners:
@@ -2091,8 +1660,8 @@ beside either of them. Every connection speaks TLS 1.3 alone, with the three TLS
 connect. Clients use `wss://` or `https://` endpoints, and Clients trusting a
 private CA set `ca_file` in their own `[tls]` section.
 
-The same section names the CA a **client certificate** must chain to: see
-[Mutual TLS](#mutual-tls-proving-who-is-on-the-connection).
+Neither plane asks a peer for a client certificate: a host proves itself with
+its access token ([How a host joins the fleet](#how-a-host-joins-the-fleet)).
 
 ### Bounds on every listener
 
@@ -2173,11 +1742,10 @@ new endpoint without touching every host. The Server compiles the section into
 one hash-gated offer, and every Agent that accepts connection settings gets it,
 **verifies it by actually connecting**, and switches only on success. An Agent
 that cannot connect with the offered settings keeps the ones it has and reports
-the failure. An offer goes only to an Agent admitted with a certificate from the
-client CA; an enrolling host receives none but the certificate it asked for.
+the failure.
 
-The offer carries **no credential and no `headers`**: the Agent plane reads no
-`Authorization`, so an offered one would be a value nothing reads. A credential
+The offer carries **no credential and no `headers`**: a host presents the access
+token it holds, so an offered credential would be a value nothing reads. A credential
 key in the section — `bearer_token_file`, `username`, `password_file`,
 `bearer_token`, `password` — is refused at startup, naming the key. A Client
 that is offered `headers` by another Server applies the rest of the offer and
@@ -2191,8 +1759,7 @@ be the Server for its Client. A development setup on the loopback names its
 plaintext endpoint in `supervisor.toml` instead.
 
 The standing offer carries no `tls` and no `proxy`: there is no configuration
-surface for them. A `certificate` travels in an offer only as the answer to an
-Agent's signing request.
+surface for them.
 
 ## What the Server does not do
 

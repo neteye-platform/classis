@@ -2,8 +2,8 @@
 //!
 //! `server pki status` says when each certificate the Server host depends on ends, and the running
 //! Server reads the same ends and warns before one of them does. The Server makes no certificate
-//! authority, no server certificate and no bootstrap certificate: those are made by the operator
-//! tool's `pki` commands, on the operator's machine (ADR-0028). When a certificate counts as ending
+//! authority and no server certificate: those are made by the operator tool's `pki` commands, on
+//! the operator's machine (ADR-0028). When a certificate counts as ending
 //! is [`classis_core::ending`], so both programs judge alike.
 
 use std::path::{Path, PathBuf};
@@ -65,23 +65,15 @@ pub fn read_ending(file: &Path) -> Result<Ending, String> {
 }
 
 /// The certificates a running Server depends on (ADR-0028 clause 11): its own on each plane
-/// (ADR-0032), the client CA as both `[tls]` and `[client_ca]` name it, and the bootstrap CA. Each
-/// file once.
+/// (ADR-0032). Each file once.
 #[must_use]
 pub fn depended_on(config: &ServerConfig) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if let Some(tls) = &config.tls {
         files.push(tls.cert_file.clone());
-        files.extend(tls.client_ca_file.clone());
     }
     if let Some(operator) = &config.rest.tls {
         files.push(operator.cert_file.clone());
-    }
-    if let Some(ca) = &config.client_ca {
-        files.push(ca.cert_file.clone());
-    }
-    if let Some(enrolment) = &config.enrolment {
-        files.push(enrolment.bootstrap_ca_file.clone());
     }
     let mut seen = std::collections::HashSet::new();
     files.retain(|file| seen.insert(file.clone()));

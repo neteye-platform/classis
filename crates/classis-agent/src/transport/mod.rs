@@ -31,88 +31,33 @@ pub(crate) struct Upstream<'a> {
     pub config: &'a mut ClientConfig,
     pub shutdown: Shutdown,
     pub telemetry: &'a crate::telemetry::Telemetry,
-    /// An enrolment report was answered `BadRequest` on this run: the Client reports as a member
-    /// until an exchange fails, since the certificate it presents may be one an operator
-    /// provisioned rather than a bootstrap certificate.
-    pub enrolment_refused: bool,
-}
-
-/// Whether this Client enrols over plain HTTP (ADR-0039 clause 11): it holds no certificate the
-/// Server issued, it presents one — the bootstrap certificate, or one an operator provisioned,
-/// which it cannot tell apart — and its endpoint is `https://` or `http://`. It then sends one
-/// report, its certificate signing request and nothing else, which is all a Server reads on an
-/// enrolment connection. Over WebSocket it enrols as before.
-fn enrols_over_http(config: &ClientConfig) -> bool {
-    !config.is_enrolled()
-        && (config.bootstrap_identity.is_some() || config.client_identity().is_some())
-        && (config.endpoint.starts_with("https://") || config.endpoint.starts_with("http://"))
-}
-
-impl Upstream<'_> {
-    fn enrolling(&self) -> bool {
-        !self.enrolment_refused && enrols_over_http(self.config)
-    }
-
-    /// The enrolment report, while this Client enrols over plain HTTP: the request in flight, or a
-    /// new one — whatever the Server has declared, since on an enrolment connection nothing else
-    /// reaches it.
-    fn enrolment(&mut self) -> Option<Vec<AgentToServer>> {
-        if !self.enrolling() {
-            return None;
-        }
-        let csr = crate::csr::request(self.config)?;
-        Some(self.engine.enrolment_report(csr).into_iter().collect())
-    }
 }
 
 impl Session for Upstream<'_> {
     fn connected(&mut self) -> Vec<AgentToServer> {
         self.engine.force_full_all();
-        if let Some(enrolment) = self.enrolment() {
-            return enrolment;
-        }
         self.engine.poll_reports()
     }
 
     fn routine(&mut self) -> Vec<AgentToServer> {
-        if let Some(enrolment) = self.enrolment() {
-            return enrolment;
-        }
         self.engine.poll_reports()
     }
 
     fn owed(&mut self) -> Vec<AgentToServer> {
-        // An enrolling Client owes nothing but its request, which the next poll re-sends.
-        if self.enrolling() {
-            return Vec::new();
-        }
         self.engine.owed_reports()
     }
 
     fn on_reply(&mut self, reply: &ServerToAgent) -> Option<Duration> {
-        if self.enrolling()
-            && reply.error_response.as_ref().is_some_and(|error| {
-                error.r#type == opamp::proto::ServerErrorResponseType::BadRequest as i32
-            })
-        {
-            tracing::warn!(
-                "the Server refused the enrolment request; reporting as a member until an \
-                 exchange fails"
-            );
-            self.enrolment_refused = true;
-        }
         self.engine.handle(reply).retry_after
     }
 
     async fn after_reply<S: ReportSink>(&mut self, sink: &mut S) -> AfterReply {
-        let enrolling = self.enrolling();
         after_reply(
             self.engine,
             self.config,
             &self.shutdown,
             self.telemetry,
             sink,
-            enrolling,
         )
         .await
     }
@@ -122,8 +67,6 @@ impl Session for Upstream<'_> {
     }
 
     fn exchange_failed(&mut self) {
-        // A refusal is judged again: a window opened since may take it now.
-        self.enrolment_refused = false;
         self.engine.force_full_all();
     }
 
@@ -135,10 +78,12 @@ impl Session for Upstream<'_> {
         self.engine.disconnect_messages()
     }
 
-    /// The Client sends no credential upstream (ADR-0021 clause 3), so it has none to replace: a
-    /// `401` is met as before, with a back-off on a WebSocket and a lost exchange on plain HTTP.
-    fn unauthorized(&mut self, _: &[String]) -> bool {
-        false
+    /// Only a `401` whose Bearer challenge says `error="invalid_token"` asks for a new token, and
+    /// only of a host that is enrolled: it ends the run, which [`run`] answers by asking for one.
+    /// A bare `401`, or one the token cannot answer, keeps the driver's own back-off and retry
+    /// (ADR-0064 clause 7).
+    fn unauthorized(&mut self, challenges: &[String]) -> bool {
+        self.config.credentials.is_some() && crate::packages::invalid_token(challenges)
     }
 }
 
@@ -156,22 +101,17 @@ async fn flush_owed<S: ReportSink>(engine: &mut Engine, sink: &mut S) -> Result<
 ///
 /// 1. A connection-settings offer (ADR-0014) — verified OpAMP settings end the
 ///    connection; an offer applied in place owes its acknowledgement now.
-/// 2. Ask for a certificate, now that the Server's capabilities are known and an offered
-///    certificate is in force (ADR-0021).
-/// 3. Offered packages are downloaded and verified (ADR-0026).
-/// 4. **The self-update restart, before anything is applied after it.** The `Installing` the
+/// 2. Offered packages are downloaded and verified (ADR-0026).
+/// 3. **The self-update restart, before anything is applied after it.** The `Installing` the
 ///    package step just owed is the last thing this version says (ADR-0018). It ends the run, so
 ///    `AfterReply::End` means exactly this.
-/// 5. The self-Agent's Supervisor set (ADR-0017), whose retired Agents' goodbyes go out with it.
-///
-/// While `enrolling` over plain HTTP the request rides the enrolment report instead (ADR-0039).
+/// 4. The self-Agent's Supervisor set (ADR-0017), whose retired Agents' goodbyes go out with it.
 pub async fn after_reply<S: ReportSink>(
     engine: &mut Engine,
     config: &mut ClientConfig,
     shutdown: &Shutdown,
     telemetry: &crate::telemetry::Telemetry,
     sink: &mut S,
-    enrolling: bool,
 ) -> AfterReply {
     match process_connection_offer(engine, config, telemetry).await {
         OfferOutcome::Reconnect => return AfterReply::Reconnect,
@@ -182,16 +122,13 @@ pub async fn after_reply<S: ReportSink>(
         }
         OfferOutcome::None => {}
     }
-    // Only after the offer: one that carries the certificate a request asked for answers it, and a
-    // request queued before it would ride the next connection and be signed a second time. A
-    // request queued after an earlier reply has left already: an offer always owes a report, which
-    // goes out before this runs on WebSocket and is the report the offer answers on plain HTTP.
-    if !enrolling {
-        engine.request_certificate(|| crate::csr::request(config));
-    }
     if flush_owed(engine, sink).await.is_err() {
         return AfterReply::ConnectionLost;
     }
+    let token = config
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.access_token.clone());
     if process_package_downloads(engine, config, shutdown, sink).await
         && flush_owed(engine, sink).await.is_err()
     {
@@ -199,6 +136,18 @@ pub async fn after_reply<S: ReportSink>(
     }
     if engine.restart_for_update() {
         return AfterReply::End;
+    }
+    // A download the Server refused for its token asked for a new one, and a new token ends the
+    // sessions the old one admitted, and is not the one this connection carries: the connection is
+    // built again with it (ADR-0064 clause 6).
+    let renewed = config
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.access_token.as_str())
+        != token.as_ref().map(|token| token.as_str());
+    if renewed {
+        reapply_telemetry(engine, config, telemetry);
+        return AfterReply::Reconnect;
     }
     if process_self_configuration(engine, config, shutdown, sink).await
         && flush_owed(engine, sink).await.is_err()
@@ -221,7 +170,7 @@ pub async fn after_reply<S: ReportSink>(
 /// (ADR-0026 clause 49) — and nothing is reported for it.
 pub async fn process_package_downloads<S: ReportSink>(
     engine: &mut Engine,
-    config: &ClientConfig,
+    config: &mut ClientConfig,
     shutdown: &Shutdown,
     sink: &mut S,
 ) -> bool {
@@ -253,9 +202,13 @@ pub async fn process_package_downloads<S: ReportSink>(
         // rename beside the download rather than a copy across filesystems. Keyed by the block
         // name behind the Agent, never by index — the Agent set can change at runtime (ADR-0017).
         let staging_dir = config.staging_dir_for(engine.block_name(index));
-        let download =
-            crate::packages::download_and_verify(&package, config, &staging_dir, &progress)
-                .instrument(span.clone());
+        let download = crate::packages::download_and_verify_renewing(
+            &package,
+            &mut *config,
+            &staging_dir,
+            &progress,
+        )
+        .instrument(span.clone());
         tokio::pin!(download);
         // Poll the download and a ticker together: every tick turns the progress the download has
         // been writing into a status report, without the download itself knowing about reporting.
@@ -272,6 +225,9 @@ pub async fn process_package_downloads<S: ReportSink>(
                 }
             }
         };
+        // Whether the download asked for a new token shows in the configuration, which the caller
+        // reads.
+        let (result, _) = result;
         match result {
             Ok(staged) => {
                 engine.apply_package(index, staged, version, hash, &span);
@@ -349,7 +305,7 @@ pub enum OfferOutcome {
 ///    telemetry destination cannot be proved that way and is not: a receiver that is momentarily
 ///    down is not an offer that is wrong.
 /// 2. **Persist, then apply telemetry from what was persisted** — never from the raw offer. An
-///    offer that says nothing about telemetry — an endpoint move, a heartbeat, a certificate —
+///    offer that says nothing about telemetry — an endpoint move, a heartbeat —
 ///    would otherwise compare against `metrics: None, traces: None, logs: None` and
 ///    tear down exporters the Server never mentioned. `merge` is what puts those back. What it no
 ///    longer puts back is a signal left out of an offer that *does* name one: that is a stop, and
@@ -396,15 +352,6 @@ pub async fn process_connection_offer(
             engine.connection_settings_outcome(&offer.hash, Err(&e));
             return OfferOutcome::Applied;
         }
-        // The issued certificate is stored only now, after connecting with it proved it works — the
-        // old one stays in force until here (ADR-0021).
-        if let Some(certificate) = &settings.certificate {
-            if let Err(e) = crate::csr::accept(&config.state_dir, &certificate.cert) {
-                tracing::warn!(error = %e, "cannot store the issued certificate");
-            } else {
-                tracing::info!("a client certificate was issued and is now in force");
-            }
-        }
         if let Err(e) = crate::connection::unhonoured(settings) {
             tracing::warn!(error = %e, "connection settings partly applied");
             errors.push(e);
@@ -443,24 +390,27 @@ pub async fn process_connection_offer(
     }
 }
 
-/// The upstream connection `supervisor.toml` describes, with the client identity in force
-/// (ADR-0021).
+/// The upstream connection `supervisor.toml` describes.
 ///
 /// # Errors
 /// Returns an error when a TLS file cannot be read.
 pub fn connection(config: &ClientConfig) -> Result<Connection, String> {
-    Ok(connection_with(config, crate::tls::client_tls(config)?))
+    Ok(connection_with(config, crate::tls::trust(config)?))
 }
 
-/// The same connection with other TLS material — a candidate certificate under test.
+/// The same connection with other TLS material — a candidate under test.
 ///
-/// It carries no `Authorization`: the Server admits by the client certificate alone, and this
-/// Client sends no credential upstream (ADR-0021 clause 3).
+/// It carries the host's access token, as every OpAMP connection of an enrolled host does
+/// (ADR-0064 clause 7), and never a credential the Server offered: the settings an offer carries
+/// are the Server's word on where to connect, not on what to present there.
 #[must_use]
 pub fn connection_with(config: &ClientConfig, tls: ClientTls) -> Connection {
     Connection {
         endpoint: config.endpoint.clone(),
-        authorization: None,
+        authorization: config
+            .credentials
+            .as_ref()
+            .map(|credentials| credentials.authorization().to_string()),
         tls,
         max_message_size: config.max_message_size_bytes,
         // The heartbeat (ReportsHeartbeat, Baseline default 30 s; 0 disables).
@@ -473,6 +423,11 @@ pub fn connection_with(config: &ClientConfig, tls: ClientTls) -> Connection {
 /// Runs the Engine's Agents over the connection `config` describes, on the transport its endpoint
 /// names, until the run ends.
 ///
+/// A connection the Server refuses with `invalid_token` ends its run, and the Client asks for a new
+/// token, keeps it, builds the connection again — its headers are fixed when it is built — and goes
+/// on (ADR-0064 clause 7). A new token the Server refuses again at once is asked for after a
+/// back-off, as is one that could not be had.
+///
 /// # Errors
 /// Returns an error when the connection cannot be built.
 pub async fn run(
@@ -481,25 +436,77 @@ pub async fn run(
     shutdown: &mut Shutdown,
     telemetry: &crate::telemetry::Telemetry,
 ) -> Result<RunOutcome, String> {
-    let connection = connection(config)?;
-    let mut session = Upstream {
-        engine,
-        config,
-        shutdown: shutdown.clone(),
-        telemetry,
-        enrolment_refused: false,
-    };
-    Ok(
+    let mut backoff = opamp::client::Backoff::new();
+    let mut renewed_at: Option<std::time::Instant> = None;
+    loop {
+        let connection = connection(config)?;
+        let mut session = Upstream {
+            engine: &mut *engine,
+            config: &mut *config,
+            shutdown: shutdown.clone(),
+            telemetry,
+        };
         match opamp::client::connection::run(&connection, &mut session, shutdown).await? {
-            Ended::Stopped => RunOutcome::Shutdown,
-            Ended::Reconnect => RunOutcome::Reconfigured,
+            Ended::Stopped => return Ok(RunOutcome::Shutdown),
+            Ended::Reconnect => return Ok(RunOutcome::Reconfigured),
             // The only end the Client asks for is the self-update restart (ADR-0018).
-            Ended::End => RunOutcome::RestartForUpdate,
-            Ended::Unauthorized { .. } => {
-                unreachable!("the session never ends a run on a 401")
+            Ended::End => return Ok(RunOutcome::RestartForUpdate),
+            Ended::Unauthorized { .. } => {}
+        }
+        // A new token asked for at once after the last one is asked for after a back-off.
+        if renewed_at.is_some_and(|at| at.elapsed() < RENEWAL_SETTLES) {
+            let delay = backoff.advance();
+            if wait(delay, engine, shutdown).await {
+                return Ok(RunOutcome::Shutdown);
             }
-        },
-    )
+        } else {
+            backoff.reset();
+        }
+        tracing::warn!("the Server refused the access token (invalid_token); requesting a new one");
+        match crate::enrolment::renew(config).await {
+            Ok(()) => {
+                tracing::info!("a new access token is in force");
+                renewed_at = Some(std::time::Instant::now());
+                reapply_telemetry(engine, config, telemetry);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot get a new access token");
+                renewed_at = Some(std::time::Instant::now());
+                if wait(backoff.advance(), engine, shutdown).await {
+                    return Ok(RunOutcome::Shutdown);
+                }
+            }
+        }
+    }
+}
+
+/// How long after a new token a refusal of it counts as the same refusal still, not a new one.
+const RENEWAL_SETTLES: Duration = Duration::from_secs(60);
+
+/// Waits `delay`, or until the run is stopped, which stops what the Agents run first. `true` when
+/// it was stopped.
+async fn wait(delay: Duration, engine: &mut Engine, shutdown: &mut Shutdown) -> bool {
+    tokio::select! {
+        () = tokio::time::sleep(delay) => false,
+        () = shutdown.requested() => {
+            engine.shutdown_processes().await;
+            true
+        }
+    }
+}
+
+/// Puts the destinations in force again, so that the exporters that reach the Server's own origin
+/// carry the token that is in force now: a new token ends the one they were built with.
+fn reapply_telemetry(
+    engine: &Engine,
+    config: &ClientConfig,
+    telemetry: &crate::telemetry::Telemetry,
+) {
+    if let Some(stored) = crate::connection::load(&config.state_dir) {
+        for refused in telemetry.apply(&stored, &engine.self_description(), config) {
+            tracing::warn!(reason = %refused, "not reporting own telemetry");
+        }
+    }
 }
 
 /// Why a transport run ended.
@@ -725,7 +732,7 @@ mod tests {
         state.accept_packages();
         let mut engine = Engine::new(vec![state]);
         let uid = engine.poll_reports()[0].instance_uid.clone();
-        let config = ClientConfig {
+        let mut config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),
             package_key: Some(vec![0; 32]),
@@ -763,7 +770,7 @@ mod tests {
         let mut sink = Recorder(Vec::new());
         let processed = tokio::time::timeout(
             Duration::from_secs(10),
-            process_package_downloads(&mut engine, &config, &shutdown, &mut sink),
+            process_package_downloads(&mut engine, &mut config, &shutdown, &mut sink),
         )
         .await
         .expect("the shutdown ended the wait");
@@ -845,7 +852,7 @@ mod tests {
         let uid = engine.poll_reports()[0].instance_uid.clone();
         // A Client that takes packages holds a key, and fetches from its own Server's origin
         // (ADR-0026, ADR-0033).
-        let config = ClientConfig {
+        let mut config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),
             package_key: Some(public),
@@ -878,7 +885,7 @@ mod tests {
 
         let mut sink = Recorder(Vec::new());
         let (_tx, shutdown) = crate::shutdown::shutdown_channel();
-        assert!(process_package_downloads(&mut engine, &config, &shutdown, &mut sink).await);
+        assert!(process_package_downloads(&mut engine, &mut config, &shutdown, &mut sink).await);
 
         // At least one interim report went out while the bytes were still arriving, and it says
         // Downloading — with a percentage that actually moved.

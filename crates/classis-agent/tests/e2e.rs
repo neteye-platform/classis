@@ -312,8 +312,18 @@ async fn a_config_change_reaches_both_supervised_agents_over_one_connection() {
     // uid, matched by the same Selectors — and it takes effect without touching the host's file
     // (ADR-0024, ADR-0017).
     let uid = opamp::uid::InstanceUid::parse(&stub.instance_uid).expect("the uid the Server holds");
+    // The Client's own Agent is in the fleet-wide channel, and a Supervisor's Agent inherits the
+    // labels of the Client Agent on its host below its own (ADR-0035): to leave the channel the
+    // stub states a channel of its own beside the role, which wins over the inherited one.
     assert!(state
-        .set_labels(&uid, [("role".to_string(), "edge".to_string())].into())
+        .set_labels(
+            &uid,
+            [
+                ("role".to_string(), "edge".to_string()),
+                (common::CHANNEL.0.to_string(), "edge-only".to_string()),
+            ]
+            .into()
+        )
         .is_ok());
     let agents = state.snapshot();
     assert_eq!(
