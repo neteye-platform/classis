@@ -9,20 +9,24 @@
 mod agents;
 mod blobs;
 mod bootstrap;
+mod clients;
 mod configs;
 mod deployments;
 mod enrolment;
 mod packages;
 mod revocation;
+mod spaces;
 
 pub use agents::FsAgentStore;
 pub use blobs::FsBlobStore;
 pub use bootstrap::FsBootstrapStore;
+pub use clients::FsClientStore;
 pub use configs::FsConfigBackend;
 pub use deployments::FsDeploymentBackend;
 pub use enrolment::FsEnrolmentStore;
 pub use packages::FsPackageBackend;
 pub use revocation::FsLedgerStore;
+pub use spaces::FsSpaceStore;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -47,6 +51,13 @@ pub const BOOTSTRAP: &str = "bootstrap";
 pub const REVOCATIONS: &str = "revocations.json";
 /// The enrolment window and its pending requests.
 pub const ENROLMENT: &str = "enrolment.json";
+/// One Space per file, named by its lowercase name: the name and the whole enrolment key
+/// (ADR-0064 clause 1). Not in [`DIRECTORIES`]: the Server opens no Space store yet.
+pub const SPACES: &str = "spaces";
+/// One OAuth client per file: its Space, the hash of its secret and the hash and expiry of its one
+/// active token (ADR-0064 clauses 2 to 4). Not in [`DIRECTORIES`]: the Server opens no client
+/// store yet.
+pub const CLIENTS: &str = "clients";
 
 /// Every directory the layout names, in the order the table of ADR-0037 clause 2 lists them.
 pub const DIRECTORIES: [&str; 8] = [

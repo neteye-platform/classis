@@ -2,13 +2,55 @@
 
 use std::path::Path;
 
+/// The Space every host of these tests enrols in.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub const SPACE: &str = "lab";
+
+/// The Agent plane over `state`, as these tests serve it to a Client whose admission is not what
+/// they test: today the plane with an open admission, which checks nothing.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub fn app(state: std::sync::Arc<classis_server::fleet::AppState>) -> axum::Router {
+    classis_server::agent_app(state, classis_server::transport::Admission::open())
+}
+
+/// What a host needs to start against these tests' Servers, for a Client whose state directory is
+/// `state_dir`: the [`client_certificate`] in `dir`, whose `[tls]` table is returned to be appended
+/// at the end of a `supervisor.toml`, and a `state.json` in `state_dir` from [`write_state_json`].
+/// The Client of today reads only the certificate.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub fn client_identity(dir: &Path, state_dir: &Path) -> String {
+    let tls = client_certificate(dir);
+    write_state_json(state_dir, "http://127.0.0.1:9");
+    tls
+}
+
+/// Writes a `state.json` for a host whose Server is not one of these tests' Servers — a stub that
+/// checks no token — with a token nobody issued.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub fn write_state_json(state_dir: &Path, base_url: &str) {
+    std::fs::create_dir_all(state_dir).expect("the state directory");
+    let state = serde_json::json!({
+        "endpoint": base_url,
+        "space": SPACE,
+        "device_id": "0193a6f0-0000-7000-8000-000000000000",
+        "client_secret": "a-client-secret-nobody-issued",
+        "access_token": "a-token-nobody-issued",
+    });
+    std::fs::write(
+        state_dir.join("state.json"),
+        serde_json::to_vec_pretty(&state).expect("json"),
+    )
+    .expect("write state.json");
+}
+
 /// Writes a throwaway self-signed client certificate and key into `dir` and returns the `[tls]`
 /// table that names them, to be appended at the end of a `supervisor.toml`.
 ///
 /// The Client refuses to start without a client certificate (ADR-0021). The test Servers serve
 /// plaintext with an open admission and do not check it, so the files only have to exist and
 /// parse.
-pub fn client_identity(dir: &Path) -> String {
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub fn client_certificate(dir: &Path) -> String {
     let key = rcgen::KeyPair::generate().expect("generate a key");
     let cert = rcgen::CertificateParams::new(vec!["test-agent".into()])
         .expect("certificate parameters")

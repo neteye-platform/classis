@@ -40,8 +40,7 @@ async fn wait_until<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
 async fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = common::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -165,8 +164,11 @@ async fn a_config_change_reaches_both_supervised_agents_over_one_connection() {
         stub_block = stub_block,
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(
+        &config_path,
+        toml + &common::client_identity(dir.path(), &state_dir),
+    )
+    .expect("write supervisor.toml");
 
     // Both owned Supervisors have their program staged before the Client starts, so they run at
     // once rather than waiting for a package (ADR-0017 makes the delivery path owned-only).
@@ -548,7 +550,11 @@ async fn a_refused_supervisor_set_leaves_the_running_supervisors_untouched() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path())).expect("write");
+    std::fs::write(
+        &config_path,
+        toml + &common::client_identity(dir.path(), &state_dir),
+    )
+    .expect("write");
     let written = std::fs::read(&config_path).expect("read");
     stage_owned_program(&state_dir, "stub", &program);
     let _client = spawn_client(&config_path);
@@ -633,8 +639,11 @@ async fn a_server_offers_no_configuration_to_a_listed_supervisor() {
             closed = block("closed"),
         );
         let path = dir.path().join("supervisor.toml");
-        std::fs::write(&path, toml + &common::client_identity(dir.path()))
-            .expect("write supervisor.toml");
+        std::fs::write(
+            &path,
+            toml + &common::client_identity(dir.path(), &state_dir),
+        )
+        .expect("write supervisor.toml");
         path
     };
     stage_owned_program(&state_dir, "open", &program);
@@ -749,8 +758,11 @@ async fn a_server_offers_no_supervisor_set_to_a_host_that_keeps_it() {
             program = program,
             marker = marker.to_string_lossy(),
         );
-        std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-            .expect("write supervisor.toml");
+        std::fs::write(
+            &config_path,
+            toml + &common::client_identity(dir.path(), &state_dir),
+        )
+        .expect("write supervisor.toml");
         std::fs::read(&config_path).expect("read")
     };
     let written = write_config(false);
