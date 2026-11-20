@@ -480,15 +480,17 @@ async fn an_unsigned_offer_or_an_unkeyed_client_fetches_nothing() {
     );
 }
 
-/// One HTTPS origin on its own port that asks for a client certificate without requiring one, and
-/// records whether the download presented one. `/artifact` serves bytes; `/redirect` sends the
+/// One HTTPS origin on its own port, serving a certificate of `pki`, that records the
+/// `Authorization` of every request it was sent. `/artifact` serves bytes; `/redirect` sends the
 /// download on to `next`.
 async fn tls_origin(
     pki: &(rcgen::Issuer<'static, rcgen::KeyPair>, String),
     next: Option<String>,
-) -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    use axum::Extension;
-    use opamp::server::listen::{ClientAuth, Listener, PeerCertificate, ServerTls};
+) -> (
+    SocketAddr,
+    std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+) {
+    use opamp::server::listen::{Listener, ServerTls};
     let key = rcgen::KeyPair::generate().expect("key");
     let cert = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
         .expect("params")
@@ -499,28 +501,27 @@ async fn tls_origin(
             cert_pem: cert.pem().into_bytes(),
             key_pem: key.serialize_pem().into_bytes(),
         },
-        client_auth: ClientAuth::Optional {
-            ca_pem: pki.1.clone().into_bytes(),
-        },
     }
     .rustls_config()
     .expect("tls");
-    let presented = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let seen = presented.clone();
-    let record = move |Extension(peer): Extension<PeerCertificate>| {
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>> = std::sync::Arc::default();
+    let record = {
         let seen = seen.clone();
-        async move {
-            if peer.present() {
-                seen.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
+        move |headers: &axum::http::HeaderMap| {
+            seen.lock().expect("seen").push(
+                headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+            );
         }
     };
     let mut app = Router::new().route(
         "/artifact",
         get({
             let record = record.clone();
-            move |peer| async move {
-                record(peer).await;
+            move |headers: axum::http::HeaderMap| async move {
+                record(&headers);
                 vec![0u8; 64]
             }
         }),
@@ -528,8 +529,8 @@ async fn tls_origin(
     if let Some(next) = next {
         app = app.route(
             "/redirect",
-            get(move |peer| async move {
-                record(peer).await;
+            get(move |headers: axum::http::HeaderMap| async move {
+                record(&headers);
                 Redirect::to(&next)
             }),
         );
@@ -541,15 +542,15 @@ async fn tls_origin(
             .with_tls(config)
             .serve(app),
     );
-    (addr, presented)
+    (addr, seen)
 }
 
-/// This Client's certificate goes to its own Server's origin and to no other: the download from it
-/// presents the certificate, and a redirect to another host is refused before that host is reached
-/// (ADR-0033 clause 13).
-/// Verifies: ADR-0021, ADR-0026, ADR-0033
+/// Over TLS the Client trusts the CA its `[tls] ca_file` names, and its bearer token goes to its
+/// own Server's origin and to no other: the download from it carries the token, and a redirect to
+/// another host is refused before that host is reached (ADR-0033 clause 13, ADR-0064 clause 7).
+/// Verifies: ADR-0021, ADR-0026, ADR-0033, ADR-0064
 #[tokio::test]
-async fn the_client_certificate_goes_to_the_servers_origin_alone() {
+async fn the_bearer_token_goes_to_the_servers_origin_alone_over_tls() {
     opamp::tls::install_ring_provider();
     let ca_key = rcgen::KeyPair::generate().expect("ca key");
     let mut ca_params =
@@ -566,24 +567,11 @@ async fn the_client_certificate_goes_to_the_servers_origin_alone() {
     let (server, server_saw) = tls_origin(&pki, Some(format!("https://{mirror}/artifact"))).await;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let client_key = rcgen::KeyPair::generate().expect("client key");
-    let client_cert = rcgen::CertificateParams::new(vec!["edge-01".to_string()])
-        .expect("params")
-        .signed_by(&client_key, &pki.0)
-        .expect("signed");
-    for (name, pem) in [
-        ("ca.pem", ca_pem),
-        ("client.pem", client_cert.pem()),
-        ("client-key.pem", client_key.serialize_pem()),
-    ] {
-        std::fs::write(dir.path().join(name), pem).expect("write");
-    }
+    std::fs::write(dir.path().join("ca.pem"), ca_pem).expect("write");
     let config = ClientConfig {
         endpoint: format!("wss://{server}/v1/opamp"),
         tls: Some(classis_agent::config::TlsConfig {
             ca_file: Some(dir.path().join("ca.pem")),
-            cert_file: Some(dir.path().join("client.pem")),
-            key_file: Some(dir.path().join("client-key.pem")),
         }),
         packages: Some(classis_agent::config::PackagesConfig {
             verification_key: Some(hex::encode([7u8; 32])),
@@ -591,6 +579,13 @@ async fn the_client_certificate_goes_to_the_servers_origin_alone() {
         }),
         package_key: Some(vec![7u8; 32]),
         state_dir: dir.path().join("state"),
+        credentials: Some(classis_agent::credentials::Credentials {
+            endpoint: format!("https://{server}"),
+            space: "lab".to_string(),
+            device_id: "device".to_string(),
+            client_secret: zeroize::Zeroizing::new("secret".to_string()),
+            access_token: zeroize::Zeroizing::new("the-hosts-token".to_string()),
+        }),
         ..ClientConfig::default()
     };
 
@@ -603,9 +598,10 @@ async fn the_client_certificate_goes_to_the_servers_origin_alone() {
     .await
     .expect_err("the hash of the test bytes does not match");
     assert!(err.contains("hash"), "the bytes arrived: {err}");
-    assert!(
-        server_saw.load(std::sync::atomic::Ordering::SeqCst),
-        "the Server's origin is shown the certificate"
+    assert_eq!(
+        *server_saw.lock().expect("seen"),
+        [Some("Bearer the-hosts-token".to_string())],
+        "the Server's origin is sent the token"
     );
 
     let err = download_and_verify(
@@ -618,7 +614,8 @@ async fn the_client_certificate_goes_to_the_servers_origin_alone() {
     .expect_err("the redirect off the origin is refused");
     assert!(err.contains(&mirror.to_string()), "{err}");
     assert!(
-        !mirror_saw.load(std::sync::atomic::Ordering::SeqCst),
-        "the mirror was shown the Client's certificate"
+        mirror_saw.lock().expect("seen").is_empty(),
+        "the mirror was sent a request: {:?}",
+        mirror_saw.lock().expect("seen")
     );
 }

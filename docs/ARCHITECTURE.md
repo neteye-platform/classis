@@ -24,10 +24,10 @@ true.
 ```text
  operator ── REST / bundled UI ──▶ Operator plane :4321 ─┐
                                                          │  Server (Linux)
- Client ──── OpAMP, mTLS ──────────────▶ Agent plane :4320 ─┘   │
-   │  ▲                                                          └─▶ data_dir: fleet state,
-   │  └── Gateway (a Client) ◀── OpAMP, mTLS ── other Clients        register,
-   │                                                                 artifacts by SHA-256
+ Client ──── OpAMP, bearer token ──▶ Agent plane :4320 ──┘   │
+   │                                                         └─▶ data_dir: fleet state,
+   │                                                             spaces, clients,
+   │                                                             artifacts by SHA-256
    ├── Supervisor Endpoint (loopback) ◀── a Collector's opampextension
    ├── Managed Processes: Collector, any command — where a process account is registered, under
    │     it, started by the second service over a Unix socket or named pipe
@@ -39,19 +39,21 @@ true.
 - **Operators** drive the fleet through the REST API on the Operator plane,
   guarded by `[rest.auth]` beyond the loopback; the bundled UI uses the same API
   ([ADR-0021](adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)).
-- **Clients** reach the Agent plane over OpAMP — WebSocket or plain HTTP —
-  admitted by the client certificate in the TLS 1.3 handshake alone
-  ([ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md),
-  ADR-0021). A Client in Gateway Mode carries other Clients' Agents over its own
-  upstream connections and refuses what the Server revoked
-  ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
+- **Clients** reach the Agent plane over OpAMP — WebSocket or plain HTTP — over
+  TLS 1.3
+  ([ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
+  A host belongs to one Space and enrols once, with that Space's enrolment key,
+  for a client of its own and an access token; every OpAMP exchange and package
+  download then carries the token as a bearer credential, and no client
+  certificate is asked for
+  ([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
 - **Managed Processes** run on the Client's host under a Supervisor each; a
   Collector reports through its own `opampextension` to the Supervisor Endpoint,
   which admits only the process its Supervisor started
   ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
 - **Package downloads** come from the Server alone: every artifact is uploaded
-  to it, and a Client fetches only from its own Server's origin, or from its
-  Gateway. What arrives is checked against its hash and the operator's signature
+  to it, and a Client fetches only from its own Server's origin. What arrives is
+  checked against its hash and the operator's signature
   ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
   [ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)).
 - **The service manager** starts the Client and restarts it after a self-update
@@ -70,30 +72,27 @@ copies from are named here.
 
 Seven crates in one workspace: the five of
 [ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)
-and the two standalone OAuth crates of
-[ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md),
-neither yet wired into the product — no Server or Client code depends on them:
+and the two OAuth crates of
+[ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md):
 
 - **`opamp`** — the OpAMP communication layer, publishable on its own
   ([ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)).
   Always the generated types, framing and the endpoint's body rules. Behind
   `client`, an Agent's protocol state machine, the two transports, and
   `client::connection`, which builds a connection, its TLS and its HTTP client
-  from a `Connection` the application fills in. Behind `server`, the endpoint
-  around a `Handler`, `server::listen`, the listener with its TLS and its bounds
-  on connection setup, and `server::pace`, the floor every body and WebSocket
-  message it serves is held to. The server side takes a WebSocket over through
-  hyper's upgrade and reads its frames with `tokio-tungstenite`, the library the
-  client side uses too. `tls` reads PEM and installs the ring provider. It reads
-  no file and knows nothing of this project.
+  from a `Connection` the application fills in, and hands a server's `401` with
+  its `WWW-Authenticate` challenges to the application. Behind `server`, the
+  endpoint around a `Handler`, `server::listen`, the listener with its TLS and
+  its bounds on connection setup, and `server::pace`, the floor every body and
+  WebSocket message it serves is held to. The server side takes a WebSocket over
+  through hyper's upgrade and reads its frames with `tokio-tungstenite`, the
+  library the client side uses too. `tls` reads PEM and installs the ring
+  provider. It reads no file and knows nothing of this project.
 - **`classis-core`** — what the Server and the Client implement identically beyond
   the protocol: the version, the platform aliases, the statement a package
-  signature covers, the renewal proof and the bootstrap proof a CSR carries —
-  read from a CSR by the adapter `csr` — the host a certificate that names none
-  is taken for, when a certificate counts as ending, and what a certificate is
-  called — and the bootstrap certificate's PKCS#12 file, whose rule is core and
-  whose reading and writing with `p12-keystore` is the adapter `pkcs12::file`
-  (ADR-0029).
+  signature covers, when a certificate counts as ending, what a certificate is
+  called, and the shape of a Space's name and of its enrolment key
+  (`enrolment_key`).
 - **`oauth-registration`** — RFC 7591 dynamic client registration and nothing
   more, with no word of Classis in it: a `server` module, the registration
   route over a storage trait the application implements, and a `client` module,
@@ -103,21 +102,22 @@ neither yet wired into the product — no Server or Client code depends on them:
   `server`, the token route over a storage trait; `client`, the one request a
   host makes; `bearer`, the reading of a presented credential and of the
   `WWW-Authenticate` challenges that refuse one, which the registration route
-  uses; and `secret`, the generator of the 256-bit credentials and their
-  SHA-256 hash.
-- **`classis-server`** — the Server: the fleet and its Hosts, its Configurations,
-  labels, packages and Deployments, the Agent plane and the Operator plane.
-- **`classis-agent`** — the Client in all its modes, the program `supervisor`.
+  and the Server's admission use too; and `secret`, the generator of the 256-bit
+  credentials and their SHA-256 hash.
+- **`classis-server`** — the Server: the fleet, its Spaces and clients, its
+  Configurations, labels, packages and Deployments, the Agent plane and the
+  Operator plane.
+- **`classis-agent`** — the Client, the program `supervisor`.
 - **`classis-tools`** — the operator tool, the one program `classisctl`: its
   `package` commands fetch, pack, hash and sign package artifacts — or sign a
   Package's signing file from the UI (ADR-0027) — its `pki` commands make the
-  fleet's certificates (ADR-0028).
+  Server's certificate and the package signing key (ADR-0028).
 
 Inside the Server and the Client the code is ports and adapters
 ([ADR-0006](adr/0006-architecture-style.md)): a **core** that holds the domain
 and owns its **ports**, **adapters** that bind a port to a technology, and a
 **composition root** — `lib.rs`, `main.rs`, and on the Client `supervisor`,
-`service::runtime` and `service::enrol` — that wires the two. Every module's
+and `service::runtime` — that wires the two. Every module's
 role is listed in
 [`dependency_direction.rs`](../crates/classis-core/tests/dependency_direction.rs),
 which fails when a core module names an adapter or a technology, and when a
@@ -137,14 +137,17 @@ module has no role.
   adapter in `s3`, which bridges the synchronous port onto a runtime of its own
   (`bridge`)
   ([ADR-0049](adr/0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md));
-  `BootstrapStore` under the `BootstrapCertificates` in `bootstrap`;
-  `EnrolmentStore` under the `Enrolment` in `enrolment`; `LedgerStore` in
-  `revocation`. The filesystem adapters are in `fs`, which also opens the data
-  directory and refuses anything its layout does not name. With
+  `SpaceStore` in `space_store`, under the `Spaces` service in `spaces`, which
+  keeps each Space's whole enrolment key; `ClientStore` in `client_store`, which
+  holds each client's Space, the SHA-256 of its secret and the SHA-256 and
+  expiry of its one active token, and answers which client holds a token
+  ([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
+  The filesystem adapters are in `fs`, which also opens the data directory and
+  refuses anything its layout does not name. With
   `[database] store = "postgres"` every port but the blob port has its
   PostgreSQL adapter in `postgres` instead
-  (`postgres::agents`, `configs`, `deployments`, `packages`, `ledger`,
-  `bootstrap`, `enrolment`), each call one transaction; `postgres` holds the
+  (`postgres::agents`, `configs`, `deployments`, `packages`, `spaces`,
+  `clients`), each call one transaction; `postgres` holds the
   connection they share — TLS 1.3 on _ring_, a pool on a `bridge` runtime of its
   own, the advisory lock that keeps one Server per database — and applies the
   schema embedded in `postgres::schema` as numbered migrations;
@@ -153,51 +156,46 @@ module has no role.
   ([ADR-0050](adr/0050-the-servers-records-may-live-in-postgresql.md)). The
   core's constructors take the ports — `AppState::with_stores`,
   `PackageStore::with_backend`, `PackageOffering::with_deployments`,
-  `BootstrapCertificates::open`, `Enrolment::open_on` — and `lib.rs` chooses the
-  adapters by `[database]` in `Records`, which `AppState::on`,
-  `PackageStore::open_on`, `PackageOffering::on` and `BootstrapCertificates::on`
-  take, and wires the filesystem adapters in `AppState::new`,
-  `PackageStore::open`, `PackageOffering::new` and
-  `BootstrapCertificates::on_disk`. `migrate` is the one module that reads the
-  layout of an older Server, for `server migrate`, and nothing in the running
-  Server calls it.
-- **Server listeners** — `tls` reads the `[tls]`, `[rest.tls]` and `[enrolment]`
-  files into the material each plane serves with — the Agent plane requiring a
-  client certificate in the handshake, the Operator plane asking for none and
-  serving `[rest.tls]`'s certificate when the section is present
-  ([ADR-0032](adr/0032-the-operator-plane-may-serve-a-certificate-of-its-own.md))
-  — and tells a member's certificate from a bootstrap one by its issuer.
-  `listen` serves both planes on one handle with one drain and a connection cap
-  each
+  `Spaces::new`, `Enrolment::new` — and `lib.rs` chooses the adapters by
+  `[database]` in `Records`, which `AppState::on`, `PackageStore::open_on`,
+  `PackageOffering::on` and `Enrolment::on` take, and wires the filesystem
+  adapters in `AppState::new`, `PackageStore::open` and `PackageOffering::new`.
+  `migrate` is the one module that reads the layout of an older Server, for
+  `server migrate`, and nothing in the running Server calls it.
+- **Server listeners** — `tls` reads the `[tls]` and `[rest.tls]` files into the
+  material each plane serves with — `[tls]`'s certificate on the Agent plane,
+  and on the Operator plane `[rest.tls]`'s when the section is present
+  ([ADR-0032](adr/0032-the-operator-plane-may-serve-a-certificate-of-its-own.md));
+  neither plane asks the peer for a certificate. `listen` serves both planes on
+  one handle with one drain and a connection cap each
   ([ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
-- **Server admission** — `transport::Admission` requires the client certificate
-  on every request to `/v1/opamp` and reads no `Authorization` header, admits a
-  bootstrap certificate only while the enrolment window is open, and guards the
-  package download with the same certificate. Two core modules hold the state
-  behind it: `enrolment`, the operator-opened window and the queue of requests
-  an operator approves through `api`, and `throttle`, the per-address back-off
-  after repeated failures, which both planes use
-  ([ADR-0021](adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)).
-  `revocation` holds the register of issued certificates, the revocation list
-  and the Hosts — each with the subject values of its certificate, its Gateway
-  mark and the Agents bound to it — behind the `LedgerStore` port
-  ([ADR-0021](adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md),
-  [ADR-0035](adr/0035-a-host-is-what-a-client-certificate-names-and-its-agents-inherit-from-it.md)).
-  `agent_rate` holds the token buckets that bound how often an admitted host, an
-  Agent behind a marked Gateway, and the Gateway as a whole are heard;
-  `transport` takes a token for each message before the handler does anything
-  else and for each download in the guard
-  ([ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
-- **Security decisions** — each admission and refusal, enrolment, issuance,
-  revocation, operator act and package outcome is a `tracing` event on the
-  Server's log, which goes to standard error; its `event` field names it
+- **Server admission** — `transport::admit` is a layer round `/v1/opamp` and the
+  package download. It reads the `Authorization: Bearer` credential with
+  `oauth-token`'s `bearer`, asks `enrolment::Enrolment` which client holds the
+  token's SHA-256 and whether the token has expired, and hands the handlers that
+  client's `client_id` as the host the request arrived over. `Enrolment` is the
+  adapter that stands behind the registration route, the token route and this
+  admission alike: it implements the two crates' storage traits over `Spaces`
+  and the `ClientStore`, so a Space's key and a client's secret are judged where
+  the records are. It also tracks the WebSocket sessions admitted with each
+  token and ends them, with close code 1008, when the token is replaced. The
+  core module `throttle` is the per-address back-off: `transport::back_off`
+  counts the refused authentications of the Agent plane's three routes in one
+  table, and the Operator plane keeps its own. `agent_rate` holds the token
+  buckets that bound how often a host, or a peer address where no host is named,
+  is heard; `transport` takes a token for each message before the handler does
+  anything else and for each download in the guard
+  ([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md),
+  [ADR-0013](adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
+- **Security decisions** — each admission and refusal, enrolment, token
+  issuance, session end, operator act and package outcome is a `tracing` event
+  on the Server's log, which goes to standard error; its `event` field names it
   (`admission.refused`), and what a peer can repeat at will is logged at
   `debug`. The Server keeps no audit record and no port for one
   ([ADR-0022](adr/0022-security-decisions-are-structured-log-events.md)).
-- **Server ports beyond storage** — `fleet` owns `CertificateSigner`, which the
-  local CA in `ca` implements for the CSR flow and the renewal proof (ADR-0021),
-  and `Clock`, which `clock::SystemClock` implements. The `[connection_offer]`
-  and `[telemetry_offer]` sections become the fleet's offers in `config`.
+- **Server ports beyond storage** — `fleet` owns `Clock`, which
+  `clock::SystemClock` implements. The `[connection_offer]` and
+  `[telemetry_offer]` sections become the fleet's offers in `config`.
 - **Server configuration** — `config` builds one TOML document from the
   defaults, `server.toml` when one is read, and the `CLASSIS_SERVER__…` variables
   over it, and deserializes it once, so the environment is checked as strictly
@@ -251,12 +249,12 @@ module has no role.
   answers each Server message in `handle` and leaves three channels and its
   description each to a submodule: `packages`, `remote_config`,
   `connection_settings`, and `description`, what the Agent reports about itself.
-  `storage`, `csr`, `connection`, `tls`, the staging in `service::layout` and
-  the re-owning in `service::run_as` reach the state directory and the layout
-  root through the adapter `nofollow`: a directory held open without following a
-  link at its name, read from and written to by name, each file written whole
-  and renamed into place, because a privileged install works in directories the
-  service's account owns
+  `storage`, `enrolment`, `revoke`, `connection`, `tls`, the staging in
+  `service::layout` and the re-owning in `service::run_as` reach the state
+  directory and the layout root through the adapter `nofollow`: a directory held
+  open without following a link at its name, read from and written to by name,
+  each file written whole and renamed into place, because a privileged install
+  works in directories the service's account owns
   ([ADR-0054](adr/0054-no-privileged-install-step-follows-a-link-the-account-placed.md)).
 - **Client configuration** — `config` is what `supervisor.toml` may say and the
   rules it must meet
@@ -264,33 +262,33 @@ module has no role.
   `config_file` reads it from disk, makes its directories absolute, finds the
   identity the state directory holds, and redacts the text the Client reports as
   its effective configuration.
-- **Client connection** — `tls` decides which CA and which identity are in
-  force, and `transport` describes the upstream `Connection` from
-  `supervisor.toml` and runs the Engine over it. The settings verification in
-  `connection`, the Gateway's upstream pool and its downstream listener, and the
+- **Client enrolment** — `enrolment` is `supervisor enrol <base-url> <key>`: it
+  registers the host with `oauth-registration`'s client, asks for its first
+  token with `oauth-token`'s, writes `state.json` once, owner-only, in the state
+  directory, and, where the service is registered for that directory, hands the
+  file to the service's account, lets the service start at boot and starts it;
+  it also rewrites `access_token` there when the Server has refused the token.
+  `revoke` is `supervisor revoke`: local, never contacting the Server, it
+  deletes the state directory. Both reach the machine's service manager through
+  the `ServiceHost` trait of `enrolment`, which a test replaces. `credentials`
+  is the value the rest of the Client carries, the five fields of `state.json`;
+  `service::runtime` reads it before a run starts and refuses a host that has
+  none
+  ([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
+- **Client connection** — `tls` decides which CA is in force — the one trust
+  anchor `[tls] ca_file` replaces the built-in roots with — and `transport`
+  describes the upstream `Connection` from `supervisor.toml` and `state.json`,
+  with the token as its `Authorization` header, and runs the Engine over it; a
+  refusal that carries `error="invalid_token"` ends the run and `enrolment`
+  asks for a new token. The settings verification in `connection` and the
   Supervisor Endpoint use the same `opamp` building blocks
   ([ADR-0010](adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)).
-  The Gateway's `revocations` keeps the list it fetches from its Server and
-  refuses what that list names
-  ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
-  The Gateway's `cache` sees every offer `registry` hands down, fetches each
-  artifact offered on the Server's route once into the state directory, and
-  serves it on the downstream download route to the hosts it was offered to
-  ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
-  Which host the Gateway takes to speak for an `instance_uid` is decided in the
-  core module `gateway::policy`; the cache holds the bindings and keeps them
-  across restarts in the journal `gateway::store` reads and writes beside the
-  artifacts; while that journal cannot be read the Gateway carries no downstream
-  Agent
-  ([ADR-0058](adr/0058-a-gateways-bindings-outlast-its-restart-and-end-with-their-hosts-certificate.md)).
-  With a bootstrap CA the Gateway tells an enrolling peer from a member and
-  relays its one plain-HTTP enrolment request without a binding
-  ([ADR-0039](adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)).
+  `packages` downloads from the Server's own origin with the same token, and
+  `telemetry` sends it only to a destination of that origin.
 - **Client engine** — `engine` routes the Server's replies to the Agents over
   one connection
   ([ADR-0015](adr/0015-client-modes-and-a-gateway-that-passes-packages-only-to-the-hosts-they-were-offered-to.md)).
-  The transports, the Gateway, telemetry and the service runtime are adapters
-  around it.
+  The transports, telemetry and the service runtime are adapters around it.
 - **Client service** — `service::manager` registers, starts, stops and
   deregisters the Client's service and, where a process account is named, the
   second service `<PRODUCT_NAME>-agents` beside it, and writes both systemd
@@ -337,15 +335,18 @@ stops anything
 ([ADR-0017](adr/0017-supervisor-mode-kinds-directories-and-what-the-server-may-change.md)).
 
 **An Agent is placed under its Host.** Each Agent record names the Host it last
-arrived over — its own, or the Gateway's behind one. `fleet` derives from it,
-per Agent, what its effective description adds to its report: the `fleet.host.*`
-values of the Host it arrived over directly, and the labels of its Client Agent
-— the Agent reporting `supervisor.kind.*` in the same group, which is the Host,
-or behind a Gateway the machine the Agents report. It keeps that placement per
-group and places a group again when a report, a label, a forget or a Gateway
-mark changes it, so every Selector match reads the same description without a
-fleet-wide pass
-([ADR-0035](adr/0035-a-host-is-what-a-client-certificate-names-and-its-agents-inherit-from-it.md)).
+arrived over: the `client_id` of the client whose token admitted the report,
+which the Server takes from the token and never from the report. `fleet`
+derives from it, per Agent, what its effective description adds to its report:
+the labels of its Client Agent — the Agent reporting `supervisor.kind.*` among
+the Agents of the same Host. It keeps that placement per Host and places a
+Host's Agents again when a report, a label or a forget changes it, so every
+Selector match reads the same description without a fleet-wide pass. An
+attribute an Agent reports under the Server's own `fleet.` prefix selects
+nothing and is listed as ignored. A report whose `instance_uid` is recorded
+under another client is refused, and one client owns at most 256
+`instance_uid`s
+([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
 
 **A package reaches an Agent.** An operator uploads an artifact into `packages`
 and signs its entry there — `packages` checks the signature against
@@ -354,41 +355,36 @@ puts the Package into a Deployment with a Selector and releases it, together
 with the Configurations the Deployment holds. The Agent is offered the package
 with its entry's signature; the Client downloads it from its own Server's origin
 and nowhere else, and `api` serves it only when `fleet` finds it offered to an
-Agent the certificate's host speaks for, by the test `packages` shares with the
-offer
+Agent of the host whose token admitted the request, by the test `packages`
+shares with the offer
 ([ADR-0026](adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md),
-[ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md));
-behind a Gateway the Client downloads it from the Gateway's cache, which
-`gateway` fetched once from the Server. The Client checks hash and signature in
-`packages`, and the Supervisor swaps the program, keeps the previous one for its
-grace period and rolls back if the new one does not stay up. The Client's own
+[ADR-0033](adr/0033-a-package-entry-carries-its-signature-and-every-artifact-is-uploaded.md)).
+The Client checks hash and signature in `packages`, and the Supervisor swaps
+the program, keeps the previous one for its grace period and rolls back if the
+new one does not stay up. The Client's own
 package goes through `update` instead: a version directory beside the running
 one, a self-check, the `current` pointer moved, and a restart on probation that
 commits or rolls back.
 
-**A host joins and stays.** The Server issues bootstrap certificates on an
-operator's request: `bootstrap` checks the subject and the life, records what
-was issued, and asks its `BootstrapSigner` port — the bootstrap CA with its key
-in `ca` — to make the key, sign, and seal both into the PKCS#12 file it keeps,
-the key's only way out
-([ADR-0028](adr/0028-one-operator-program-that-makes-the-fleets-certificates.md)).
-A fresh host presents a bootstrap certificate while an operator has the
-enrolment window open — to the Server, or to a Gateway that relays its request —
-and proves it in its CSR
-([ADR-0039](adr/0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md));
-the request is filed under the certificate it proves and waits until an operator
-approves it, and the certificate it gets names a new host and carries the
-subject values `tls` read from the bootstrap certificate and `ca` checked again,
-never the CSR's; every renewal carries the predecessor's
-([ADR-0036](adr/0036-a-bootstrap-certificates-subject-is-carried-into-the-host-certificate.md)).
-The questionnaire of `service install --interactive` and `service config` does
-this before the service is registered: `service::enrol` runs the Client's own
-Agent over the ordinary `transport` with the bootstrap pair until the issued
-certificate is in the state directory
-([ADR-0019](adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)).
-From then on the Client renews at two thirds of the certificate's life, proving
-with the old key which certificate it renews. A revocation closes the sessions
-it concerns at once and follows every renewal.
+**A host joins and stays.** A Space in `spaces` has one enrolment key,
+`cle1_<space>_<secret>`, kept whole in the store so it can be read again.
+`service install` registers the Client's service and starts nothing. `enrolment`
+on the host posts to `/v1/enrol` with the key as the bearer credential
+(RFC 7591); `Enrolment` on the Server judges the key against the Space's
+current one — and again when the client is stored, so a rotation between the two
+steps refuses — and stores a client with its Space and the SHA-256 of its
+secret. The answer carries the `client_id`, the `client_secret` and the Space.
+The host then posts to `/v1/token` with those as HTTP Basic credentials
+(RFC 6749 §4.4); the Server stores the SHA-256 of a new opaque token and its
+expiry on the client's record, which overwrites the token before it, so that
+one is revoked and the WebSocket sessions admitted with it end. `enrolment`
+writes `state.json` and starts the service. From then on every OpAMP exchange
+and every download carries the token, and `transport::admit` finds its client by
+the hash. Only a refusal with `error="invalid_token"` makes the Client post to
+`/v1/token` again with its client secret; it never renews ahead of time.
+`supervisor revoke` deletes the host's state directory and does not contact the
+Server, which keeps the client's record
+([ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
 
 **A Supervisor starts its program.** Without a process account the runner starts
 the Managed Process, its version probe and a package's preflight as the Client.
@@ -416,9 +412,11 @@ the Supervisor retries with backoff
 one directory per domain and owner-only: `configurations/`, `deployments/`,
 `packages/` (metadata) and `blobs/` (the artifacts, named by SHA-256, unless a
 bucket keeps them), `agents/` (each Agent's record, its labels inside),
-`hosts/`, `certificates/` (the register), `revocations.json`, `bootstrap/`,
-and `enrolment.json` (the window and its queue)
-([ADR-0037](adr/0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md)).
+`spaces/` (each Space with its enrolment key) and `clients/` (each client with
+its Space, the SHA-256 of its secret and the SHA-256 and expiry of its one
+active token)
+([ADR-0037](adr/0037-the-servers-state-lives-under-one-data-directory-one-store-per-domain.md),
+[ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)).
 With `[database] store = "postgres"` the records are rows of one PostgreSQL
 database instead, and `data_dir` keeps only `blobs/`, with the filesystem blob
 store
@@ -426,8 +424,9 @@ store
 still loads every record at startup and answers from memory. A restart restores
 the fleet from them and shows each Agent disconnected until it reports; an
 installation an older Server wrote is moved there once by `server migrate`. The
-Client keeps its state under `state_dir`: the issued certificate and key, the
-connection settings the Server offered, and per Supervisor a directory with
+Client keeps its state under `state_dir`: `state.json`, the host's identity and
+credentials, the connection settings the Server offered, and per Supervisor a
+directory with
 `config/` and `program/`. An installed Client runs from `versions/<version>/`
 through the `current` pointer
 ([ADR-0019](adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)).

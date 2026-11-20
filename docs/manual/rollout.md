@@ -78,8 +78,9 @@ Two things this block gets right that are easy to get wrong:
   _name of the Configuration on the Server_, which is what the written entry
   file is called.
 
-**Nothing has to be installed on the host first.** Start the Client with the
-program absent and the Agent comes up, connects, and reports
+**Nothing has to be installed on the host first.** Start the Client, enrolled as
+[Setting up a fleet](setup.md#5-enrol-the-client) describes, with the program
+absent and the Agent comes up, connects, and reports
 `no process installed` — a Supervisor with no process, said plainly, rather than
 a spawn error. With the verification key set it declares `AcceptsPackages` all
 the same, so the first version arrives the same way every later one does.
@@ -199,7 +200,7 @@ takes no package, an offer without a signature is refused before anything is
 downloaded, and the Server offers no entry that carries no signature. Keep the
 private key off the Server host.
 
-The download route requires the Client's certificate, and the content hash and
+The download route requires the Client's access token, and the content hash and
 this signature are what protect an installed binary.
 
 ## 4. Give it to the Server

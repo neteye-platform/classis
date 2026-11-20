@@ -5,21 +5,21 @@ do, how to start it, and what every configuration key means. It is split the way
 a deployment is split — the Server is one machine, the Clients are all the
 others — so each half can be read on its own:
 
-| Part                                  | Read it to                                                                                                                                                                                                                                     |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[Setting up a fleet](setup.md)**    | go from nothing to a running fleet, in order: the three certificate authorities and the files they make, the Server's and the Client's configuration, enrolling a host, and living with the certificates afterwards                            |
-| **[A host's life](lifecycle.md)**     | follow one managed host from start to finish, in the UI: issuing its bootstrap certificate, installing the Client, enrolling it, renewal, and the updates of its agents and of the Client itself                                               |
-| **[Server](server.md)**               | run the control plane: the two listeners, Configurations, packages and the deployments that aim them, the REST API, authentication, enrolment, TLS                                                                                             |
-| **[Client](client.md)**               | run a managed host, end to end: how it is built, the OS service and the process account its Managed Processes may run under, the on-disk layout, Supervisors for Collectors and Foreign Agents, package updates, self-update, and Gateway Mode |
-| **[Rollout walkthrough](rollout.md)** | both ends at once, end to end: build an artifact, sign it, upload it, aim it, and watch a Foreign Agent be installed and configured entirely from the Server                                                                                   |
-| **[Command-line tools](tools.md)**    | get software into the fleet: fetch a known agent's release and hand it to the Server, or build, hash, and sign an artifact out of any program                                                                                                  |
+| Part                                  | Read it to                                                                                                                                                                                                                       |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[Setting up a fleet](setup.md)**    | go from nothing to a running fleet, in order: the Server's certificate and the files that make it, the Server's and the Client's configuration, enrolling a host, and living with the enrolment afterwards                       |
+| **[A host's life](lifecycle.md)**     | follow one managed host from start to finish: installing the Client, enrolling it, and the updates of its agents and of the Client itself                                                                                        |
+| **[Server](server.md)**               | run the control plane: the two listeners, Configurations, packages and the deployments that aim them, the REST API, authentication, enrolment, TLS                                                                               |
+| **[Client](client.md)**               | run a managed host, end to end: how it is built, the OS service and the process account its Managed Processes may run under, the on-disk layout, Supervisors for Collectors and Foreign Agents, package updates, and self-update |
+| **[Rollout walkthrough](rollout.md)** | both ends at once, end to end: build an artifact, sign it, upload it, aim it, and watch a Foreign Agent be installed and configured entirely from the Server                                                                     |
+| **[Command-line tools](tools.md)**    | get software into the fleet: fetch a known agent's release and hand it to the Server, or build, hash, and sign an artifact out of any program                                                                                    |
 
 The two halves interlock in three places, and each is described on both sides:
-**authentication** (the Client presents a client certificate the Server accepts,
-and a new host is enrolled on an operator's approval), **connection settings**
-(the Server can move the fleet to a new endpoint and renews each certificate),
-and **packages** (the Server decides _which_ artifact an Agent gets, the Client
-decides _whether_ it takes one at all).
+**authentication** (a host enrols with its Space's key, and from then on the
+Client presents an access token the Server accepts), **connection settings**
+(the Server can move the fleet to a new endpoint), and **packages** (the Server
+decides _which_ artifact an Agent gets, the Client decides _whether_ it takes
+one at all).
 
 ## What this manual is not
 
@@ -49,18 +49,18 @@ source checkout.
 ## Quick start: a closed loop on one machine
 
 This is the smallest complete deployment — one Server, one Client, one
-Configuration. Neither end starts without TLS material and a client certificate,
-so the first step makes a development set of them.
+Configuration. The Server does not start without TLS material, and the Client
+runs nothing until it is enrolled, so the first step makes a development set of
+certificates.
 
 1. **Create the development certificates.**
    [`scripts/dev-pki.sh`](../../scripts/dev-pki.sh) makes them with the operator
-   tool's `classisctl pki init`, so it needs no other tool: the three CAs of
-   [Setting up a fleet](setup.md#the-certificates-at-a-glance), a Server
-   certificate for `localhost`, `127.0.0.1` and `::1`, and the bootstrap
-   certificate the Client enrols with. Everything lands in `.dev-pki/`, which
-   git ignores. The keys are unencrypted and the CAs are throwaway, so use the
-   set on a development machine only. The script refuses to overwrite a
-   directory that already holds a set.
+   tool's `classisctl pki init`, so it needs no other tool: the server CA of
+   [Setting up a fleet](setup.md#1-make-the-certificates), a Server certificate
+   for `localhost`, `127.0.0.1` and `::1`, and the package signing key.
+   Everything lands in `.dev-pki/`, which git ignores. The keys are unencrypted
+   and the CA is throwaway, so use the set on a development machine only. The
+   script refuses to overwrite a directory that already holds a set.
 
    ```sh
    scripts/dev-pki.sh
@@ -79,20 +79,23 @@ so the first step makes a development set of them.
    cargo run -p classis-server -- --config .dev-pki/server.toml
    ```
 
-3. **Start a Client, and approve its enrolment.** With no `[[supervisor]]` block
-   it presents exactly one Agent: itself. It holds the bootstrap certificate and
-   trusts the development server CA, so it enrols like any host: it asks for a
-   certificate, and the request waits for an approval. In a development set the
-   seed script opens the window and approves it:
+3. **Enrol a Client.** With no `[[supervisor]]` block it presents exactly one
+   Agent: itself. It trusts the development server CA, and it runs only once it
+   holds a `state.json`, which `enrol` writes from the enrolment key of a Space.
+   This step needs that key, and this build cannot give you one: it has no
+   command that makes a Space or shows its key, and the REST API and the Server's
+   settings have none either ([Enrol the Client](setup.md#5-enrol-the-client)).
+   So the loop below cannot be closed with this build's own programs alone. With
+   a key in hand, the step is:
 
-   ```console
-   $ cargo run -p classis-agent -- --config .dev-pki/supervisor.toml
-   $ scripts/seed_test_configs.sh --enrol
-   approved the request with key fingerprint f1e9…
+   ```sh
+   cargo run -p classis-agent -- --config .dev-pki/supervisor.toml enrol https://127.0.0.1:4320 cle1_lab_…
+   cargo run -p classis-agent -- --config .dev-pki/supervisor.toml run
    ```
 
-   On a real fleet you compare the fingerprint with the Client's log first
-   ([Enrol the Client](setup.md#5-enrol-the-client)).
+   `enrol` registers the host and writes `state.json`; with no service registered
+   it says that `run` runs the Client in the foreground, which the second command
+   does.
 
 4. **Open the UI** at <https://127.0.0.1:4321/>. Your browser does not know the
    development CA, so import `.dev-pki/offline/server-ca.pem` into its trust
@@ -182,14 +185,13 @@ operator's signature. It reaches no Agent of another type, and it aims at nobody
 by itself.
 
 **Selector and Deployment.** A _Selector_ is a set of `key=value` pairs that an
-Agent's effective description must equal: the `fleet.host.*` values of the Host
-it connects over, what it reported, its labels, and the labels of its Client's
-own Agent, in that order. It aims a _Deployment_: a name, the **channel** its
-Selector names, at most one Package per Agent type, and any number of
-Configurations. It is the only thing that is rolled out — one press releases its
-Packages and Configurations together — and an Agent belongs to **at most one** —
-two claiming the same Agent is a conflict the Server reports rather than
-resolves. A Selector is equality and cannot say "not", so channels are a
+Agent's effective description must equal: what it reported, its labels, and the
+labels of its Client's own Agent, in that order. It aims a _Deployment_: a name,
+the **channel** its Selector names, at most one Package per Agent type, and any
+number of Configurations. It is the only thing that is rolled out — one press
+releases its Packages and Configurations together — and an Agent belongs to **at
+most one** — two claiming the same Agent is a conflict the Server reports rather
+than resolves. A Selector is equality and cannot say "not", so channels are a
 partition over an attribute every Agent carries; there is no fleet-wide default.
 The Server decides which artifact an Agent is offered; the Client decides
 whether it accepts packages at all. Every artifact is verified by its content
@@ -208,11 +210,11 @@ the same time. `ws://` and `http://` are accepted only to the IP literals
 startup, and the refusal names the setting to fix; neither warns and carries on.
 Every connection that leaves a host is TLS 1.3, and plaintext is accepted on the
 loopback alone — the IP literals `127.0.0.1` and `::1`, never the name
-`localhost`. An Agent proves fleet membership with one thing: a client
-certificate in the TLS handshake. It holds no credential. A new host gets its
-certificate only through an enrolment an operator opens and approves. Software
-is installed only when it is signed with the operator's key and fetched from a
-source the operator allowed.
+`localhost`. A host proves fleet membership with one thing: a bearer access
+token on every request. It gets the token by enrolling with the enrolment key of
+its Space, and keeps it in `state.json`, which only its owner can read; the
+configuration file holds no credential. Software is installed only when it is
+signed with the operator's key and fetched from a source the operator allowed.
 
 **Configuration files.** Both ends read a hand-edited TOML file. The Client's is
 the one `--config` names, `supervisor.toml` by default. The Server's is the one
@@ -235,9 +237,7 @@ named here so you do not go looking for a setting that does not exist.
 [`docs/CONFORMANCE.md`](../CONFORMANCE.md) is the authority on all of it.
 
 - **`tls` and `proxy` in connection settings** — a Server offering either is
-  told, in its status report, that the Client dropped them. Mutual TLS itself
-  _is_ built, and required: see
-  [the Server](server.md#mutual-tls-proving-who-is-on-the-connection).
+  told, in its status report, that the Client dropped them.
 - **Custom messages** (`CustomCapabilities` / `CustomMessage`) — planned, not
   implemented.
 - **Other connection settings** (`AcceptsOtherConnectionSettings`) —

@@ -94,8 +94,8 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -105,6 +105,7 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
     });
 
     let state_dir = dir.path().join("client-state");
+    admission.enrol(addr, &state_dir).await;
     let marker = dir.path().join("collector-marker");
     let program = Path::new(env!("CARGO_BIN_EXE_stub_agent"))
         .file_name()
@@ -127,14 +128,12 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
                 "binary = {program:?}\n",
                 "endpoint_port = {port}\n",
                 "args = [\"--touch\", {marker:?}]\n",
-                "{identity}",
             ),
             addr = addr,
             state_dir = state_dir.to_string_lossy(),
             program = program,
             port = port,
             marker = marker.to_string_lossy(),
-            identity = common::client_identity(dir.path()),
         ),
     )
     .expect("write supervisor.toml");

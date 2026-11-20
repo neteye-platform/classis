@@ -1,6 +1,6 @@
 # Classis Client configuration. Every setting is optional; the values shown are the
-# defaults. For development, scripts/dev-pki.sh writes a supervisor.toml with the certificates
-# a Client needs. Start with:
+# defaults. For development, scripts/dev-pki.sh writes a supervisor.toml with the Server CA and
+# the package verification key a Client needs. Start with:
 # cargo run -p classis-agent -- --config .dev-pki/supervisor.toml
 
 # The Server's OpAMP endpoint. The URL scheme selects the transport:
@@ -75,58 +75,12 @@ state_dir = "client-state"
 # [attributes]
 # env = "prod"
 
-# Optional Gateway Mode: this Client stands at a network boundary, accepts OpAMP from
-# other Clients, and folds them onto a small pool of upstream connections. It composes with the
-# [[supervisor]] blocks below — a host may supervise its own processes and gateway for others.
-#
-# upstream_connections is a CAP, not a count: connections are opened as Agents appear, so a Gateway
-# in front of three Agents holds three. Each Agent sticks to its connection while that lives.
-#
-# The Gateway makes no authentication decisions of its own — a downstream peer is admitted by its
-# handshake against client_ca_file, and the Gateway refuses only a certificate the Server revoked
-# and a package download the Server did not offer to the requesting host through it.
-# It forwards no Authorization header upstream. It admits nobody until the
-# operator marks its host as a Gateway on the Server (PUT /api/v1/hosts/<host>/gateway). Mutual
-# TLS is per hop: [gateway.tls] verifies the Agents connecting to *this* Client, while the identity
-# presented to the Server is the one in [tls] below. The endpoint above must be
-# ws:// or wss://, since a polling connection cannot carry the Server's pushes to the Agents behind
-# a Gateway.
-#
-# The Gateway fetches each package the Server hosts once, when it relays an offer of it, and serves
-# it on its listen address only to the hosts whose Agents it relayed that offer to. It
-# holds them under <state_dir>/gateway-packages, bounded by package_cache_bytes; an artifact larger
-# than that is not delivered through the Gateway.
-# [gateway]
-# listen = "0.0.0.0:4320"
-# upstream_connections = 10
-# package_cache_bytes = 10737418240  # 10 GiB, the default; 0 fails startup
-# [gateway.tls]
-# cert_file = "gateway.pem"
-# key_file = "gateway-key.pem"
-# client_ca_file = "client-ca.pem"   # the fleet's client CA — never a bootstrap CA: downstream
-#                                    # Agents travel upstream as members
-# bootstrap_ca_file = "bootstrap-ca.pem"  # optional: the public certificate of the Server's
-#                                         # [enrolment] bootstrap_ca_file, never its key; relays a
-#                                         # plain-HTTP enrolment request of a host behind it
-
-# TLS toward the Server. ca_file trusts a private CA; cert_file and key_file are this Client's
-# identity, and the Client refuses to start without one — the Server asks for it in the
-# handshake and admits by it alone. The Client sends no credential; a leftover [auth] section from
-# an earlier version is ignored, with one warning at startup, and can be deleted.
+# TLS toward the Server. ca_file trusts a private CA. The Client presents no certificate, and
+# reads no credential from this file: it sends the bearer token that `supervisor enrol` keeps in
+# state.json in the state directory. A leftover [auth] section from an earlier version is ignored,
+# with one warning at startup, and can be deleted.
 # [tls]
 # ca_file = "ca.pem"          # replaces the built-in roots — the private-CA deployment
-# cert_file = "client.pem"    # this Client's certificate, or a BOOTSTRAP certificate to enrol with
-# key_file = "client-key.pem" # its private key; cert_file and key_file go together or not at all
-#
-# A certificate the Server issued outranks the one written here: the Client stores that pair in
-# <state_dir> as client-cert.pem and client-key.pem and prefers it. Deleting the stored pair reverts
-# to this one.
-#
-# Enrolment: a fresh host connects with a bootstrap certificate (from the Server's [enrolment]
-# bootstrap CA), sends a signing request for a key that never leaves this
-# host, and logs that key's fingerprint. An operator opens the Server's enrolment window and
-# approves the request with that fingerprint; the issued certificate arrives through the ordinary
-# offer flow and is used from then on, renewed the same way two thirds through its life.
 
 # Package verification. REQUIRED to take packages: every Server-offered package MUST
 # carry a valid Ed25519 signature over its artifact, and without a key this Client takes no

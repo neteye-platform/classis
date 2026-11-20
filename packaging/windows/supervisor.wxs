@@ -231,7 +231,7 @@
         does and for the same reason (ADR-0019 clause 37): a Client with no configuration
         dials the development default and manages nothing, and an installer must not manufacture
         that state on every host it touches. An install that was given an ENDPOINT still does not
-        start — the client identity is not in yet (ADR-0019).
+        start: starting it is the operator's, once the rest of the configuration is in.
       -->
       <Custom Action="RegisterServiceWithEndpoint" After="InstallFiles"
               Condition="NOT REMOVE AND ENDPOINT&lt;&gt;&quot;&quot;" />

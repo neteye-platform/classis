@@ -1,7 +1,7 @@
 //! One upstream connection, described once and built here (ADR-0010).
 //!
-//! The application says *what* to connect with: the endpoint, the credential, the trust anchors and
-//! the identity, the limit and the intervals. Everything else is built in this module: the rustls
+//! The application says *what* to connect with: the endpoint, the credential, the trust anchors,
+//! the limit and the intervals. Everything else is built in this module: the rustls
 //! configuration for `wss://`, the HTTP client for `https://`, the headers, the transport. The same
 //! description drives a long-running connection ([`run`]), a one-shot proof that offered settings
 //! work ([`probe`]), and a single socket for a caller that drives its own ([`connect_websocket`]).
@@ -17,54 +17,42 @@ use super::{http, ws, Ended, Session, StopSignal};
 use crate::endpoint::check_url;
 use crate::endpoint::PROTOBUF_CONTENT_TYPE;
 use crate::proto::AgentToServer;
-use crate::tls::{certificates, client_builder, private_key, root_store, Identity};
+use crate::tls::{client_builder, root_store};
 
 /// How long one plain-HTTP exchange, and the probe, may take.
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Whom a client trusts and what it presents, as PEM.
+/// Whom a client trusts, as PEM.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClientTls {
     /// The CA certificates to trust. They *replace* the built-in roots, so a private deployment
     /// trusts its own CA and nobody else. `None` trusts the built-in web roots.
     pub ca_pem: Option<Vec<u8>>,
-    /// The client certificate a server demanding mutual TLS asks for.
-    pub identity: Option<Identity>,
 }
 
 impl ClientTls {
     /// The rustls configuration for `wss://`, always built here — never the transport's default,
     /// which would take whatever provider the process happens to have, TLS 1.2 included
-    /// (ADR-0010). Nothing configured means the web roots and no client certificate. Always
-    /// `Some`; the `Option` keeps the callers' shape.
+    /// (ADR-0010). Nothing configured means the web roots. Always `Some`; the `Option` keeps the
+    /// callers' shape.
     ///
     /// # Errors
-    /// Returns an error naming the part — CA, certificate or key — that cannot be used.
+    /// Returns an error when the CA cannot be used.
     pub fn rustls_config(&self) -> Result<Option<Arc<rustls::ClientConfig>>, String> {
         let roots = match &self.ca_pem {
             Some(pem) => root_store(pem).map_err(|e| format!("the CA: {e}"))?,
-            // An identity does not imply a private CA: presenting a client certificate to a
-            // server with a publicly trusted one is an ordinary deployment.
             None => rustls::RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
             },
         };
-        let builder = client_builder().with_root_certificates(roots);
-        let config = match &self.identity {
-            None => builder.with_no_client_auth(),
-            Some(identity) => builder
-                .with_client_auth_cert(
-                    certificates(&identity.cert_pem)
-                        .map_err(|e| format!("the client certificate: {e}"))?,
-                    private_key(&identity.key_pem).map_err(|e| format!("the client key: {e}"))?,
-                )
-                .map_err(|e| format!("cannot present the client certificate: {e}"))?,
-        };
+        let config = client_builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
         Ok(Some(Arc::new(config)))
     }
 
-    /// Applies the trust anchors alone to an HTTP client: what a download from a host that is not
-    /// the server needs, since an identity is for the server and not for whoever hosts a file.
+    /// Applies the trust anchors to an HTTP client: what talking to the server over `https://`
+    /// needs, and what a download from a host that is not the server needs.
     ///
     /// # Errors
     /// Returns an error when the CA cannot be parsed.
@@ -81,27 +69,6 @@ impl ClientTls {
         }
         // `tls_certs_only`: the configured CA replaces the built-in roots, as for `wss://`.
         Ok(builder.tls_certs_only(certs))
-    }
-
-    /// Applies the trust anchors and the identity to an HTTP client: what talking to the server
-    /// over `https://` needs.
-    ///
-    /// # Errors
-    /// Returns an error when the CA or the identity cannot be used.
-    pub fn apply(&self, builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, String> {
-        let builder = self.trust(builder)?;
-        let Some(identity) = &self.identity else {
-            return Ok(builder);
-        };
-        // reqwest's rustls backend takes key and certificate as one PEM buffer, key first.
-        let mut pem = identity.key_pem.clone();
-        if !pem.ends_with(b"\n") {
-            pem.push(b'\n');
-        }
-        pem.extend_from_slice(&identity.cert_pem);
-        let identity = reqwest::Identity::from_pem(&pem)
-            .map_err(|e| format!("cannot present the client certificate: {e}"))?;
-        Ok(builder.identity(identity))
     }
 }
 
@@ -215,7 +182,7 @@ impl Connection {
             builder = builder.default_headers(headers);
         }
         self.tls
-            .apply(builder)?
+            .trust(builder)?
             .build()
             .map_err(|e| format!("cannot build the HTTP client: {e}"))
     }
@@ -412,7 +379,6 @@ mod tests {
     fn unusable_tls_material_names_the_part() {
         let tls = ClientTls {
             ca_pem: Some(b"not pem".to_vec()),
-            identity: None,
         };
         let error = tls.rustls_config().expect_err("no CA in it");
         assert!(error.starts_with("the CA:"), "{error}");

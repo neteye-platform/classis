@@ -20,7 +20,7 @@ use super::{AfterReply, Ended, ReportSink, Session, StopSignal};
 pub struct Settings {
     /// `http://` or `https://`.
     pub endpoint: String,
-    /// The client every exchange goes through — trust, identity and default headers (the
+    /// The client every exchange goes through — trust and default headers (the
     /// `Authorization` header, typically) are the application's to configure on it.
     pub client: reqwest::Client,
     /// How long to wait between cycles once nothing is owed.
@@ -76,6 +76,16 @@ pub async fn run<S: Session, X: StopSignal>(
                     // Refused on its own terms — retrying it unchanged is what the specification
                     // forbids for a `413`, and a full snapshot would make the retry larger still.
                     Err(e @ Exchange::Refused(_)) => warn!(error = %e, "report refused"),
+                    // The report is lost as any failed exchange is, unless the session wants its
+                    // credential replaced: then the run ends here, without goodbyes the Server
+                    // would refuse as well.
+                    Err(Exchange::Unauthorized { challenges }) => {
+                        if session.unauthorized(&challenges) {
+                            return Ok(Ended::Unauthorized { challenges });
+                        }
+                        warn!("admission failed: the server refused this client (HTTP 401)");
+                        session.exchange_failed();
+                    }
                     Err(e) => {
                         warn!(error = %e, "exchange failed");
                         // A report was lost; full snapshots so the Server can rebuild.
@@ -187,9 +197,15 @@ async fn exchange(
         .map_err(|e| Exchange::failed(&format!("cannot reach {endpoint}: {e}")))?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(Exchange::failed(
-            "admission failed: the server refused this client (HTTP 401)",
-        ));
+        return Err(Exchange::Unauthorized {
+            challenges: super::challenges(
+                response
+                    .headers()
+                    .get_all(reqwest::header::WWW_AUTHENTICATE)
+                    .iter()
+                    .map(reqwest::header::HeaderValue::as_bytes),
+            ),
+        });
     }
     // Throttling (the Baseline, *Throttling*, plain HTTP): the Server may answer 503 or 429 and
     // *"MAY optionally set Retry-After … The Client SHOULD honour the corresponding requirements of
@@ -238,6 +254,10 @@ pub enum Exchange {
     },
     /// The Server refused this report and it must not be sent again as it stands.
     Refused(String),
+    /// The Server answered `401`: what its `WWW-Authenticate` headers said, one entry per header.
+    /// The report was lost like any other failed exchange, unless the session asks to end the run
+    /// on it ([`Session::unauthorized`]).
+    Unauthorized { challenges: Vec<String> },
 }
 
 impl Exchange {
@@ -252,6 +272,9 @@ impl std::fmt::Display for Exchange {
             Exchange::Failed(message) | Exchange::Refused(message) => f.write_str(message),
             Exchange::Throttled { status, after } => {
                 write!(f, "the server is throttling ({status}); waiting {after:?}")
+            }
+            Exchange::Unauthorized { .. } => {
+                f.write_str("admission failed: the server refused this client (HTTP 401)")
             }
         }
     }

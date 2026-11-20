@@ -82,8 +82,8 @@ async fn spawn_server(
                 PackageOffering::new(dir.path(), store).expect("deployments"),
             )),
     );
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -91,6 +91,11 @@ async fn spawn_server(
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
+    // The Client is a host of the Server's Space: the `state.json` of the state directory the
+    // tests below name (ADR-0064).
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
     (addr, state, dir)
 }
 
@@ -180,8 +185,7 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let _client = spawn_client(&config_path);
 
@@ -302,8 +306,7 @@ async fn a_package_that_fails_the_configured_version_check_is_refused() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let _client = spawn_client(&config_path);
 

@@ -1554,8 +1554,8 @@ mod tests {
     /// A delivered set reaches no key of `supervisor.toml` but the `[[supervisor]]` array: whatever
     /// else it names — an `[auth]` section, trust, the verification key, a removed key such as
     /// `allowed_sources`, the
-    /// operator's consent in `[supervisors]`, self-update, Gateway Mode — the file keeps the
-    /// operator's values and gains none of the offered ones.
+    /// operator's consent in `[supervisors]`, self-update — the file keeps the operator's values and
+    /// gains none of the offered ones.
     /// Verifies: ADR-0017
     #[test]
     fn a_delivered_set_writes_nothing_beyond_the_supervisor_blocks() {
@@ -1584,9 +1584,6 @@ mod tests {
             delivered_args = true
             delivered_env = ["LD_PRELOAD"]
 
-            [gateway]
-            listen = "0.0.0.0:4320"
-
             [[supervisor]]
             type = "command"
             name = "agent"
@@ -1604,7 +1601,6 @@ mod tests {
             "delivered_args",
             "LD_PRELOAD",
             "self_update",
-            "[gateway]",
         ] {
             assert!(
                 !text.contains(offered),

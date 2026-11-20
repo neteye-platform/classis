@@ -14,14 +14,13 @@
 //! a channel for its work there.
 
 pub mod agents;
-pub mod bootstrap;
+pub mod clients;
 pub mod configs;
 pub mod deployments;
-pub mod enrolment;
 pub mod import;
-pub mod ledger;
 pub mod packages;
 pub mod schema;
+pub mod spaces;
 
 use std::future::Future;
 use std::path::Path;

@@ -16,17 +16,12 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 opamp = { path = "../crates/opamp", features = ["client", "server"] }
 classis-agent = { path = "../crates/classis-agent" }
-classis-server = { path = "../crates/classis-server" }
-classis-core = { path = "../crates/classis-core" }
 oauth-token = { path = "../crates/oauth-token", features = ["server"] }
 oauth-registration = { path = "../crates/oauth-registration", features = ["server"] }
 http = "1"
 prost = "0.14"
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 tempfile = "3"
 toml = "1"
-# Reads the issued certificate back, so the assertion is on what was signed, not on its text.
-x509-parser = "0.18"
 
 # Its own workspace, so the repository's stable build never compiles libFuzzer.
 [workspace]
@@ -63,29 +58,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "csr_sign"
-path = "fuzz_targets/csr_sign.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "archive_tree"
 path = "fuzz_targets/archive_tree.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "pkcs12"
-path = "fuzz_targets/pkcs12.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "revocation_list"
-path = "fuzz_targets/revocation_list.rs"
 test = false
 doc = false
 bench = false
@@ -100,13 +74,6 @@ bench = false
 [[bin]]
 name = "archive_member"
 path = "fuzz_targets/archive_member.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "renewal_proof"
-path = "fuzz_targets/renewal_proof.rs"
 test = false
 doc = false
 bench = false

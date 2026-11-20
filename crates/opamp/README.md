@@ -24,11 +24,13 @@ Two features add each side on top, end to end, and neither is on by default:
 - `client` — `opamp::client`: an agent's protocol state machine, a `Session` the
   program implements, and the WebSocket and plain-HTTP transports with backoff,
   heartbeat, limits and throttling. A `Connection` describes the endpoint, the
-  credential, the trust anchors and the client certificate; the crate builds the
-  TLS configuration and the HTTP client from it.
+  credential and the trust anchors; the crate builds the TLS configuration and
+  the HTTP client from it. A server's `401` reaches the program with its
+  `WWW-Authenticate` challenges, on both transports, so that it can replace its
+  credential.
 - `server` — `opamp::server`: one endpoint for both transports around a
   `Handler` the program implements, and `opamp::server::listen`, which serves it
-  over TLS with the client-certificate rule, a bounded header read and a bounded
+  over TLS with the server's certificate, a bounded header read and a bounded
   handshake.
 
 Both take their material as values — PEM bytes, a header value, durations — and

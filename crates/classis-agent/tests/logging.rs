@@ -16,18 +16,19 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Runs the Client the way `service install` writes the command line, against an endpoint nothing
-/// answers on: it must still log, because the failures worth reading are exactly the ones where
-/// there is no Server.
+/// Runs the Client the way `service install` writes the command line, as an enrolled host whose
+/// Server nothing answers: it must still log, because the failures worth reading are exactly the
+/// ones where there is no Server. The host holds a `state.json` — a Client without one refuses to
+/// start and runs nothing (ADR-0064 clause 7) — naming that same endpoint.
 fn spawn(dir: &Path, args: &[&str]) -> Child {
+    common::write_state_json(&dir.join("state"), "http://127.0.0.1:1");
     let config = dir.join("supervisor.toml");
     std::fs::write(
         &config,
         // Port 1 answers nothing, so this Client stays in its reconnect loop for the whole test.
         format!(
-            "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {:?}\n{}",
+            "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {:?}\n",
             dir.join("state").to_string_lossy(),
-            common::client_identity(dir)
         ),
     )
     .expect("write config");
@@ -74,6 +75,10 @@ fn a_service_run_writes_a_log_file() {
 
     let logs = dir.path().join("state").join("logs");
     let found = wait_for_log(&logs, Duration::from_secs(20));
+    assert!(
+        child.try_wait().expect("wait").is_none(),
+        "the Client ended on its own"
+    );
     let _ = child.kill();
     let _ = child.wait();
 
@@ -98,6 +103,10 @@ fn a_foreground_run_writes_no_log_file() {
 
     // Long enough that the Client is well past start-up and into its reconnect loop.
     std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        child.try_wait().expect("wait").is_none(),
+        "the Client ended on its own, so it never reached its reconnect loop"
+    );
     let _ = child.kill();
     let _ = child.wait();
 

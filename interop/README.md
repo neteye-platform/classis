@@ -32,7 +32,11 @@ The test builds this program itself with `go build`.
 
 Each runs in both directions (`opamp-go`'s Client against our Server, our Client
 against `opamp-go`'s Server) and on both transports. All run in plaintext on the
-loopback with an open admission, except the runs on the endpoint as it ships:
+loopback, except the runs on the endpoint as it ships. Our Server admits by bearer
+token ([ADR-0064](../docs/adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)):
+the test enrols a host and gives `opamp-go`'s Client its access token.
+`opamp-go`'s Server checks no token, and our Client is started with a
+`state.json`, which it does not run without:
 
 - connect and report: the description and the declared capabilities arrive;
 - `sequence_num` continuity, and the `ReportFullState` recovery: our Server asks
@@ -48,10 +52,9 @@ loopback with an open admission, except the runs on the endpoint as it ships:
 - identity: a Server-assigned `AgentIdentification` is adopted, our Client
   persists it, and our Server keeps no record under the requested identity;
 - the endpoint as it ships: both directions over `wss://` and `https://` with
-  TLS 1.3 alone and a required client certificate from a PKI the test generates,
-  carrying connect and report and a configuration round trip; a certificate
-  another CA issued is refused by both ends, and our Server refuses a peer that
-  offers none;
+  TLS 1.3 alone, from a PKI the test generates, carrying connect and report and
+  a configuration round trip; a peer that trusts another CA than the one that
+  issued the far end's certificate does not get past the handshake;
 - `agent_disconnect` on a graceful stop of our Client. The other direction is
   not decided: `opamp-go`'s plain-HTTP Client sends no `agent_disconnect` (an
   oracle gap), and over WebSocket the goodbye and the closing socket mark the
