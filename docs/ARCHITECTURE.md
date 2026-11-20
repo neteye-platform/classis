@@ -108,6 +108,9 @@ neither yet wired into the product — no Server or Client code depends on them:
 - **`classis-server`** — the Server: the fleet and its Hosts, its Configurations,
   labels, packages and Deployments, the Agent plane and the Operator plane.
 - **`classis-agent`** — the Client in all its modes, the program `supervisor`.
+  Its `credentials` value type, a host's bearer token and the secret that
+  replaces it, is prepared but unused: the Client still authenticates by its
+  client certificate.
 - **`classis-tools`** — the operator tool, the one program `classisctl`: its
   `package` commands fetch, pack, hash and sign package artifacts — or sign a
   Package's signing file from the UI (ADR-0027) — its `pki` commands make the
@@ -160,7 +163,15 @@ module has no role.
   `PackageStore::open`, `PackageOffering::new` and
   `BootstrapCertificates::on_disk`. `migrate` is the one module that reads the
   layout of an older Server, for `server migrate`, and nothing in the running
-  Server calls it.
+  Server calls it. The ports of the bearer-token enrolment of
+  [ADR-0064](adr/0064-a-host-enrols-with-its-spaces-key-and-is-admitted-by-a-bearer-token.md)
+  are in place but unused:
+  `SpaceStore` in `space_store` under the `Spaces` service in `spaces`,
+  `ClientStore` in `client_store`, their adapters in `fs::spaces`,
+  `fs::clients`, `postgres::spaces` and `postgres::clients`, and the `spaces`
+  and `clients` tables in the first migration. `Records` hands out neither
+  port, the data directory's layout names neither directory, and admission is
+  still by client certificate.
 - **Server listeners** — `tls` reads the `[tls]`, `[rest.tls]` and `[enrolment]`
   files into the material each plane serves with — the Agent plane requiring a
   client certificate in the handshake, the Operator plane asking for none and

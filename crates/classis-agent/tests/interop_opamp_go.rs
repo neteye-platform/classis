@@ -464,7 +464,7 @@ impl Drop for OurClient {
 }
 
 fn our_client(dir: &Path, endpoint: &str) -> (OurClient, PathBuf) {
-    our_client_with(dir, endpoint, &common::client_identity(dir))
+    our_client_with(dir, endpoint, &common::client_certificate(dir))
 }
 
 /// Our Client with the `[tls]` table given, which names its certificate and, for a TLS endpoint,

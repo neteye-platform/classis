@@ -3,7 +3,8 @@
 //! when a certificate counts as ending and what a certificate is called (ADR-0028), and the
 //! bootstrap certificate's PKCS#12 file (ADR-0029), and the host a certificate that names none is
 //! taken for (ADR-0039), and the proofs a renewal and an enrolment request carry in their CSR
-//! (ADR-0021 clause 27, ADR-0039).
+//! (ADR-0021 clause 27, ADR-0039), and the shape of a space's name and its enrolment key
+//! (ADR-0064).
 //! The protocol and its transport, TLS included, are in the `opamp` crate (ADR-0010).
 
 #![forbid(unsafe_code)]
@@ -11,6 +12,7 @@
 pub mod bootstrap_proof;
 pub mod csr;
 pub mod ending;
+pub mod enrolment_key;
 pub mod host;
 pub mod naming;
 pub mod package;
