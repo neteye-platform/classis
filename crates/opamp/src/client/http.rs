@@ -20,7 +20,7 @@ use super::{AfterReply, Ended, ReportSink, Session, StopSignal};
 pub struct Settings {
     /// `http://` or `https://`.
     pub endpoint: String,
-    /// The client every exchange goes through — trust, identity and default headers (the
+    /// The client every exchange goes through — trust and default headers (the
     /// `Authorization` header, typically) are the application's to configure on it.
     pub client: reqwest::Client,
     /// How long to wait between cycles once nothing is owed.

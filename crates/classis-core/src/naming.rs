@@ -7,7 +7,7 @@ pub const MAX_COMMON_NAME: usize = 64;
 /// The longest value of an organization or an organizational unit (RFC 5280 Appendix A.1).
 pub const MAX_ORGANIZATION: usize = 64;
 
-/// The longest product name, so `<product> Bootstrap Certificate` stays within
+/// The longest product name, so `<product> Server Certificate` stays within
 /// [`MAX_COMMON_NAME`].
 pub const MAX_PRODUCT: usize = 40;
 
@@ -65,16 +65,16 @@ mod tests {
     #[test]
     fn a_leaf_is_named_for_its_ca_with_ca_turned_into_certificate() {
         assert_eq!(
-            leaf_common_name("Acme Fleet Client CA"),
-            "Acme Fleet Client Certificate"
+            leaf_common_name("Acme Fleet Server CA"),
+            "Acme Fleet Server Certificate"
         );
         assert_eq!(
-            leaf_common_name("classis bootstrap CA"),
-            "classis bootstrap Certificate"
+            leaf_common_name("classis server CA"),
+            "classis server Certificate"
         );
         assert_eq!(leaf_common_name("Corp Root"), "Corp Root Certificate");
         let longest = "x".repeat(MAX_PRODUCT);
-        assert!(leaf_common_name(&format!("{longest} Bootstrap CA")).len() <= MAX_COMMON_NAME);
+        assert!(leaf_common_name(&format!("{longest} Server CA")).len() <= MAX_COMMON_NAME);
     }
 
     // Verifies: ADR-0028

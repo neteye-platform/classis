@@ -567,30 +567,6 @@ impl crate::packages::SignatureVerifier for Ed25519Verifier {
     }
 }
 
-/// What the `[enrolment]` section of a certificate-era Server held (ADR-0021 clause 19). No longer a
-/// section of [`ServerConfig`], which refuses it as an unknown key: kept only for the unwired
-/// bootstrap CA ([`crate::ca::BootstrapCa`]) until the certificate cleanup removes both.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnrolmentConfig {
-    /// PEM certificate of the CA that issues bootstrap certificates. A certificate from it can
-    /// only enrol: it needs an open enrolment window and an operator's approval.
-    pub bootstrap_ca_file: PathBuf,
-    /// PEM PKCS#8 key of that CA. With it the Server issues bootstrap certificates on an
-    /// operator's request; without it enrolment works with bootstrap certificates made elsewhere
-    /// (ADR-0021 clause 19).
-    #[serde(default)]
-    pub bootstrap_ca_key_file: Option<PathBuf>,
-    /// The most requests of one bootstrap certificate the pending queue holds at once, 1 to
-    /// [`MAX_PENDING`](crate::certificate_enrolment::MAX_PENDING) (ADR-0046).
-    #[serde(default = "default_max_pending_per_bootstrap")]
-    pub max_pending_per_bootstrap: usize,
-}
-
-fn default_max_pending_per_bootstrap() -> usize {
-    crate::certificate_enrolment::DEFAULT_MAX_PENDING_PER_BOOTSTRAP
-}
-
 /// The `[admission_throttle]` section (ADR-0021 clause 24).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -851,23 +827,6 @@ pub struct TlsConfig {
     pub key_file: PathBuf,
 }
 
-/// What the `[client_ca]` section of a certificate-era Server held (ADR-0021): the certificate
-/// authority it signed Agent CSRs with. No longer a section of [`ServerConfig`], which refuses it as
-/// an unknown key: kept only for the unwired client CA ([`crate::ca::ClientCa`]) until the
-/// certificate cleanup removes both.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClientCaConfig {
-    /// PEM certificate of the issuing CA.
-    pub cert_file: PathBuf,
-    /// PEM private key of the issuing CA.
-    pub key_file: PathBuf,
-    /// How long an issued certificate is valid. Short is the point: validity plus renewal bounds a
-    /// certificate nobody noticed was stolen, and revocation ends one that was (ADR-0021).
-    #[serde(default = "default_validity_days")]
-    pub validity_days: u32,
-}
-
 fn default_agent_max_connections() -> usize {
     opamp::server::listen::DEFAULT_MAX_CONNECTIONS
 }
@@ -898,12 +857,6 @@ fn default_max_message_size() -> usize {
 /// lost packet, and a fleet view that flickers is one nobody trusts.
 fn default_stale_after_secs() -> u64 {
     90
-}
-
-/// A month: short enough that a certificate stolen unnoticed is good for weeks, not a quarter;
-/// long enough that a host offline for a fortnight still renews on its own (ADR-0021 clause 9).
-fn default_validity_days() -> u32 {
-    30
 }
 
 /// Roomy enough for the real thing: an `otelcol-contrib` binary is a few hundred megabytes.

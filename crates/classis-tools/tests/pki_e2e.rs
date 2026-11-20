@@ -129,7 +129,6 @@ async fn a_fleet_made_by_pki_init_lets_a_host_enrol_over_tls() {
         &state_dir,
         opamp::client::ClientTls {
             ca_pem: Some(std::fs::read(&host.tls.ca_file).expect("the CA")),
-            identity: None,
         },
         &NoService,
     )

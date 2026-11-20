@@ -720,7 +720,7 @@ mod tests {
     /// Verifies: ADR-0014, ADR-0064
     #[tokio::test]
     async fn verify_trusts_the_ca_file_and_sends_the_token_over_tls() {
-        use opamp::server::listen::{ClientAuth, Handle, Listener, ServerTls};
+        use opamp::server::listen::{Handle, Listener, ServerTls};
         use opamp::tls::Identity;
         use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 
@@ -741,9 +741,6 @@ mod tests {
                 cert_pem: server_cert.pem().into_bytes(),
                 key_pem: server_key.serialize_pem().into_bytes(),
             },
-            // The Server asks for no client certificate: admission is by the bearer token
-            // (ADR-0064). The field goes with the certificate cleanup of `opamp`.
-            client_auth: ClientAuth::None,
         }
         .rustls_config()
         .expect("server config");

@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use opamp::server::listen::{ClientAuth, ServerTls};
+use opamp::server::listen::ServerTls;
 use opamp::tls::Identity;
 
 use crate::config::{RestTlsConfig, TlsConfig};
@@ -31,13 +31,9 @@ pub fn server_tls(tls: &TlsConfig, operator: Option<&RestTlsConfig>) -> Result<P
             Some(operator) => operator_identity(operator)?,
             None => identity.clone(),
         },
-        client_auth: ClientAuth::None,
     };
     Ok(PlaneTls {
-        agent: ServerTls {
-            identity,
-            client_auth: ClientAuth::None,
-        },
+        agent: ServerTls { identity },
         operator,
     })
 }
@@ -49,7 +45,6 @@ fn operator_identity(operator: &RestTlsConfig) -> Result<Identity, String> {
     let identity = identity(&operator.cert_file, &operator.key_file)?;
     ServerTls {
         identity: identity.clone(),
-        client_auth: ClientAuth::None,
     }
     .rustls_config()
     .map_err(|e| {

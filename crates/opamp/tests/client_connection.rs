@@ -8,7 +8,7 @@ use axum::http::{header, StatusCode};
 use axum::routing::post;
 use opamp::client::{AfterReply, ClientTls, Connection, Ended, ReportSink, Session, StopSignal};
 use opamp::proto::{AgentToServer, ServerToAgent};
-use opamp::server::listen::{ClientAuth, Handle, Listener, PeerCertificate, ServerTls};
+use opamp::server::listen::{Handle, Listener, ServerTls};
 use opamp::server::{Handler, NoOutbound, Rejection, Reply, RequestInfo, Settings};
 use opamp::tls::Identity;
 use rcgen::{CertificateParams, IsCa, Issuer, KeyPair};
@@ -46,8 +46,8 @@ impl Pki {
 /// What the refusal of a connection without the credential says in `WWW-Authenticate`.
 const CHALLENGE: &str = "Bearer error=\"invalid_token\"";
 
-/// Admits a connection that brings the credential and a client certificate, and answers every
-/// report with its own `instance_uid`.
+/// Admits a connection that brings the credential, and answers every report with its own
+/// `instance_uid`.
 struct Gate;
 
 impl Handler for Gate {
@@ -58,15 +58,11 @@ impl Handler for Gate {
         &self,
         request: &RequestInfo<'_>,
     ) -> Result<((), Option<NoOutbound>), Rejection> {
-        let certificate = request
-            .extensions
-            .get::<PeerCertificate>()
-            .is_some_and(PeerCertificate::present);
         let credential = request
             .headers
             .get(header::AUTHORIZATION)
             .is_some_and(|value| value == "Bearer secret");
-        if certificate && credential {
+        if credential {
             Ok(((), None))
         } else {
             Err(Rejection {
@@ -92,14 +88,11 @@ impl Handler for Gate {
     }
 }
 
-/// The endpoint over TLS with an optional client certificate, plus a route that redirects.
+/// The endpoint over TLS, plus a route that redirects.
 fn serve(pki: &Pki) -> u16 {
     opamp::tls::install_ring_provider();
     let tls = ServerTls {
         identity: pki.issue("localhost"),
-        client_auth: ClientAuth::Optional {
-            ca_pem: pki.ca_pem.clone().into_bytes(),
-        },
     }
     .rustls_config()
     .expect("server config");
@@ -122,13 +115,12 @@ fn serve(pki: &Pki) -> u16 {
     port
 }
 
-fn connection(endpoint: String, pki: &Pki, identity: Option<Identity>) -> Connection {
+fn connection(endpoint: String, pki: &Pki) -> Connection {
     Connection {
         endpoint,
         authorization: Some("Bearer secret".to_string()),
         tls: ClientTls {
             ca_pem: Some(pki.ca_pem.clone().into_bytes()),
-            identity,
         },
         max_message_size: 4096,
         heartbeat: None,
@@ -144,8 +136,8 @@ fn report() -> Option<AgentToServer> {
     })
 }
 
-/// The probe proves a connection over either transport with the trust, the identity and the
-/// credential the description names — and fails without the identity the server asks for.
+/// The probe proves a connection over either transport with the trust and the credential the
+/// description names — and fails without the credential the server asks for.
 /// Verifies: ADR-0010
 #[tokio::test]
 async fn the_probe_connects_with_the_described_material_on_both_transports() {
@@ -153,16 +145,19 @@ async fn the_probe_connects_with_the_described_material_on_both_transports() {
     let port = serve(&pki);
     for scheme in ["wss", "https"] {
         let endpoint = format!("{scheme}://localhost:{port}/v1/opamp");
-        let with = connection(endpoint.clone(), &pki, Some(pki.issue("agent")));
+        let with = connection(endpoint.clone(), &pki);
         opamp::client::connection::probe(&with, report)
             .await
             .unwrap_or_else(|e| panic!("{scheme}: {e}"));
-        let without = connection(endpoint, &pki, None);
+        let without = Connection {
+            authorization: None,
+            ..connection(endpoint, &pki)
+        };
         assert!(
             opamp::client::connection::probe(&without, report)
                 .await
                 .is_err(),
-            "{scheme}: a connection without the client certificate was admitted"
+            "{scheme}: a connection without the credential was admitted"
         );
     }
 }
@@ -173,11 +168,7 @@ async fn the_probe_connects_with_the_described_material_on_both_transports() {
 async fn a_redirect_is_not_followed() {
     let pki = Pki::new();
     let port = serve(&pki);
-    let moved = connection(
-        format!("https://localhost:{port}/moved"),
-        &pki,
-        Some(pki.issue("agent")),
-    );
+    let moved = connection(format!("https://localhost:{port}/moved"), &pki);
     let error = opamp::client::connection::probe(&moved, report)
         .await
         .expect_err("a redirect is a failure");
@@ -231,11 +222,7 @@ async fn a_run_carries_the_session_over_the_transport_the_scheme_names() {
     let pki = Pki::new();
     let port = serve(&pki);
     for scheme in ["wss", "https"] {
-        let described = connection(
-            format!("{scheme}://localhost:{port}/v1/opamp"),
-            &pki,
-            Some(pki.issue("agent")),
-        );
+        let described = connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki);
         let mut session = Once::default();
         let ended = tokio::time::timeout(
             Duration::from_secs(10),
@@ -281,11 +268,7 @@ async fn a_tls12_only_server_fails_the_handshake() {
             .serve(router),
     );
     for scheme in ["wss", "https"] {
-        let described = connection(
-            format!("{scheme}://localhost:{port}/v1/opamp"),
-            &pki,
-            Some(pki.issue("agent")),
-        );
+        let described = connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki);
         let error = opamp::client::connection::probe(&described, report)
             .await
             .expect_err("a TLS 1.2 server was reached");
@@ -369,11 +352,7 @@ async fn a_401_and_its_challenge_reach_the_caller_on_both_transports() {
     for scheme in ["wss", "https"] {
         let without = Connection {
             authorization: None,
-            ..connection(
-                format!("{scheme}://localhost:{port}/v1/opamp"),
-                &pki,
-                Some(pki.issue("agent")),
-            )
+            ..connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki)
         };
         let mut session = Refused::new(true);
         let ended = tokio::time::timeout(
@@ -405,11 +384,7 @@ async fn a_session_that_does_not_end_on_a_401_keeps_the_drivers_behaviour() {
     for scheme in ["wss", "https"] {
         let without = Connection {
             authorization: None,
-            ..connection(
-                format!("{scheme}://localhost:{port}/v1/opamp"),
-                &pki,
-                Some(pki.issue("agent")),
-            )
+            ..connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki)
         };
         let mut session = Refused::new(false);
         let ended = tokio::time::timeout(

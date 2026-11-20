@@ -844,8 +844,6 @@ mod tests {
         let config = ClientConfig {
             tls: Some(crate::config::TlsConfig {
                 ca_file: Some(PathBuf::from("/etc/fleet/ca.pem")),
-                cert_file: None,
-                key_file: None,
             }),
             ..ClientConfig::default()
         };

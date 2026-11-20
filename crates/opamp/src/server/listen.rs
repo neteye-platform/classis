@@ -1,6 +1,6 @@
 //! The listener an OpAMP endpoint is served on (ADR-0010): TLS from the material the application
-//! hands it, the bounds on connection setup of ADR-0013, and what the handshake learned carried
-//! into every request.
+//! hands it, the bounds on connection setup of ADR-0013, and the peer's address carried into every
+//! request.
 //!
 //! Every other limit an endpoint enforces starts at a request. A peer that completes the TCP
 //! connection, sends a request line and falls silent reaches none of them, and would hold a task and
@@ -30,15 +30,13 @@ use axum_server::accept::Accept;
 use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig};
 use axum_server::Server;
 use hyper_util::rt::TokioTimer;
-use rustls::pki_types::CertificateDer;
-use rustls::server::WebPkiClientVerifier;
 use rustls::ServerConfig;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 
 use super::pace::{self, Pace, MIN_PACE_BYTES, PACE_WINDOW};
 use crate::endpoint::is_loopback_literal;
-use crate::tls::{certificates, private_key, provider, root_store, server_builder, Identity};
+use crate::tls::{certificates, private_key, server_builder, Identity};
 
 /// How long a connection may take to send its request line and headers: hyper's own default,
 /// with the timer that makes it take effect. It bounds the request line and the headers only.
@@ -140,79 +138,31 @@ impl Sessions {
     }
 }
 
-/// Whether a peer has to present a client certificate, and the CA it is verified against.
-#[derive(Clone, Debug)]
-pub enum ClientAuth {
-    /// Server-authenticated TLS only.
-    None,
-    /// A certificate the peer offers must verify, but the handshake succeeds without one. The
-    /// application decides per route whether to require it, through [`PeerCertificate`]. A
-    /// listener that also serves a route reached without a certificate needs this.
-    Optional { ca_pem: Vec<u8> },
-    /// The handshake fails without a certificate that verifies. For a listener that speaks only
-    /// OpAMP, where the CA is an access-control boundary.
-    Required { ca_pem: Vec<u8> },
-}
-
 /// What a listener serves TLS with.
 #[derive(Clone, Debug)]
 pub struct ServerTls {
     /// The certificate chain and key this listener presents.
     pub identity: Identity,
-    pub client_auth: ClientAuth,
 }
 
 impl ServerTls {
-    /// The rustls configuration for this material, with HTTP/2 and HTTP/1.1 offered by ALPN.
+    /// The rustls configuration for this material, with HTTP/2 and HTTP/1.1 offered by ALPN. The
+    /// server authenticates itself and asks its peer for nothing.
     ///
     /// # Errors
-    /// Returns an error naming the part — certificate, key, or client CA — that cannot be used.
+    /// Returns an error naming the part — certificate or key — that cannot be used.
     pub fn rustls_config(&self) -> Result<Arc<ServerConfig>, String> {
         let certs = certificates(&self.identity.cert_pem)
             .map_err(|e| format!("the TLS certificate: {e}"))?;
         let key = private_key(&self.identity.key_pem).map_err(|e| format!("the TLS key: {e}"))?;
-        let builder = match &self.client_auth {
-            ClientAuth::None => server_builder().with_no_client_auth(),
-            ClientAuth::Optional { ca_pem } | ClientAuth::Required { ca_pem } => {
-                let roots = root_store(ca_pem).map_err(|e| format!("the client CA: {e}"))?;
-                let verifier = WebPkiClientVerifier::builder_with_provider(
-                    Arc::new(roots),
-                    Arc::new(provider()),
-                );
-                let verifier = if matches!(self.client_auth, ClientAuth::Optional { .. }) {
-                    verifier.allow_unauthenticated()
-                } else {
-                    verifier
-                };
-                let verifier = verifier
-                    .build()
-                    .map_err(|e| format!("cannot build the client verifier: {e}"))?;
-                server_builder().with_client_cert_verifier(verifier)
-            }
-        };
-        let mut config = builder
+        let mut config = server_builder()
+            .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|e| format!("cannot use the TLS certificate and key: {e}"))?;
         // `RustlsConfig::from_config` leaves ALPN to the caller, unlike the from-PEM constructors,
         // and without it every HTTP/2 client fails the negotiation.
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         Ok(Arc::new(config))
-    }
-}
-
-/// What the TLS handshake proved about the peer, in every request on that connection.
-///
-/// `None` means the peer presented no certificate, or the listener serves no TLS. A certificate
-/// that is present has been verified against the client CA: rustls refuses a bad one during the
-/// handshake, so this type never carries an unverified certificate. It proves membership of
-/// whoever holds the CA's certificates, never which Agent is speaking.
-#[derive(Clone, Debug, Default)]
-pub struct PeerCertificate(pub Option<CertificateDer<'static>>);
-
-impl PeerCertificate {
-    #[must_use]
-    pub fn present(&self) -> bool {
-        self.0.is_some()
     }
 }
 
@@ -273,7 +223,7 @@ impl Listener {
     }
 
     /// Serves `router` until the handle shuts the listener down. Every request carries the peer's
-    /// address as `ConnectInfo<SocketAddr>` and the handshake's [`PeerCertificate`].
+    /// address as `ConnectInfo<SocketAddr>`.
     ///
     /// # Errors
     /// Returns the I/O error that stopped the listener, and refuses a listener without TLS on any
@@ -459,15 +409,8 @@ impl AsyncWrite for Counted {
 /// The per-connection extensions, attached to the router that serves the connection. The router is
 /// what `into_make_service` hands an acceptor, and `Router::layer` attaches an extension without a
 /// direct dependency on `tower`.
-fn with_connection(
-    service: Router,
-    peer: Option<SocketAddr>,
-    certificate: Option<CertificateDer<'static>>,
-    pace: Pace,
-) -> Router {
-    let service = service
-        .layer(Extension(PeerCertificate(certificate)))
-        .layer(Extension(pace));
+fn with_connection(service: Router, peer: Option<SocketAddr>, pace: Pace) -> Router {
+    let service = service.layer(Extension(pace));
     match peer {
         Some(peer) => service.layer(Extension(ConnectInfo(peer))),
         None => service,
@@ -485,7 +428,7 @@ impl Accept<TcpStream, Router> for Plain {
     fn accept(&self, stream: TcpStream, service: Router) -> Self::Future {
         let peer = stream.peer_addr().ok();
         std::future::ready(match self.0.take(stream) {
-            Some(stream) => Ok((stream, with_connection(service, peer, None, self.0.pace()))),
+            Some(stream) => Ok((stream, with_connection(service, peer, self.0.pace()))),
             None => Err(full()),
         })
     }
@@ -508,14 +451,7 @@ impl Accept<TcpStream, Router> for Tls {
         Box::pin(async move {
             let stream = counted.ok_or_else(full)?;
             let (stream, service) = inner.accept(stream, service).await?;
-            // What is here was verified against the client CA: rustls completed the handshake, and
-            // a certificate it could not chain never gets this far.
-            let certificate = stream
-                .get_ref()
-                .1
-                .peer_certificates()
-                .and_then(|chain| chain.first().cloned());
-            Ok((stream, with_connection(service, peer, certificate, pace)))
+            Ok((stream, with_connection(service, peer, pace)))
         })
     }
 }
