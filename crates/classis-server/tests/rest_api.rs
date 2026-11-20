@@ -1962,11 +1962,11 @@ async fn the_ui_lists_hosts_and_marks_inherited_labels() {
 }
 
 /// The Packages tab shows each entry's SHA-256 and signature state, and puts a signature through
-/// the entry's signature route (ADR-0033, ADR-0063 clause 16) — so the fields it reads must be the
+/// the entry's signature route (ADR-0033, ADR-0066 clause 16) — so the fields it reads must be the
 /// ones the API serves. A rename on either side breaks here rather than in an empty column. The
 /// tab neither offers nor imports a signing file, and names no verification key: what
-/// `classisctl package sign` makes is refused (ADR-0063 clauses 17 and 18).
-/// Verifies: ADR-0023, ADR-0033, ADR-0063
+/// `classisctl package sign` makes is refused (ADR-0066 clauses 17 and 18).
+/// Verifies: ADR-0023, ADR-0033, ADR-0066
 #[tokio::test]
 async fn the_ui_shows_the_sha256_and_the_signature_state_the_api_serves() {
     let server = spawn().await;

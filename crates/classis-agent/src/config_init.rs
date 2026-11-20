@@ -455,7 +455,7 @@ fn table<'a>(
 ///
 /// The endpoint and the self-update consent are taken, and for a `wss://` / `https://` endpoint
 /// the Server CA that lies `beside` the program, copied beside the file as the questionnaire's
-/// answer would be (ADR-0063 clause 14). The client identity comes from
+/// answer would be (ADR-0066 clause 14). The client identity comes from
 /// an enrolment an operator approves, which the install runs with a bootstrap pair beside the
 /// program (ADR-0020 clause 4); a file written without one fails the install's validation and
 /// stays on disk to be completed (ADR-0019).
@@ -575,7 +575,7 @@ pub fn ask(
             endpoint: endpoint.trim().to_string(),
             name: name.trim().to_string(),
             ca_file,
-            // Not asked (ADR-0063 clause 11): a new file writes the consent, and an edited file keeps
+            // Not asked (ADR-0066 clause 11): a new file writes the consent, and an edited file keeps
             // the consent it states.
             self_update: current.self_update_package().is_some(),
         },
@@ -1249,7 +1249,7 @@ mod tests {
             (SERVER_CA_FILE, "ca"),
             (BOOTSTRAP_CERT_FILE, "cert"),
             (BOOTSTRAP_KEY_FILE, "key"),
-            // What `pki init` still writes offline, and nothing reads (ADR-0063 clause 12).
+            // What `pki init` still writes offline, and nothing reads (ADR-0066 clause 12).
             (
                 "package-signing-key.pub",
                 &format!("{}\n", "ab".repeat(32))[..],
@@ -1260,8 +1260,8 @@ mod tests {
     }
 
     /// The fleet's files are found by their exact names; half a bootstrap pair is said and not
-    /// taken, and a package key lying there is neither looked for nor named (ADR-0063 clause 12).
-    /// Verifies: ADR-0020, ADR-0063
+    /// taken, and a package key lying there is neither looked for nor named (ADR-0066 clause 12).
+    /// Verifies: ADR-0020, ADR-0066
     #[test]
     fn the_fleets_files_are_found_beside_the_program_by_their_names() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1318,8 +1318,8 @@ mod tests {
 
     /// `--endpoint` writes the CA it finds beside the program, as a copy beside the file, and no
     /// package key lying there; a loopback `ws://` takes no CA, and a file that exists is kept
-    /// (ADR-0063 clause 14).
-    /// Verifies: ADR-0063
+    /// (ADR-0066 clause 14).
+    /// Verifies: ADR-0066
     #[test]
     fn an_endpoint_install_takes_the_ca_beside_the_program() {
         let program = tempfile::tempdir().expect("tempdir");

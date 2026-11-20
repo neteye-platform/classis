@@ -1,4 +1,4 @@
-# ADR-0062: The release run signs every entry of the Client's own package, with a key only a reviewed `v<version>` tag reaches
+# ADR-0065: The release run signs every entry of the Client's own package, with a key only a reviewed `v<version>` tag reaches
 
 - **Status:** 🟡 proposed
 - **Date:** 2026-11-13
@@ -31,10 +31,10 @@ the operator can sign the Client's release for it.
 This ADR moves the signing of the Client's own Package into the project's
 release run. The release run signs each entry of `supervisor` at the release's
 version with the key of a Package Signer, in the `PackageSignature` form that
-[ADR-0063](0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+[ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 defines, and publishes the signatures beside the archives. What the Client and
 the Server accept, and why a Package Signer certificate rather than a bare key,
-is ADR-0063's decision.
+is ADR-0066's decision.
 
 The forces:
 
@@ -68,7 +68,7 @@ The forces:
 ## Decision
 
 We will sign every entry of the Client's own Package in a `sign` job of the
-release run. The key is the Ed25519 key of one Package Signer (ADR-0063), a
+release run. The key is the Ed25519 key of one Package Signer (ADR-0066), a
 secret of the GitHub environment `Package Signing`. Only a run started by a
 hand-pushed `v<version>` tag reaches that job, and only after a second person
 with write access approves. The release publishes each signature beside the
@@ -77,7 +77,7 @@ archives.
 1. **One Package Signer, made outside the release run.**
    - A repository admin makes an Ed25519 key on a machine of their own and
      sends a request for it to the Package Root's custodian, who issues the
-     certificate (ADR-0063 clause 2).
+     certificate (ADR-0066 clause 2).
    - The admin stores the base64 of the key in PKCS#8 DER as the secret
      `PACKAGE_SIGNING_KEY` of the environment `Package Signing`, then deletes
      the key. No copy is kept.
@@ -156,7 +156,7 @@ archives.
    - **The key on the runner.** The key is decoded into a file under
      `RUNNER_TEMP`, mode `0600`. A step with `if: always()` removes it.
    - **What it writes.**
-     - Each `PackageSignature` (ADR-0063 clause 3), the certificate and the
+     - Each `PackageSignature` (ADR-0066 clause 3), the certificate and the
        64-byte signature in one DER value, goes to `<archive>.sig` as lowercase
        hex and a newline. That is the form the REST API takes an entry's
        signature in.
@@ -220,7 +220,7 @@ archives.
      their `supervisor_` stem, as one package for Agent type `supervisor`, each
      entry with the signature its `.sig` holds;
    - that the Client and the Server check each `.sig` against the Package
-     Roots they carry, with nothing to configure (ADR-0063);
+     Roots they carry, with nothing to configure (ADR-0066);
    - the full baked version string, as provenance. The upload uses the release
      number, since versions are compared without build metadata (ADR-0012).
 
@@ -285,7 +285,7 @@ archives.
 **Out of scope:**
 
 - what the Client and the Server accept, the Package Signer's profile and the
-  `PackageSignature`, which ADR-0063 decides;
+  `PackageSignature`, which ADR-0066 decides;
 - the operator tool's `package sign` and `keygen` commands;
 - signing third-party packages in the release run;
 - verifying the `.sig` files in `publish` before the release is created;
@@ -315,7 +315,7 @@ archives.
   pursued for this step.
 - **A Sigstore keyless signature (cosign).** Neither the Client nor the Server
   verifies one. Both verify a `PackageSignature` up to the Package Roots
-  compiled into them (ADR-0063).
+  compiled into them (ADR-0066).
 - **Sign in `publish`.** `publish` holds `contents: write`, `packages: write`,
   `id-token: write` and `attestations: write`. The key would sit beside every
   one of them, and ADR-0052 clause 11 limits that job to two actions.
@@ -357,7 +357,7 @@ Read on 2026-11-12 and 2026-11-13.
 - **Positive:**
   - An operator trusts the Client's releases with nothing to configure: the
     Client and the Server verify each `.sig` up to their Package Roots
-    (ADR-0063).
+    (ADR-0066).
   - No release is signed by one person alone.
   - The signing job builds nothing and runs nothing from this repository's
     sources or dependencies, only the shell of its own steps.
@@ -366,7 +366,7 @@ Read on 2026-11-12 and 2026-11-13.
   - A repository admin can change the environment's reviewers and rules, or
     replace the secret. The organisation's audit log records it.
   - An exposed key signs Packages that every Client accepts until its Package
-    Signer expires. There is no revocation (ADR-0063, Out of scope). Reverting
+    Signer expires. There is no revocation (ADR-0066, Out of scope). Reverting
     the workflow does not undo it.
   - A lost key means a new Package Signer from the Root's custodian before the
     next release.
@@ -382,7 +382,7 @@ Read on 2026-11-12 and 2026-11-13.
     since a run fails when its tag disagrees with `Cargo.toml`.
 - **Specification:** "Software is installed only when it is signed with a key
   the operator holds" no longer describes the Client's releases. The change is
-  drafted in ADR-0063, which decides what a Client trusts; landing it is the
+  drafted in ADR-0066, which decides what a Client trusts; landing it is the
   human's ([`AGENTS.md` §3](../../AGENTS.md#3-adr-rules), rule 7).
 - **A release tag is `v<version>`** (clauses 11 to 13), the form upstream
   projects use: `classisctl package fetch` reads this project's releases by it,
@@ -401,7 +401,7 @@ Read on 2026-11-12 and 2026-11-13.
 ## Enforcement
 
 Tests in `crates/classis-tools/tests/release_workflow.rs`, each marked
-`// Verifies: ADR-0062`:
+`// Verifies: ADR-0065`:
 
 - **A release starts only from a tag (clauses 3 to 5).**
   - The workflow triggers on `push: tags: ["v[0-9]+.[0-9]+.[0-9]+"]` and on

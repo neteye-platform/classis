@@ -235,7 +235,7 @@ version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). A
 release starts when a person with write access pushes the `v<version>` tag,
 `v0.1.0` say, on the commit of `main` that carries it, and the run fails when
 the tag and the file disagree or the commit is not on `main`
-([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
 Its `sign` job waits until a second person with write
 access approves it in the environment `Package Signing`, then signs every Client
 archive with the key that environment holds. A release publishes one archive per
@@ -243,7 +243,7 @@ platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
 on the architectures each ships on, a `.sig` beside each Client archive, which
 carries the certificate of the release's Package Signer and which the Server and
 every Client verify up to the Package Roots compiled into them
-([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)),
+([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)),
 a CycloneDX SBOM `<stem>.cdx.json` beside each archive of the Client and of the
 operator tool, and a `SHA256SUMS` file. Every
 asset is a subject of one build-provenance attestation, which the workflow
@@ -361,7 +361,7 @@ $ curl -X PUT -H 'Content-Type: application/json' \
 # A Package is identified by its Agent type and version, with one entry per platform (ADR-0026);
 # each Agent is offered the entry that fits it. An entry is offered only with a signature that
 # verifies up to the Package Roots compiled into the Server and the Client — the `.sig` a release
-# publishes beside each archive (ADR-0063). Only the Client's own Package, `supervisor`, is signed
+# publishes beside each archive (ADR-0066). Only the Client's own Package, `supervisor`, is signed
 # today; no other Package can be delivered yet. Saving stages it: nothing reaches the fleet until
 # a Deployment holding it is rolled out (ADR-0025).
 $ curl -X PUT http://127.0.0.1:4321/api/v1/packages/supervisor/0.1.0
@@ -590,7 +590,7 @@ repository move or transfer:
   requires signatures. It leaves creating a tag to everyone with write access,
   who may release;
 - the **environment `Package Signing`**
-  ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
+  ([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
   clauses 1 and 2). Its deployment rule admits the tags
   `v[0-9]*.[0-9]*.[0-9]*` and no branch. It has one required reviewer, from a
   team of the people with write access, with _Prevent self-review_, and
@@ -598,7 +598,7 @@ repository move or transfer:
   base64 of a Package Signer's Ed25519 key in PKCS#8 DER, made by an admin on a
   machine of their own and then deleted; the certificate the Package Root's
   custodian issues for it is `packaging/package-signer.der`
-  ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
+  ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
   clause 12). Replacing it is a new key, a new certificate from the same Root,
   a new secret and a reviewed change to that file; no installation changes.
   The reviewer approves a run only when the push of a `v<version>` tag started

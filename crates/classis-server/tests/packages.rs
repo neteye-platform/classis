@@ -297,7 +297,7 @@ async fn ring_holding(
 
 /// Signs every entry of the Package that carries no signature yet, as an operator does before a
 /// rollout: the Server offers nothing unsigned (ADR-0033) — with the test Package Signer, whose
-/// Root the test Server trusts (ADR-0063).
+/// Root the test Server trusts (ADR-0066).
 async fn sign_every_entry(server: &TestServer, agent_type: &str, version: &str) {
     let set: serde_json::Value = reqwest::Client::new()
         .get(set_url(server, agent_type, version))
@@ -1780,7 +1780,7 @@ async fn an_entry_carries_its_signature_and_says_its_state() {
         .await;
         assert_eq!(orphan.status(), 404, "{version} {os}");
     }
-    // And it has to verify (ADR-0063): a bare Ed25519 signature, or one over other bytes, is
+    // And it has to verify (ADR-0066): a bare Ed25519 signature, or one over other bytes, is
     // refused like a malformed one.
     let other_bytes = support::signature_hex(support::AGENT_TYPE, "1.0.0", &sha256(b"v2"));
     for malformed in [

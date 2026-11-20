@@ -1275,17 +1275,17 @@ struct PackageEntryView {
     /// sync, and the Server stops re-offering while the two agree — so a rollout that seems not to
     /// travel is answered here rather than by reading logs.
     package_hash: String,
-    /// The entry's `PackageSignature`, hex, as a release's `.sig` holds it (ADR-0063); absent
+    /// The entry's `PackageSignature`, hex, as a release's `.sig` holds it (ADR-0066); absent
     /// while the entry carries none. Only a signature that verified up to the Package Roots is
     /// held, and an entry without one is offered to nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
-    /// Whether the entry carries a signature that verified up to the Package Roots (ADR-0063
+    /// Whether the entry carries a signature that verified up to the Package Roots (ADR-0066
     /// clause 10): `valid` or `missing`.
     signature_state: SignatureStateView,
 }
 
-/// Whether an entry carries a signature (ADR-0063 clause 10): the Server holds only one that
+/// Whether an entry carries a signature (ADR-0066 clause 10): the Server holds only one that
 /// verified up to the Package Roots.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1669,7 +1669,7 @@ async fn delete_package_entry(
 }
 
 /// Writes a `PackageSignature` onto one entry of a Package, in hex, as a release's `.sig` holds
-/// it (ADR-0063). One signature serves every Deployment that holds the Package; an entry without
+/// it (ADR-0066). One signature serves every Deployment that holds the Package; an entry without
 /// one is offered to nobody.
 ///
 /// The Server verifies it up to the Package Roots compiled into it. One that does not verify is
@@ -1688,7 +1688,7 @@ async fn delete_package_entry(
     request_body = SignatureSpec,
     responses(
         (status = 200, description = "The Set, with the signed entry and its signature_state", body = PackageSetView),
-        (status = 400, description = "Invalid identity or platform, or a signature that is empty, not hex, or does not verify up to the Package Roots (ADR-0063)", body = ErrorBody),
+        (status = 400, description = "Invalid identity or platform, or a signature that is empty, not hex, or does not verify up to the Package Roots (ADR-0066)", body = ErrorBody),
         (status = 404, description = "No such Set or entry, or package delivery is not configured", body = ErrorBody),
         (status = 409, description = "The Set is assigned to an Agent and its entries are immutable", body = ErrorBody),
         (status = 500, description = "The signature could not be persisted", body = ErrorBody)
@@ -2055,7 +2055,7 @@ struct DeploymentSpec {
     selector: std::collections::BTreeMap<String, String>,
 }
 
-/// One artifact's signature, as a release's `.sig` holds it (ADR-0063 clause 9).
+/// One artifact's signature, as a release's `.sig` holds it (ADR-0066 clause 9).
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct SignatureSpec {

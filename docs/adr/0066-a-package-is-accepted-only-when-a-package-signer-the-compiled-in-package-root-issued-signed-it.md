@@ -1,4 +1,4 @@
-# ADR-0063: A Package is accepted only when a Package Signer the compiled-in Package Root issued signed it
+# ADR-0066: A Package is accepted only when a Package Signer the compiled-in Package Root issued signed it
 
 - **Status:** 🟡 proposed
 - **Date:** 2026-11-14
@@ -36,7 +36,7 @@ own update (G-10, G-11). Today one key decides for every Package.
 writes into each Client's configuration
 ([ADR-0026](0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)
 clause 54).
-[ADR-0062](0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
+[ADR-0065](0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
 moves the signing of the Client's own Package into the release run. Against
 one such key, replacing it would mean changing `verification_key` on every
 installation.
@@ -167,7 +167,7 @@ and that signer's Ed25519 signature over the Package's statement verifies;
      in the statement and checked against the streamed bytes first, the
      signature still covers the artifact exactly as published, archive and
      all, and holds for that type and version alone.
-   - The release run's `sign` job makes it (ADR-0062 clause 6).
+   - The release run's `sign` job makes it (ADR-0065 clause 6).
    - The same download and verification serve the Client's own update
      ([ADR-0018](0018-the-client-updates-itself-under-its-own-agent-type.md)).
 
@@ -584,7 +584,7 @@ Read on 2026-11-13 and 2026-11-14.
 
 ## Enforcement
 
-Tests carrying `Verifies: ADR-0063`:
+Tests carrying `Verifies: ADR-0066`:
 
 - `crates/classis-core`: the verifier accepts a Package Signer of a test Root,
   and refuses each of the following, naming the step:

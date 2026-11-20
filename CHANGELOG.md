@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). A
 version is the one `[workspace.package] version` in `Cargo.toml` names, whose
 `v<version>` tag a person pushes to release it
 ([ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md),
-[ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+[ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
 A section carries a date once its tag exists.
 
 ## [Unreleased]
@@ -17,7 +17,7 @@ A section carries a date once its tag exists.
 ### Added
 
 - **Each release signs the Client's archives**
-  ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
+  ([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
   Beside every `supervisor_<version>_<os>_<arch>.tar.gz`
   the release carries its `.sig`: the certificate of the release's Package
   Signer and its signature, which the Server and every Client verify up to the
@@ -27,14 +27,14 @@ A section carries a date once its tag exists.
 - **A release starts from a pushed tag, `v<version>`.** The `Release` workflow
   no longer creates the tag, and a run started by hand is a dry run. The tag is
   `v0.1.0`; a build recognises a release by it
-  ([ADR-0062](docs/adr/0062-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
+  ([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
   clause 11).
 
 ### Changed
 
 - **Package signatures are verified up to the Package Roots compiled into the
   Client and the Server**
-  ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
+  ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
   A signature is now the certificate of a Package Signer that a compiled-in
   Package Root issued, and that signer's Ed25519 signature over the same
   statement as before, in one DER value. The REST API
@@ -58,7 +58,7 @@ A section carries a date once its tag exists.
   - **The Packages tab takes the hex of a release's `.sig`** for each entry. It
     no longer offers or imports a signing file.
 - **Every Client takes packages**
-  ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
+  ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
   Every Supervisor declares `AcceptsPackages`, and the Client's own Agent does
   while `[packages] self_update` consents, which is unchanged. No setting turns
   packages off.
@@ -76,7 +76,7 @@ A section carries a date once its tag exists.
 - **`server audit-verify`** is gone.
 - **`[packages] verification_key`**, in `supervisor.toml` and in
   `server.toml`, and with it the Server's whole `[packages]` section
-  ([ADR-0063](docs/adr/0063-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
+  ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)).
   Either is refused at startup as an unknown key, like any other. The install
   no longer asks for a package key nor reads `package-signing-key.pub`, and the
   `supervisor.toml.fragment` of `pki init` names none.

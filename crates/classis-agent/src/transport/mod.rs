@@ -780,7 +780,7 @@ mod tests {
         opamp::tls::install_ring_provider();
         let artifact = vec![7u8; 3072];
         let content_hash = Sha256::digest(&artifact).to_vec();
-        // Signed by a Package Signer of a test Root: a Client takes nothing unsigned (ADR-0063).
+        // Signed by a Package Signer of a test Root: a Client takes nothing unsigned (ADR-0066).
         let root = classis_core::package::testing::TestRoot::new();
         let signature = root.signer().sign_artifact(
             "otelcol",
@@ -823,7 +823,7 @@ mod tests {
         let mut engine = Engine::new(vec![state]);
         let uid = engine.poll_reports()[0].instance_uid.clone();
         // A Client verifies up to its Package Roots, and fetches from its own Server's origin
-        // (ADR-0063, ADR-0033).
+        // (ADR-0066, ADR-0033).
         let config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),

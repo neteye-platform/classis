@@ -236,7 +236,7 @@ pub struct Package {
 }
 
 /// One platform's artifact of a Package: an uploaded file, the hash that identifies what an Agent
-/// installs, and the signature over it (ADR-0033, ADR-0063). The signature lives here because what
+/// installs, and the signature over it (ADR-0033, ADR-0066). The signature lives here because what
 /// it covers — `classis_core::package::statement` — names the Agent type, the version and this hash,
 /// and no Deployment: one signature serves every Deployment that holds the Package.
 #[derive(Clone)]
@@ -246,21 +246,21 @@ pub struct Entry {
     pub content_hash: Vec<u8>,
     /// The artifact's size in bytes.
     pub size: u64,
-    /// The entry's signature (ADR-0063 clause 3), and whether it is offered. `None` until one
+    /// The entry's signature (ADR-0066 clause 3), and whether it is offered. `None` until one
     /// is written; new bytes remove it, because a signature covers the hash (ADR-0033). An entry
     /// without an offered one is offered to nobody.
     pub signature: Option<Signature>,
 }
 
 /// An entry's `PackageSignature`, DER: a Package Signer's certificate and its Ed25519 signature
-/// over the statement for the entry (ADR-0063 clause 3), as a release's `.sig` holds it in hex —
+/// over the statement for the entry (ADR-0066 clause 3), as a release's `.sig` holds it in hex —
 /// and whether this Server offers it. The two cases persist alike, as the bytes; which one an
 /// entry is in is this Server's alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Signature {
     /// It verified up to the Package Roots, when it was written or when the store was armed.
     Offered(Vec<u8>),
-    /// Kept but offered to nobody, and reported `missing` (ADR-0063 clause 10): every stored
+    /// Kept but offered to nobody, and reported `missing` (ADR-0066 clause 10): every stored
     /// signature loads so, and stays so if it does not verify when the store is armed. A wrong
     /// clock or another list of Roots then loses nothing.
     Withheld(Vec<u8>),
@@ -283,7 +283,7 @@ impl Signature {
 }
 
 impl Entry {
-    /// The signature this entry is offered with: none while it is withheld (ADR-0063 clause 10).
+    /// The signature this entry is offered with: none while it is withheld (ADR-0066 clause 10).
     pub fn offered_signature(&self) -> Option<&[u8]> {
         match &self.signature {
             Some(Signature::Offered(bytes)) => Some(bytes),
@@ -292,7 +292,7 @@ impl Entry {
     }
 }
 
-/// Whether an entry carries a signature (ADR-0063 clause 10). The Server holds only signatures
+/// Whether an entry carries a signature (ADR-0066 clause 10). The Server holds only signatures
 /// that verified up to the Package Roots when written or loaded, so there is no third state; the
 /// Agent's own verification still decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,13 +313,13 @@ impl SignatureState {
     }
 }
 
-/// Whether a stored signature has a length a `PackageSignature` can have (ADR-0063 clause 3).
+/// Whether a stored signature has a length a `PackageSignature` can have (ADR-0066 clause 3).
 /// The stores refuse anything else as corrupt; whether it verifies is the store's check at load.
 pub(crate) fn signature_fits(signature: &[u8]) -> bool {
     !signature.is_empty() && signature.len() <= classis_core::package::MAX_SIGNATURE_LEN
 }
 
-/// The signature check's port (ADR-0006, ADR-0063): whether `signature` verifies over
+/// The signature check's port (ADR-0006, ADR-0066): whether `signature` verifies over
 /// `statement`, and if not, why. [`RootsVerifier`](crate::config::RootsVerifier) over the
 /// compiled-in Package Roots is what the composition root wires; tests pass a test Root.
 pub trait SignatureVerifier: Send + Sync {
@@ -330,7 +330,7 @@ pub trait SignatureVerifier: Send + Sync {
 
 /// What a store checks with until one is armed: nothing verifies. The composition root arms the
 /// compiled-in Package Roots ([`RootsVerifier`](crate::config::RootsVerifier)); a store that was
-/// never armed takes no signature and offers none it loaded (ADR-0063 clause 10).
+/// never armed takes no signature and offers none it loaded (ADR-0066 clause 10).
 struct Unarmed;
 
 impl SignatureVerifier for Unarmed {
@@ -340,7 +340,7 @@ impl SignatureVerifier for Unarmed {
 }
 
 /// Checks one entry's signature over the statement a Client verifies
-/// (`classis_core::package::statement`, ADR-0026 clause 54) with `verifier` (ADR-0063).
+/// (`classis_core::package::statement`, ADR-0026 clause 54) with `verifier` (ADR-0066).
 fn verify_entry(
     verifier: &dyn SignatureVerifier,
     id: &PackageId,
@@ -352,7 +352,7 @@ fn verify_entry(
     verifier.verify(&statement, signature)
 }
 
-/// Whether an entry carries a signature (ADR-0063 clause 10).
+/// Whether an entry carries a signature (ADR-0066 clause 10).
 pub fn signature_state(entry: &Entry) -> SignatureState {
     if entry.offered_signature().is_some() {
         SignatureState::Valid
@@ -486,7 +486,7 @@ pub struct PackageStore {
     /// The blobs an upload or a deletion is working on while no lock on `sets` is held, so that
     /// no round trip to the blob store runs under it and the two never cross ([`Life`]).
     life: Mutex<Life>,
-    /// The check every signature passes before it is held (ADR-0063 clause 10): nothing verifies
+    /// The check every signature passes before it is held (ADR-0066 clause 10): nothing verifies
     /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
 }
@@ -507,7 +507,7 @@ impl PackageStore {
         let stored: BTreeMap<String, u64> = blobs.list()?.into_iter().collect();
         let mut sets = BTreeMap::new();
         // A backend loads every signature `Withheld` — offered to nobody until a verifier has
-        // checked it (ADR-0063 clause 10); [`PackageStore::with_verifier`] offers the ones that pass.
+        // checked it (ADR-0066 clause 10); [`PackageStore::with_verifier`] offers the ones that pass.
         for package in backend.load()? {
             for entry in package.entries.values() {
                 let sha256 = hex::encode(&entry.content_hash);
@@ -569,7 +569,7 @@ impl PackageStore {
         self
     }
 
-    /// Offers every stored signature that verifies, and withholds the rest (ADR-0063 clause 10)
+    /// Offers every stored signature that verifies, and withholds the rest (ADR-0066 clause 10)
     /// — one whose Package Signer has expired among them — naming each. The store keeps a
     /// withheld one: only this Server's view of the entry turns unsigned. Run when the store is armed at load.
     fn drop_unverified(&self) {
@@ -767,7 +767,7 @@ impl PackageStore {
     }
 
     /// Writes a signature onto one entry (ADR-0033), once it verifies up to the Package Roots
-    /// (ADR-0063 clause 10). One that does not is refused and nothing is stored.
+    /// (ADR-0066 clause 10). One that does not is refused and nothing is stored.
     ///
     /// # Errors
     /// `no package set …` or `no entry …` when there is nothing to sign (a `404`), and `the
@@ -1333,7 +1333,7 @@ fn aggregate_hash(set: &Package, entry: &Entry) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-/// A test Package Root for the tests of this crate (ADR-0063): the store on it, and its Package
+/// A test Package Root for the tests of this crate (ADR-0066): the store on it, and its Package
 /// Signer's signature over an entry.
 #[cfg(test)]
 pub(crate) mod test_signing {
@@ -1447,7 +1447,7 @@ mod tests {
     }
 
     /// Signs every entry the Package holds — what an operator does before anything of it is offered
-    /// (ADR-0033) — with the test Package Signer (ADR-0063).
+    /// (ADR-0033) — with the test Package Signer (ADR-0066).
     fn sign_all(store: &PackageStore, id: &PackageId) {
         let entries: Vec<(Platform, Vec<u8>)> = store
             .sets
@@ -1653,8 +1653,8 @@ mod tests {
 
     /// A signature has to name an entry the Package holds (`no entry`, a `404`), and has to verify:
     /// empty, a bare 64-byte signature, or one over another entry is refused (a `400`) and nothing
-    /// is stored (ADR-0033 clause 6, ADR-0063 clause 9).
-    /// Verifies: ADR-0033, ADR-0063
+    /// is stored (ADR-0033 clause 6, ADR-0066 clause 9).
+    /// Verifies: ADR-0033, ADR-0066
     #[test]
     fn a_signature_needs_an_entry_and_the_shape_of_one() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1689,12 +1689,12 @@ mod tests {
         );
     }
 
-    /// The Server holds only a signature that verifies up to its Package Roots (ADR-0063 clause
+    /// The Server holds only a signature that verifies up to its Package Roots (ADR-0066 clause
     /// 10): a Package Signer of another Root is refused on write, and a stored signature that does
     /// not verify — 64 bytes here — is set aside when the store is loaded: the
     /// entry is offered to nobody, and the store keeps the signature, through later writes too. A
     /// store no verifier armed offers no stored signature at all.
-    /// Verifies: ADR-0063
+    /// Verifies: ADR-0066
     #[test]
     fn the_server_refuses_what_does_not_verify_and_sets_it_aside_on_load() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1722,7 +1722,7 @@ mod tests {
                 .expect_err("another Root's Package Signer");
             assert!(refused.starts_with("the signature is refused"), "{refused}");
             assert!(refused.contains("Package Root"), "{refused}");
-            // What a Server before ADR-0063 kept: a bare signature, written past the check.
+            // What a Server before ADR-0066 kept: a bare signature, written past the check.
             let mut old = store.sets.read().expect("sets lock")[&set].clone();
             old.entries.get_mut(&windows()).expect("entry").signature =
                 Some(Signature::Offered(vec![1u8; 64]));

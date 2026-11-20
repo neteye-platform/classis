@@ -346,7 +346,7 @@ pub fn init(options: &InitOptions) -> Result<Vec<String>, String> {
         quoted(&server_path, "bootstrap-ca-key.pem"),
     );
     // The bootstrap certificate is the Server's to issue, as a PKCS#12 file `pki p12-extract`
-    // takes the pair out of; the fragment names where a host keeps the pair (ADR-0063 clause 15).
+    // takes the pair out of; the fragment names where a host keeps the pair (ADR-0066 clause 15).
     let supervisor_toml = format!(
         "[tls]\nca_file = {}\ncert_file = {}\nkey_file = {}\n",
         quoted(&host_path, "server-ca.pem"),
@@ -1100,8 +1100,8 @@ mod tests {
     }
 
     /// The package signing key lands offline with its public half, and the fragment names no key:
-    /// the Client verifies packages up to its compiled-in Package Roots (ADR-0063 clause 15).
-    // Verifies: ADR-0028, ADR-0063
+    /// the Client verifies packages up to its compiled-in Package Roots (ADR-0066 clause 15).
+    // Verifies: ADR-0028, ADR-0066
     #[test]
     fn init_makes_the_package_signing_key_offline_and_the_fragment_names_no_key() {
         use ring::signature::{Ed25519KeyPair, KeyPair as _};

@@ -135,7 +135,7 @@ impl AgentKind {
     }
 
     /// What each project puts in front of the version in its tags: `v`, for upstream and for this
-    /// project's own releases alike (ADR-0062, restating ADR-0012 clause 2).
+    /// project's own releases alike (ADR-0065, restating ADR-0012 clause 2).
     fn tag_prefix(self) -> &'static str {
         match self {
             AgentKind::Otelcol | AgentKind::OtelcolContrib | AgentKind::Supervisor => "v",

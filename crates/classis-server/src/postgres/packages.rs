@@ -104,7 +104,7 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
         if let Some(signature) = &signature {
             if !crate::packages::signature_fits(signature) {
                 return Err(named(format!(
-                    "invalid signature: {} bytes, not 1 to {} (ADR-0063)",
+                    "invalid signature: {} bytes, not 1 to {} (ADR-0066)",
                     signature.len(),
                     classis_core::package::MAX_SIGNATURE_LEN
                 )));
@@ -116,7 +116,7 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
                 platform,
                 content_hash,
                 size: unsigned(row.get(5)),
-                // Offered only once the store's verifier has checked it (ADR-0063).
+                // Offered only once the store's verifier has checked it (ADR-0066).
                 signature: signature.map(crate::packages::Signature::Withheld),
             },
         );

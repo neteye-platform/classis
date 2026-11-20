@@ -57,11 +57,11 @@ impl PackageBackend for FsPackageBackend {
                     .map(hex::decode)
                     .transpose()
                     .map_err(|e| format!("invalid signature in {}: {e}", path.display()))?;
-                // Held to the length a PackageSignature can have (ADR-0063 clause 3).
+                // Held to the length a PackageSignature can have (ADR-0066 clause 3).
                 if let Some(signature) = &signature {
                     if !crate::packages::signature_fits(signature) {
                         return Err(format!(
-                            "invalid signature in {}: {} bytes, not 1 to {} (ADR-0063)",
+                            "invalid signature in {}: {} bytes, not 1 to {} (ADR-0066)",
                             path.display(),
                             signature.len(),
                             classis_core::package::MAX_SIGNATURE_LEN
@@ -74,7 +74,7 @@ impl PackageBackend for FsPackageBackend {
                         platform,
                         content_hash,
                         size: entry.size,
-                        // Offered only once the store's verifier has checked it (ADR-0063).
+                        // Offered only once the store's verifier has checked it (ADR-0066).
                         signature: signature.map(crate::packages::Signature::Withheld),
                     },
                 );

@@ -116,7 +116,7 @@ pub async fn download_and_verify_patiently(
     // First, before any URL is resolved or a byte is written: the staged path is built from this
     // name, and a name that could escape the staging directory is refused outright.
     ensure_safe_package_name(&package.name)?;
-    // Refused before a byte is fetched: an offer with no signature (ADR-0026, ADR-0063).
+    // Refused before a byte is fetched: an offer with no signature (ADR-0026, ADR-0066).
     signature_policy(&package.signature)?;
     let roots = package_roots(config)?;
     let url = resolve_url(&package.download_url, &config.endpoint)?;
@@ -536,7 +536,7 @@ async fn write_stream(
 
 /// Verifies the streamed artifact: the content hash from the stream, then the signature over what
 /// the offer says the artifact is — its Agent type (the package's name), its version and that
-/// hash (ADR-0026) — up to the compiled-in Package Roots (ADR-0063 clause 5). A signed artifact
+/// hash (ADR-0026) — up to the compiled-in Package Roots (ADR-0066 clause 5). A signed artifact
 /// offered as another type's program, or under another version, does not verify.
 fn verify_staged(
     _path: &Path,
@@ -553,7 +553,7 @@ fn verify_staged(
         .map_err(|e| e.to_string())
 }
 
-/// The Package Roots this Client verifies up to (ADR-0063 clause 1): the compiled-in ones, unless a
+/// The Package Roots this Client verifies up to (ADR-0066 clause 1): the compiled-in ones, unless a
 /// test put its own in the configuration.
 ///
 /// # Errors
@@ -567,7 +567,7 @@ pub fn package_roots(config: &ClientConfig) -> Result<classis_core::package::Roo
     }
 }
 
-/// The signature policy (ADR-0026, ADR-0063): there is no unsigned posture. An offer that carries
+/// The signature policy (ADR-0026, ADR-0066): there is no unsigned posture. An offer that carries
 /// no signature is refused before anything is downloaded.
 fn signature_policy(signature: &[u8]) -> Result<(), String> {
     if signature.is_empty() {
@@ -1018,7 +1018,7 @@ mod tests {
         assert!(err.contains("max_artifact_size_bytes"), "got {err}");
     }
 
-    /// A test Package Root and one Package Signer it issued (ADR-0063).
+    /// A test Package Root and one Package Signer it issued (ADR-0066).
     fn signer() -> (
         classis_core::package::testing::TestSigner,
         classis_core::package::Roots,
@@ -1046,7 +1046,7 @@ mod tests {
     /// downloaded, and a signature that does not verify up to the Package Roots refuses the
     /// artifact — one of another Root, and a bare Ed25519 signature, included. The Client's own
     /// update takes the same path.
-    /// Verifies: ADR-0026, ADR-0018, ADR-0063
+    /// Verifies: ADR-0026, ADR-0018, ADR-0066
     #[test]
     fn signature_policy_is_enforced() {
         let (signer, roots) = signer();

@@ -353,7 +353,7 @@ pub async fn spawn_with_telemetry(offer: classis_server::fleet::TelemetryOffer) 
     }
 }
 
-/// The test Package Root and its one Package Signer, shared by every test of a binary (ADR-0063).
+/// The test Package Root and its one Package Signer, shared by every test of a binary (ADR-0066).
 #[allow(dead_code)]
 pub fn test_root() -> &'static (
     classis_core::package::testing::TestRoot,
@@ -371,7 +371,7 @@ pub fn test_root() -> &'static (
 }
 
 /// The package store on `dir`, checking signatures up to the test Root, as the binary does up to
-/// the compiled-in ones (ADR-0063).
+/// the compiled-in ones (ADR-0066).
 #[allow(dead_code)]
 pub fn open_store(dir: &std::path::Path) -> classis_server::packages::PackageStore {
     classis_server::packages::PackageStore::open(dir.to_path_buf())

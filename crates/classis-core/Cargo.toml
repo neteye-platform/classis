@@ -9,7 +9,7 @@ publish.workspace = true
 
 [features]
 # `package::testing`: a test Package Root and Package Signers. For tests only; it makes nothing
-# trusted by itself (ADR-0063).
+# trusted by itself (ADR-0066).
 test-support = ["dep:ring", "dep:time"]
 
 [build-dependencies]
@@ -33,7 +33,7 @@ x509-parser.workspace = true
 sha2.workspace = true
 hex.workspace = true
 # A Package signature is a Package Signer's certificate and its Ed25519 signature, verified up to a
-# compiled-in Package Root (ADR-0063).
+# compiled-in Package Root (ADR-0066).
 rustls-webpki.workspace = true
 rustls-pki-types.workspace = true
 # A test Package Root and Package Signers for the tests of every crate (`package::testing`).

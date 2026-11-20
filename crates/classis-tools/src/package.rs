@@ -4,7 +4,7 @@
 //! `sign` makes a **raw Ed25519** signature over a statement of what the artifact is — its Agent
 //! type, its version and its SHA-256 (`classis_core::package::statement`, ADR-0026). The Client
 //! and the Server no longer accept one: a Package's signature carries a Package Signer
-//! certificate that a compiled-in Package Root issued (ADR-0063), as a release's `.sig` holds it.
+//! certificate that a compiled-in Package Root issued (ADR-0066), as a release's `.sig` holds it.
 //! `pack` builds the artifact: it writes container formats [`classis_agent::archive`] can open, with the member named the way the
 //! Supervisor will look for it, and its tests open what it wrote with that same module.
 //!
@@ -46,7 +46,7 @@ pub enum Command {
     /// Sign an artifact and print the signature (hex) — the value of that Package entry's signature
     /// (ADR-0033). Or, with --signing-info, sign every entry of a Package's signing file and write
     /// the signatures into it (ADR-0027). The Client and the Server refuse what it signs
-    /// (ADR-0063).
+    /// (ADR-0066).
     Sign {
         /// The PKCS#8 private key from `keygen`.
         #[arg(long)]
@@ -173,7 +173,7 @@ pub fn run(command: Command) -> Result<(), String> {
             let out = out.unwrap_or(path);
             file.write(&out)?;
             eprintln!(
-                "wrote the signatures to {} — the Client and the Server refuse them (ADR-0063). \
+                "wrote the signatures to {} — the Client and the Server refuse them (ADR-0066). \
                  These hashes were signed as the file states them; they are only as right as \
                  your comparison with upstream's checksums or the files.",
                 out.display()

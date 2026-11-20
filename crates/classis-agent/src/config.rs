@@ -82,7 +82,7 @@ pub struct ClientConfig {
     /// superseded version. Absent takes the defaults: one day.
     #[serde(default)]
     pub updates: UpdatesConfig,
-    /// The Package Roots a package signature is verified up to (ADR-0063 clause 1). `None`, as
+    /// The Package Roots a package signature is verified up to (ADR-0066 clause 1). `None`, as
     /// every load leaves it, is the ones compiled into this binary; tests put a test Root here.
     /// Not a file key.
     #[serde(skip)]

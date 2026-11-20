@@ -83,7 +83,7 @@ the project already has:
   client-certificate verification come before that, and a failed handshake is
   not counted as an admission failure.
 - **Nothing installed unsigned, and downloads only from the Client's own
-  Server** (ADR-0026, ADR-0033, ADR-0063): every package is verified up to the
+  Server** (ADR-0026, ADR-0033, ADR-0066): every package is verified up to the
   Package Roots compiled into the Client, the Server offers no entry that
   carries no signature, and every
   download hop is held to `https://` and the Client's own Server origin before a
