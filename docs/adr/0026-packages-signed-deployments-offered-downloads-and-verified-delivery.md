@@ -17,6 +17,8 @@
   [ADR-0056](0056-a-repack-follows-no-link-out-of-its-tree.md) · clause 60
   superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
+  · clauses 50 and 54 superseded by
+  [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
 - **Applies to:** `crates/classis-server/src/packages.rs`,

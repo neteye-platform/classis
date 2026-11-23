@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio_postgres::GenericClient;
 
 use super::{client, signed, sql, unsigned, Database};
-use crate::packages::{Entry, Package, PackageBackend, PackageId, Platform, ED25519_SIGNATURE_LEN};
+use crate::packages::{Entry, Package, PackageBackend, PackageId, Platform};
 
 /// The Packages in `packages` and `package_entries`.
 pub struct PgPackageBackend {
@@ -102,10 +102,11 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
             .ok_or_else(|| named(format!("invalid sha256 {sha256:?}")))?;
         let signature: Option<Vec<u8>> = row.get(6);
         if let Some(signature) = &signature {
-            if signature.len() != ED25519_SIGNATURE_LEN {
+            if !crate::packages::signature_fits(signature) {
                 return Err(named(format!(
-                    "invalid signature: {} bytes, not {ED25519_SIGNATURE_LEN}",
-                    signature.len()
+                    "invalid signature: {} bytes, not 1 to {} (ADR-0066)",
+                    signature.len(),
+                    classis_core::package::MAX_SIGNATURE_LEN
                 )));
             }
         }
@@ -115,7 +116,8 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
                 platform,
                 content_hash,
                 size: unsigned(row.get(5)),
-                signature,
+                // Offered only once the store's verifier has checked it (ADR-0066).
+                signature: signature.map(crate::packages::Signature::Withheld),
             },
         );
     }
@@ -152,7 +154,10 @@ pub(crate) async fn write(client: &impl GenericClient, package: &Package) -> Res
                     &entry.platform.arch,
                     &hex::encode(&entry.content_hash),
                     &signed(entry.size),
-                    &entry.signature,
+                    &entry
+                        .signature
+                        .as_ref()
+                        .map(crate::packages::Signature::bytes),
                 ],
             )
             .await
@@ -181,7 +186,12 @@ mod tests {
                             platform,
                             content_hash: vec![*byte; 32],
                             size: u64::from(*byte) << 40,
-                            signature: (*byte % 2 == 0).then(|| vec![*byte; ED25519_SIGNATURE_LEN]),
+                            signature: (*byte % 2 == 0).then(|| {
+                                crate::packages::Signature::Withheld(vec![
+                                    *byte;
+                                    classis_core::package::ED25519_SIGNATURE_LEN
+                                ])
+                            }),
                         },
                     )
                 })
@@ -205,7 +215,7 @@ mod tests {
                         entry.platform.arch.clone(),
                         entry.content_hash.clone(),
                         entry.size,
-                        entry.signature.clone(),
+                        entry.signature.as_ref().map(|s| s.bytes().to_vec()),
                     )
                 })
                 .collect(),

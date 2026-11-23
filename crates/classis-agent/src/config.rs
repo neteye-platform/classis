@@ -82,10 +82,11 @@ pub struct ClientConfig {
     /// superseded version. Absent takes the defaults: one day.
     #[serde(default)]
     pub updates: UpdatesConfig,
-    /// The `[packages].verification_key` decoded once at load — the Ed25519 public key a package
-    /// signature is checked against. Set from the file at load; not itself a file key.
+    /// The Package Roots a package signature is verified up to (ADR-0066 clause 1). `None`, as
+    /// every load leaves it, is the ones compiled into this binary; tests put a test Root here.
+    /// Not a file key.
     #[serde(skip)]
-    pub package_key: Option<Vec<u8>>,
+    pub package_roots: Option<classis_core::package::Roots>,
     /// The file's own text with secret values masked (see
     /// [`redact_secrets`](crate::config_file::redact_secrets)), kept from load so the Client's own
     /// Agent can report it as its effective configuration — the file *is* what this Client runs (a
@@ -541,11 +542,10 @@ fn take_integer(table: &mut toml::Table, key: &str) -> Result<Option<i64>, Strin
 /// Keys whose values are secrets: `[packages]`'s `archive_key`, and the `bearer_token` and
 /// `password` a leftover `[auth]` section may still hold — the Client ignores the section
 /// (ADR-0021 clause 3), but the file's text is reported as it stands, so its values stay masked.
-/// Paths and public keys are not on the list — a path locates a secret, it is not one, and the
-/// `verification_key` is the *public* half of the signing pair.
+/// Paths are not on the list — a path locates a secret, it is not one.
 pub(crate) const SECRET_KEYS: &[&str] = &["bearer_token", "password", "archive_key"];
 
-/// The `[packages]` block (ADR-0026): how downloaded package artifacts are verified, and whether
+/// The `[packages]` block (ADR-0026): how downloaded package artifacts are opened, and whether
 /// this Client takes its own (ADR-0018). Where they come from is not configurable: always this
 /// Client's own Server origin (ADR-0033).
 #[derive(Debug, Clone, Deserialize)]
@@ -559,13 +559,9 @@ pub struct PackagesConfig {
     /// The consent is narrowed to one package, the Client's own Agent type, and that name is not
     /// configurable: a package with an empty Selector reaches every Agent that accepts packages
     /// (ADR-0026), so without the name the first fleet-wide Collector artifact would be installed
-    /// over the Client. Whether the consent takes effect is decided by `verification_key`.
+    /// over the Client.
     #[serde(default = "default_self_update")]
     pub self_update: bool,
-    /// Hex-encoded Ed25519 public key. Every offered package MUST carry a valid signature against
-    /// it; without it this Client takes no packages at all, its own self-update included
-    /// (ADR-0026, ADR-0018).
-    pub verification_key: Option<String>,
     /// `allowed_sources`, which ADR-0033 removed: a package is downloaded only from this Client's
     /// own Server origin. Read only so that [`ClientConfig::checked`] can refuse it by name — a
     /// list an operator believes is in force, and is not, is worse than a failed start.
@@ -592,7 +588,6 @@ impl Default for PackagesConfig {
     fn default() -> Self {
         PackagesConfig {
             self_update: default_self_update(),
-            verification_key: None,
             leftover_allowed_sources: None,
             archive_key: None,
         }
@@ -954,7 +949,7 @@ impl Default for ClientConfig {
             leftover_auth: None,
             packages: None,
             leftover_self_update: None,
-            package_key: None,
+            package_roots: None,
             source: None,
             path: None,
             state_dir_as_written: default_state_dir(),
@@ -986,7 +981,7 @@ impl ClientConfig {
     /// # Errors
     /// Returns the first rule the configuration breaks, naming the file.
     pub fn checked(self, path: &Path) -> Result<Self, String> {
-        let mut config = self;
+        let config = self;
         config.check_supervisor_names()?;
         // A name no block can ever carry would switch nothing off, silently (ADR-0017 clause 49).
         for name in &config.supervisor_defaults.remote_config_disabled {
@@ -1033,21 +1028,6 @@ impl ClientConfig {
                 .check(&config.endpoint)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        // Decode the package verification key once — a malformed key must fail startup, not the
-        // first package offer.
-        if let Some(key_hex) = config
-            .packages
-            .as_ref()
-            .and_then(|p| p.verification_key.as_ref())
-        {
-            let key = hex::decode(key_hex).map_err(|e| {
-                format!(
-                    "{}: [packages].verification_key is not valid hex: {e}",
-                    path.display()
-                )
-            })?;
-            config.package_key = Some(key);
-        }
         // A limit of zero would refuse every message, and the Baseline knows no "unlimited": the
         // limit is mandatory, so a value that cannot carry a message fails startup.
         if config.max_message_size_bytes == 0 {
@@ -1076,11 +1056,6 @@ impl ClientConfig {
             ));
         }
         Ok(config)
-    }
-
-    /// The Ed25519 public key package signatures are verified against (ADR-0026), or `None`.
-    pub fn package_key(&self) -> Option<&[u8]> {
-        self.package_key.as_deref()
     }
 
     /// The CA bundle that replaces the built-in roots, when one is configured (ADR-0013).
@@ -1396,10 +1371,7 @@ mod tests {
 
         // A file that never mentions it is the common case, and it is consent — with or without
         // a [packages] section.
-        for text in [
-            "endpoint = \"wss://h/v1/opamp\"",
-            "[packages]\nverification_key = \"00\"\n",
-        ] {
+        for text in ["endpoint = \"wss://h/v1/opamp\"", "[packages]\n"] {
             let untouched: ClientConfig = toml::from_str(text).expect("parse");
             assert_eq!(
                 untouched.self_update_package(),

@@ -38,9 +38,6 @@ pub const BOOTSTRAP_CERT_FILE: &str = "bootstrap.pem";
 /// The bootstrap certificate's private key the install looks for beside its program (ADR-0020).
 pub const BOOTSTRAP_KEY_FILE: &str = "bootstrap-key.pem";
 
-/// The package verification key, in hex, the install looks for beside its program (ADR-0020).
-pub const VERIFICATION_KEY_FILE: &str = "package-signing-key.pub";
-
 /// The bootstrap certificate and its key in one password-protected file, which the install looks
 /// for beside its program (ADR-0029 clause 6).
 pub const BOOTSTRAP_P12_FILE: &str = classis_core::pkcs12::FILE_NAME;
@@ -54,8 +51,6 @@ pub struct Beside {
     pub ca_file: Option<PathBuf>,
     /// `bootstrap.pem` and `bootstrap-key.pem` only as a pair, or `bootstrap.p12` — never both.
     pub bootstrap: Option<BootstrapFiles>,
-    /// The content of `package-signing-key.pub`, when it is a key.
-    pub verification_key: Option<String>,
     /// What was there and not taken, each said once by the install.
     pub warnings: Vec<String>,
 }
@@ -120,24 +115,9 @@ impl Beside {
             }
             (None, pair) => pair,
         };
-        let verification_key = file(VERIFICATION_KEY_FILE).and_then(|path| {
-            let key = std::fs::read_to_string(&path)
-                .map(|text| text.trim().to_string())
-                .unwrap_or_default();
-            if key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit()) {
-                Some(key)
-            } else {
-                warnings.push(format!(
-                    "{} holds no hex Ed25519 public key; not used",
-                    path.display()
-                ));
-                None
-            }
-        });
         Beside {
             ca_file: file(SERVER_CA_FILE),
             bootstrap,
-            verification_key,
             warnings,
         }
     }
@@ -215,12 +195,8 @@ pub struct Answers {
     /// The questionnaire always asks for it there; `None` for a loopback `ws://` / `http://`
     /// endpoint, or where no question was put — a packaged install.
     pub ca_file: Option<PathBuf>,
-    /// The hex Ed25519 key packages are verified against (ADR-0026); `None` takes no package until
-    /// one is set.
-    pub verification_key: Option<String>,
     /// `[packages] self_update` (ADR-0018): whether the Server may replace this Client's own
-    /// binary. The questionnaire does not ask — a new file says `true`, and the verification key
-    /// decides whether that takes effect; only `--no-self-update` and the MSI's checkbox write
+    /// binary. The questionnaire does not ask — a new file says `true`; only `--no-self-update` and the MSI's checkbox write
     /// `false`. A new file says which of the two it is; an edited file keeps what it says.
     pub self_update: bool,
 }
@@ -439,7 +415,6 @@ fn replace(path: &Path, contents: &str) -> Result<(), String> {
 /// `toml_edit` keeps everything else byte for byte — comments, ordering, the `[[supervisor]]`
 /// blocks, the self-update consent. A CA is written only when one was answered: a loopback
 /// endpoint asks for none, and an edit that switches to one leaves the CA the file names standing.
-/// An answered verification key replaces the one in the file, and a removed one is removed.
 ///
 /// # Errors
 /// Returns an error if the text is not TOML, or names `[tls]` or `[packages]` as something other
@@ -455,19 +430,6 @@ pub fn edit(text: &str, answers: &Answers) -> Result<String, String> {
             "ca_file",
             toml_edit::value(ca.to_string_lossy().into_owned()),
         );
-    }
-    match &answers.verification_key {
-        Some(key) => {
-            table(&mut doc, "packages")?.insert("verification_key", toml_edit::value(key.as_str()));
-        }
-        None => {
-            if let Some(packages) = doc
-                .get_mut("packages")
-                .and_then(toml_edit::Item::as_table_like_mut)
-            {
-                packages.remove("verification_key");
-            }
-        }
     }
     Ok(doc.to_string())
 }
@@ -492,8 +454,8 @@ fn table<'a>(
 /// [`write_new`], so the never-overwrite rule and the `0600` mode are not restated here.
 ///
 /// The endpoint and the self-update consent are taken, and for a `wss://` / `https://` endpoint
-/// the Server CA and the verification key that lie `beside` the program, the CA copied beside the
-/// file as the questionnaire's answer would be (ADR-0020 clause 3). The client identity comes from
+/// the Server CA that lies `beside` the program, copied beside the file as the questionnaire's
+/// answer would be (ADR-0066 clause 14). The client identity comes from
 /// an enrolment an operator approves, which the install runs with a bootstrap pair beside the
 /// program (ADR-0020 clause 4); a file written without one fails the install's validation and
 /// stays on disk to be completed (ADR-0019).
@@ -515,18 +477,14 @@ pub fn run_with_endpoint(
     // to load it would leave the operator correcting a file they never typed.
     validate_endpoint(endpoint)?;
     let endpoint = endpoint.trim().to_string();
-    // Trust and package keys belong to a Server reached over TLS; a loopback `ws://` has neither.
+    // Trust belongs to a Server reached over TLS; a loopback `ws://` has none.
     let tls = is_tls_endpoint(&endpoint);
     let answers = Answers {
         name: ClientConfig::default().name,
         ca_file: beside.ca_file.clone().filter(|_| tls),
-        verification_key: beside.verification_key.clone().filter(|_| tls),
         self_update,
         endpoint,
     };
-    if let Some(key) = &answers.verification_key {
-        println!("took the package verification key {key} from beside the program");
-    }
     let (answers, copies) = copy_ca_beside(answers, path)?;
     for copy in &copies {
         println!("copied {}", copy.display());
@@ -612,33 +570,13 @@ pub fn ask(
         )?)
     };
 
-    // Without it nothing is installed, the Client's own updates included (ADR-0026); an empty
-    // answer is allowed and said so. A key the file holds is the default, so Enter keeps it and a
-    // single `-` is how it is removed.
-    let mut prompt = Input::<String>::new().allow_empty(true);
-    prompt = match defaults.verification_key {
-        Some(key) => prompt
-            .with_prompt("Package verification key (hex Ed25519 public key; - removes it)")
-            .default(key),
-        None => prompt.with_prompt(
-            "Package verification key (hex Ed25519 public key; empty takes no packages)",
-        ),
-    };
-    let key_hex = prompt.interact_text().map_err(prompt_failed)?;
-    let key_hex = key_hex.trim();
-    let verification_key = (!key_hex.is_empty() && key_hex != "-").then(|| key_hex.to_string());
-    if verification_key.is_none() {
-        println!("no verification key: this Client installs no package until one is set");
-    }
-
     Ok((
         Answers {
             endpoint: endpoint.trim().to_string(),
             name: name.trim().to_string(),
             ca_file,
-            verification_key,
-            // Not asked (ADR-0018): the key above decides whether the consent takes effect, and an
-            // edited file keeps the consent it states.
+            // Not asked (ADR-0066 clause 11): a new file writes the consent, and an edited file keeps
+            // the consent it states.
             self_update: current.self_update_package().is_some(),
         },
         bootstrap,
@@ -770,7 +708,6 @@ struct Defaults {
     ca_file: Option<String>,
     cert_file: Option<String>,
     key_file: Option<String>,
-    verification_key: Option<String>,
 }
 
 impl Defaults {
@@ -789,11 +726,6 @@ impl Defaults {
                 .or_else(|| path(beside.ca_file.as_ref())),
             cert_file: path(tls.and_then(|t| t.cert_file.as_ref())).or_else(|| path(beside_cert)),
             key_file: path(tls.and_then(|t| t.key_file.as_ref())).or_else(|| path(beside_key)),
-            verification_key: current
-                .packages
-                .as_ref()
-                .and_then(|p| p.verification_key.clone())
-                .or_else(|| beside.verification_key.clone()),
         }
     }
 }
@@ -830,23 +762,18 @@ pub fn render(answers: &Answers) -> String {
     out.push_str(if answers.self_update {
         "\n# self_update: consent for the Server to replace this Client's own binary, with\n\
          # the package named after its Agent type alone. Write `false` to withdraw it.\n\
-         # Every package, this Client's own included, is verified against\n\
-         # verification_key; without the key nothing is installed.\n\
+         # Every package, this Client's own included, is verified up to the Package\n\
+         # Roots compiled into this Client; there is no key to configure.\n\
          [packages]\n\
          self_update = true\n"
     } else {
         "\n# The Server may NOT replace this Client's own binary. Written out because the\n\
          # consent otherwise stands by default: this Client is then the one program in the\n\
          # fleet that has to be updated by hand on this host. Every package is verified\n\
-         # against verification_key; without the key nothing is installed.\n\
+         # up to the Package Roots compiled into this Client; there is no key to configure.\n\
          [packages]\n\
          self_update = false\n"
     });
-    match &answers.verification_key {
-        Some(key) => out.push_str(&format!("verification_key = {}\n", toml_string(key))),
-        None => out.push_str("# verification_key = \"<hex-encoded Ed25519 public key>\"\n"),
-    }
-
     out.push_str(
         "\n# Machine-level attributes the Server's Selectors match on:\n\
          # [attributes]\n\
@@ -940,7 +867,6 @@ mod tests {
             endpoint: "wss://fleet.example.com/v1/opamp".to_string(),
             name: "host-01".to_string(),
             ca_file: None,
-            verification_key: None,
             self_update: true,
         }
     }
@@ -954,11 +880,7 @@ mod tests {
     fn a_complete_answer_writes_a_file_the_client_starts_with() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(FILE_NAME);
-        let given = Answers {
-            verification_key: Some(hex::encode([7u8; 32])),
-            ..answers()
-        };
-        write_new(&path, &render(&given)).expect("write");
+        write_new(&path, &render(&answers())).expect("write");
         let mut loaded = ClientConfig::load(&path).expect("the written file loads");
         assert!(loaded.tls.is_none(), "no identity and no CA was written");
 
@@ -970,11 +892,6 @@ mod tests {
         loaded
             .check_admission()
             .expect("the Client would start with it");
-        assert_eq!(
-            loaded.package_key(),
-            Some(&[7u8; 32][..]),
-            "the key as answered"
-        );
     }
 
     /// The questionnaire suggests the loader's default, and that default is one its own endpoint
@@ -1044,7 +961,6 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         let given = Answers {
             ca_file: Some(PathBuf::from("/etc/ssl/private-ca.pem")),
-            verification_key: Some(hex::encode([7u8; 32])),
             ..answers()
         };
         write_new(&path, &render(&given)).expect("write");
@@ -1052,7 +968,6 @@ mod tests {
         let loaded = ClientConfig::load(&path).expect("the written file loads");
         assert_eq!(loaded.endpoint, given.endpoint);
         assert_eq!(loaded.name, given.name);
-        assert_eq!(loaded.package_key(), Some(&[7u8; 32][..]));
         assert_eq!(loaded.self_update_package(), Some("supervisor"));
         assert_eq!(
             loaded.tls.expect("tls").ca_file,
@@ -1067,7 +982,6 @@ mod tests {
     fn a_rendered_file_has_no_auth_section() {
         let given = Answers {
             ca_file: Some(PathBuf::from("/etc/ssl/private-ca.pem")),
-            verification_key: Some(hex::encode([7u8; 32])),
             ..answers()
         };
         for rendered in [
@@ -1192,8 +1106,8 @@ mod tests {
 
     /// A declined section is absent rather than empty — a bare `[tls]` would say nothing.
     /// `[packages]` is the one exception and it is the point of ADR-0018: an absent `self_update`
-    /// *means* consent, so both answers are written out, `self_update = true` or `= false`, with the
-    /// verification key or a commented line for it. A reader of the file can tell which it is.
+    /// *means* consent, so both answers are written out, `self_update = true` or `= false`. A
+    /// reader of the file can tell which it is.
     /// Verifies: ADR-0018
     #[test]
     fn declined_sections_are_absent_rather_than_empty_and_the_consent_is_always_written() {
@@ -1329,23 +1243,25 @@ mod tests {
         }
     }
 
-    const KEY_HEX: &str = "7752550dc567225658fcb0a91322f52497b26c2a65cfc4cff14145fcf8857d4b";
-
     /// A directory holding what the operator copies beside the program.
     fn fleet_files(dir: &Path) {
         for (name, content) in [
             (SERVER_CA_FILE, "ca"),
             (BOOTSTRAP_CERT_FILE, "cert"),
             (BOOTSTRAP_KEY_FILE, "key"),
-            (VERIFICATION_KEY_FILE, &format!("{KEY_HEX}\n")[..]),
+            // What `pki init` still writes offline, and nothing reads (ADR-0066 clause 12).
+            (
+                "package-signing-key.pub",
+                &format!("{}\n", "ab".repeat(32))[..],
+            ),
         ] {
             std::fs::write(dir.join(name), content).expect("write");
         }
     }
 
-    /// The fleet's files are found by their exact names; half a bootstrap pair and a public key
-    /// file that holds no key are said and not taken (ADR-0020 clause 1).
-    /// Verifies: ADR-0020
+    /// The fleet's files are found by their exact names; half a bootstrap pair is said and not
+    /// taken, and a package key lying there is neither looked for nor named (ADR-0066 clause 12).
+    /// Verifies: ADR-0020, ADR-0066
     #[test]
     fn the_fleets_files_are_found_beside_the_program_by_their_names() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1360,15 +1276,12 @@ mod tests {
                 key: dir.path().join(BOOTSTRAP_KEY_FILE),
             })
         );
-        assert_eq!(beside.verification_key.as_deref(), Some(KEY_HEX));
         assert!(beside.warnings.is_empty(), "{:?}", beside.warnings);
 
         std::fs::remove_file(dir.path().join(BOOTSTRAP_KEY_FILE)).expect("remove");
-        std::fs::write(dir.path().join(VERIFICATION_KEY_FILE), "not a key").expect("write");
         let beside = Beside::in_dir(dir.path());
         assert_eq!(beside.bootstrap, None, "half a pair is no pair");
-        assert_eq!(beside.verification_key, None);
-        assert_eq!(beside.warnings.len(), 2, "{:?}", beside.warnings);
+        assert_eq!(beside.warnings.len(), 1, "{:?}", beside.warnings);
     }
 
     /// Each default is what the file holds, else what lies beside the program (ADR-0020
@@ -1385,7 +1298,6 @@ mod tests {
         assert_eq!(fresh.ca_file, text(SERVER_CA_FILE));
         assert_eq!(fresh.cert_file, text(BOOTSTRAP_CERT_FILE));
         assert_eq!(fresh.key_file, text(BOOTSTRAP_KEY_FILE));
-        assert_eq!(fresh.verification_key.as_deref(), Some(KEY_HEX));
 
         let held = ClientConfig {
             tls: Some(crate::config::TlsConfig {
@@ -1404,12 +1316,12 @@ mod tests {
         assert_eq!(edited.cert_file, text(BOOTSTRAP_CERT_FILE));
     }
 
-    /// `--endpoint` writes the CA and the verification key it finds beside the program, the CA as
-    /// a copy beside the file; a loopback `ws://` takes neither, and a file that exists is kept
-    /// (ADR-0020 clause 3).
-    /// Verifies: ADR-0020
+    /// `--endpoint` writes the CA it finds beside the program, as a copy beside the file, and no
+    /// package key lying there; a loopback `ws://` takes no CA, and a file that exists is kept
+    /// (ADR-0066 clause 14).
+    /// Verifies: ADR-0066
     #[test]
-    fn an_endpoint_install_takes_the_ca_and_the_key_beside_the_program() {
+    fn an_endpoint_install_takes_the_ca_beside_the_program() {
         let program = tempfile::tempdir().expect("tempdir");
         fleet_files(program.path());
         let beside = Beside::in_dir(program.path());
@@ -1425,13 +1337,14 @@ mod tests {
             loaded.tls.expect("tls").ca_file.as_deref(),
             Some(copy.as_path())
         );
-        assert_eq!(
-            loaded.packages.and_then(|p| p.verification_key).as_deref(),
-            Some(KEY_HEX)
-        );
         assert!(
             !data.path().join(BOOTSTRAP_CERT_FILE).exists(),
             "the bootstrap pair is not copied"
+        );
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            !written.contains("verification_key") && !written.contains(&"ab".repeat(32)),
+            "no package key is written: {written}"
         );
 
         let before = std::fs::read(&path).expect("read");
@@ -1449,7 +1362,6 @@ mod tests {
         assert!(copies.is_empty());
         let loaded = ClientConfig::load(&path).expect("loads");
         assert!(loaded.tls.and_then(|t| t.ca_file).is_none());
-        assert!(loaded.packages.and_then(|p| p.verification_key).is_none());
     }
 
     /// Unasked, the pair beside the program enrols a Client over TLS that holds no issued
@@ -1753,7 +1665,6 @@ mod tests {
                       \n\
                       [packages]\n\
                       self_update = false\n\
-                      verification_key = \"aa\"\n\
                       \n\
                       [[supervisor]]\n\
                       name = \"collector\"\n\
@@ -1764,7 +1675,6 @@ mod tests {
                 endpoint: "wss://new.example/v1/opamp".to_string(),
                 name: "new".to_string(),
                 ca_file: Some(PathBuf::from("/data/server-ca.pem")),
-                verification_key: None,
                 self_update: true,
             },
         )
@@ -1783,10 +1693,6 @@ mod tests {
         assert_eq!(doc["endpoint"].as_str(), Some("wss://new.example/v1/opamp"));
         assert_eq!(doc["name"].as_str(), Some("new"));
         assert_eq!(doc["tls"]["ca_file"].as_str(), Some("/data/server-ca.pem"));
-        assert!(
-            doc["packages"].get("verification_key").is_none(),
-            "a removed key is removed"
-        );
         assert_eq!(
             doc["packages"]["self_update"].as_bool(),
             Some(false),
@@ -1803,7 +1709,6 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         let given = Answers {
             ca_file: Some(PathBuf::from("/data/server-ca.pem")),
-            verification_key: Some(hex::encode([7u8; 32])),
             ..answers()
         };
         let edited = edit("[logging]\nenabled = true\n", &given).expect("edit");
@@ -1811,7 +1716,6 @@ mod tests {
         let loaded = ClientConfig::load(&path).expect("the edited file loads");
         assert_eq!(loaded.endpoint, given.endpoint);
         assert_eq!(loaded.name, given.name);
-        assert_eq!(loaded.package_key(), Some(&[7u8; 32][..]));
         assert_eq!(
             loaded.tls.expect("tls").ca_file,
             Some(PathBuf::from("/data/server-ca.pem"))
@@ -1826,13 +1730,8 @@ mod tests {
         let fresh = Defaults::of(&ClientConfig::default(), &Beside::default());
         assert_eq!(fresh.endpoint, ClientConfig::default().endpoint);
         assert_eq!(
-            (
-                fresh.ca_file,
-                fresh.cert_file,
-                fresh.key_file,
-                fresh.verification_key
-            ),
-            (None, None, None, None)
+            (fresh.ca_file, fresh.cert_file, fresh.key_file),
+            (None, None, None)
         );
 
         let held: ClientConfig = toml::from_str(
@@ -1841,9 +1740,7 @@ mod tests {
              [tls]\n\
              ca_file = \"/d/server-ca.pem\"\n\
              cert_file = \"/d/boot.pem\"\n\
-             key_file = \"/d/boot-key.pem\"\n\
-             [packages]\n\
-             verification_key = \"abcd\"\n",
+             key_file = \"/d/boot-key.pem\"\n",
         )
         .expect("config");
         assert_eq!(
@@ -1854,7 +1751,6 @@ mod tests {
                 ca_file: Some("/d/server-ca.pem".to_string()),
                 cert_file: Some("/d/boot.pem".to_string()),
                 key_file: Some("/d/boot-key.pem".to_string()),
-                verification_key: Some("abcd".to_string()),
             }
         );
     }

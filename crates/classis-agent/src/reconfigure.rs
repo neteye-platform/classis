@@ -1552,7 +1552,7 @@ mod tests {
     }
 
     /// A delivered set reaches no key of `supervisor.toml` but the `[[supervisor]]` array: whatever
-    /// else it names — an `[auth]` section, trust, the verification key, a removed key such as
+    /// else it names — an `[auth]` section, trust, a removed key such as
     /// `allowed_sources`, the
     /// operator's consent in `[supervisors]`, self-update, Gateway Mode — the file keeps the
     /// operator's values and gains none of the offered ones.
@@ -1562,7 +1562,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("supervisor.toml");
         let operator = "endpoint = \"wss://fleet.example:4320/v1/opamp\"\n\n\
-                        [packages]\nverification_key = \"aa\"\n\
+                        [packages]\n\
                         archive_key = \"operator-secret\"\n";
         std::fs::write(&path, operator).expect("write");
 
@@ -1577,7 +1577,6 @@ mod tests {
 
             [packages]
             self_update = false
-            verification_key = "bb"
             allowed_sources = ["https://evil.example/"]
 
             [supervisors]
@@ -1599,7 +1598,6 @@ mod tests {
         for offered in [
             "server-token",
             "server-ca.pem",
-            "\"bb\"",
             "evil.example",
             "delivered_args",
             "LD_PRELOAD",
@@ -1615,7 +1613,6 @@ mod tests {
         let parsed: ClientConfig = toml::from_str(&text).expect("the file parses");
         assert_eq!(parsed.endpoint, "wss://fleet.example:4320/v1/opamp");
         assert!(text.contains("operator-secret"));
-        assert!(text.contains("verification_key = \"aa\""));
         assert_eq!(parsed.supervisors.len(), 1);
     }
 

@@ -1,5 +1,6 @@
-//! The signing file (ADR-0027): what a Package's signatures cover, carried from the bundled UI to
-//! the machine that holds the key, and the signatures carried back.
+//! The signing file (ADR-0027): what a Package's signatures cover, carried to the machine that
+//! holds the key, and the signatures carried back. The Client and the Server refuse what it
+//! carries (ADR-0066).
 //!
 //! The file is read whole and checked whole before anything is signed — a file with one bad entry
 //! signs nothing — and every signature is made over [`classis_core::package::statement`], the same

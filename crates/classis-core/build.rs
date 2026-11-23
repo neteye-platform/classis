@@ -8,7 +8,9 @@
 
 use git2::Repository;
 
-const TAG_PREFIX: &str = "version/";
+// A release tag is `v` and the version (ADR-0065, restating ADR-0012 clause 2). Only a `v` followed
+// by a digit is one: `very-old` is no release tag, whatever it points at.
+const TAG_PREFIX: &str = "v";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=OPAMP_PRODUCT_VERSION");
@@ -25,10 +27,10 @@ fn main() {
 // `CARGO_PKG_VERSION`; `OPAMP_PRODUCT_VERSION` overrides it for builds that want to state a version
 // explicitly. Git decides only what is *around* that number:
 //
-// - a `version/<base>` tag pointing at HEAD — a **release** build: the base as it stands;
+// - a `v<base>` tag pointing at HEAD — a **release** build: the base as it stands;
 // - no such tag — a **development** build: the base plus the `-dev` pre-release, so a build heading
 //   for a release is unmistakably not it;
-// - a `version/*` tag on HEAD naming a **different** version — a disagreement between the file and
+// - a `v<digit>…` tag on HEAD naming a **different** version — a disagreement between the file and
 //   the tag, which fails the build rather than picking one.
 //
 // The commit short-hash is appended as SemVer build metadata whenever a repository is present, so
@@ -113,7 +115,7 @@ fn short_hash(repo: &Repository) -> Result<String, String> {
     Ok(head.id().to_string()[..7].to_string())
 }
 
-/// A `version/*` tag pointing exactly at HEAD — the marker of a release build.
+/// A release tag — `v` and a digit — pointing exactly at HEAD: the marker of a release build.
 fn release_tag_on_head(repo: &Repository) -> Result<Option<String>, String> {
     let head = repo
         .head()
@@ -125,6 +127,14 @@ fn release_tag_on_head(repo: &Repository) -> Result<Option<String>, String> {
         .map_err(|e| format!("cannot list version tags: {e}"))?;
     for reference in refs {
         let reference = reference.map_err(|e| format!("cannot read a version tag: {e}"))?;
+        let looks_like_release = reference
+            .name()
+            .ok()
+            .and_then(|name| name.strip_prefix("refs/tags/v"))
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+        if !looks_like_release {
+            continue;
+        }
         // Peeling covers both lightweight and annotated tags.
         if reference.peel_to_commit().map(|c| c.id()) == Ok(head) {
             if let Ok(name) = reference.name() {
@@ -135,7 +145,7 @@ fn release_tag_on_head(repo: &Repository) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Strict parse of a `version/*` tag name into a normalised `MAJOR.MINOR.PATCH` string.
+/// Strict parse of a release tag name, `v` and the version, into a normalised `MAJOR.MINOR.PATCH`.
 fn parse_tag(tag: &str) -> Option<String> {
     parse_components(tag.strip_prefix(TAG_PREFIX)?)
 }

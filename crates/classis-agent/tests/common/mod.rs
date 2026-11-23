@@ -116,3 +116,71 @@ pub fn release_to_every_agent(
     }
     release(state, FLEET_DEPLOYMENT, &[CHANNEL], configurations)
 }
+
+/// The Package Roots of these tests (ADR-0066): `ours`, which the Client under test trusts through
+/// [`classis_core::package::DEBUG_ROOT_ENV`] — a debug build only — and the Server too, and
+/// `theirs`, which only the Server trusts, so a signature it holds can still fail the Client's own
+/// check.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this scaffolding
+pub struct PackageRoots {
+    pub ours: classis_core::package::testing::TestRoot,
+    pub signer: classis_core::package::testing::TestSigner,
+    pub theirs: classis_core::package::testing::TestRoot,
+    pub their_signer: classis_core::package::testing::TestSigner,
+}
+
+#[allow(dead_code)]
+pub fn package_roots() -> &'static PackageRoots {
+    static ROOTS: std::sync::OnceLock<PackageRoots> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| {
+        let ours = classis_core::package::testing::TestRoot::new();
+        let theirs = classis_core::package::testing::TestRoot::new();
+        PackageRoots {
+            signer: ours.signer(),
+            their_signer: theirs.signer(),
+            ours,
+            theirs,
+        }
+    })
+}
+
+/// The file the Client under test reads `ours` from through
+/// [`classis_core::package::DEBUG_ROOT_ENV`]: in `dir`, a directory the test owns — beside its
+/// configuration — so it goes when the test's temporary directory does. Created exclusively; a
+/// second Client of the same test finds the same Root there.
+#[allow(dead_code)]
+pub fn package_root_file(dir: &Path) -> std::path::PathBuf {
+    use std::io::Write as _;
+    let path = dir.join("test-package-root.der");
+    let der = &package_roots().ours.der;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => file.write_all(der).expect("write the test Package Root"),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => assert_eq!(
+            &std::fs::read(&path).expect("read the test Package Root"),
+            der,
+            "{} holds another Root",
+            path.display()
+        ),
+        Err(e) => panic!("{}: {e}", path.display()),
+    }
+    path
+}
+
+/// A Server's package store on `dir`, checking signatures up to both test Roots (ADR-0066).
+#[allow(dead_code)]
+pub fn server_store(dir: &Path) -> classis_server::packages::PackageStore {
+    let roots = package_roots();
+    classis_server::packages::PackageStore::open(dir.to_path_buf())
+        .expect("store")
+        .with_verifier(Box::new(classis_server::config::RootsVerifier::new(
+            classis_core::package::Roots::from_der([
+                roots.ours.der.as_slice(),
+                roots.theirs.der.as_slice(),
+            ])
+            .expect("test roots"),
+        )))
+}

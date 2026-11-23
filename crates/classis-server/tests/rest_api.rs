@@ -1860,7 +1860,6 @@ async fn the_forms_mark_every_field_required_or_optional() {
     }
     for id in [
         "config-role",
-        "set-sig-file",
         "dep-package-pick",
         "dep-config-pick",
         "boot-country",
@@ -1962,14 +1961,14 @@ async fn the_ui_lists_hosts_and_marks_inherited_labels() {
     }
 }
 
-/// The Packages tab shows each entry's SHA-256 and signature state, offers what a signature covers
-/// as a signing file, and imports a signed one through the entry's signature route (ADR-0033) — so
-/// the page writes the one format `classisctl package sign --signing-info` reads, and the
-/// fields it reads must be the ones the API serves. A rename on either side breaks here rather than
-/// in an empty column or a signing file with a hole in it.
-/// Verifies: ADR-0023, ADR-0027, ADR-0033
+/// The Packages tab shows each entry's SHA-256 and signature state, and puts a signature through
+/// the entry's signature route (ADR-0033, ADR-0066 clause 16) — so the fields it reads must be the
+/// ones the API serves. A rename on either side breaks here rather than in an empty column. The
+/// tab neither offers nor imports a signing file, and names no verification key: what
+/// `classisctl package sign` makes is refused (ADR-0066 clauses 17 and 18).
+/// Verifies: ADR-0023, ADR-0033, ADR-0066
 #[tokio::test]
-async fn the_ui_shows_the_sha256_and_carries_the_signing_file_the_api_serves() {
+async fn the_ui_shows_the_sha256_and_the_signature_state_the_api_serves() {
     let server = spawn().await;
     let client = reqwest::Client::new();
     let html = client
@@ -1986,19 +1985,22 @@ async fn the_ui_shows_the_sha256_and_carries_the_signing_file_the_api_serves() {
         "p.version",
         "e.os",
         "e.arch",
-        "\"classis-signing-v1\"",
-        "format: SIGNING_FORMAT",
         "/entries/${encodeURIComponent(os)}/${encodeURIComponent(arch)}/signature",
-        "entrySigPath(info.agent_type, info.version, e.os, e.arch)",
-        "e.sha256 !== entry.content_hash",
-        "JSON.stringify({ signature: e.signature })",
+        "entrySigPath(p.agent_type, p.version, sign.dataset.os, sign.dataset.arch), { signature }",
         "e.signature_state",
-        "stored.signature_state",
     ] {
         assert!(
             html.contains(needle),
             "the UI no longer contains {needle:?}"
         );
+    }
+    for gone in [
+        "classis-signing-v1",
+        "verification_key",
+        "\"invalid\"",
+        "unchecked",
+    ] {
+        assert!(!html.contains(gone), "the UI still names {gone:?}");
     }
 
     let document: serde_json::Value = client

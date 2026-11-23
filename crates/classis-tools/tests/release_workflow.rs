@@ -145,7 +145,7 @@ fn each_archive_is_named_like_the_clients_packed_by_the_tool_and_checksummed() {
         "{upload}"
     );
     assert!(workflow.contains("cat -- *.sha256 | sort -k2 > SHA256SUMS"));
-    assert!(workflow.contains("*.tar.gz *.deb *.rpm *.msi *.cdx.json SHA256SUMS"));
+    assert!(workflow.contains("*.tar.gz *.tar.gz.sig *.deb *.rpm *.msi *.cdx.json SHA256SUMS"));
 
     // No installer carries it.
     for installer in [
@@ -253,9 +253,11 @@ fn action(uses: &str) -> &str {
     uses.split_once('@').map_or(uses, |(action, _)| action)
 }
 
-/// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8).
-const PUBLISHED: [&str; 6] = [
+/// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8, with
+/// the signatures ADR-0065 clause 9 keeps).
+const PUBLISHED: [&str; 7] = [
     "*.tar.gz",
+    "*.tar.gz.sig",
     "*.deb",
     "*.rpm",
     "*.msi",
@@ -317,12 +319,13 @@ fn only_the_publish_job_may_attest() {
         ]
     );
 
-    // It downloads the SBOMs and the two programs' archives, and not the Server's binaries, which
-    // ship inside the image alone. Every artifact the workflow uploads under another name is one
-    // of those, and the pattern names each.
+    // It downloads the SBOMs, the two programs' archives and the signatures (ADR-0065 clause 9),
+    // and not the tracked certificate, which travels inside each signature, nor the Server's binaries, which ship inside the image alone,
+    // nor the archives' lone checksums, which were the signing job's. Every artifact the workflow
+    // uploads under another name is one of those, and the pattern names each.
     assert!(
         publish.contains(
-            "          pattern: '{sbom,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'\n"
+            "          pattern: '{sbom,signatures,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'\n"
         ),
         "{publish}"
     );
@@ -335,10 +338,13 @@ fn only_the_publish_job_may_attest() {
     assert_eq!(
         uploaded,
         [
+            "package-signer",
             "sbom",
             "server-linux-${{ matrix.arch }}",
             "${{ steps.pack_tool.outputs.name }}",
-            "${{ steps.pack.outputs.name }}"
+            "${{ steps.pack.outputs.name }}",
+            "sha256_${{ steps.pack.outputs.name }}",
+            "signatures"
         ]
     );
 
@@ -355,7 +361,7 @@ fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
     let workflow = workflow();
     let publish = job(&workflow, "publish");
     assert!(
-        publish.contains("    needs: [version, build, sbom, image]\n"),
+        publish.contains("    needs: [version, build, sbom, image, sign]\n"),
         "{publish}"
     );
 
@@ -969,4 +975,447 @@ fn the_notes_name_the_image_by_its_digest_and_say_how_to_verify_it() {
     ] {
         assert!(notes.contains(line), "{line} in the notes");
     }
+}
+
+/// The shell of a step's `run: |` block, dedented: what the runner executes.
+fn run_script(step: &str) -> String {
+    let body = step
+        .split_once("        run: |\n")
+        .unwrap_or_else(|| panic!("no run block in {step}"))
+        .1;
+    body.lines()
+        .take_while(|line| line.is_empty() || line.starts_with("          "))
+        .map(|line| line.get(10..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// The actions a job runs, without their pins.
+fn actions(job: &str) -> Vec<&str> {
+    job.lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            line.strip_prefix("- uses: ")
+                .or_else(|| line.strip_prefix("uses: "))
+        })
+        .map(action)
+        .collect()
+}
+
+// Verifies: ADR-0065
+#[test]
+fn a_release_starts_only_from_a_tag_a_person_pushed() {
+    let workflow = workflow();
+    // Two triggers: the pushed tag, and a dry run by hand that takes no input.
+    let on = workflow
+        .split_once("\non:\n")
+        .and_then(|(_, rest)| rest.split_once("\n\n"))
+        .map(|(block, _)| block)
+        .expect("an on: block");
+    let triggers: Vec<&str> = on
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect();
+    assert_eq!(
+        triggers,
+        [
+            "  workflow_dispatch:",
+            "  push:",
+            "    tags: [\"v[0-9]+.[0-9]+.[0-9]+\"]"
+        ],
+        "{on}"
+    );
+    assert!(!workflow.contains("inputs."), "a run reads no input");
+
+    // The workflow pushes no tag, so no job needs write access to the contents for one.
+    assert!(!workflow.contains("git push"), "the workflow pushes");
+    assert!(!workflow.contains("git tag "), "the workflow tags");
+    let version = job(&workflow, "version");
+    assert_eq!(grants(permissions(version)), ["contents: read"]);
+
+    // A run started by hand publishes nothing, on a tag ref neither.
+    let read = run_script(step(version, "Read the version out of Cargo.toml"));
+    assert!(
+        read.contains("if [ \"$GITHUB_EVENT_NAME\" = \"push\" ]; then"),
+        "{read}"
+    );
+    assert!(read.contains("else\n  publish=false\nfi"), "{read}");
+
+    // The tagged commit must be on main (clause 4).
+    let on_main = step(version, "The tag is on main");
+    assert!(
+        on_main.contains("if: steps.read.outputs.publish == 'true'"),
+        "{on_main}"
+    );
+    assert!(
+        on_main.contains("git merge-base --is-ancestor \"$GITHUB_SHA\" refs/remotes/origin/main"),
+        "{on_main}"
+    );
+}
+
+// Verifies: ADR-0065
+#[test]
+fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_repository() {
+    let workflow = workflow();
+    let sign = job(&workflow, "sign");
+    assert_eq!(
+        workflow.matches("environment:").count(),
+        1,
+        "one environment"
+    );
+    assert!(
+        sign.contains("    environment: Package Signing\n"),
+        "{sign}"
+    );
+    assert_eq!(workflow.matches("secrets.").count(), 1, "one secret");
+    assert!(
+        sign.contains("${{ secrets.PACKAGE_SIGNING_KEY }}"),
+        "{sign}"
+    );
+
+    // A release alone, after the build, on a GitHub-hosted runner, reading and nothing more.
+    assert!(
+        sign.contains(
+            "    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'\n"
+        ),
+        "{sign}"
+    );
+    assert!(sign.contains("    needs: [version, build]\n"), "{sign}");
+    assert!(sign.contains("    runs-on: ubuntu-latest\n"), "{sign}");
+    assert_eq!(grants(permissions(sign)), ["contents: read"]);
+
+    // No checkout, no build, two kinds of action: it fetches the archives' checksums and the
+    // tracked certificate, and hands back the signatures (ADR-0065 clause 6).
+    assert!(!sign.contains("actions/checkout"), "{sign}");
+    assert!(!sign.contains("cargo "), "{sign}");
+    assert_eq!(
+        actions(sign),
+        [
+            "actions/download-artifact",
+            "actions/download-artifact",
+            "actions/upload-artifact"
+        ]
+    );
+    assert!(
+        sign.contains("          pattern: sha256_${{ env.ARTIFACT }}_*\n"),
+        "{sign}"
+    );
+    let build = job(&workflow, "build");
+    let lone = build
+        .split("- uses: actions/upload-artifact@")
+        .find(|block| block.contains("name: sha256_"))
+        .expect("the archive's lone checksum is uploaded");
+    assert!(
+        lone.contains("          path: ${{ env.STEM }}.tar.gz.sha256\n"),
+        "{lone}"
+    );
+
+    // The key is on the runner only between its decoding and a removal that always runs.
+    let remove = step(sign, "Remove the signing key");
+    assert!(remove.contains("        if: always()\n"), "{remove}");
+    assert!(
+        remove.contains("rm -f -- \"$RUNNER_TEMP/package-signing-key.pk8\""),
+        "{remove}"
+    );
+    let decode = run_script(step(sign, "Decode the signing key"));
+    assert!(decode.contains("umask 077"), "{decode}");
+}
+
+/// The `openssl` on the path, required to be OpenSSL 3: LibreSSL, macOS's `openssl`, signs no raw
+/// Ed25519 input the way the runner's does.
+fn openssl_3() {
+    let out = std::process::Command::new("openssl")
+        .arg("version")
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("this test runs the signing step with `openssl`, and there is none: {e}")
+        });
+    let version = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        version.starts_with("OpenSSL 3."),
+        "this test needs OpenSSL 3, the runner's, and found {version:?}"
+    );
+}
+
+// Verifies: ADR-0065, ADR-0066
+#[test]
+fn the_signing_step_signs_the_statement_the_client_verifies() {
+    use classis_core::package::testing::TestRoot;
+
+    openssl_3();
+    let workflow = workflow();
+    let script = run_script(step(job(&workflow, "sign"), "Sign every entry"));
+
+    // A Package Signer of a test Root — its PKCS#8 key, as the secret holds it, and its certificate,
+    // as `packaging/package-signer.der` does — and two entries' checksums as the build writes them.
+    let root = TestRoot::new();
+    let signer = root.signer();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let key_file = dir.path().join("package-signing-key.pk8");
+    // As the secret holds it: PKCS#8 v1, from `openssl genpkey`, which the runner's OpenSSL 3.0
+    // reads (it refuses ring's v2).
+    std::fs::write(&key_file, signer.pkcs8_v1()).expect("key file");
+    let cert_file = dir.path().join("package-signer.der");
+    std::fs::write(&cert_file, &signer.der).expect("certificate file");
+    let entries = dir.path().join("entries");
+    std::fs::create_dir(&entries).expect("entries");
+    let archives = [
+        ("supervisor_1.2.3_linux_amd64.tar.gz", [0x0a_u8; 32]),
+        ("supervisor_1.2.3_windows_amd64.tar.gz", [0xf0_u8; 32]),
+    ];
+    for (name, hash) in &archives {
+        std::fs::write(
+            entries.join(format!("{name}.sha256")),
+            format!("{}  {name}\n", hex::encode(hash)),
+        )
+        .expect("checksum");
+    }
+    let script_file = dir.path().join("sign.sh");
+    std::fs::write(&script_file, &script).expect("script");
+    let run = || {
+        std::process::Command::new("bash")
+            .arg(&script_file)
+            .env("AGENT_TYPE", "supervisor")
+            .env("VERSION", "1.2.3")
+            .env("KEY", &key_file)
+            .env("CERT", &cert_file)
+            .env("ENTRIES", &entries)
+            .status()
+            .expect("bash")
+    };
+    let status = run();
+    assert!(status.success(), "the signing step failed: {status}");
+
+    // Each `.sig` is a PackageSignature in lowercase hex and a newline, and verifies under the
+    // Client's own check: up to the Root, over `classis_core::package::statement`.
+    for (name, hash) in &archives {
+        let sig = std::fs::read_to_string(entries.join(format!("{name}.sig"))).expect("sig");
+        assert!(sig.ends_with('\n'), "{sig:?}");
+        let hexdigits = sig.trim_end();
+        assert!(
+            hexdigits
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{sig:?}"
+        );
+        let bytes = hex::decode(hexdigits).expect("hex");
+        let parsed = classis_core::package::parse_signature(&bytes).expect("a PackageSignature");
+        assert_eq!(
+            parsed.signer,
+            signer.der.as_slice(),
+            "it carries the tracked certificate"
+        );
+        let statement = classis_core::package::statement("supervisor", "1.2.3", hash);
+        assert_eq!(
+            classis_core::package::chain::verify_now(&statement, &bytes, &root.roots()),
+            Ok(()),
+            "the signature of {name} verifies"
+        );
+        assert_eq!(
+            bytes,
+            signer.sign(&statement),
+            "byte-identical to what `classis_core` writes: Ed25519 is deterministic"
+        );
+        assert!(entries.join(format!("{name}.sig.sha256")).exists());
+        assert!(!entries.join(format!("{name}.statement")).exists());
+        assert!(!entries.join(format!("{name}.sig.bin")).exists());
+    }
+
+    // A checksum that names another file is refused, and nothing is signed for it.
+    std::fs::write(
+        entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"),
+        format!("{}  other.tar.gz\n", hex::encode([1_u8; 32])),
+    )
+    .expect("checksum");
+    assert!(
+        !run().success(),
+        "a checksum naming another file was signed"
+    );
+    std::fs::remove_file(entries.join("supervisor_1.2.3_darwin_arm64.tar.gz.sha256"))
+        .expect("remove");
+
+    // A key that is not the tracked certificate's is refused: each signature is verified under the
+    // certificate before it is kept (ADR-0065 clause 6).
+    let other = root.signer();
+    std::fs::write(&key_file, other.pkcs8_v1()).expect("another key");
+    let sig_file = entries.join("supervisor_1.2.3_linux_amd64.tar.gz.sig");
+    let before = std::fs::read(&sig_file).expect("sig");
+    assert!(
+        !run().success(),
+        "a key that is not the certificate's signed"
+    );
+    assert_eq!(
+        std::fs::read(&sig_file).expect("sig"),
+        before,
+        "nothing written over the good signature"
+    );
+    std::fs::write(&key_file, signer.pkcs8_v1()).expect("key file");
+
+    // A certificate file that is no DER certificate is refused before anything is signed.
+    std::fs::write(&cert_file, b"not a certificate").expect("certificate file");
+    assert!(!run().success(), "a non-certificate was carried");
+}
+
+// Verifies: ADR-0065, ADR-0066
+#[test]
+fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
+    let workflow = workflow();
+    // The certificate comes from the tracked file, out of the job that has the checkout.
+    let version = job(&workflow, "version");
+    let tracked = run_script(step(version, "The tracked Package Signer certificate"));
+    assert!(
+        tracked.contains("cp packaging/package-signer.der package-signer/"),
+        "{tracked}"
+    );
+    assert!(
+        version.contains("          name: package-signer\n"),
+        "{version}"
+    );
+    let sign = job(&workflow, "sign");
+    assert!(sign.contains("          name: package-signer\n"), "{sign}");
+    assert!(
+        !job(&workflow, "publish").contains("package-signer"),
+        "the certificate travels inside each .sig, and is not published on its own"
+    );
+
+    // The signatures are the signing job's, handed back with their checksums.
+    assert!(sign.contains("          name: signatures\n"), "{sign}");
+    assert!(
+        sign.contains("            entries/*.tar.gz.sig\n"),
+        "{sign}"
+    );
+
+    // The notes tell an operator how to upload them.
+    let notes = step(job(&workflow, "publish"), "Publish the release");
+    for line in [
+        "\\$(cat \"\\$f.sig\")",
+        "\"\\$api/packages/supervisor/\\$v/entries/\\$os/\\$arch/signature\"",
+    ] {
+        assert!(notes.contains(line), "{line} in the notes");
+    }
+    assert!(!notes.contains("package-signing-key.pub"), "{notes}");
+}
+
+// Verifies: ADR-0065, ADR-0066
+#[test]
+fn the_tracked_certificate_is_a_package_signer() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signer.der");
+    let der = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let (rest, cert) = x509_parser::parse_x509_certificate(&der).expect("a DER certificate");
+    assert!(
+        rest.is_empty(),
+        "{} bytes follow the certificate",
+        rest.len()
+    );
+    assert!(!cert.is_ca(), "a Package Signer is no CA");
+    assert!(
+        cert.extended_key_usage().ok().flatten().is_none(),
+        "a Package Signer carries no extendedKeyUsage"
+    );
+    assert_eq!(
+        cert.public_key().algorithm.algorithm.to_id_string(),
+        "1.3.101.112",
+        "a Package Signer's key is Ed25519 (RFC 8410)"
+    );
+    // What every `.sig` of a release will carry parses as a PackageSignature, within its bound.
+    let carried = classis_core::package::encode_signature(&der, &[0; 64])
+        .expect("the tracked certificate fits a PackageSignature");
+    let parsed = classis_core::package::parse_signature(&carried).expect("a PackageSignature");
+    assert_eq!(parsed.signer, der.as_slice());
+    // And it was issued by a compiled-in Root: with a placeholder signature the check gets past
+    // the chain and stops at the signature, the step a real one passes.
+    let statement = classis_core::package::statement("supervisor", "1.0.0", &[0; 32]);
+    assert_eq!(
+        classis_core::package::chain::verify_now(
+            &statement,
+            &carried,
+            &classis_core::package::chain::compiled().expect("the compiled-in Roots")
+        ),
+        Err(classis_core::package::SignatureError::Signature),
+        "the tracked Package Signer chains to a compiled-in Package Root"
+    );
+}
+
+/// A release is started by a signed tag, which is an annotated one: `ls-remote` lists it as its
+/// tag object and as the commit it names. The step that refuses a spent number takes the tag that
+/// started the run, whichever of the two `GITHUB_SHA` holds, and refuses one on another commit.
+// Verifies: ADR-0065
+#[test]
+fn the_version_step_takes_the_annotated_tag_that_started_the_run() {
+    let workflow = workflow();
+    let script = run_script(step(
+        job(&workflow, "version"),
+        "This version has not been released yet",
+    ))
+    .replace("${{ steps.read.outputs.version }}", "1.2.3")
+    .replace("${{ github.repository }}", "owner/repo");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str], cwd: &Path| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let origin = dir.path().join("origin");
+    std::fs::create_dir(&origin).expect("origin");
+    git(&["init", "-q"], &origin);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"], &origin);
+    git(&["tag", "-a", "v1.2.3", "-m", "release"], &origin);
+    let commit = git(&["rev-parse", "HEAD"], &origin);
+    let object = git(&["rev-parse", "v1.2.3"], &origin);
+    assert_ne!(commit, object, "an annotated tag");
+    git(
+        &["clone", "-q", origin.to_str().expect("utf-8"), "clone"],
+        dir.path(),
+    );
+    // No release exists: `gh release view` answers "not found".
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).expect("bin");
+    std::fs::write(bin.join("gh"), "#!/bin/sh\nexit 1\n").expect("gh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+    }
+    let script_file = dir.path().join("step.sh");
+    std::fs::write(&script_file, &script).expect("script");
+    let run = |sha: &str| {
+        std::process::Command::new("bash")
+            .arg(&script_file)
+            .current_dir(dir.path().join("clone"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("GITHUB_EVENT_NAME", "push")
+            .env("GITHUB_SHA", sha)
+            .env("GITHUB_SERVER_URL", "https://example.invalid")
+            .env("GH_TOKEN", "unused")
+            .status()
+            .expect("bash")
+            .success()
+    };
+    assert!(run(&commit), "the commit the tag names");
+    assert!(run(&object), "the tag object");
+    assert!(
+        !run(&"0".repeat(40)),
+        "a tag on another commit is a spent number"
+    );
 }
