@@ -81,7 +81,7 @@ A section carries a date once its tag exists.
   no longer asks for a package key nor reads `package-signing-key.pub`, and the
   `supervisor.toml.fragment` of `pki init` names none.
 - **Support for macOS**
-  ([ADR-0064](docs/adr/0064-no-program-of-the-product-is-built-for-macos.md)).
+  ([ADR-0067](docs/adr/0067-no-program-of-the-product-is-built-for-macos.md)).
   No release carries a macOS build of the Client or of `classisctl`. The Server
   no longer reads the platform spellings `macos` and `osx` as `darwin`, and the
   upload form no longer fills in a macOS platform from a file name.

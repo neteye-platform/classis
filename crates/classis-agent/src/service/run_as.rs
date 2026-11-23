@@ -1047,7 +1047,7 @@ pub fn check_process_account(
 const NOTHING: &str = "Nothing has been installed or written.";
 
 /// The lines that create `account` with a primary group of its own and make that group one of
-/// `client`'s. The refusals name the shadow utilities (ADR-0064 clause 21): `useradd`, `usermod`,
+/// `client`'s. The refusals name the shadow utilities (ADR-0067 clause 21): `useradd`, `usermod`,
 /// `gpasswd`. The binary runs none of them.
 fn create_line(account: &str, client: &str) -> String {
     format!(

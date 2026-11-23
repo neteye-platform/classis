@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 accepted
   · clauses 1, 2, 4, 6, 7, 9, 10, 14 and 16 superseded by
-  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-24
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the `--process-account` flag of `service install` and the

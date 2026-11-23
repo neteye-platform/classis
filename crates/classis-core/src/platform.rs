@@ -115,7 +115,7 @@ mod tests {
 
     /// No program of the product is built for macOS, so the table keeps no alias for it: each of
     /// its spellings is an unknown token, served under its own name and folded onto no other.
-    /// Verifies: ADR-0064
+    /// Verifies: ADR-0067
     #[test]
     fn the_macos_spellings_pass_through_unchanged() {
         for os in ["macos", "osx", "darwin"] {

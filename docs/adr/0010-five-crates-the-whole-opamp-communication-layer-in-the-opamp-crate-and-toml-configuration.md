@@ -3,7 +3,7 @@
 - **Status:** 🟢 accepted · clause 23 superseded by
   [ADR-0051](0051-the-servers-configuration-may-come-from-its-environment.md)
   · clauses 15 and 21 superseded by
-  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** Cargo.toml, `crates/opamp/` (its manifest and `[features]`,

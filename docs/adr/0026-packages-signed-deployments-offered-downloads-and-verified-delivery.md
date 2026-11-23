@@ -20,7 +20,7 @@
   · clauses 50 and 54 superseded by
   [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
   · clause 7 superseded by
-  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
 - **Applies to:** `crates/classis-server/src/packages.rs`,

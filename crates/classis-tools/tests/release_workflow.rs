@@ -101,7 +101,7 @@ fn the_operator_tool_is_built_for_two_targets_and_its_version_asserted_where_it_
 
 /// The release's three targets, each built on a runner that runs it, so every row asserts the
 /// version its own binary reports and none skips it.
-// Verifies: ADR-0064
+// Verifies: ADR-0067
 #[test]
 fn the_release_builds_three_targets_each_on_a_runner_that_runs_it() {
     let workflow = workflow();
@@ -145,7 +145,7 @@ fn the_release_builds_three_targets_each_on_a_runner_that_runs_it() {
 
 /// The workflows that build and test the product on a platform name no macOS target and no macOS
 /// runner.
-// Verifies: ADR-0064
+// Verifies: ADR-0067
 #[test]
 fn no_workflow_builds_or_tests_on_macos() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");

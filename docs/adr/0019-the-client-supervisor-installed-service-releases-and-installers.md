@@ -14,7 +14,7 @@
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
   · clauses 2, 7, 11, 12, 21, 22, 30 and 33, and the sentence of its Decision,
   superseded by
-  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `crates/classis-agent/src/cli.rs`,

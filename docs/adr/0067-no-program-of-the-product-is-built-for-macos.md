@@ -1,4 +1,4 @@
-# ADR-0064: No program of the product is built for macOS
+# ADR-0067: No program of the product is built for macOS
 
 - **Status:** 🟢 accepted
 - **Date:** 2026-11-16
@@ -983,7 +983,7 @@ nothing on macOS.
 
 ## Enforcement
 
-The implementation adds, each with a `Verifies: ADR-0064` marker:
+The implementation adds, each with a `Verifies: ADR-0067` marker:
 
 - a test in `crates/classis-tools/tests/release_workflow.rs` that fails when
   `.github/workflows/release.yml`, `.github/workflows/ci.yml` or

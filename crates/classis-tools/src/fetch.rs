@@ -1758,7 +1758,7 @@ mod tests {
     /// No program of the product is built for macOS, and the fetch names no macOS platform: an
     /// archive for it, in either spelling, is passed over like any platform this fleet cannot
     /// name — the Client's of an older release and a Collector's alike.
-    /// Verifies: ADR-0064
+    /// Verifies: ADR-0067
     #[test]
     fn no_macos_archive_is_offered() {
         let assets = vec![

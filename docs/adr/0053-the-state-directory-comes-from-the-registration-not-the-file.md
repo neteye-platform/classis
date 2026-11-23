@@ -3,7 +3,7 @@
 - **Status:** 🟢 accepted · clause 1 superseded by
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
   · clauses 2, 3 and 5 superseded by
-  [ADR-0064](0064-no-program-of-the-product-is-built-for-macos.md)
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-23
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the state directory `service install` and `service config`

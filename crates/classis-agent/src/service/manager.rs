@@ -1473,7 +1473,7 @@ impl NativeService {
 }
 
 /// Whether the Client's registration starts the second service with it: systemd's `Wants=` in the
-/// Client's unit does (ADR-0064 clause 26); the SCM entry names no dependency (ADR-0064 clause 22).
+/// Client's unit does (ADR-0067 clause 26); the SCM entry names no dependency (ADR-0067 clause 22).
 const PULLED_IN: bool = cfg!(target_os = "linux");
 
 /// What `start` starts, in order. Where a second service is registered and the Client's unit wants
