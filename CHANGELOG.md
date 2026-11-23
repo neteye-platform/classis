@@ -68,10 +68,11 @@ its tag exists.
 - **`[audit]` in `server.toml`** is refused at startup as an unknown key, like
   any other.
 - **`server audit-verify`** is gone.
-- **`[packages] verification_key`**, in `supervisor.toml` and in `server.toml`,
-  and with it the Server's whole `[packages]` section. Either is refused at
-  startup as an unknown key, like any other. The install no longer asks for a
-  package key nor reads `package-signing-key.pub`, and the
+- **`[packages] verification_key`**, in `supervisor.toml` and in
+  `server.toml`. Either is refused at startup as an unknown key, like any
+  other; the `[packages]` section of `server.toml` stays, for
+  `revoked_signers`. The install no longer asks for a package key nor reads
+  `package-signing-key.pub`, and the
   `supervisor.toml.fragment` of `pki init` names none.
 
 ### Fixed
