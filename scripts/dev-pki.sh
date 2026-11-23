@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 #
+# OUT OF DATE (ADR-0064): the Server speaks plain HTTP behind a reverse proxy and authenticates no
+# Agent, so the `server.toml` this writes, with `[tls]`, `[client_ca]` and `[enrolment]`, is
+# refused at startup. Kept until the enrolment reimplementation (NEAG-34) replaces it.
+#
 # Creates the certificates a development Server and Client need, since both refuse to run without
 # them (ADR-0013, ADR-0021), with the operator tool's `classisctl pki init`
 # (ADR-0028) — no openssl. Every certificate of the set says it is a development one:

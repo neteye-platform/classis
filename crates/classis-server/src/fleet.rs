@@ -485,6 +485,9 @@ impl Drop for UploadReservation<'_> {
     }
 }
 
+/// The check of the records' database behind `/readyz` (ADR-0063).
+pub type RecordsReady = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+
 /// The package store and the Deployments that release from it (ADR-0026). Every `download_url`
 /// is a path the Client resolves against its own endpoint — the Agent plane, where the download
 /// is served behind the same handshake as `/v1/opamp` (ADR-0033).
@@ -530,6 +533,9 @@ pub struct AppState {
     /// The packages offered to the fleet (ADR-0026); `None` offers nothing and leaves
     /// `OffersPackages` undeclared.
     packages: Option<PackageOffering>,
+    /// What `/readyz` asks beyond the blob store: whether the records' database answers and the
+    /// Server still holds its lock (ADR-0063); `None` with the records on the filesystem.
+    records_ready: Option<RecordsReady>,
     /// The authority that signs Agent CSRs (ADR-0021); `None` signs nothing and leaves
     /// `AcceptsConnectionSettingsRequest` undeclared.
     client_ca: Option<Box<dyn CertificateSigner>>,
@@ -624,6 +630,7 @@ impl AppState {
             next_conn: AtomicU64::new(1),
             connection_offer: None,
             packages: None,
+            records_ready: None,
             client_ca: None,
             enrolment: None,
             bootstrap: None,
@@ -1102,6 +1109,29 @@ impl AppState {
     pub fn with_packages(mut self, packages: Option<PackageOffering>) -> Self {
         self.packages = packages;
         self
+    }
+
+    /// Arms `/readyz` with the check of the records' database (ADR-0063).
+    #[must_use]
+    pub fn with_records_ready(mut self, check: Option<RecordsReady>) -> Self {
+        self.records_ready = check;
+        self
+    }
+
+    /// What `/readyz` answers (ADR-0063): `Ok` when the records' database answers and the Server
+    /// holds its lock, and the blob store answers; else the name of the first check that failed,
+    /// which says nothing of why.
+    ///
+    /// # Errors
+    /// Returns `"database"` or `"blobs"`.
+    pub fn ready(&self) -> Result<(), &'static str> {
+        if let Some(check) = &self.records_ready {
+            check().map_err(|_| "database")?;
+        }
+        if let Some(store) = self.packages() {
+            store.blobs_answer().map_err(|_| "blobs")?;
+        }
+        Ok(())
     }
 
     /// Read access to the package store, for the REST API's package routes.

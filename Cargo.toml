@@ -34,7 +34,7 @@ tracing = "0.1"
 # `registry` is what a layered subscriber composes on: the OTLP log bridge needs a reloadable slot
 # in it, because the destination cannot exist until the Server names one (ADR-0016). The `reload`
 # module itself is unconditional in 0.3.
-tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
 # The rolling file the Client writes while it runs as a service (ADR-0019) — the Windows SCM
 # discards a service's stderr, so without this a Client installed there has no readable log at all.
 # `tokio-rs/tracing`'s own appender, so the rotation lives beside the logging stack rather than

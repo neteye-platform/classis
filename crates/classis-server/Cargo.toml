@@ -37,7 +37,8 @@ constant_time_eq.workspace = true
 # ADR-0021: which CA issued the certificate a connection carries — the client CA's member, or the
 # bootstrap CA's enrolling host. The parser rcgen itself uses, already in the tree.
 x509-parser = { workspace = true, features = ["verify"] }
-# The configuration the listener of `opamp` serves with (ADR-0010).
+# The TLS 1.3 client configuration of the S3 store and of PostgreSQL (ADR-0049, ADR-0050): the
+# Server terminates no TLS of its own (ADR-0064).
 rustls.workspace = true
 rcgen.workspace = true
 time.workspace = true

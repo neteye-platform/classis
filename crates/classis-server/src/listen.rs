@@ -34,6 +34,16 @@ pub fn plane(
     }
 }
 
+/// A plane on an already-bound listener, served in plaintext on any address: the Server sits
+/// behind a reverse proxy that terminates TLS (ADR-0064), so the connection it accepts is the
+/// proxy's. `handle` is shared by both planes, as for [`plane`].
+#[must_use]
+pub fn plain_plane(listener: TcpListener, max_connections: usize, handle: Handle) -> Listener {
+    Listener::new(listener, handle)
+        .with_max_connections(max_connections)
+        .with_plaintext_anywhere()
+}
+
 /// Asks both planes to stop and gives their connections [`SHUTDOWN_DRAIN`] to end.
 ///
 /// A free function rather than a call at the signal site, so the two planes cannot end up with

@@ -106,17 +106,19 @@ pub fn check_layout(root: &Path) -> Result<(), String> {
 /// artifacts are copied from into it (ADR-0049 clause 7).
 ///
 /// With the records in PostgreSQL and the artifacts in a bucket (`filesystem_blobs` is false), the
-/// Server keeps nothing on the filesystem: a missing `root` is not created, so it runs on a
-/// read-only root filesystem. An existing one is still checked.
+/// Server keeps nothing on the filesystem: a missing `root` is not created, and an existing one is
+/// checked but neither created nor restricted, so the Server runs on a read-only root filesystem,
+/// as a user that does not own the directory an image ships.
 ///
 /// # Errors
 /// Returns an error naming the path when a directory cannot be created, or when the data
 /// directory holds a record of the filesystem store or anything else.
 pub fn open_data_dir_beside_database(root: &Path, filesystem_blobs: bool) -> Result<(), String> {
-    if !filesystem_blobs && !root.exists() {
+    if filesystem_blobs {
+        create_private_dir(root)?;
+    } else if !root.exists() {
         return Ok(());
     }
-    create_private_dir(root)?;
     for (name, path) in entries(root)? {
         if name == BLOBS && path.is_dir() {
             continue;
@@ -410,6 +412,21 @@ mod tests {
             !absent.exists(),
             "no data directory with a database and a bucket"
         );
+        // A directory an image ships, owned by someone else, is neither created nor restricted.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let shipped = dir.path().join("shipped");
+            std::fs::create_dir(&shipped).expect("mkdir");
+            std::fs::set_permissions(&shipped, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+            open_data_dir_beside_database(&shipped, false).expect("open");
+            let mode = std::fs::metadata(&shipped)
+                .expect("meta")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755, "the shipped directory was restricted");
+        }
 
         for record in [AGENTS, CONFIGURATIONS, CERTIFICATES, REVOCATIONS, ENROLMENT] {
             let path = root.join(record);

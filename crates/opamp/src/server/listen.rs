@@ -224,6 +224,7 @@ pub struct Listener {
     header_read_timeout: Duration,
     max_connections: usize,
     pace: (Duration, u64),
+    plaintext_anywhere: bool,
 }
 
 impl Listener {
@@ -237,7 +238,17 @@ impl Listener {
             header_read_timeout: HEADER_READ_TIMEOUT,
             pace: (PACE_WINDOW, MIN_PACE_BYTES),
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            plaintext_anywhere: false,
         }
+    }
+
+    /// Lets a listener without TLS bind any address, not the loopback alone. For a Server behind a
+    /// reverse proxy that terminates TLS: the connection it accepts is the proxy's, and what
+    /// protects the traffic beyond it is the network the two share.
+    #[must_use]
+    pub fn with_plaintext_anywhere(mut self) -> Self {
+        self.plaintext_anywhere = true;
+        self
     }
 
     /// Serves TLS with `config`, usually built by [`ServerTls::rustls_config`].
@@ -277,11 +288,12 @@ impl Listener {
     ///
     /// # Errors
     /// Returns the I/O error that stopped the listener, and refuses a listener without TLS on any
-    /// address but `127.0.0.1` or `::1`.
+    /// address but `127.0.0.1` or `::1` unless [`with_plaintext_anywhere`](Self::with_plaintext_anywhere)
+    /// was called.
     pub async fn serve(self, router: Router) -> io::Result<()> {
         // Plaintext is for the loopback alone (specification Q-1): a listener reachable from the
         // network without TLS is refused before it accepts anything.
-        if self.tls.is_none() {
+        if self.tls.is_none() && !self.plaintext_anywhere {
             let address = self.listener.local_addr()?;
             if !is_loopback_literal(&address.ip().to_string()) {
                 return Err(io::Error::new(

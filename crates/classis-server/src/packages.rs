@@ -569,6 +569,15 @@ impl PackageStore {
         self.blobs.get(&hex::encode(sha256))
     }
 
+    /// Whether the blob store answers: asks it for a blob no store holds, which the bucket or the
+    /// directory answers with "not there" while it works (ADR-0063).
+    ///
+    /// # Errors
+    /// Returns the store's own error when it does not answer.
+    pub fn blobs_answer(&self) -> Result<(), String> {
+        self.blobs.exists(&"0".repeat(64)).map(|_| ())
+    }
+
     /// `true` when the store holds no Package — the Server then leaves `OffersPackages` undeclared.
     pub fn is_empty(&self) -> bool {
         self.sets.read().expect("sets lock").is_empty()

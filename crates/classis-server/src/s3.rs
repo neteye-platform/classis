@@ -82,6 +82,52 @@ const LIMITS: Limits = Limits {
     retry_for: Duration::from_secs(60),
 };
 
+/// How long the Server waits at startup for the bucket to answer, and how often it asks again
+/// (ADR-0062): the time the database gets, so a store and a database that come back together
+/// are both waited for.
+const START_WAIT: Duration = Duration::from_secs(180);
+const START_RETRY: Duration = Duration::from_secs(5);
+
+/// What in a failed listing means that asking again will not change the answer: a bucket that does
+/// not exist, credentials or a signature the store refuses, a certificate that does not verify.
+/// A timeout, a refused connection, a name that does not resolve and a server error may pass.
+const WILL_NOT_PASS: [&str; 10] = [
+    "NoSuchBucket",
+    "AccessDenied",
+    "InvalidAccessKeyId",
+    "SignatureDoesNotMatch",
+    "InvalidBucketName",
+    "401 Unauthorized",
+    "403 Forbidden",
+    "invalid peer certificate",
+    "UnknownIssuer",
+    "invalid certificate",
+];
+
+/// Whether a failure to list the bucket at startup may pass on its own (ADR-0062).
+fn may_pass(error: &object_store::Error) -> bool {
+    use object_store::Error as E;
+    if matches!(
+        error,
+        E::NotFound { .. }
+            | E::PermissionDenied { .. }
+            | E::Unauthenticated { .. }
+            | E::InvalidPath { .. }
+            | E::NotSupported { .. }
+            | E::UnknownConfigurationKey { .. }
+    ) {
+        return false;
+    }
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        text.push(' ');
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    !WILL_NOT_PASS.iter().any(|marker| text.contains(marker))
+}
+
 /// One object per blob at `<prefix>blobs/<sha256>`, an upload in progress at
 /// `<prefix>staging/<random>`, and no key outside `<prefix>` (ADR-0049 clause 4).
 pub struct S3BlobStore {
@@ -94,18 +140,31 @@ pub struct S3BlobStore {
 
 impl S3BlobStore {
     /// Connects to the bucket `config` names and checks that it can be listed. Nothing is created:
-    /// a bucket that does not exist fails here, naming it (ADR-0049 clause 4).
+    /// a bucket that does not exist fails here, naming it (ADR-0049 clause 4). A store that does
+    /// not answer yet — the name not resolving, the connection refused, a server error — is asked
+    /// again for [`START_WAIT`] (ADR-0062); a refusal that will not change fails at once.
     ///
     /// # Errors
     /// Returns an error naming the key when the secret or the CA file cannot be read, and naming
     /// the bucket when it does not exist or cannot be listed.
     pub fn open(config: &S3BlobsConfig) -> Result<Self, String> {
-        Self::open_within(config, LIMITS)
+        Self::open_retrying(config, LIMITS, START_WAIT, START_RETRY)
     }
 
-    /// [`open`](Self::open) with `limits` rather than [`LIMITS`]: what the tests of a store that
-    /// stops answering wait for.
+    /// [`open`](Self::open) with `limits` rather than [`LIMITS`], and one attempt: what the tests
+    /// of a store that stops answering wait for.
+    #[cfg(test)]
     fn open_within(config: &S3BlobsConfig, limits: Limits) -> Result<Self, String> {
+        Self::open_retrying(config, limits, Duration::ZERO, START_RETRY)
+    }
+
+    /// [`open`](Self::open) asking again every `interval` for `wait`.
+    fn open_retrying(
+        config: &S3BlobsConfig,
+        limits: Limits,
+        wait: Duration,
+        interval: Duration,
+    ) -> Result<Self, String> {
         let builder = builder(config, &|name| std::env::var(name).ok(), limits)?;
         let store = builder
             .build()
@@ -116,16 +175,32 @@ impl S3BlobStore {
             prefix: config.prefix.clone(),
             bridge: Arc::new(Bridge::new("blobs-s3")?),
         };
-        let root = s3.root();
-        let store = s3.store.clone();
-        s3.bridge
-            .run(async move { store.list_with_delimiter(root.as_ref()).await })
-            .map_err(|e| {
-                format!(
-                    "[blobs.s3] bucket {}: it does not exist or cannot be listed: {e}",
+        let started = std::time::Instant::now();
+        loop {
+            let root = s3.root();
+            let store = s3.store.clone();
+            let Err(error) = s3
+                .bridge
+                .run(async move { store.list_with_delimiter(root.as_ref()).await })
+            else {
+                break;
+            };
+            let left = wait.saturating_sub(started.elapsed());
+            if !may_pass(&error) || left.is_zero() {
+                return Err(format!(
+                    "[blobs.s3] bucket {}: it does not exist or cannot be listed: {error}",
                     s3.bucket
-                )
-            })?;
+                ));
+            }
+            tracing::warn!(
+                bucket = %s3.bucket,
+                error = %error,
+                retry_in_secs = interval.as_secs(),
+                left_secs = left.as_secs(),
+                "cannot list the S3 bucket yet; asking again"
+            );
+            std::thread::sleep(interval.min(left));
+        }
         tracing::info!(
             endpoint = %config.endpoint,
             bucket = %s3.bucket,
@@ -989,6 +1064,149 @@ mod tests {
         let built = format!("{:?}", builder.build().expect("build"));
         assert!(built.contains("https://s3.example/fleet"), "{built}");
         assert!(!built.contains("203.0.113.9"), "{built}");
+    }
+
+    /// What `status` and `body` answer, as a store would: the listing of an empty bucket for
+    /// `200`.
+    fn reply(status: u16, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status} X\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// A store on a loopback port that answers each request with the next of `replies` (the last
+    /// again, when they run out), and how many requests it has had.
+    fn store_answering(replies: Vec<String>) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = asked.clone();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut seen = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => seen.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let n = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let answer = &replies[n.min(replies.len() - 1)];
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        (port, asked)
+    }
+
+    /// A configuration for the store on `port`, with a key pair so that the request goes to it.
+    fn config_for(port: u16, dir: &Path) -> S3BlobsConfig {
+        let secret = dir.join("secret");
+        std::fs::write(&secret, "the-secret").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600))
+                .expect("chmod");
+        }
+        let mut named = config(&format!("http://127.0.0.1:{port}"));
+        named.access_key_id = Some("fleet-test".to_string());
+        named.secret_access_key_file = Some(secret);
+        named
+    }
+
+    /// What a store that does not answer yet is asked again for, and what it is not: a server
+    /// error is asked again until the store lists the bucket; a bucket that does not exist, or
+    /// credentials that are refused, fail at once however long the wait. Needs no store.
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_store_that_does_not_answer_yet_is_asked_again_and_a_refusal_is_not() {
+        const EMPTY: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult \
+            xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>fleet</Name><Prefix></Prefix>\
+            <KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys><Delimiter>/</Delimiter>\
+            <IsTruncated>false</IsTruncated></ListBucketResult>";
+        let limits = Limits {
+            connect: Duration::from_secs(1),
+            silence: Duration::from_secs(2),
+            retries: 0,
+            retry_for: Duration::from_millis(1),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ask = |replies: Vec<String>| {
+            let (port, asked) = store_answering(replies);
+            let started = std::time::Instant::now();
+            let opened = S3BlobStore::open_retrying(
+                &config_for(port, dir.path()),
+                limits,
+                Duration::from_secs(20),
+                Duration::from_millis(50),
+            )
+            .map(|_| ());
+            (
+                opened,
+                asked.load(std::sync::atomic::Ordering::SeqCst),
+                started.elapsed(),
+            )
+        };
+
+        let (opened, asked, _) = ask(vec![
+            reply(503, "<Error><Code>SlowDown</Code></Error>"),
+            reply(503, "<Error><Code>SlowDown</Code></Error>"),
+            reply(200, EMPTY),
+        ]);
+        assert_eq!(opened, Ok(()), "it opened once the store answered");
+        assert_eq!(asked, 3, "it asked again after each server error");
+
+        let (opened, asked, took) = ask(vec![reply(
+            404,
+            "<Error><Code>NoSuchBucket</Code><Message>no such bucket</Message></Error>",
+        )]);
+        let err = opened.expect_err("no such bucket");
+        assert!(err.contains("fleet"), "{err}");
+        assert_eq!(asked, 1, "a missing bucket is asked once");
+        assert!(took < Duration::from_secs(5), "{took:?}");
+
+        let (opened, asked, _) = ask(vec![reply(
+            403,
+            "<Error><Code>AccessDenied</Code><Message>denied</Message></Error>",
+        )]);
+        assert!(opened.is_err());
+        assert_eq!(asked, 1, "a refusal is asked once");
+    }
+
+    /// The failures that pass and those that do not, by what the store said.
+    /// Verifies: ADR-0062
+    #[test]
+    fn a_failed_listing_is_told_apart_by_what_the_store_said() {
+        let generic = |text: &str| object_store::Error::Generic {
+            store: "S3",
+            source: text.to_string().into(),
+        };
+        for passes in [
+            "error sending request: Connection refused (os error 111)",
+            "dns error: failed to lookup address information: Temporary failure in name resolution",
+            "Server returned non-2xx status code: 503 Service Unavailable",
+            "operation timed out",
+        ] {
+            assert!(may_pass(&generic(passes)), "{passes}");
+        }
+        for stays in [
+            "Server returned non-2xx status code: 404 Not Found: <Code>NoSuchBucket</Code>",
+            "Server returned non-2xx status code: 403 Forbidden: <Code>AccessDenied</Code>",
+            "<Code>InvalidAccessKeyId</Code>",
+            "<Code>SignatureDoesNotMatch</Code>",
+            "invalid peer certificate: UnknownIssuer",
+        ] {
+            assert!(!may_pass(&generic(stays)), "{stays}");
+        }
+        let permission = object_store::Error::PermissionDenied {
+            path: "x".to_string(),
+            source: "denied".into(),
+        };
+        assert!(!may_pass(&permission));
     }
 
     /// A store that takes the connection and never answers fails the call within the limits —

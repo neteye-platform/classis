@@ -175,6 +175,27 @@ async fn authenticate(
     next.run(request).await
 }
 
+/// `/livez` and `/readyz` (ADR-0063): no credential, `GET` and `HEAD` only, and a body of one
+/// word.
+fn health_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/livez", get(|| async { "ok" }))
+        .route("/readyz", get(readyz))
+        .with_state(state)
+}
+
+/// `200 ok` when the Server is ready to serve, `503` and the name of the failed check when it is
+/// not (ADR-0063). The checks block on the database, so they run off the request's thread.
+async fn readyz(State(state): State<Arc<AppState>>) -> Response {
+    let verdict = tokio::task::spawn_blocking(move || state.ready())
+        .await
+        .unwrap_or(Err("internal"));
+    match verdict {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(check) => (StatusCode::SERVICE_UNAVAILABLE, check).into_response(),
+    }
+}
+
 pub fn router(state: Arc<AppState>, auth: Option<OperatorAuth>) -> Router {
     let (api, document) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(agents))
@@ -260,6 +281,10 @@ pub fn router(state: Arc<AppState>, auth: Option<OperatorAuth>) -> Router {
         Some(auth) => router.layer(middleware::from_fn_with_state(Arc::new(auth), authenticate)),
         None => router,
     };
+    // Beside the guard, not behind it (ADR-0063): an orchestrator's probe carries no credential.
+    // Merged after the layers above, so neither the guard nor the act log wraps these routes, and
+    // the admission throttle never counts them.
+    let router = router.merge(health_router(state));
     // Outermost, so a refusal of the guard carries the headers too.
     router.layer(middleware::from_fn(security_headers))
 }
@@ -2590,7 +2615,7 @@ async fn issue_bootstrap_certificate(
     let Some(bootstrap) = state.bootstrap() else {
         return enrolment_off();
     };
-    let request = match serde_json::from_value::<IssueBootstrapRequest>(body) {
+    let request = match IssueBootstrapRequest::deserialize(&body) {
         Ok(request) => {
             let subject = request.subject.unwrap_or_default();
             crate::bootstrap::IssueRequest {
@@ -3349,7 +3374,7 @@ async fn revoke(
              there is no credential to revoke; name a certificate",
         );
     }
-    let request = match serde_json::from_value::<RevokeRequest>(body) {
+    let request = match RevokeRequest::deserialize(&body) {
         Ok(request) => request,
         Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
     };

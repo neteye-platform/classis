@@ -28,6 +28,14 @@ in [`docs/HARDENING.md`](docs/HARDENING.md).
 > [Setting up a fleet](docs/manual/setup.md): the certificates, both
 > configurations, and enrolment, in order.
 >
+> **The Server no longer terminates TLS or authenticates Agents**
+> ([ADR-0064](docs/adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> it speaks plain HTTP behind a reverse proxy that does both. The certificate,
+> enrolment and `[tls]` instructions below and in the manual describe the
+> mutual-TLS mode and are out of date until the enrolment reimplementation
+> (NEAG-34) lands; `scripts/dev-pki.sh` writes a `server.toml` the Server now
+> refuses.
+>
 > For agent instructions, see [`AGENTS.md`](AGENTS.md) — the single source of
 > truth for all coding agents.
 

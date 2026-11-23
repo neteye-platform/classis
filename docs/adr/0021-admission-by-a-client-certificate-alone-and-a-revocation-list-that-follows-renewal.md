@@ -10,6 +10,10 @@
   [ADR-0039](0039-through-a-gateway-a-csr-proves-the-certificate-it-rests-on.md)
   · clause 21 superseded by
   [ADR-0046](0046-one-bootstrap-certificate-holds-at-most-a-quarter-of-the-enrolment-queue.md)
+  · clause 15 superseded by
+  [ADR-0063](0063-the-operator-plane-answers-liveness-and-readiness-without-credentials.md)
+  · clauses 1, 5, 6, 14, 23 and 24 superseded by
+  [ADR-0064](0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)
 - **Date:** 2026-10-06
 - **Deciders:** Davide Zeni
 - **Applies to:** Admission on `/v1/opamp` in
