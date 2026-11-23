@@ -2615,7 +2615,7 @@ async fn issue_bootstrap_certificate(
     let Some(bootstrap) = state.bootstrap() else {
         return enrolment_off();
     };
-    let request = match serde_json::from_value::<IssueBootstrapRequest>(body) {
+    let request = match IssueBootstrapRequest::deserialize(&body) {
         Ok(request) => {
             let subject = request.subject.unwrap_or_default();
             crate::bootstrap::IssueRequest {
@@ -3374,7 +3374,7 @@ async fn revoke(
              there is no credential to revoke; name a certificate",
         );
     }
-    let request = match serde_json::from_value::<RevokeRequest>(body) {
+    let request = match RevokeRequest::deserialize(&body) {
         Ok(request) => request,
         Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
     };
