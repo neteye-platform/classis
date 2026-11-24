@@ -1,4 +1,4 @@
-// The product's name and title, fixed at build time (ADR-0019 clause 2).
+// The product's name and title, fixed at build time.
 //
 // `PRODUCT_NAME` names the installation: the directory under the platform's base, the service, the
 // `.deb`/`.rpm` package, the `/usr/libexec` payload directory and the `PATH` symlink. A second
@@ -9,9 +9,9 @@
 // The display name is prose and cannot be derived from the slug by any rule that would still read
 // correctly for the next variant, so it is a second variable rather than a transformation.
 //
-// The grammar is the one ADR-0019 set for instance names, for the same reason: the value must be
+// The grammar is the one set for instance names, for the same reason: the value must be
 // simultaneously a systemd unit name, a launchd label, an SCM service name and a directory name on
-// every platform. Breaking it fails *this build* — the class of failure ADR-0019 clause 2 moves
+// every platform. Breaking it fails *this build* — the class of failure the grammar moves
 // from a runtime parse of operator input to a compile-time check, so an illegal name cannot reach
 // a service manager at all.
 

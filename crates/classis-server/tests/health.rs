@@ -1,4 +1,4 @@
-//! `/livez` and `/readyz` on the Operator plane (ADR-0063): answered without a credential beside
+//! `/livez` and `/readyz` on the Operator plane: answered without a credential beside
 //! a guarded plane, the rest of which stays guarded.
 
 mod support;
@@ -56,7 +56,6 @@ async fn get(server: &TestServer, path: &str) -> reqwest::Response {
         .expect("get")
 }
 
-/// Verifies: ADR-0063
 #[tokio::test]
 async fn the_probes_answer_without_a_credential_and_the_rest_of_the_plane_stays_guarded() {
     let server = spawn(None).await;
@@ -84,7 +83,6 @@ async fn the_probes_answer_without_a_credential_and_the_rest_of_the_plane_stays_
     }
 }
 
-/// Verifies: ADR-0063
 #[tokio::test]
 async fn readiness_names_the_failed_check_and_nothing_else() {
     let server = spawn(Some(Arc::new(|| {
@@ -102,7 +100,6 @@ async fn readiness_names_the_failed_check_and_nothing_else() {
     );
 }
 
-/// Verifies: ADR-0063
 #[tokio::test]
 async fn probes_are_not_counted_by_the_admission_throttle() {
     let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);

@@ -1,9 +1,9 @@
-//! Entry point: load the configuration from `server.toml` and the environment (ADR-0051), bind the
-//! two listeners — the Agent plane and the Operator plane (ADR-0013) — and serve both until
+//! Entry point: load the configuration from `server.toml` and the environment, bind the
+//! two listeners — the Agent plane and the Operator plane — and serve both until
 //! interrupted.
 //!
-//! Both planes speak plain HTTP: a reverse proxy in front of the Server terminates TLS (ADR-0064).
-//! What bounds a connection before it becomes a request is `opamp`'s listener (ADR-0013).
+//! Both planes speak plain HTTP: a reverse proxy in front of the Server terminates TLS.
+//! What bounds a connection before it becomes a request is `opamp`'s listener.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-/// The configuration every command that reads one reads (ADR-0051 clause 2): the file `--config`
+/// The configuration every command that reads one reads: the file `--config`
 /// or `CLASSIS_SERVER_CONFIG` names, or `server.toml` in the working directory when it exists, with
 /// the environment over it. The keys the environment set are logged by name. Stops the process on
 /// an error.
@@ -46,7 +46,7 @@ fn load_config(named: Option<PathBuf>) -> Layered {
     layered
 }
 
-/// Logs the keys the environment set, by name (ADR-0051 clause 7), once the log is set up.
+/// Logs the keys the environment set, by name, once the log is set up.
 fn announce_environment(layered: &Layered) {
     if let Some(notice) = layered.environment_notice() {
         info!("{notice}");
@@ -68,17 +68,17 @@ fn init_logging(format: classis_server::config::LogFormat) {
     }
 }
 
-/// `server pki` is gone (ADR-0064): the Server holds no certificate, so there is no ending to
+/// `server pki` is gone: the Server holds no certificate, so there is no ending to
 /// report. Said by name, so a script that still calls it is not left guessing.
 fn pki(_args: impl Iterator<Item = String>) -> ! {
     eprintln!(
         "server pki is removed — the Server speaks plain HTTP behind a reverse proxy and holds no \
-         certificate (ADR-0064)"
+         certificate"
     );
     std::process::exit(2);
 }
 
-/// `server migrate --config-dir <old> --packages-dir <old> --data-dir <new>` (ADR-0037 clause 14):
+/// `server migrate --config-dir <old> --packages-dir <old> --data-dir <new>`:
 /// moves the state an older Server kept under `config_dir` and `packages_dir` into a new, empty
 /// `data_dir`, copying, so the old directories stay as the backup. It is run while the Server is
 /// stopped — a Server still writing the old directories would be copied half-way — and that is the
@@ -131,8 +131,8 @@ fn migrate(mut args: impl Iterator<Item = String>) -> ! {
     }
 }
 
-/// `server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]`
-/// (ADR-0050 clause 15): copies the records of `data_dir` into the database the configuration
+/// `server migrate-to-postgres --from <data_dir> --data-dir <new> [--config <server.toml>]`:
+/// copies the records of `data_dir` into the database the configuration
 /// names, and its filesystem blobs into a new, empty `data_dir`, leaving the old one as the
 /// backup. It is run while the Server is stopped; it takes the database's lock, so a
 /// Server still running against it stops the copy. Prints what it copied, and exits non-zero when
@@ -195,7 +195,7 @@ fn migrate_to_postgres(mut args: impl Iterator<Item = String>) -> ! {
 type Hasher = fn(&str) -> Result<String, String>;
 
 /// The hash `server hash-credential` makes for a scheme: Basic, for an operator's password in
-/// `[rest.auth]`, and nothing else — the Agent plane has no credential (ADR-0021 clause 26).
+/// `[rest.auth]`, and nothing else — the Agent plane has no credential.
 fn hasher(scheme: Option<&str>) -> Option<Hasher> {
     match scheme {
         Some("--basic") => Some(classis_server::credentials::hash_basic),
@@ -203,7 +203,7 @@ fn hasher(scheme: Option<&str>) -> Option<Hasher> {
     }
 }
 
-/// `server hash-credential --basic` (ADR-0021 clause 26): reads the password from standard input —
+/// `server hash-credential --basic`: reads the password from standard input —
 /// without echo on a terminal — and prints the entry `server.toml` keeps instead of it.
 fn hash_credential(scheme: Option<String>) -> ! {
     let Some(hash) = hasher(scheme.as_deref()) else {
@@ -217,7 +217,7 @@ fn hash_credential(scheme: Option<String>) -> ! {
         }
     };
     let hashed = hash(&secret);
-    // `exit` runs no destructor: the secret is wiped before it (ADR-0057).
+    // `exit` runs no destructor: the secret is wiped before it.
     drop(secret);
     match hashed {
         Ok(entry) => {
@@ -233,7 +233,7 @@ fn hash_credential(scheme: Option<String>) -> ! {
 
 /// One line from standard input, the trailing newline dropped. On a Unix terminal echo is off while
 /// it is typed, so the secret does not stand on the screen. It is held in a buffer wiped when it is
-/// dropped, sized for any password a person types so it is not grown and left behind (ADR-0057).
+/// dropped, sized for any password a person types so it is not grown and left behind.
 /// The copy in the buffer of the process-wide standard input, which the standard library keeps,
 /// is not wiped.
 fn read_secret() -> std::io::Result<zeroize::Zeroizing<String>> {
@@ -307,7 +307,7 @@ fn parse_args() -> Option<PathBuf> {
                 None => usage(),
             },
             "--version" => {
-                // The baked version, not `CARGO_PKG_VERSION` (ADR-0012): the number in the file is
+                // The baked version, not `CARGO_PKG_VERSION`: the number in the file is
                 // the release this build is *heading for*, and only `classis_core::version::current` knows
                 // whether this is it.
                 println!("server {}", classis_core::version::current());
@@ -337,8 +337,8 @@ fn bind(address: SocketAddr, plane: &str) -> std::net::TcpListener {
 
 #[tokio::main]
 async fn main() {
-    // One TLS provider for the whole process (ADR-0013): ring, never a system library. The Server
-    // terminates no TLS (ADR-0064), but its outbound connections — PostgreSQL, S3 — still use it.
+    // One TLS provider for the whole process: ring, never a system library. The Server
+    // terminates no TLS, but its outbound connections — PostgreSQL, S3 — still use it.
     opamp::tls::install_ring_provider();
 
     let layered = load_config(parse_args());
@@ -346,8 +346,8 @@ async fn main() {
     announce_environment(&layered);
     let Layered { config, origin, .. } = layered;
 
-    // Where the records live (ADR-0050): the data directory, its layout created owner-only and
-    // checked before any store opens (ADR-0037), and with PostgreSQL the database, its lock taken
+    // Where the records live: the data directory, its layout created owner-only and
+    // checked before any store opens, and with PostgreSQL the database, its lock taken
     // and its schema applied.
     let records = match classis_server::Records::open(&config) {
         Ok(records) => records,
@@ -367,10 +367,9 @@ async fn main() {
         .as_ref()
         .map(classis_server::fleet::ConnectionOffer::from_config);
     if connection_offer.is_some() {
-        // ADR-0014.
         info!("offering connection settings to the fleet");
     }
-    // What Agents enrol with, and what the Server signs for them, is NEAG-34's (ADR-0064): nothing
+    // What Agents enrol with, and what the Server signs for them, is NEAG-34's: nothing
     // here issues a certificate.
     let telemetry_offer = config
         .telemetry_offer
@@ -378,10 +377,9 @@ async fn main() {
         .map(classis_server::fleet::TelemetryOffer::from_config)
         .unwrap_or_default();
     if config.telemetry_offer.is_some() {
-        // ADR-0016.
         info!("offering the fleet somewhere to send its own telemetry");
     }
-    // ADR-0066 clause 1: a Root that cannot be read stops the Server here, naming it.
+    // A Root that cannot be read stops the Server here, naming it.
     let roots = match classis_core::package::chain::compiled() {
         Ok(roots) => roots,
         Err(e) => {
@@ -390,14 +388,13 @@ async fn main() {
         }
     };
     if let Some(path) = classis_core::package::chain::debug_root() {
-        // ADR-0066 clause 1: a debug build only.
+        // A debug build only.
         warn!(
             "a debug build: also trusting the Package Root in {} ({})",
             path.display(),
             classis_core::package::DEBUG_ROOT_ENV
         );
     }
-    // ADR-0066 clause 1.
     info!(
         roots = roots.len(),
         "checking package signatures up to the compiled-in Package Roots"
@@ -409,7 +406,6 @@ async fn main() {
             })
             .and_then(|store| {
                 if !store.is_empty() {
-                    // ADR-0026.
                     info!("offering software packages to the fleet");
                 }
                 classis_server::fleet::PackageOffering::on(&records, store)
@@ -421,7 +417,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // What the client CA signed and what is revoked (ADR-0021), kept beside the fleet's records.
+    // What the client CA signed and what is revoked, kept beside the fleet's records.
     let revocations = match records.ledger().and_then(|store| {
         classis_server::revocation::Revocations::open(store, clock.clone(), Vec::new())
     }) {
@@ -432,7 +428,6 @@ async fn main() {
         }
     };
     if let Some(warning) = config.rate_limit_warning() {
-        // ADR-0013 clause 20.
         warn!("{warning}");
     }
     let agent_rate = Arc::new(classis_server::agent_rate::AgentRate::new(
@@ -467,11 +462,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // The Server authenticates no Agent (ADR-0064): the proxy in front of it does, and the Agent
+    // The Server authenticates no Agent: the proxy in front of it does, and the Agent
     // port must be reachable through it alone. `AdmitEveryone` is the seam an authenticating
     // library plugs into later.
     info!("the OpAMP endpoint admits every request: the Agent port must be reachable only through the authenticating proxy");
-    // Two planes, two listeners (ADR-0013): Agents reach the OpAMP endpoint and the package
+    // Two planes, two listeners: Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
     let agents = classis_server::agent_app(
         state.clone(),
@@ -502,7 +497,7 @@ async fn main() {
         }
     };
     if operator_auth.is_some() {
-        // ADR-0021. Both planes speak plain HTTP (ADR-0064): the password crosses the network
+        // Both planes speak plain HTTP: the password crosses the network
         // between the proxy and the Server in clear.
         info!("the REST API and the UI require authentication");
     }
@@ -511,7 +506,7 @@ async fn main() {
     let agent_listener = bind(config.listen, "the Agent plane");
     let operator_listener = bind(config.rest.listen, "the Operator plane");
     // One signal, both planes: the interrupt is watched once, and the handle both servers hold
-    // drains them together within a bounded window (ADR-0013).
+    // drains them together within a bounded window.
     let handle = Handle::new();
     let signalled = shutdown_signal();
     tokio::spawn({
@@ -532,7 +527,7 @@ async fn main() {
     );
     agents.expect("serve the Agent plane");
     operators.expect("serve the Operator plane");
-    // The graceful-shutdown flush (ADR-0024): every record's current timestamp and sequence
+    // The graceful-shutdown flush: every record's current timestamp and sequence
     // number, so the ordinary restart restores a fleet without gaps or false silence.
     state.flush_agents();
 }
@@ -569,7 +564,6 @@ mod tests {
 
     /// `hash-credential` makes an operator's Basic entry and nothing else: the Agent plane has no
     /// credential to hash.
-    /// Verifies: ADR-0021
     #[test]
     fn hash_credential_hashes_a_basic_password_alone() {
         let basic = hasher(Some("--basic")).expect("--basic is a scheme");

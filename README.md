@@ -14,9 +14,9 @@ supervises many managed processes at once — OpenTelemetry Collectors and,
 through plugins, foreign agents that do not speak OpAMP — and that can equally
 run as a **gateway** multiplexing other clients upstream. The work is driven by
 a written **specification** ([`docs/SPECIFICATION.md`](docs/SPECIFICATION.md))
-and **Architecture Decision Records** ([`docs/adr/`](docs/adr/)), so intent and
-the reasoning behind every structural choice stay explicit and reviewable. How
-much of the protocol each end implements is tracked in
+and an **architecture overview**
+([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)) that lists its key decisions.
+How much of the protocol each end implements is tracked in
 [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md); candidate measures for hardening
 the Client–Server link further are collected — as a backlog, not as decisions —
 in [`docs/HARDENING.md`](docs/HARDENING.md).
@@ -28,13 +28,11 @@ in [`docs/HARDENING.md`](docs/HARDENING.md).
 > [Setting up a fleet](docs/manual/setup.md): the certificates, both
 > configurations, and enrolment, in order.
 >
-> **The Server no longer terminates TLS or authenticates Agents**
-> ([ADR-0064](docs/adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
-> it speaks plain HTTP behind a reverse proxy that does both. The certificate,
-> enrolment and `[tls]` instructions below and in the manual describe the
-> mutual-TLS mode and are out of date until the enrolment reimplementation
-> (NEAG-34) lands; `scripts/dev-pki.sh` writes a `server.toml` the Server now
-> refuses.
+> **The Server no longer terminates TLS or authenticates Agents**: it speaks
+> plain HTTP behind a reverse proxy that does both. The certificate, enrolment
+> and `[tls]` instructions below and in the manual describe the mutual-TLS mode
+> and are out of date until the enrolment reimplementation (NEAG-34) lands;
+> `scripts/dev-pki.sh` writes a `server.toml` the Server now refuses.
 >
 > For agent instructions, see [`AGENTS.md`](AGENTS.md) — the single source of
 > truth for all coding agents.
@@ -88,9 +86,7 @@ Collectors **and** agents that were never built to speak OpAMP:
 The goal is one place — reachable by any UI — to decide what every agent in the
 fleet runs and to see what each one is really running, whether or not it speaks
 OpAMP. The full problem statement, goals, vocabulary, and non-goals live in the
-**specification** ([`docs/SPECIFICATION.md`](docs/SPECIFICATION.md)); the
-reasoning behind each structural choice lives in the ADRs
-([`docs/adr/`](docs/adr/)).
+**specification** ([`docs/SPECIFICATION.md`](docs/SPECIFICATION.md)).
 
 ## Architecture
 
@@ -141,143 +137,123 @@ Foreign Agent, Plugin, Port, Selector, Package, Deployment, …) are defined in
    Container and the preconfigured agent extensions build automatically, and the
    container enables the repository's git hooks ([`.githooks/`](.githooks/)): no
    commit on `main`, and the checks run before a push. Working outside the
-   container? Enable them yourself, once per clone:
-   `git config core.hooksPath .githooks`.
-2. Authenticate your coding agent inside the container (for Claude Code:
-   `claude login`).
+   container? Enable them yourself, once per clone: `git config core.hooksPath
+   .githooks`.
+2. Authenticate your coding agent inside the container (for Claude Code: `claude
+   login`).
 3. Start working with the agent. Drive the work from the specification and the
-   ADRs.
+   architecture overview.
 
 ## Build, Test & Run
 
 The toolchain is **Rust stable**, provided by the Dev Container; the code is one
 Cargo workspace with five crates — `opamp` (the OpAMP communication layer,
 publishable on its own, with an Agent's client and a server endpoint with their
-TLS and listener behind the `client` and `server` features, ADR-0010),
-`classis-core` (what both ends share beyond the protocol), `classis-server` (the
-Server), `classis-agent` (the Client, in all its modes), and `classis-tools` (the
-operator command-line tools, ADR-0010). This section is the single source for
+TLS and listener behind the `client` and `server` features), `classis-core`
+(what both ends share beyond the protocol), `classis-server` (the Server),
+`classis-agent` (the Client, in all its modes), and `classis-tools` (the
+operator command-line tools). This section is the single source for
 build/test/run commands — both humans and agents rely on it (AGENTS.md links
 here).
 
 - **Build:** `cargo build --workspace`
 - **Test:** `cargo test --workspace`
-- **Lint:**
-  `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings`
-- **Lint `opamp` per feature:**
-  `for f in "" client server; do cargo clippy -p opamp --all-targets
-  --no-default-features --features "$f" -- -D warnings; done`
-  — inside the workspace Cargo builds `opamp` once with every feature any crate
-  asks for, so only a build of each feature on its own shows that it stands
-  alone (ADR-0010).
-- **Lint and test `classis-agent` with fewer Supervisor kinds:**
-  `cargo clippy -p classis-agent --all-targets --no-default-features -- -D
-  warnings && cargo test -p classis-agent --no-default-features`
-  — a wrapped kind, when the code base carries one, is a feature, so only these
-  show that a build leaving one out compiles and refuses its `type` (ADR-0017).
-- **Check the Windows build:**
-  `cargo xwin clippy -p classis-agent --all-targets --target
-  x86_64-pc-windows-msvc -- -D warnings`
-  (needs `cargo install cargo-xwin` and
-  `rustup target add x86_64-pc-windows-msvc`; the Dev Container carries the
-  `llvm-lib` it requires). Worth running whenever a change touches
+- **Lint:** `cargo fmt --all --check && cargo clippy --workspace --all-targets
+  -- -D warnings`
+- **Lint `opamp` per feature:** `for f in "" client server; do cargo clippy -p
+  opamp --all-targets --no-default-features --features "$f" -- -D warnings;
+  done` — inside the workspace Cargo builds `opamp` once with every feature any
+  crate asks for, so only a build of each feature on its own shows that it
+  stands alone.
+- **Lint and test `classis-agent` with fewer Supervisor kinds:** `cargo clippy
+  -p classis-agent --all-targets --no-default-features -- -D warnings && cargo
+  test -p classis-agent --no-default-features` — a wrapped kind, when the code
+  base carries one, is a feature, so only these show that a build leaving one
+  out compiles and refuses its `type`.
+- **Check the Windows build:** `cargo xwin clippy -p classis-agent --all-targets
+  --target x86_64-pc-windows-msvc -- -D warnings` (needs `cargo install
+  cargo-xwin` and `rustup target add x86_64-pc-windows-msvc`; the Dev Container
+  carries the `llvm-lib` it requires). Worth running whenever a change touches
   platform-gated code or the tests around it: CI builds the Client on Windows
   and macOS, and a `#[cfg(unix)]` mistake compiles perfectly well on Linux.
-- **Check the supply chain:** `cargo deny check` (needs
-  `cargo install cargo-deny`): advisories, licences, sources and banned crates,
-  as [`deny.toml`](deny.toml) sets them; reviewed advisories are recorded there
+- **Check the supply chain:** `cargo deny check` (needs `cargo install
+  cargo-deny`): advisories, licences, sources and banned crates, as
+  [`deny.toml`](deny.toml) sets them; reviewed advisories are recorded there
   with a reason
-- **Fuzz a parser:**
-  `cargo +nightly fuzz run <target> fuzz/corpus/<target> fuzz/seeds/<target>`
-  (needs `cargo install cargo-fuzz` and a nightly toolchain); the targets are
-  listed in [`fuzz/Cargo.toml`](fuzz/Cargo.toml), and every parser that reads
-  bytes from the network or a downloaded artifact has one (specification Q-2)
-- **Check interop against `opamp-go`:**
-  `cargo test -p classis-agent --test interop_opamp_go -- --ignored --nocapture
-  --test-threads=1` (needs a Go toolchain on `PATH`, which nothing else here
-  needs and the Dev Container does not ship); the scheduled `Interop` workflow
-  runs it weekly, and [`interop/README.md`](interop/README.md) says what it
-  covers and how a red run is triaged (ADR-0011)
+- **Fuzz a parser:** `cargo +nightly fuzz run <target> fuzz/corpus/<target>
+  fuzz/seeds/<target>` (needs `cargo install cargo-fuzz` and a nightly
+  toolchain); the targets are listed in [`fuzz/Cargo.toml`](fuzz/Cargo.toml),
+  and every parser that reads bytes from the network or a downloaded artifact
+  has one (specification Q-2)
+- **Check interop against `opamp-go`:** `cargo test -p classis-agent --test
+  interop_opamp_go -- --ignored --nocapture --test-threads=1` (needs a Go
+  toolchain on `PATH`, which nothing else here needs and the Dev Container does
+  not ship); the scheduled `Interop` workflow runs it weekly, and
+  [`interop/README.md`](interop/README.md) says what it covers and how a red run
+  is triaged
 - **Make development certificates:** `scripts/dev-pki.sh` — both binaries refuse
-  to run without TLS (ADR-0013); it runs the operator tool's
-  `classisctl pki init` (ADR-0028), no other tool, and writes the set and a
-  `server.toml` and `supervisor.toml` that use it to `.dev-pki/`. The
-  development Client enrols with the bootstrap certificate;
-  `scripts/seed_test_configs.sh --enrol` approves it. The VS Code launch
-  configurations run it when `.dev-pki/` has no configuration yet
-- **Run the Server:**
-  `cargo run -p classis-server -- --config .dev-pki/server.toml`
-- **Run the Client:**
-  `cargo run -p classis-agent -- --config .dev-pki/supervisor.toml`
+  to run without TLS; it runs the operator tool's `classisctl pki init`, no
+  other tool, and writes the set and a `server.toml` and `supervisor.toml` that
+  use it to `.dev-pki/`. The development Client enrols with the bootstrap
+  certificate; `scripts/seed_test_configs.sh --enrol` approves it. The VS Code
+  launch configurations run it when `.dev-pki/` has no configuration yet
+- **Run the Server:** `cargo run -p classis-server -- --config
+  .dev-pki/server.toml`
+- **Run the Client:** `cargo run -p classis-agent -- --config
+  .dev-pki/supervisor.toml`
 - **Run the operator tool:** `cargo run --bin classisctl -- package fetch`
-  (fetch a known agent's release and hand it to the Server),
-  `cargo run --bin classisctl -- package --help` (build, hash, and sign an
-  artifact out of any program) or `cargo run --bin classisctl -- pki --help`
-  (the fleet's certificates) — documented in [the manual](docs/manual/tools.md).
-  Every release also publishes it for Linux and macOS (ADR-0028).
+  (fetch a known agent's release and hand it to the Server), `cargo run --bin
+  classisctl -- package --help` (build, hash, and sign an artifact out of any
+  program) or `cargo run --bin classisctl -- pki --help` (the fleet's
+  certificates) — documented in [the manual](docs/manual/tools.md). Every
+  release also publishes it for Linux and macOS.
 
-Both binaries read a TOML configuration file
-([ADR-0010](docs/adr/0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md));
-every setting has a default except the TLS material, without which neither
-starts. The annotated examples live in [`config/`](config/).
-[`scripts/check-rust.sh`](scripts/check-rust.sh) runs exactly these
-build/test/lint commands, locally through `scripts/check-all.sh` and in CI as
-the `rust` job of
+Both binaries read a TOML configuration file; every setting has a default except
+the TLS material, without which neither starts. The annotated examples live in
+[`config/`](config/). [`scripts/check-rust.sh`](scripts/check-rust.sh) runs
+exactly these build/test/lint commands, locally through `scripts/check-all.sh`
+and in CI as the `rust` job of
 [`.github/workflows/checks.yml`](.github/workflows/checks.yml);
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) additionally checks the
 Client on Windows and macOS and release-builds the Client for Linux, Windows,
 and macOS and the Server for Linux.
 
-**Releases**
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md),
-[ADR-0012](docs/adr/0012-versions-resolved-in-the-internal-crate.md)): the
-version is `[workspace.package] version` in [`Cargo.toml`](Cargo.toml). A
-release starts when a person with write access pushes the `v<version>` tag,
-`v0.1.0` say, on the commit of `main` that carries it, and the run fails when
-the tag and the file disagree or the commit is not on `main`
-([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)).
-Its `sign` job waits until a second person with write
-access approves it in the environment `Package Signing`, then signs every Client
-archive with the key that environment holds. A release publishes one archive per
-platform, `supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows
-on the architectures each ships on, a `.sig` beside each Client archive, which
-carries the certificate of the release's Package Signer and which the Server and
-every Client verify up to the Package Roots compiled into them
-([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)),
-a CycloneDX SBOM `<stem>.cdx.json` beside each archive of the Client and of the
-operator tool, and a `SHA256SUMS` file. Every
-asset is a subject of one build-provenance attestation, which the workflow
-verifies before it creates the release
-([ADR-0045](docs/adr/0045-every-release-asset-carries-a-provenance-attestation-and-every-program-an-sbom.md));
-an operator checks a download with
-`gh attestation verify SHA256SUMS --repo neteye-platform/classis
---signer-workflow neteye-platform/classis/.github/workflows/release.yml`
-and then `sha256sum -c --ignore-missing SHA256SUMS`. The files are named after
-the **Set** an operator uploads them to, not after the product inside them
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md))
-— and the program inside them and its configuration file are called `supervisor`
-too. The dpkg/rpm/MSI package and the service carry the **product's** name,
-`classis`
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)):
-that is the name that identifies an _installation_, and a second one is a second
-build rather than a flag. The fields are separated by `_` because a name and a
-version both contain `-`
-([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)),
-and the last two are exactly what an Agent reports as `os.type` and `host.arch`
-(`linux_amd64`, `darwin_arm64`, …), so uploading a whole release under one
-package name needs no translation
-([ADR-0026](docs/adr/0026-packages-signed-deployments-offered-downloads-and-verified-delivery.md)).
-Started by hand it is a dry run: it builds and packs everything, and signs and
-publishes nothing. Before it builds anything at all it checks that the version
-is still free — a `v<version>` tag or a release already carrying that number
-fails the run on the spot, dry or not, so a forgotten bump costs seconds rather
-than five build jobs — and the built binary must report the version the
-artifacts are named after. Each archive is also a ready package artifact: the
-same file an operator downloads is the one a fleet is handed for a Client
+**Releases**: the version is `[workspace.package] version` in
+[`Cargo.toml`](Cargo.toml). A release starts when a person with write access
+pushes the `v<version>` tag, `v0.1.0` say, on the commit of `main` that carries
+it, and the run fails when the tag and the file disagree or the commit is not on
+`main`. Its `sign` job waits until a second person with write access approves it
+in the environment `Package Signing`, then signs every Client archive with the
+key that environment holds. A release publishes one archive per platform,
+`supervisor_<version>_<os>_<arch>.tar.gz` for Linux, macOS and Windows on the
+architectures each ships on, a `.sig` beside each Client archive, which carries
+the certificate of the release's Package Signer and which the Server and every
+Client verify up to the Package Roots compiled into them, a CycloneDX SBOM
+`<stem>.cdx.json` beside each archive of the Client and of the operator tool,
+and a `SHA256SUMS` file. Every asset is a subject of one build-provenance
+attestation, which the workflow verifies before it creates the release; an
+operator checks a download with `gh attestation verify SHA256SUMS --repo
+neteye-platform/classis --signer-workflow
+neteye-platform/classis/.github/workflows/release.yml` and then `sha256sum -c
+--ignore-missing SHA256SUMS`. The files are named after the **Set** an operator
+uploads them to, not after the product inside them — and the program inside them
+and its configuration file are called `supervisor` too. The dpkg/rpm/MSI package
+and the service carry the **product's** name, `classis`: that is the name that
+identifies an _installation_, and a second one is a second build rather than a
+flag. The fields are separated by `_` because a name and a version both contain
+`-`, and the last two are exactly what an Agent reports as `os.type` and
+`host.arch` (`linux_amd64`, `darwin_arm64`, …), so uploading a whole release
+under one package name needs no translation. Started by hand it is a dry run: it
+builds and packs everything, and signs and publishes nothing. Before it builds
+anything at all it checks that the version is still free — a `v<version>` tag or
+a release already carrying that number fails the run on the spot, dry or not, so
+a forgotten bump costs seconds rather than five build jobs — and the built
+binary must report the version the artifacts are named after. Each archive is
+also a ready package artifact: the same file an operator downloads is the one a
+fleet is handed for a Client
 [self-update](docs/manual/client.md#updating-the-client-itself).
 
-The **Server** ships as a container image and nowhere else
-([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)):
+The **Server** ships as a container image and nowhere else:
 `ghcr.io/neteye-platform/classis-server:<version>` for `linux/amd64` and
 `linux/arm64`, built by
 [`packaging/container/Containerfile`](packaging/container/Containerfile) from
@@ -286,11 +262,11 @@ by digest, with no shell, running as UID 65532. The release pushes it by digest,
 attests the digest, verifies it, and only then tags it with the version; there
 is no `latest` tag, and the release notes name the digest to deploy. Its SBOMs
 are `server_<version>_linux_<arch>.cdx.json` beside the other assets. Check an
-image with
-`gh attestation verify oci://ghcr.io/neteye-platform/classis-server@<digest>
---repo neteye-platform/classis
---signer-workflow neteye-platform/classis/.github/workflows/release.yml`;
-running it is in [the Server's manual](docs/manual/server.md#in-a-container).
+image with `gh attestation verify
+oci://ghcr.io/neteye-platform/classis-server@<digest> --repo
+neteye-platform/classis --signer-workflow
+neteye-platform/classis/.github/workflows/release.yml`; running it is in [the
+Server's manual](docs/manual/server.md#in-a-container).
 
 ## Usage
 
@@ -302,32 +278,25 @@ configuration key of both ends — is the
 
 A minimal closed control loop on one machine:
 
-1. **Start the Server:**
-   `cargo run -p classis-server -- --config config/server.toml` — it serves two
-   planes on two ports
-   ([ADR-0013](docs/adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md)).
-   The **Agent plane** on `4320`: the OpAMP endpoint at `/v1/opamp` (plain HTTP
-   **and** WebSocket,
-   [ADR-0013](docs/adr/0013-tls-1-3-plaintext-on-the-loopback-alone-and-bounded-planes-bodies-and-messages.md))
+1. **Start the Server:** `cargo run -p classis-server -- --config
+   config/server.toml` — it serves two planes on two ports. The **Agent plane**
+   on `4320`: the OpAMP endpoint at `/v1/opamp` (plain HTTP **and** WebSocket)
    and the package downloads the offers point at. The **Operator plane** on
-   `127.0.0.1:4321`: the REST API under `/api/v1/`
-   ([ADR-0023](docs/adr/0023-configurations-and-the-rest-api.md)), the API docs,
-   and the bundled UI at `/` — on loopback, because it is open until
-   `[rest.auth]` guards it with Basic credentials
-   ([ADR-0021](docs/adr/0021-admission-by-a-client-certificate-alone-and-a-revocation-list-that-follows-renewal.md)).
-2. **Start a Client:**
-   `cargo run -p classis-agent -- --config config/supervisor.toml` — it connects
-   over WebSocket by default (`ws://127.0.0.1:4320/v1/opamp`), reports its
-   description and health, and appears in the fleet. Point `endpoint` at an
-   `http(s)://` URL to use the polling transport instead.
+   `127.0.0.1:4321`: the REST API under `/api/v1/`, the API docs, and the
+   bundled UI at `/` — on loopback, because it is open until `[rest.auth]`
+   guards it with Basic credentials.
+2. **Start a Client:** `cargo run -p classis-agent -- --config
+   config/supervisor.toml` — it connects over WebSocket by default
+   (`ws://127.0.0.1:4320/v1/opamp`), reports its description and health, and
+   appears in the fleet. Point `endpoint` at an `http(s)://` URL to use the
+   polling transport instead.
 3. **Open the UI** at <http://127.0.0.1:4321/> — the Agent is listed as
    _Connected_. Press **Configurations**, create a Configuration with its
    configuration text, and press **OK**. Then press **Deployments**, create a
    deployment whose Selector (`key=value` pairs an Agent's reported attributes
    must equal, never empty) matches the Agent, add the Configuration, press
    **OK**, and press the row's **Roll out** — a Configuration reaches Agents
-   only through a Deployment
-   ([ADR-0034](docs/adr/0034-a-deployment-carries-configurations-and-is-the-one-thing-rolled-out.md)).
+   only through a Deployment.
 4. **Watch the loop close:** a WebSocket Client the Deployment claims receives
    the configuration within a second, an HTTP Client on its next poll. The Agent
    stores it (under its `state_dir`), reports it **Applied** with the matching
@@ -352,18 +321,21 @@ $ curl -X PUT -H 'Content-Type: application/json' -d '{"selector": {"os.type": "
 $ curl -X PUT http://127.0.0.1:4321/api/v1/deployments/linux/configurations/linux-base
 $ curl -X POST http://127.0.0.1:4321/api/v1/deployments/linux/rollout  # distribute
 
-# Content the agent reads by path rather than is configured with (ADR-0023): written next to the
+# Content the agent reads by path rather than is configured with: written next
+# to the
 # configuration under its own name, never passed to the process as configuration.
 $ curl -X PUT -H 'Content-Type: application/json' \
        -d '{"service_name": "otelcol", "body": "rules: []", "role": "supplementary"}' \
        http://127.0.0.1:4321/api/v1/configurations/ruleset
 
-# A Package is identified by its Agent type and version, with one entry per platform (ADR-0026);
+# A Package is identified by its Agent type and version, with one entry per
+# platform;
 # each Agent is offered the entry that fits it. An entry is offered only with a signature that
 # verifies up to the Package Roots compiled into the Server and the Client — the `.sig` a release
-# publishes beside each archive (ADR-0066). Only the Client's own Package, `supervisor`, is signed
+# publishes beside each archive. Only the Client's own Package, `supervisor`, is
+# signed
 # today; no other Package can be delivered yet. Saving stages it: nothing reaches the fleet until
-# a Deployment holding it is rolled out (ADR-0025).
+# a Deployment holding it is rolled out.
 $ curl -X PUT http://127.0.0.1:4321/api/v1/packages/supervisor/0.1.0
 $ curl -X PUT --data-binary @supervisor_0.1.0_linux_amd64.tar.gz \
        http://127.0.0.1:4321/api/v1/packages/supervisor/0.1.0/entries/linux/amd64
@@ -383,8 +355,7 @@ certificate of their own, for example from your organization's PKI, under
 ### Running as an OS service
 
 The Client registers _itself_ as a native service on Linux (systemd), macOS
-(launchd), and Windows (SCM) —
-[ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md):
+(launchd), and Windows (SCM):
 
 ```sh
 supervisor service install --config /etc/opamp/supervisor.toml     # system service (root/Administrator)
@@ -394,21 +365,20 @@ supervisor service stop
 supervisor service uninstall                                   # never deletes layout or state
 ```
 
-- **One service per build:** the service is named after the product,
-  `classis`, with no suffix and nothing to look up — so the verbs above take
-  no name at all. A second installation on one host is a second _build_ with its
-  own `PRODUCT_NAME`, not a runtime flag
-  ([ADR-0019](docs/adr/0019-the-client-supervisor-installed-service-releases-and-installers.md)).
+- **One service per build:** the service is named after the product, `classis`,
+  with no suffix and nothing to look up — so the verbs above take no name at
+  all. A second installation on one host is a second _build_ with its own
+  `PRODUCT_NAME`, not a runtime flag.
 - **Two roots:** `--root <dir>` given alone puts everything under the one
   directory it names; nothing is ever installed to a fixed path. Without it, a
   Linux system install splits the defaults: the executable layout —
   `versions/supervisor-<version>-<commit>/` and the `current` pointer the
-  service runs from — lives at `/opt/classis`, while `supervisor.toml` and
-  the default `state/` directory stay at `/var/lib/classis` (SELinux never
-  lets systemd execute a binary under `/var/lib`). `--data-root <dir>` names
-  that second half explicitly. macOS, Windows and user scope keep one directory
-  for everything — including a Windows host installed by the MSI, where
-  `Program Files` holds the delivered payload and the layout goes under
+  service runs from — lives at `/opt/classis`, while `supervisor.toml` and the
+  default `state/` directory stay at `/var/lib/classis` (SELinux never lets
+  systemd execute a binary under `/var/lib`). `--data-root <dir>` names that
+  second half explicitly. macOS, Windows and user scope keep one directory for
+  everything — including a Windows host installed by the MSI, where `Program
+  Files` holds the delivered payload and the layout goes under
   `%ProgramData%\classis`, because the self-update rewrites the layout at
   runtime and `Program Files` is not a tree a service account should be able to
   write.
@@ -417,13 +387,12 @@ supervisor service uninstall                                   # never deletes l
 - Stopping the service sends the OpAMP `agent_disconnect` goodbye (`SIGTERM` on
   Unix, an SCM stop control on Windows); after a crash the manager restarts the
   service, after an explicit stop it stays down.
-- **Self-update**
-  ([ADR-0018](docs/adr/0018-the-client-updates-itself-under-its-own-agent-type.md)):
-  the Client is always its own Agent, so the Server can see which version each
-  host runs. Letting the Server _replace_ that version is a consent that stands
-  by default and takes only the package named after the Client's own Agent
-  type, `supervisor` — anything else is refused, because a package aimed at the
-  whole fleet would otherwise be written over the Client itself:
+- **Self-update**: the Client is always its own Agent, so the Server can see
+  which version each host runs. Letting the Server _replace_ that version is a
+  consent that stands by default and takes only the package named after the
+  Client's own Agent type, `supervisor` — anything else is refused, because a
+  package aimed at the whole fleet would otherwise be written over the Client
+  itself:
 
   ```toml
   [packages]
@@ -452,16 +421,14 @@ reboots), the logs (`journalctl -u classis` on Linux, Console/`log show` on
 macOS), the Agent in the fleet UI, and an **SELinux-enforcing host** (Fedora,
 RHEL, or SUSE 16 with `getenforce` answering `Enforcing`): the `.rpm` install
 must start — a service dying with `status=203/EXEC` and an AVC denial in
-`ausearch -m avc` is the failure ADR-0019 clause 8 exists to prevent. Each
-wrapped kind — Telegraf, Icinga 2 with its plugins, GLPI Agent with its tasks —
-under the packaged account `classis` and under `--run-as root`: it starts,
-reports, and its `sudo` or setuid helpers still work
-([ADR-0042](docs/adr/0042-the-linux-packages-run-the-client-under-its-own-account.md)).
-Known platform gaps (tracked in the ADR): launchd `status` is advisory and
-`install` does not auto-start there. The SCM still discards a Windows service's
-stderr, but the service now writes its own rotating log under `<state_dir>/logs`
-on every platform (ADR-0019), which is where to look when the manager shows a
-service that will not start.
+`ausearch -m avc` is the failure keeping the programs under `/opt` prevents.
+Each wrapped kind — Telegraf, Icinga 2 with its plugins, GLPI Agent with its
+tasks — under the packaged account `classis` and under `--run-as root`: it
+starts, reports, and its `sudo` or setuid helpers still work. Known platform
+gaps: launchd `status` is advisory and `install` does not auto-start there. The
+SCM still discards a Windows service's stderr, but the service now writes its
+own rotating log under `<state_dir>/logs` on every platform, which is where to
+look when the manager shows a service that will not start.
 
 ## Project Layout
 
@@ -476,22 +443,23 @@ docs/ARCHITECTURE.md  # the system as it currently stands
 docs/CONFORMANCE.md   # OpAMP Protocol Baseline + capability conformance matrix
 docs/SECURITY-MODEL.md # the Dev Container, secrets, pinned actions, the fleet trust model, supported versions
 docs/HARDENING.md     # candidate hardening measures for the Client-Server link (a backlog, not decisions)
-docs/adr/             # Architecture Decision Records (+ template)
 crates/               # Cargo workspace: opamp (shared) · classis-core · classis-server · classis-agent · classis-tools (operator CLIs)
 config/               # annotated example configuration files (server.toml, supervisor.toml)
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI
-interop/              # the Go side of the interop check against opamp-go (ADR-0011)
+interop/              # the Go side of the interop check against opamp-go
 dev/                  # the development stores — rustfs (S3) and PostgreSQL — run on the host
 rust-toolchain.toml   # pinned Rust toolchain (an exact stable release + rustfmt + clippy)
 .githooks/            # git hooks: refuse a commit on main and a push while the checks are red
 .github/              # CI workflows, issue & pull request templates
-renovate.json         # Renovate: the organisation preset, with Cargo requirements kept as ranges (ADR-0060)
+renovate.json         # Renovate: the organisation preset, with Cargo
+requirements kept as ranges
 .devcontainer/        # Dev Container definition (base image + Features + the OTLP forwarder)
 .vscode/              # shared editor settings
 .editorconfig         # editor-neutral formatting baseline
-.gitattributes        # line-ending normalization (LF everywhere)
-.agents/skills/       # the procedures of AGENTS.md as Agent Skills, one directory each (ADR-0005)
+.gitattributes        # line-ending normalization (LF everywhere).
+ agents/skills/       # the procedures of AGENTS.md as Agent Skills, one
+ directory each
 .claude/CLAUDE.md     # pointer for Claude Code to read AGENTS.md
 .claude/skills/       # pointers (one symlink per skill) for Claude Code to read .agents/skills/
 .claude/settings.json # Claude Code permissions: deny reading .env files (see docs/SECURITY-MODEL.md)
@@ -526,12 +494,12 @@ puts them on the container's loopback on every start, so `127.0.0.1:9100` and
 ### Host container management
 
 The Dev Container deliberately has **no access to the host Docker daemon**: the
-socket is not mounted ([ADR-0002](docs/adr/0002-dev-container-runtime.md)). To
-manage the host's containers from VS Code, run the **Container Tools** extension
-(`ms-azuretools.vscode-containers`) on the **host** side: install it in your
-host VS Code. [`.vscode/settings.json`](.vscode/settings.json) already pins it
-to run locally via `remote.extensionKind`, so it keeps talking to the host
-engine even when this folder is reopened in the container.
+socket is not mounted. To manage the host's containers from VS Code, run the
+**Container Tools** extension (`ms-azuretools.vscode-containers`) on the
+**host** side: install it in your host VS Code.
+[`.vscode/settings.json`](.vscode/settings.json) already pins it to run locally
+via `remote.extensionKind`, so it keeps talking to the host engine even when
+this folder is reopened in the container.
 
 ## Coding Agents
 
@@ -541,34 +509,30 @@ extensions (see
 agents (OpenAI Codex, Cursor, OpenCode, GitHub Copilot) work too once you add
 them.
 
-The rules every agent follows live in [`AGENTS.md`](AGENTS.md); that there is
-exactly one such file is decided in
-[ADR-0001](docs/adr/0001-agent-governance-model.md). An agent that cannot read
-it natively gets a pointer file instead.
+The rules every agent follows live in [`AGENTS.md`](AGENTS.md), and only there.
+An agent that cannot read it natively gets a pointer file instead.
 [`.claude/CLAUDE.md`](.claude/CLAUDE.md) is the one shipped here; it carries the
-pointer and no rules of its own ([`AGENTS.md` §3](AGENTS.md#3-adr-rules)). It
+pointer and no rules of its own ([`AGENTS.md` §3](AGENTS.md#3-decisions)). It
 exists for one gap only: Claude Code loads `CLAUDE.md`, not `AGENTS.md`, tracked
 upstream as
 [anthropics/claude-code#34235](https://github.com/anthropics/claude-code/issues/34235).
 Once that lands, delete the pointer file rather than keeping a second file to
 maintain.
 
-The procedures those rules name (proposing an ADR, planning a feature, reviewing
-a change, revising the design) are Agent Skills under
+The procedures those rules name (planning a feature, reviewing a change,
+revising the design) are Agent Skills under
 [`.agents/skills/`](.agents/skills/), the open format and the directory Codex,
-Gemini CLI, and Cursor read ([ADR-0005](docs/adr/0005-procedures-as-skills.md)).
-An agent invokes one by name (`/review`) or picks it up when the task matches
-its description. Claude Code reads `.claude/skills/` only, so that directory
-holds one symlink per skill into `.agents/skills/`; a directory-level symlink is
-not followed. The symlinks are pointers of the same kind as `CLAUDE.md`, tracked
-upstream as
+Gemini CLI, and Cursor read. An agent invokes one by name (`/review`) or picks
+it up when the task matches its description. Claude Code reads `.claude/skills/`
+only, so that directory holds one symlink per skill into `.agents/skills/`; a
+directory-level symlink is not followed. The symlinks are pointers of the same
+kind as `CLAUDE.md`, tracked upstream as
 [anthropics/claude-code#31005](https://github.com/anthropics/claude-code/issues/31005).
 Delete them when that lands, and add one for every skill added meanwhile. A rule
 is enforced only by what every agent hits: the git hooks under
 [`.githooks/`](.githooks/), the checks, and the repository settings below. A
 tool's own configuration is not used to enforce one, because a gate that one
-agent honours and the next does not
-looks like a rule and is not one.
+agent honours and the next does not looks like a rule and is not one.
 
 ## Repository settings
 
@@ -589,44 +553,38 @@ repository move or transfer:
 - a **ruleset on tags** that blocks updates, deletions and force pushes and
   requires signatures. It leaves creating a tag to everyone with write access,
   who may release;
-- the **environment `Package Signing`**
-  ([ADR-0065](docs/adr/0065-the-release-run-signs-every-entry-of-the-clients-own-package-with-a-key-only-a-reviewed-version-tag-reaches.md)
-  clauses 1 and 2). Its deployment rule admits the tags
+- the **environment `Package Signing`**. Its deployment rule admits the tags
   `v[0-9]*.[0-9]*.[0-9]*` and no branch. It has one required reviewer, from a
   team of the people with write access, with _Prevent self-review_, and
   administrators may not bypass it. Its secret `PACKAGE_SIGNING_KEY` is the
   base64 of a Package Signer's Ed25519 key in PKCS#8 DER, made by an admin on a
   machine of their own and then deleted; the certificate the Package Root's
-  custodian issues for it is `packaging/package-signer.der`
-  ([ADR-0066](docs/adr/0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
-  clause 12). Replacing it is a new key, a new certificate from the same Root,
-  a new secret and a reviewed change to that file; no installation changes.
-  The reviewer approves a run only when the push of a `v<version>` tag started
-  it and the tag names a commit of `main`;
+  custodian issues for it is `packaging/package-signer.der`. Replacing it is a
+  new key, a new certificate from the same Root, a new secret and a reviewed
+  change to that file; no installation changes. The reviewer approves a run only
+  when the push of a `v<version>` tag started it and the tag names a commit of
+  `main`;
 - enable **secret scanning with push protection**, the only mechanical backstop
   behind the secrets rule ([`AGENTS.md` §7](AGENTS.md#7-secrets)), which is
   otherwise carried by review alone;
 - enable **private vulnerability reporting** (see [`SECURITY.md`](SECURITY.md)).
 - after the first release that pushes the Server's image, set the package
-  **`classis-server`** on `ghcr.io` to **public** and linked to this
-  repository: a package a workflow publishes for the first time is private, and
-  operators pull the image without an account
-  ([ADR-0052](docs/adr/0052-the-server-ships-as-a-container-image-built-from-its-attested-release-binary.md)).
+  **`classis-server`** on `ghcr.io` to **public** and linked to this repository:
+  a package a workflow publishes for the first time is private, and operators
+  pull the image without an account.
 
 ## Template
 
 - **Template release:** unreleased — the release of
   [NUC](https://github.com/hivevm/nuc) this repository carries; a project moves
-  the line when it takes up a later one
-  ([ADR-0008](docs/adr/0008-template-releases.md)).
+  the line when it takes up a later one.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the workflow (specification- and
-ADR-driven, small reviewable changes) and
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for the community standards we expect
-of everyone taking part. Security issues: please follow
-[`SECURITY.md`](SECURITY.md) instead of opening a public issue.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the workflow (specification-driven,
+small reviewable changes) and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for the
+community standards we expect of everyone taking part. Security issues: please
+follow [`SECURITY.md`](SECURITY.md) instead of opening a public issue.
 
 ## License
 

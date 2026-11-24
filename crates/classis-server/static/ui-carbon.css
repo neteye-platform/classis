@@ -70,7 +70,7 @@
   --tag-red-bg: #a2191f;    --tag-red-fg: #ffd7d9;  --tag-red-hover: #c21e25;
   --sans: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, ".SFNSText-Regular", sans-serif;
   --mono: "IBM Plex Mono", Menlo, "DejaVu Sans Mono", "Bitstream Vera Sans Mono", Courier, monospace;
-  /* An effective configuration's colours (ADR-0038), from Carbon's tokens: keys in link-primary,
+  /* An effective configuration's colours, from Carbon's tokens: keys in link-primary,
      strings and numbers in the green and yellow tag colours, comments in text-helper. */
   --shiki-foreground: #f4f4f4;
   --shiki-background: #262626;
@@ -136,7 +136,7 @@
   --tag-gray-bg: #e0e0e0;   --tag-gray-fg: #161616;
   --tag-yellow-bg: #fddc69; --tag-yellow-fg: #684e00;
   --tag-red-bg: #ffd7d9;    --tag-red-fg: #a2191f;  --tag-red-hover: #ffc2c5;
-  /* An effective configuration's colours (ADR-0038), the same roles in Gray 10. */
+  /* An effective configuration's colours, the same roles in Gray 10. */
   --shiki-foreground: #161616;
   --shiki-background: #f4f4f4;
   --shiki-token-keyword: #0f62fe;

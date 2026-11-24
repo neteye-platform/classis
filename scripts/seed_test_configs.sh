@@ -2,7 +2,7 @@
 #
 # Seeds one minimal test Configuration per example Collector from config/supervisor.toml, each
 # stated for the Agent type that should receive it and held by a Deployment of that name whose
-# Selector aims at it (ADR-0034) — a Configuration has no Selector of its own:
+# Selector aims at it — a Configuration has no Selector of its own:
 #
 #   otelcol-contrib-conf  →  type otelcol-contrib, deployment otelcol-contrib
 #                            (selector service.name = otelcol-contrib; opampextension, self-reporting)
@@ -11,19 +11,19 @@
 #
 # A Configuration's name is the file name its entry gets in the Supervisor's config directory,
 # so a block that reads one must read exactly that path. Names carry no extension: they follow the
-# ADR-0019 grammar (lowercase letters, digits and '-'), which admits no dot.
+# grammar the Server enforces (lowercase letters, digits and '-'), which admits no dot.
 #
 # Two modes:
 #   scripts/seed_test_configs.sh [server-url]
 #       PUTs each Configuration to a running Server's REST API, puts it into its Deployment and
-#       rolls the Deployment out — the act that assigns it to the Agents the Deployment claims
-#       (ADR-0025, ADR-0034); a PUT alone reaches nobody.
-#       (default server-url: https://127.0.0.1:4321). The Operator plane serves TLS (ADR-0013); the
+#       rolls the Deployment out — the act that assigns it to the Agents the Deployment claims;
+#       a PUT alone reaches nobody.
+#       (default server-url: https://127.0.0.1:4321). The Operator plane serves TLS; the
 #       CA curl trusts is $SEED_CACERT, or .dev-pki/offline/server-ca.pem when scripts/dev-pki.sh
 #       made one.
 #   scripts/seed_test_configs.sh --offline [data-dir]
 #       Writes each Configuration as <data-dir>/configurations/<name>.json, owner-only — the
-#       Server's own persistence format (ADR-0037), loaded at its next start; no running Server
+#       Server's own persistence format, loaded at its next start; no running Server
 #       needed. Default data-dir is fleet-data/ in the repository root (the server.toml default).
 #       This is what scripts/install_tools.sh runs after installing the processes. A staged Configuration is
 #       stored, not assigned, and held by no Deployment: once the Agents have enrolled, put each
@@ -31,10 +31,10 @@
 #       (PUT /api/v1/deployments/<name>/configurations/<configuration>, then
 #       POST /api/v1/deployments/<name>/rollout, or the Deployments tab).
 #   scripts/seed_test_configs.sh --enrol [server-url]
-#       For the development set of scripts/dev-pki.sh, whose Client enrols like any other host
-#       (ADR-0028): asks the Server for a fresh bootstrap certificate for the customer and site
+#       For the development set of scripts/dev-pki.sh, whose Client enrols like any other host:
+#       asks the Server for a fresh bootstrap certificate for the customer and site
 #       "Development" under a throwaway password, downloads its bootstrap.p12 — the Server hands
-#       the key out in no other form (ADR-0036) — and extracts the pair with
+#       the key out in no other form — and extracts the pair with
 #       `classisctl pki p12-extract` where the development supervisor.toml names it
 #       ($SEED_BOOTSTRAP_DIR, default .dev-pki/offline/), replacing a pair already there,
 #       opens the enrolment window for ten minutes, waits up to two minutes for
@@ -68,7 +68,7 @@ if [ "${1:-}" = "--offline" ]; then
     mode=stage
     data_dir="${2:-$examples/../../fleet-data}"
     configurations="$data_dir/configurations"
-    # Owner-only, as the Server keeps everything under data_dir (ADR-0037).
+    # Owner-only, as the Server keeps everything under data_dir.
     umask 077
     mkdir -p "$configurations"
 elif [ "${1:-}" = "--enrol" ]; then
@@ -88,8 +88,8 @@ if [ "$mode" = enrol ]; then
     root="$(cd "$(dirname "$0")/.." && pwd)"
     bootstrap_dir="$(cd "${SEED_BOOTSTRAP_DIR:-$root/.dev-pki/offline}" && pwd)"
     # A fresh certificate every time, so one that has ended since the last run is never reused.
-    # The Server keeps its key only in a PKCS#12 file under the password the request names
-    # (ADR-0036): a throwaway one opens the file once, and nothing keeps it.
+    # The Server keeps its key only in a PKCS#12 file under the password the request names:
+    # a throwaway one opens the file once, and nothing keeps it.
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     (
@@ -128,7 +128,7 @@ if [ "$mode" = enrol ]; then
 fi
 
 # seed <name> <file> <service_name> <deployment> <selector-json>
-#   service_name   the Agent type this Configuration is for (ADR-0034); it fits the Configuration
+#   service_name   the Agent type this Configuration is for; it fits the Configuration
 #                  to the Agents of its Deployment that report it
 #   deployment     the Deployment that holds it; its Selector aims it
 #   selector-json  the Deployment's Selector, equality pairs as a JSON object, never empty

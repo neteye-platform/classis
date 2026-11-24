@@ -1,4 +1,4 @@
-//! The Agent plane behind a reverse proxy that terminates TLS (ADR-0064): plain HTTP, and no
+//! The Agent plane behind a reverse proxy that terminates TLS: plain HTTP, and no
 //! authentication in the Server — it admits every request, and what admits an Agent lives in the
 //! proxy. The peer the throttle counts is the address in `X-Forwarded-For`, on either plane.
 
@@ -61,7 +61,6 @@ async fn post(server: &support::TestServer, authorization: Option<&str>) -> reqw
 
 /// A report is admitted over plain HTTP with no credential at all, and a credential it carries is
 /// ignored, never refused: the Server authenticates no Agent.
-/// Verifies: ADR-0064
 #[tokio::test]
 async fn the_agent_plane_admits_a_request_without_credentials() {
     let served = served(None).await;
@@ -83,7 +82,6 @@ async fn the_agent_plane_admits_a_request_without_credentials() {
 
 /// The package download is on the same plane and asks nothing either: the route answers for what
 /// it was asked, not for who asks.
-/// Verifies: ADR-0064
 #[tokio::test]
 async fn the_package_download_asks_nothing_either() {
     let served = served(None).await;
@@ -118,8 +116,7 @@ async fn get_agents(
 
 /// Failed sign-ins are counted against the address in `X-Forwarded-For`, from any source: the third
 /// failure from one address puts that address in back-off, and another address behind the same
-/// proxy is served. The header is trusted whoever sends it (ADR-0064).
-/// Verifies: ADR-0064
+/// proxy is served. The header is trusted whoever sends it.
 #[tokio::test]
 async fn failures_are_counted_per_forwarded_address() {
     let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
@@ -162,7 +159,6 @@ async fn failures_are_counted_per_forwarded_address() {
 }
 
 /// Without the header the address of the connection is the peer, as before.
-/// Verifies: ADR-0064
 #[tokio::test]
 async fn without_the_header_the_connection_is_the_peer() {
     let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);

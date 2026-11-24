@@ -1,13 +1,11 @@
 # Interop against opamp-go
 
-This directory holds the Go side of the conformance check of
-[ADR-0011](../docs/adr/0011-the-protocol-is-pinned-and-checked-against-opamp-go-on-the-endpoint-as-it-ships.md):
-a small program that puts
-[`opamp-go`](https://github.com/open-telemetry/opamp-go), the OpAMP reference
-implementation, at the far end of a connection with this project's Server or
-Client. It decides nothing. It reports what `opamp-go` sees as one JSON object
-per line on stdout and takes commands on stdin. The scenarios and every
-assertion live in
+This directory holds the Go side of the protocol conformance check: a small
+program that puts [`opamp-go`](https://github.com/open-telemetry/opamp-go), the
+OpAMP reference implementation, at the far end of a connection with this
+project's Server or Client. It decides nothing. It reports what `opamp-go` sees
+as one JSON object per line on stdout and takes commands on stdin. The scenarios
+and every assertion live in
 [`crates/classis-agent/tests/interop_opamp_go.rs`](../crates/classis-agent/tests/interop_opamp_go.rs),
 where both ends' state can be read.
 

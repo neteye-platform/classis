@@ -1,4 +1,4 @@
-//! The bootstrap certificates the Server issued, in PostgreSQL (ADR-0050 clause 12): the
+//! The bootstrap certificates the Server issued, in PostgreSQL: the
 //! PostgreSQL adapter behind [`BootstrapStore`](crate::bootstrap::BootstrapStore) — one row per
 //! certificate, its PKCS#12 file in the same row, an issuance written in one transaction.
 
@@ -278,14 +278,12 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_bootstrap_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
         contract(&|| Box::new(FsBootstrapStore::open(dir.path()).expect("open")));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_bootstrap_port_contract_holds_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -296,8 +294,7 @@ mod tests {
     }
 
     /// With PostgreSQL the record and the file are one row, written in one transaction: an
-    /// issuance that cannot be written leaves neither (ADR-0050 clause 12).
-    /// Verifies: ADR-0050
+    /// issuance that cannot be written leaves neither.
     #[test]
     fn an_issuance_is_one_row_or_none() {
         let Some(test) = TestDatabase::named() else {

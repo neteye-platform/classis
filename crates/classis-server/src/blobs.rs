@@ -1,4 +1,4 @@
-//! Artifact bytes, kept by their SHA-256 (ADR-0037 clause 4): the blob port.
+//! Artifact bytes, kept by their SHA-256: the blob port.
 //!
 //! A Package entry names its artifact by the hash of its bytes and nothing else, so bytes held by
 //! two entries are stored once, and a blob's name is its own integrity check. Which blobs are still
@@ -11,7 +11,7 @@
 
 use std::io::Read;
 
-/// The blob port (ADR-0037 clause 4). A hash is the lowercase hex SHA-256 of the bytes.
+/// The blob port. A hash is the lowercase hex SHA-256 of the bytes.
 pub trait BlobStore: Send + Sync {
     /// Stores the bytes `bytes` yields, hashing them on the way, and answers their hash and size.
     /// Bytes already stored are stored once. A stream that fails stores nothing.

@@ -1,4 +1,4 @@
-//! The TLS both sides of a connection share (ADR-0010). Behind either feature.
+//! The TLS both sides of a connection share. Behind either feature.
 //!
 //! This module turns material into what rustls takes, and opens no file. Which CA to trust and
 //! which certificate to present is the application's policy, so the application reads the files
@@ -14,7 +14,7 @@ use rustls::SupportedProtocolVersion;
 /// The one protocol version either side speaks (specification Q-3).
 pub const PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] = &[&rustls::version::TLS13];
 
-/// The ring provider with the three TLS 1.3 suites and nothing else (ADR-0010). A provider without
+/// The ring provider with the three TLS 1.3 suites and nothing else. A provider without
 /// a TLS 1.2 suite cannot negotiate TLS 1.2, whoever builds the configuration from it.
 #[must_use]
 pub fn provider() -> CryptoProvider {
@@ -31,8 +31,8 @@ pub fn provider() -> CryptoProvider {
     }
 }
 
-/// Installs [`provider`] as the process-wide rustls provider — ring, never a system library
-/// (ADR-0013) — once; later calls are no-ops. A binary calls it at startup, before anything builds
+/// Installs [`provider`] as the process-wide rustls provider — ring, never a system library —
+/// once; later calls are no-ops. A binary calls it at startup, before anything builds
 /// a TLS client. reqwest's `rustls-no-provider` feature refuses to build a client without a process
 /// provider, which is the guarantee that keeps aws-lc-rs and its cmake out of the build; and since
 /// reqwest builds its own configuration from this provider, it speaks TLS 1.3 alone too.
@@ -138,7 +138,6 @@ mod tests {
         (cert.pem(), key.serialize_pem())
     }
 
-    /// Verifies: ADR-0010
     #[test]
     fn reads_a_certificate_and_a_key() {
         let (cert_pem, key_pem) = pair();
@@ -159,7 +158,6 @@ mod tests {
     }
 
     /// Fail closed: a file with no certificate in it is not an empty trust store.
-    /// Verifies: ADR-0010
     #[test]
     fn a_file_holding_no_certificate_is_an_error() {
         assert!(certificates(b"").is_err());
@@ -181,7 +179,7 @@ mod tests {
         assert!(!format!("{identity:?}").contains("PRIVATE KEY"));
     }
 
-    /// Verifies: ADR-0010, ADR-0013, ADR-0014, Q-3
+    /// Verifies: Q-3
     #[test]
     fn the_provider_offers_tls_1_3_suites_alone() {
         let provider = provider();

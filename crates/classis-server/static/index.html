@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Classis</title>
     <link id="ui-style" rel="stylesheet" href="/ui.css" />
-    <!-- Colours an Agent's effective configuration (ADR-0038); deferred, so the page never waits
+    <!-- Colours an Agent's effective configuration; deferred, so the page never waits
          for it, and without it every configuration stays plain text. -->
     <script id="shiki" src="/shiki.js" defer></script>
     <script>
@@ -78,7 +78,7 @@
         <button class="tab" data-tab="enrolments">Enrolments<span class="num" id="enrolment-count">0</span></button>
       </nav>
 
-      <!-- Configurations (ADR-0034): content only — a body for an agent type, and a role. One table
+      <!-- Configurations: content only — a body for an agent type, and a role. One table
            of Configurations and a detail form for the current one; no Selector and no rollout
            press here, because a Configuration aims at nobody: a Deployment holds it, and the
            rollout press is that Deployment's. -->
@@ -114,7 +114,7 @@
           </label>
           <label class="field"><span class="field-cap">Agent type <b class="need req">required</b></span>
             <input required aria-required="true" id="config-type" list="config-type-options" placeholder="agent type: the service.name it is for" autocomplete="off"
-                   title="Compared raw for equality against the service.name the agents report (ADR-0034): of the agents a deployment holding it claims, only those of this type receive it. Content for several types is one configuration per type." />
+                   title="Compared raw for equality against the service.name the agents report: of the agents a deployment holding it claims, only those of this type receive it. Content for several types is one configuration per type." />
           </label>
           <datalist id="config-type-options"></datalist>
           <label class="field"><span class="field-cap">Role <b class="need opt">optional</b></span>
@@ -130,14 +130,14 @@
           <span id="config-error" class="err" style="flex: 1"></span>
           <button id="config-cancel" class="btn btn-ghost" style="margin-left: auto">Cancel</button>
           <button id="config-ok" class="btn btn-primary"
-                  title="Save the form as this configuration. Nothing is distributed by this press (ADR-0025); every agent keeps the revision its assignment pins, and the Agents tab shows the save waiting.">OK</button>
+                  title="Save the form as this configuration. Nothing is distributed by this press; every agent keeps the revision its assignment pins, and the Agents tab shows the save waiting.">OK</button>
         </div>
       </section>
       </div>
 
-      <!-- Packages as Sets (ADR-0026): one table of Sets, and a detail form for the *current* one.
+      <!-- Packages as Sets: one table of Sets, and a detail form for the *current* one.
            A Set is identified by name, agent type, and version — stated at creation, never edited;
-           it holds one entry per platform. Saving never distributes (ADR-0025): a Set reaches an
+           it holds one entry per platform. Saving never distributes: a Set reaches an
            agent only through a rollout act. The table is the master, the form the detail; while
            nothing is current the form is not on screen. -->
       <div id="panel-packages" class="tab-panel">
@@ -169,13 +169,13 @@
       <!-- The detail form: exactly as capable as the API, one rule (the Server's), rendered. The
            identity fields are writable only while creating; on an existing Set they are the frozen
            identity. Entries are editable while the package is assigned to nobody. OK and Cancel persist or discard the form; the rollout act stays its own button
-           (ADR-0025: the press that changes the fleet is never the press that carries the bytes). -->
+           (the press that changes the fleet is never the press that carries the bytes). -->
       <section id="set-detail" class="card config" style="display: none">
         <h2 id="set-detail-title">Package set</h2>
         <div class="config-fields">
           <label class="field"><span class="field-cap">Agent type <b class="need req">required</b></span>
             <input required aria-required="true" id="set-type" class="required" placeholder="agent type: the service.name its agents report (e.g. otelcol-contrib)" autocomplete="off"
-                   title="Matched for equality against the service.name an agent reports (ADR-0026), and half this package's identity together with the version (ADR-0026) — frozen once created. It is also the name the package carries on the wire, which is why it never holds the version. While it is empty, choosing an artifact file fills it from the file's name." />
+                   title="Matched for equality against the service.name an agent reports, and half this package's identity together with the version — frozen once created. It is also the name the package carries on the wire, which is why it never holds the version. While it is empty, choosing an artifact file fills it from the file's name." />
           </label>
           <label class="field narrow"><span class="field-cap">Version <b class="need req">required</b></span>
             <input required aria-required="true" id="set-version" placeholder="version (e.g. 1.2.3)" autocomplete="off"
@@ -211,8 +211,8 @@
         </div>
         <!-- Delete stands alone on the left — the one press that destroys, kept away from the
              two that finish an edit. OK and Cancel sit on the right, where a form is concluded.
-             The rollout act is not here at all: it lives on the Set's table row (ADR-0025's
-             seam — the press that changes the fleet is never the press that carries the bytes). -->
+             The rollout act is not here at all: it lives on the Set's table row (the press that
+             changes the fleet is never the press that carries the bytes). -->
         <div class="config-actions">
           <button id="set-delete" class="btn btn-ghost"
                   title="Delete this Set — entries, artifacts and metadata — refused while an agent's assignment pins it. It leaves every deployment that holds it. Nothing is uninstalled: an agent keeps running what it took.">Delete</button>
@@ -220,16 +220,16 @@
           <button id="set-cancel" class="btn btn-ghost" style="margin-left: auto"
                   title="Discard the form's changes: back to the stored state, or close the form when it was creating a new Set.">Cancel</button>
           <button id="set-ok" class="btn btn-primary"
-                  title="Save the form: creates the Set — and, when a file is chosen above, stores that entry too. Nothing is distributed by this press (ADR-0025).">OK</button>
+                  title="Save the form: creates the Set — and, when a file is chosen above, stores that entry too. Nothing is distributed by this press.">OK</button>
         </div>
       </section>
       </div>
 
 
-      <!-- Deployments (ADR-0026): what reaches a channel of hosts, and the only thing rolled out. The
+      <!-- Deployments: what reaches a channel of hosts, and the only thing rolled out. The
            table is the master, the form the detail; while nothing is current the form is not on
-           screen. The rollout press sits on the row, never in the form — ADR-0025's seam: the
-           press that changes the fleet is never the press that saves. -->
+           screen. The rollout press sits on the row, never in the form: the press that changes
+           the fleet is never the press that saves. -->
       <div id="panel-deployments" class="tab-panel">
       <div class="card filters" style="align-items: center; gap: 12px;">
         <button id="dep-create" class="btn btn-primary"
@@ -304,7 +304,7 @@
       </section>
       </div>
 
-      <!-- Enrolments (ADR-0021 clause 22): the hosts that asked for a certificate with the fleet's
+      <!-- Enrolments: the hosts that asked for a certificate with the fleet's
            bootstrap certificate, waiting for an operator. The key fingerprint is shown whole so it
            can be matched against the `key_fingerprint` the Client logs on the host it came from;
            approving and rejecting are per-row presses, never part of a form. -->
@@ -343,11 +343,11 @@
         <div id="enrolments-empty" class="empty">No host is waiting.</div>
       </div>
 
-      <!-- Bootstrap certificates (ADR-0028, ADR-0036): issued by this Server with the subject values
+      <!-- Bootstrap certificates: issued by this Server with the subject values
            an operator names, which every host certificate issued from one carries. The Server keeps
            a PKCS#12 file of the pair under the password the operator types, which any page offers
            for download; the page never holds a private key, and the typed password is sent once
-           and kept nowhere (ADR-0029, ADR-0036 clause 6). -->
+           and kept nowhere. -->
       <section id="boot-section" class="card config" style="display: none">
         <h2>Bootstrap certificates — one per customer, site or batch; each opens nothing without an open window and an approval</h2>
         <div class="config-fields">
@@ -414,7 +414,7 @@
       </section>
       </div>
 
-      <!-- Hosts (ADR-0035): what a client certificate names — one Client installation connecting
+      <!-- Hosts: what a client certificate names — one Client installation connecting
            directly, a Gateway included. One table of Hosts; the current one shows its Agents
            beneath it, grouped by their Client Agent. Nothing on a Host is edited: the Gateway mark
            and the revocation of its certificates are per-row presses, and labels stay on the
@@ -594,7 +594,7 @@
       // reported strings (names, attributes, health text) flow through here before reaching the DOM.
       const esc = (s) => (s ?? "").toString().replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
       // The grammar an Agent's effective configuration is coloured with, chosen by the type the
-      // Agent reports (ADR-0038 clause 3); any other type is shown plain.
+      // Agent reports; any other type is shown plain.
       const CONFIG_GRAMMARS = new Map([["supervisor", "toml"], ["telegraf", "toml"], ["fluent-bit", "ini"]]);
       const configGrammar = (type) => ((type || "").startsWith("otelcol") ? "yaml" : CONFIG_GRAMMARS.get(type) || null);
       // Coloured configurations by grammar and text: the refresh every two seconds draws an
@@ -628,7 +628,7 @@
         return Math.round(s / 3600) + "h ago";
       }
 
-      // What to call an Agent (ADR-0016): the operator's name for it, falling back to its type and
+      // What to call an Agent: the operator's name for it, falling back to its type and
       // then to the UID. A foreign OpAMP client reports no instance name, and every Collector of
       // one distribution reports the same type — so both steps are needed for a row to stay
       // distinguishable from its neighbours.
@@ -657,16 +657,16 @@
       };
 
       function statusPill(a) {
-        // Two facts, not one (ADR-0024): the pill says whether a connection is open — behind a
+        // Two facts, not one: the pill says whether a connection is open — behind a
         // Gateway, the Gateway's — and "Stale" beside it says the Agent itself stopped talking.
         // Disconnected is soft red, not gray: a link that is down is a finding, not an absence —
-        // but soft, because behind a Gateway it can be routine (ADR-0024); FAILED keeps the
+        // but soft, because behind a Gateway it can be routine; FAILED keeps the
         // stronger reading as the one hard error in the row.
         //
         // The badge carries a ✕: a disconnected row is where forgetting is usually decided, so
         // the remedy rides on the diagnosis. A shortcut, not the rule — the details keep the
         // forget chip for *every* Agent, because whether one may be forgotten is a question about
-        // silence and not about this flag (ADR-0024): an Agent behind a Gateway reads Connected
+        // silence and not about this flag: an Agent behind a Gateway reads Connected
         // however dead its host is, and must stay forgettable.
         const base = a.connected
           ? `<span class="pill solid-green"><span class="dot"></span>Connected</span>`
@@ -675,7 +675,7 @@
           ? `${base}<span class="pill amber" title="nothing heard for longer than this Agent's heartbeat budget">Stale</span>`
           : base;
       }
-      // The third fact beside the two the Status pill carries (ADR-0024): Connected says a
+      // The third fact beside the two the Status pill carries: Connected says a
       // connection is open, Stale says the Agent stopped talking — and this pill says whether
       // what the connection carries is actually running. A Supervisor whose Managed Process
       // will not start is exactly the case that needs the split: its row reads Connected,
@@ -715,7 +715,7 @@
         const n = a.non_identifying_attributes || {};
         return n["os.type"] && n["host.arch"] ? `${n["os.type"]}-${n["host.arch"]}` : "";
       }
-      // The host's addresses (ADR-0016), first of each on the row: the row answers "which host is
+      // The host's addresses, first of each on the row: the row answers "which host is
       // this" at a glance, while the full lists stay in the details chips below and in the
       // tooltip — a host can hold many addresses, and a column is as wide as its widest cell.
       function networkOf(a) {
@@ -744,8 +744,8 @@
         return `<span class="${cls}" title="${esc(entries.join("\n"))}">${esc(key)}: ${esc(entries[0])}<span class="chip-count">+${entries.length - 1}</span></span>`;
       }
       // Everything about an agent that is a set rather than a value: reported attributes, the
-      // operator's labels (ADR-0024), the per-row actions, and its package pills. Not named
-      // `labels` — that word means the 🏷 chips alone (ADR-0024), and a row headed with it
+      // operator's labels, the per-row actions, and its package pills. Not named
+      // `labels` — that word means the 🏷 chips alone, and a row headed with it
       // reads as if a package status were one.
       function details(a) {
         const chips = [];
@@ -775,17 +775,17 @@
         if (caps.includes("AcceptsRestartCommand")) {
           chips.push(`<span class="chip clickable restart-btn" data-uid="${esc(a.instance_uid)}" title="Restart the managed process">⟳ restart</span>`);
         }
-        // Offered on every row rather than pre-filtered (ADR-0024): whether an Agent may be
+        // Offered on every row rather than pre-filtered: whether an Agent may be
         // forgotten is a question about silence, which this view does not carry. The Server holds
         // the rule and says no with a reason — one place to be right instead of two to drift.
         chips.push(`<span class="chip clickable forget-btn" data-uid="${esc(a.instance_uid)}" title="Forget this Agent: the Server drops what it knows and the row goes away. Nothing happens on the host — a Client that is still running comes back.">✕ forget</span>`);
-        // The operator's labels (ADR-0024): matched by Selectors exactly like a reported attribute,
+        // The operator's labels: matched by Selectors exactly like a reported attribute,
         // which is what makes a rollout channel a Server-side decision instead of an edit on the host.
         for (const [key, value] of Object.entries(a.labels || {})) {
           const dead = (a.shadowed_labels || []).includes(key);
           chips.push(`<span class="chip${dead ? " " : " selected"}" title="${dead ? "the Agent reports this attribute itself, so the label matches nothing" : "a label: Selectors match it like a reported attribute"}">${dead ? "⚠ " : "🏷 "}${esc(key)}=${esc(value)}</span>`);
         }
-        // Its Client Agent's labels hold for it below its own (ADR-0035 clause 4): set on the Client
+        // Its Client Agent's labels hold for it below its own: set on the Client
         // Agent's row, marked here as inherited, and dimmed where its own label or a report wins.
         const own = a.labels || {};
         const reported = { ...(a.identifying_attributes || {}), ...(a.non_identifying_attributes || {}) };
@@ -796,7 +796,7 @@
         if (a.ambiguous) {
           chips.push(`<span class="pill amber" title="more than one client agent arrives over this host for this machine, so no agent of it inherits labels">client: ambiguous</span>`);
         }
-        // The values of the host's certificate (ADR-0035 clause 3): matched by selectors, and no
+        // The values of the host's certificate: matched by selectors, and no
         // agent can report them.
         for (const [key, value] of Object.entries(a.host_attributes || {})) {
           chips.push(`<span class="chip" title="from the certificate of host ${esc(a.host)} — selectors match it, and no agent can claim it">🔒 ${esc(key)}=${esc(value)}</span>`);
@@ -827,7 +827,7 @@
         // a second one nested inside it would wrap them as a single item rather than individually.
         return chips.join("");
       }
-      // The rollout column (ADR-0025, ADR-0034): what is rolled out to this Agent (its assignment —
+      // The rollout column: what is rolled out to this Agent (its assignment —
       // the Deployment it went through, its Configurations and its Package), what waits for the
       // operator's press, per Configuration and for the Package, and the press itself. The Server
       // never rolls out on its own — a save, a Deployment edit, a label move, or this Agent
@@ -844,7 +844,7 @@
           chips.push(`<span class="chip" title="rolled out to this agent — pinned as of that act, so putting a newer package in the channel changes nothing here">pkg ${esc(a.assigned_package)}</span>`);
         }
         // Three states that would otherwise be the same empty cell, and the operator's next move
-        // differs in each (ADR-0026 point 25). Calm, not alarming: a freshly enrolled host is in no
+        // differs in each. Calm, not alarming: a freshly enrolled host is in no
         // channel yet, which is the ordinary state and not a fault.
         const pending = (a.pending_configurations || []).length + (a.pending_packages || []).length + (a.pending_deployment ? 1 : 0);
         if (!a.package_conflict) {
@@ -871,7 +871,7 @@
           chips.push(`<span class="pill amber" title="package ${esc(p.display_name)} through ${esc(p.deployment)}: ${why[p.change] || esc(p.change)}">⏳ pkg ${esc(p.display_name)} · ${esc(p.deployment)}${mark[p.change] || ""}</span>`);
         }
         if (pending) {
-          chips.push(`<span class="chip clickable agent-rollout-btn" data-uid="${esc(a.instance_uid)}" title="Roll out the deployment that claims this agent to it — the one press that distributes (ADR-0034)">⤴ roll out</span>`);
+          chips.push(`<span class="chip clickable agent-rollout-btn" data-uid="${esc(a.instance_uid)}" title="Roll out the deployment that claims this agent to it — the one press that distributes">⤴ roll out</span>`);
         }
         if (!chips.length) return `<span class="pill gray">none</span>`;
         return `<div class="chips">${chips.join("")}</div>`;
@@ -881,7 +881,7 @@
         if (!filterText) return true;
         // Labels are searched beside the reported attributes, in the same `key=value` spelling:
         // the filter promises "or label", and a rollout channel is exactly what an operator narrows
-        // the fleet by (ADR-0024).
+        // the fleet by.
         const attrs = Object.entries(a.non_identifying_attributes || {}).concat(Object.entries(a.identifying_attributes || {}))
           .concat(Object.entries(a.labels || {}))
           .concat(Object.entries(a.inherited_labels || {}))
@@ -985,7 +985,7 @@
       $("agents").addEventListener("click", (e) => {
         const rolloutBtn = e.target.closest(".agent-rollout-btn");
         if (rolloutBtn) {
-          // The empty body releases the deployment that claims this agent (ADR-0034).
+          // The empty body releases the deployment that claims this agent.
           fetch(`/api/v1/agents/${encodeURIComponent(rolloutBtn.dataset.uid)}/rollout`, { method: "POST" })
             .then(async (res) => {
               $("fleet-error").textContent = res.ok
@@ -1153,8 +1153,8 @@
         renderSelection();
       });
 
-      // Configurations (ADR-0034): a master table of content, and a detail form for the *current*
-      // one — name, agent type, role, body. A PUT only saves (ADR-0025); a Configuration reaches an
+      // Configurations: a master table of content, and a detail form for the *current*
+      // one — name, agent type, role, body. A PUT only saves; a Configuration reaches an
       // agent only through a Deployment that holds it, whose row carries the rollout press.
       let configurations = [];
       let currentConfig = null;    // the name of the current row, or null — no current, no form
@@ -1270,7 +1270,7 @@
         showConfigDetail();
       });
 
-      // Refused while an agent's assignment pins it (ADR-0034): the Server says how many, and the
+      // Refused while an agent's assignment pins it: the Server says how many, and the
       // way out is a rollout of a deployment without it.
       $("config-delete").addEventListener("click", async () => {
         const c = currentConfigView();
@@ -1304,7 +1304,7 @@
           `<span class="${attrChipClass(k)} clickable" data-pair="${esc(p)}">${esc(p)}</span>`
         ).join("") || `<span class="chip">no agents reporting yet</span>`;
         // The types the fleet currently reports, as suggestions for a configuration's type
-        // (ADR-0034) — so stating the type is a pick, not a remembered spelling.
+        // — so stating the type is a pick, not a remembered spelling.
         const types = [...new Set(agents.map((a) => a.service_name).filter(Boolean))].sort();
         $("config-type-options").innerHTML = types.map((t) => `<option value="${esc(t)}"></option>`).join("");
         document.querySelectorAll("#selector-options .clickable").forEach((chip) => {
@@ -1318,7 +1318,7 @@
         });
       }
 
-      // Packages as Sets (ADR-0026): a master table of every Set, and a detail form for the
+      // Packages as Sets: a master table of every Set, and a detail form for the
       // *current* one. The form enforces no rule of its own — what it greys out is what the
       // Server answers 409 to — and the identity (name, agent type, version) is writable only
       // while a new Set is being created, because a new version is a new Set, never an edit.
@@ -1336,21 +1336,21 @@
       // How many Agents a rollout act would reach, as the Server resolves it. Zero is the case
       // worth seeing — a mistyped agent type, a platform the fleet does not run, or a Selector
       // matching nobody — none of which is a rejected upload, so nothing else would say it.
-      // Checking the aim before the act is what the count exists for (ADR-0025) — so the count
+      // Checking the aim before the act is what the count exists for — so the count
       // rides on the act it aims, and is a button only where it is a count the act can reach.
-      // Zero has two meanings (ADR-0025), and only one of them is a mistake: a set that aims
+      // Zero has two meanings, and only one of them is a mistake: a set that aims
       // at nobody is the amber warning, a set everyone already runs is a plain statement.
-      // A package aims at nobody by itself (ADR-0026): what answers "whom would this reach" is
+      // A package aims at nobody by itself: what answers "whom would this reach" is
       // the channels that hold it, and an empty list means stored, and unreachable.
       function ringsCell(p) {
         const channels = p.deployments || [];
         if (!channels.length) {
-          return `<span class="pill amber" title="no deployment holds this package, so it reaches nobody — put it in one on the Deployments tab (ADR-0026)">in no deployment</span>`;
+          return `<span class="pill amber" title="no deployment holds this package, so it reaches nobody — put it in one on the Deployments tab">in no deployment</span>`;
         }
         return channels.map((r) => `<span class="pill">${esc(r)}</span>`).join(" ");
       }
 
-      // An entry's signature as the Server holds it (ADR-0066 clause 10): one that verifies up to
+      // An entry's signature as the Server holds it: one that verifies up to
       // the Package Roots compiled into the Server, or none. The Server refuses any other, and
       // the Client's own check still decides.
       const SIG_STATES = {
@@ -1362,7 +1362,7 @@
         return `<span class="pill ${tone}" title="${esc(why)}">${label}</span>`;
       }
 
-      // Whether every entry carries a valid signature (ADR-0066 clause 16), in one pill per row.
+      // Whether every entry carries a valid signature, in one pill per row.
       function signaturesCell(p) {
         const entries = p.entries || [];
         if (!entries.length) return "";
@@ -1396,10 +1396,10 @@
 
       // The entries of the current Set, one row each: platform, size, the full SHA-256 —
       // selectable on its own, since it is what an operator compares against the file they uploaded —
-      // and the signature (ADR-0033): its state, with a ✕ to take it away, or a field to give it.
+      // and the signature: its state, with a ✕ to take it away, or a field to give it.
       // Each entry carries a ✕ that deletes it; on a Set that is assigned to an agent the entries
       // are frozen and the Server answers 409 with the reason — one rule, held where the
-      // assignments are known (ADR-0025). What is typed survives a re-render.
+      // assignments are known. What is typed survives a re-render.
       function renderSetEntries(p) {
         const entries = p ? p.entries || [] : [];
         const typed = {};
@@ -1416,7 +1416,7 @@
       }
 
       // Fills (or hides) the detail form from the current Set. With no current Set and nothing
-      // being created, the form is not on screen — the master–detail rule of ADR-0026.
+      // being created, the form is not on screen — the master–detail rule.
       function showSetDetail() {
         const p = creatingSet ? null : currentSetView();
         if (!creatingSet && !p) {
@@ -1428,7 +1428,7 @@
         $("set-detail-title").textContent = creatingSet
           ? "New package set — saved, distributed by a rollout act"
           : `Package ${p.display_name}`;
-        // The identity: writable only while creating. Afterwards it *is* the Set (ADR-0026),
+        // The identity: writable only while creating. Afterwards it *is* the Set,
         // and another version is another Create.
         for (const [id, value] of [["set-type", p ? p.agent_type : ""], ["set-version", p ? p.version : ""]]) {
           $(id).value = value;
@@ -1463,7 +1463,7 @@
         put(path, { headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
       // The file the editor holds, sent to a Set that now exists as the entry for the platform
-      // named (ADR-0033: every artifact is uploaded). No file is nothing to send. Returns the
+      // named (every artifact is uploaded). No file is nothing to send. Returns the
       // message to show, "" when it went through or was empty.
       async function sendPendingEntry(type, version) {
         const file = $("entry-file").files[0];
@@ -1502,7 +1502,7 @@
 
       // Selecting a row makes its Package current and shows it in the form; selecting it again
       // lets it go, and the form leaves the screen with it. There is no rollout button here any
-      // more: a Package is not rolled out (ADR-0026), its Deployment is.
+      // more: a Package is not rolled out, its Deployment is.
       $("sets").addEventListener("click", async (e) => {
         const tr = e.target.closest("tr.agent");
         if (!tr) return;
@@ -1517,7 +1517,7 @@
 
       // OK: create the Package if it is new, then store the entry the editor holds, if any. The
       // identity is all a Package has, so there is nothing else to persist — and never a release:
-      // the rollout act belongs to a Deployment (ADR-0026).
+      // the rollout act belongs to a Deployment.
       $("set-ok").addEventListener("click", async () => {
         $("set-error").textContent = "";
         const type = $("set-type").value.trim();
@@ -1553,7 +1553,7 @@
       });
 
       // Delete: the Set goes — entries, artifacts, metadata — and with it the current record, so
-      // the form leaves the screen. Nothing is uninstalled on any host (ADR-0026).
+      // the form leaves the screen. Nothing is uninstalled on any host.
       $("set-delete").addEventListener("click", async () => {
         const p = currentSetView();
         if (!p) return;
@@ -1570,7 +1570,7 @@
       });
 
       // An entry's ✕, its Sign, and the ✕ of its signature, each one request against the current
-      // Set; the Server refuses each while the Set is assigned (ADR-0025, ADR-0033).
+      // Set; the Server refuses each while the Set is assigned.
       $("set-entries").addEventListener("click", async (e) => {
         const p = currentSetView();
         if (!p) return;
@@ -1636,8 +1636,8 @@
       const KNOWN_ARCH = new Set(["amd64", "arm64", ...Object.keys(ARCH_ALIASES)]);
 
       // What an artifact's file name already says. A release is `<name><sep><version><sep><os>`
-      // `<sep><arch>.7z` (ADR-0019), and the last two fields are exactly the platform
-      // pair an entry is keyed by (ADR-0026) — so naming the file answers the fields. The platform
+      // `<sep><arch>.7z`, and the last two fields are exactly the platform
+      // pair an entry is keyed by — so naming the file answers the fields. The platform
       // is found by matching the known tokens at the end, not by splitting: `linux-x86_64` must
       // not come apart at its own underscore. A tail the vocabulary does not know returns null
       // rather than a guess, because a wrong platform is an entry no agent is ever offered.
@@ -1666,8 +1666,8 @@
       // the name, the agent type, and the version is still empty. The type is not picked from a
       // list; it is read out of the file's name, which for a release artifact is the type its
       // agents report (`otelcol-contrib_…`, `supervisor_…`). A suggestion in a visible,
-      // editable identity field that OK confirms — not the silent server-side default ADR-0026
-      // rejected — so a package named for the rollout rather than the type (a canary) is one
+      // editable identity field that OK confirms — not a silent server-side default — so a
+      // package named for the rollout rather than the type (a canary) is one
       // correction in the field before OK. It never rewrites a value already given, never an
       // identity already frozen, and clears nothing it cannot answer.
       function fillFromArtifact(parsed) {
@@ -1686,7 +1686,7 @@
       });
 
 
-      // ── Deployments (ADR-0026, ADR-0034) ───────────────────────────────────
+      // ── Deployments ───────────────────────────────────
       let deployments = [];
       let currentDep = null;      // the channel whose detail form is on screen
       let creatingDep = false;    // the form is defining a new one: the name is writable
@@ -1704,9 +1704,9 @@
           bits.push(`<span class="pill amber" title="another deployment matches ${d.conflicting_agents} of the agents this one does — an agent belongs to at most one, so they are offered nothing new until a selector is narrowed">⚠ ${d.conflicting_agents} in conflict</span>`);
         }
         if (d.targeted_agents) {
-          bits.push(`<button class="btn btn-ok rollout-dep-btn" data-name="${esc(d.name)}" title="Roll this deployment out to the ${d.targeted_agents} agent(s) it would move (ADR-0034) — its packages and configurations in one release, the press that changes the fleet. Agents that join the channel later wait for their own act on the Agents tab.">Roll out (${d.targeted_agents})</button>`);
+          bits.push(`<button class="btn btn-ok rollout-dep-btn" data-name="${esc(d.name)}" title="Roll this deployment out to the ${d.targeted_agents} agent(s) it would move — its packages and configurations in one release, the press that changes the fleet. Agents that join the channel later wait for their own act on the Agents tab.">Roll out (${d.targeted_agents})</button>`);
         } else if (d.claiming_agents) {
-          bits.push(`<span class="pill gray" title="the ${d.claiming_agents} agent(s) this channel claims already hold what it releases, so a rollout act would change nothing (ADR-0025)">${d.claiming_agents} up to date</span>`);
+          bits.push(`<span class="pill gray" title="the ${d.claiming_agents} agent(s) this channel claims already hold what it releases, so a rollout act would change nothing">${d.claiming_agents} up to date</span>`);
         } else if (!d.conflicting_agents) {
           bits.push(`<span class="pill amber" title="this channel claims no agent at all — its selector names an attribute nobody reports, or a value nobody carries. Not a rejected write, so nothing else would say so.">aims at nobody</span>`);
         }
@@ -1717,7 +1717,7 @@
         $("deployment-count").textContent = deployments.length;
         $("deps-empty").style.display = deployments.length ? "none" : "block";
         $("deps").innerHTML = deployments.map((d) => {
-          // A package's signatures are its entries' own (ADR-0033); the chip warns while one is
+          // A package's signatures are its entries' own; the chip warns while one is
           // missing, because the channel is not rolled out until every entry is signed.
           const pkgs = (d.packages || []).map((h) => {
             const p = packages.find((x) => x.agent_type === h.agent_type && x.version === h.version);
@@ -1755,7 +1755,7 @@
       }
 
       // Every package with all its entries, one row each: platform, size, the full SHA-256 and the
-      // entry's signature state — read here, written on the Packages tab (ADR-0033).
+      // entry's signature state — read here, written on the Packages tab.
       function renderDepPackages(d) {
         $("dep-packages").innerHTML = depHeld(d).map((h) => {
           const p = packages.find((x) => x.agent_type === h.type && x.version === h.version);
@@ -2042,12 +2042,12 @@
         if (currentDep || creatingDep) renderDepConfigs(currentDepView());
       }
 
-      // Enrolments (ADR-0021 clause 22; the UI as a client of the API, ADR-0023). A Server without
+      // Enrolments (the UI as a client of the API). A Server without
       // [enrolment] answers 404 on both routes, and the tab says so instead of showing an empty
       // queue that could never fill.
       let enrolments = [];
       let enrolmentsShown = null;
-      // The bootstrap certificates on record (ADR-0028 clause 24). A request names the one it carries
+      // The bootstrap certificates on record. A request names the one it carries
       // by serial, since the record keeps the key's fingerprint and the request the certificate's.
       let boots = [];
       let bootsShown = null;
@@ -2065,7 +2065,7 @@
         const b = boots.find((b) => b.serial === e.bootstrap_serial);
         const tip = (lines) => esc(lines.join("\n"));
         // The values the approval carries into the host certificate, or why it will be refused
-        // (ADR-0036 clause 5) — shown before the operator presses Approve.
+        // — shown before the operator presses Approve.
         const values = e.subject_refusal
           ? `<span class="pill red" title="Approving this request is refused, and nothing is signed: ${esc(e.subject_refusal)}. Reject it, and give the host a bootstrap certificate whose subject follows the rules.">subject cannot be carried: ${esc(e.subject_refusal)}</span>`
           : SUBJECT_FIELDS.filter(([field]) => e.bootstrap_subject && e.bootstrap_subject[field])
@@ -2211,7 +2211,7 @@
         const btn = e.target.closest(".enrolment-act");
         if (!btn) return;
         e.preventDefault();
-        // The id is the requested key's fingerprint (ADR-0021 clause 22).
+        // The id is the requested key's fingerprint.
         const fingerprint = btn.dataset.id;
         const approve = btn.dataset.act === "approve";
         const question = approve
@@ -2227,8 +2227,8 @@
         await refreshEnrolments();
       });
 
-      // The ISO 3166-1 alpha-2 codes a bootstrap certificate's country is chosen from (ADR-0036
-      // clause 6), each named in the browser's language where it knows the name.
+      // The ISO 3166-1 alpha-2 codes a bootstrap certificate's country is chosen from, each named
+      // in the browser's language where it knows the name.
       const COUNTRIES = ("AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS "
         + "BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET "
         + "FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO "
@@ -2277,7 +2277,7 @@
           $("boot-error").textContent = body.error || (res ? `HTTP ${res.status}` : "the Server could not be reached");
           return;
         }
-        // The page keeps no password once it is sent (ADR-0029 clause 5).
+        // The page keeps no password once it is sent.
         $("boot-pass").value = "";
         $("boot-pass2").value = "";
         $("boot-result").textContent = `Issued ${body.subject}, serial ${body.serial}: save bootstrap.p12 from its row, now or later.`;
@@ -2338,7 +2338,7 @@
         await refreshEnrolments();
       });
 
-      // Hosts (ADR-0035): the table and, for the current Host, its Agents grouped by their Client
+      // Hosts: the table and, for the current Host, its Agents grouped by their Client
       // Agent. The certificates and the revocation list come from their own routes, so a row shows
       // which of a Host's certificates are still valid, and when each ends.
       let hosts = [];
@@ -2390,7 +2390,7 @@
         const client = a.client ? ` <span class="pill violet">client</span>` : "";
         return `<strong>${esc(hostAgentName(a))}</strong>${client} <span class="sub">${esc(a.service_name)} · ${esc(a.instance_uid)}</span> ${status}`;
       }
-      // Grouped as the Server places the agents (ADR-0035 clause 4): under their client agent, the
+      // Grouped as the Server places the agents: under their client agent, the
       // ones whose client cannot be told apart under the machine they report. Presentation only.
       function renderHostDetail() {
         const h = hosts.find((x) => x.host === currentHost);

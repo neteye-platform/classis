@@ -1,5 +1,5 @@
-//! A downloaded package artifact unpacked for its one program: `.tar.gz`, `.zip` or `.7z`
-//! (ADR-0026). Whatever the archive holds, only the one file this Client chose is written.
+//! A downloaded package artifact unpacked for its one program: `.tar.gz`, `.zip` or `.7z`.
+//! Whatever the archive holds, only the one file this Client chose is written.
 //! Verifies: Q-2
 #![no_main]
 

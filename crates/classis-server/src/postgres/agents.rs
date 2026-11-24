@@ -1,4 +1,4 @@
-//! Agent records in PostgreSQL (ADR-0050 clauses 3 and 8): the PostgreSQL adapter behind
+//! Agent records in PostgreSQL: the PostgreSQL adapter behind
 //! [`AgentStore`](crate::agent_store::AgentStore) — one row per Agent, its scalars as columns, the
 //! wire-typed fields as their protobuf bytes, its labels, and its assignment's Configurations in
 //! rows of their own. A rollout's revisions and assignments commit together or not at all.
@@ -130,8 +130,7 @@ impl AgentStore for PgAgentStore {
         Ok(())
     }
 
-    /// One transaction: the revisions and the records that pin them commit together or not at all
-    /// (ADR-0050 clause 3).
+    /// One transaction: the revisions and the records that pin them commit together or not at all.
     fn release(
         &self,
         revisions: &[Configuration],
@@ -184,7 +183,7 @@ const COLUMNS: &str = "instance_uid, sequence_num, capabilities, transport, last
      deployment, package_agent_type, package_version";
 
 /// A wire-typed field as its protobuf bytes, the encoding whose compatibility rules the Baseline
-/// already governs (clause 8).
+/// already governs.
 fn encode<M: Message>(message: Option<&M>) -> Option<Vec<u8>> {
     message.map(Message::encode_to_vec)
 }
@@ -197,7 +196,7 @@ fn decode<M: Message + Default>(bytes: Option<Vec<u8>>, what: &str) -> Result<Op
         .transpose()
 }
 
-/// Every Agent record. A row that does not decode fails, naming its `instance_uid` (clause 8).
+/// Every Agent record. A row that does not decode fails, naming its `instance_uid`.
 pub(crate) async fn read_all(
     client: &impl GenericClient,
 ) -> Result<HashMap<InstanceUid, PersistedAgent>, String> {
@@ -436,7 +435,6 @@ mod tests {
         assert_eq!(open().0.load().expect("load").len(), 1);
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_agent_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -448,7 +446,6 @@ mod tests {
         });
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_agent_port_contract_holds_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -466,7 +463,7 @@ mod tests {
     }
 
     /// A rollout whose last record cannot be written leaves none of its assignments behind, on
-    /// either store, and what the store answers about pins stays as it was (ADR-0050 clause 3):
+    /// either store, and what the store answers about pins stays as it was:
     /// the records already written are put back, or never committed. `refuse(uid)` makes the
     /// write of that Agent's record fail; `mend` takes that away. Answers the Configurations the
     /// store holds afterwards, which the caller judges: none with PostgreSQL, at most a revision
@@ -509,7 +506,6 @@ mod tests {
         configs.load().expect("load")
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn a_rollout_that_fails_leaves_no_assignment_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -529,7 +525,6 @@ mod tests {
     }
 
     /// With PostgreSQL the revisions and the assignments commit together or not at all.
-    /// Verifies: ADR-0050
     #[test]
     fn a_rollout_that_fails_leaves_neither_revisions_nor_assignments_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -551,8 +546,7 @@ mod tests {
         assert!(left.is_empty(), "no revision: {left:?}");
     }
 
-    /// A row that does not decode fails startup naming its `instance_uid` (clause 8).
-    /// Verifies: ADR-0050
+    /// A row that does not decode fails startup naming its `instance_uid`.
     #[test]
     fn an_agent_row_that_does_not_decode_fails_the_load_naming_it() {
         let Some(test) = TestDatabase::named() else {

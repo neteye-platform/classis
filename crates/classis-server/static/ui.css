@@ -55,7 +55,7 @@
   --overlay: rgba(0, 0, 0, 0.5);
   --sans: "Open Sans", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   --mono: Monaco, Menlo, "Ubuntu Mono", Consolas, ui-monospace, monospace;
-  /* An effective configuration's colours (ADR-0038), from this palette: keys in the link blue,
+  /* An effective configuration's colours, from this palette: keys in the link blue,
      strings green, numbers and booleans amber, comments muted. */
   --shiki-foreground: #c9cacc;
   --shiki-background: #1f2227;
@@ -110,7 +110,7 @@
   --soft-red-bg: #eedada;
   --soft-red-fg: #9f1a16;
   --overlay: rgba(0, 0, 0, 0.35);
-  /* An effective configuration's colours (ADR-0038), the same roles in the light steps. */
+  /* An effective configuration's colours, the same roles in the light steps. */
   --shiki-foreground: #3d3d3d;
   --shiki-background: #ffffff;
   --shiki-token-keyword: #005c95;

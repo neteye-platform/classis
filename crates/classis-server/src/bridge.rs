@@ -1,4 +1,4 @@
-//! A synchronous port over an asynchronous client (ADR-0049 clause 1, ADR-0050): the bridge the S3
+//! A synchronous port over an asynchronous client: the bridge the S3
 //! blob store and the PostgreSQL record store share.
 //!
 //! The ports are synchronous and the clients are not. An adapter owns a small Tokio runtime of its

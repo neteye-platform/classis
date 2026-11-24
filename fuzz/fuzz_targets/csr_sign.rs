@@ -35,7 +35,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(csr) = std::str::from_utf8(data) else {
         return;
     };
-    // The subject values an approval carries (ADR-0036), so the fuzzed request is signed with
+    // The subject values an approval carries, so the fuzzed request is signed with
     // a subject of the shape every host certificate has.
     let subject = classis_server::revocation::SubjectValues {
         organization: "Fuzz Customer".to_string(),

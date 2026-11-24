@@ -20,7 +20,7 @@ query-filters:
   - exclude:
       id: rust/unused-variable
   # Every hit is a test fixture in a `#[cfg(test)]` module inside `src/`. Production secrets are
-  # read from owner-only files (the `*_file` keys) and zeroized (ADR-0057).
+  # read from owner-only files (the `*_file` keys) and zeroized.
   - exclude:
       id: rust/hard-coded-cryptographic-value
   # A name heuristic: it takes values named `uid`, `account` or `certificate` for secrets. What
@@ -28,7 +28,7 @@ query-filters:
   # certificate's path or public PEM; no hit was a secret.
   - exclude:
       id: rust/cleartext-logging
-  # Plaintext is allowed on loopback literals alone, decided and tested in code (ADR-0013). The one
+  # Plaintext is allowed on loopback literals alone, decided and tested in code. The one
   # hit is the test of that rule, whose refused `http://` endpoint flows into the probe.
   - exclude:
       id: rust/non-https-url

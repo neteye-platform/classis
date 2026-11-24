@@ -1,7 +1,7 @@
 //! What the Client persists across restarts — its identity, the last received remote
 //! configuration, and the installed package — on the filesystem: the adapter behind
 //! [`AgentStorage`]. Beside it, [`HighWaterFile`] keeps the high-water marks every Supervisor
-//! shares (ADR-0043).
+//! shares.
 //!
 //! The identity file keeps the `instance_uid` stable across restarts, as the Baseline recommends.
 //! The remote configuration is stored losslessly as the received protobuf, plus one plain file per
@@ -26,14 +26,14 @@ const CONFIG_PB_FILE: &str = "remote-config.pb";
 pub(crate) const CONFIG_DIR: &str = "config";
 const PACKAGE_FILE: &str = "installed-package.json";
 
-/// The role each delivered entry carries (ADR-0023) — `<name> <role>` per line, written into the
+/// The role each delivered entry carries — `<name> <role>` per line, written into the
 /// config directory beside the entries themselves.
 ///
 /// It lives in that directory because that is where a plugin looks, and it is written only when
 /// there is something to say — a fleet that never sets a role never sees this file. The leading
-/// dot is what keeps it from colliding with an entry: a Configuration name follows the ADR-0019
-/// grammar (lowercase letters, digits, `-`) and [`entry_file_name`] strips leading dots, so no
-/// entry file can ever be named this.
+/// dot is what keeps it from colliding with an entry: a Configuration name follows the
+/// instance-name grammar (lowercase letters, digits, `-`) and [`entry_file_name`] strips leading
+/// dots, so no entry file can ever be named this.
 ///
 /// **The value is here because the Baseline says it matters.** `AgentConfigFile.role` is defined as
 /// *"Optional role of the content in the body field. The values and their semantics are Agent
@@ -44,7 +44,7 @@ pub const SUPPLEMENTARY_FILE: &str = ".supplementary";
 
 pub struct Storage {
     dir: PathBuf,
-    /// The process account's group, where a process account is registered (ADR-0059 clause 6): the
+    /// The process account's group, where a process account is registered: the
     /// directory is passed through by it, and what is stored is kept from it.
     group: Option<ProcessAccountGroup>,
     /// Whether `config/` is read by the Managed Process, and so shared with the process account's
@@ -55,7 +55,7 @@ pub struct Storage {
 impl Storage {
     /// The storage in `dir`, kept to the Client alone, as where no process account is registered:
     /// created owner-only where it is missing. A link at `dir` is refused: an install writes here
-    /// as root, and the directory belongs to the service's account (ADR-0054).
+    /// as root, and the directory belongs to the service's account.
     ///
     /// # Errors
     /// Returns an error when the directory cannot be created, or is a link.
@@ -68,7 +68,7 @@ impl Storage {
     /// passed through by that account's group — is kept so, with the group it has, and anything
     /// else is narrowed to the Client alone as [`Storage::new`] does. A running Client's Managed
     /// Processes keep reaching their directories while `service config` enrols, and the next
-    /// start lays the directory out as its registration says either way (ADR-0059 clause 6).
+    /// start lays the directory out as its registration says either way.
     pub fn enrolling(dir: PathBuf) -> io::Result<Self> {
         #[cfg(unix)]
         {
@@ -83,15 +83,13 @@ impl Storage {
     }
 
     /// The Client's own storage in the state directory: passed through by the process account's
-    /// group on the way to the Supervisors' directories, and nothing in it shared (ADR-0059
-    /// clause 6).
+    /// group on the way to the Supervisors' directories, and nothing in it shared.
     pub fn client(dir: PathBuf, group: Option<ProcessAccountGroup>) -> io::Result<Self> {
         Storage::open(dir, group, false)
     }
 
     /// A Supervisor's storage in its own directory: passed through by the process account's
-    /// group, with `config/` read by its Managed Process and the rest kept from it (ADR-0059
-    /// clause 6).
+    /// group, with `config/` read by its Managed Process and the rest kept from it.
     pub fn supervised(dir: PathBuf, group: Option<ProcessAccountGroup>) -> io::Result<Self> {
         Storage::open(dir, group, true)
     }
@@ -140,7 +138,7 @@ impl Storage {
         self.group.filter(|_| self.config_shared)
     }
 
-    /// Writes one of the Client's own records, never through a link (ADR-0054). In a directory the
+    /// Writes one of the Client's own records, never through a link. In a directory the
     /// process account's group passes through it is kept from that group, `0600`; elsewhere it is
     /// `0644`.
     fn write_record(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -152,14 +150,14 @@ impl Storage {
     }
 
     /// Where [`store_remote_config`](Self::store_remote_config) writes the plain entry files —
-    /// what a Managed Process is pointed at (ADR-0017).
+    /// what a Managed Process is pointed at.
     #[must_use]
     pub fn config_dir(&self) -> PathBuf {
         self.dir.join(CONFIG_DIR)
     }
 
     /// Takes a stored remote configuration out of force for a Supervisor whose remote
-    /// configuration is switched off (ADR-0017 clause 52): each entry file, and `.supplementary`,
+    /// configuration is switched off: each entry file, and `.supplementary`,
     /// whose bytes are still the ones the stored map would write is deleted, every other file in
     /// `config/` stays, and `remote-config.pb` goes. A `.pb` that does not decode is deleted and
     /// `config/` is left alone. `None` when nothing was stored.
@@ -197,8 +195,8 @@ impl Storage {
 }
 
 impl Storage {
-    /// Takes the Client's own stored Supervisor set out of the way on a host that keeps its set
-    /// (ADR-0017 clause 44): `remote-config.pb` goes **first**, so nothing that fails after it can
+    /// Takes the Client's own stored Supervisor set out of the way on a host that keeps its set:
+    /// `remote-config.pb` goes **first**, so nothing that fails after it can
     /// leave a hash to report, and then each entry copy in `config/` whose bytes are still the
     /// stored ones goes as far as it can. Nothing runs on the copies, so one that cannot be read
     /// or deleted is named in the result, not an error. A `.pb` that does not decode is deleted
@@ -240,7 +238,7 @@ impl Storage {
     }
 }
 
-/// What [`Storage::drop_stored_set`] found and did (ADR-0017 clause 44).
+/// What [`Storage::drop_stored_set`] found and did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DroppedStoredSet {
     /// `remote-config.pb` is gone, and so is every entry copy still as stored; `kept` names the
@@ -255,7 +253,7 @@ pub enum DroppedStoredSet {
     Undecodable,
 }
 
-/// What [`Storage::drop_remote_config`] found and did (ADR-0017 clause 52).
+/// What [`Storage::drop_remote_config`] found and did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DroppedRemoteConfig {
     /// The stored configuration and the files it wrote are gone; `kept` names the files
@@ -324,10 +322,10 @@ impl AgentStorage for Storage {
 
     /// Stores a received remote configuration: the protobuf for lossless restart, and each
     /// config-map entry as a plain file under `config/`. Entry files from a previous offer are
-    /// removed first — the composed entry set changes over time (ADR-0023), and a stale file
+    /// removed first — the composed entry set changes over time, and a stale file
     /// would otherwise still be handed to the Managed Process.
     ///
-    /// Every entry is written, whatever its role. An entry that carries one (ADR-0023) is content
+    /// Every entry is written, whatever its role. An entry that carries one is content
     /// the process reads *by path* rather than being configured with, so it lands in the same
     /// directory under the same name — that is what makes a `${file:...}` reference resolve — and
     /// its name is recorded in [`SUPPLEMENTARY_FILE`] for the plugin to leave out of what it
@@ -338,8 +336,7 @@ impl AgentStorage for Storage {
         // The protobuf and the entry files can carry secret material (a roled `${file:...}` entry
         // that is a certificate or key), so both the config directory and the files are owner-only.
         // Where a process account is registered, a Supervisor's `config/` is what its Managed
-        // Process reads: shared with the process account's group to read, never to write (ADR-0059
-        // clause 6).
+        // Process reads: shared with the process account's group to read, never to write.
         let config_dir = self.dir.join(CONFIG_DIR);
         create_shared_dir(&self.dir, &config_dir, self.config_group(), Shared::Read)?;
         for entry in std::fs::read_dir(&config_dir)? {
@@ -352,12 +349,11 @@ impl AgentStorage for Storage {
             write_shared(&config_dir.join(file_name), &body, self.config_group())?;
         }
         // Last: a store cut short leaves the previous `.pb`, never a new one beside the previous
-        // offer's files, which `drop_remote_config` would keep as the operator's (ADR-0017
-        // clause 32).
+        // offer's files, which `drop_remote_config` would keep as the operator's.
         write_private(&self.dir.join(CONFIG_PB_FILE), &config.encode_to_vec())
     }
 
-    /// The installed package (ADR-0026), if one survived a previous run.
+    /// The installed package, if one survived a previous run.
     fn load_package(&self) -> Option<InstalledPackage> {
         let bytes = crate::nofollow::read(&self.dir.join(PACKAGE_FILE)).ok()?;
         match serde_json::from_slice(&bytes) {
@@ -389,7 +385,7 @@ impl AgentStorage for Storage {
 /// order — the Collector's own merge semantics are order-dependent.
 ///
 /// Everything written by [`Storage::store_remote_config`] except the entries that carry a role
-/// (ADR-0023) and the bookkeeping that names them. Those files are deliberately still *there*:
+/// and the bookkeeping that names them. Those files are deliberately still *there*:
 /// supplementary content is read by path, so leaving it out of this list is the whole of what the
 /// role changes.
 ///
@@ -427,7 +423,7 @@ pub fn config_entries(config_dir: &std::path::Path) -> Vec<PathBuf> {
     files
 }
 
-/// What role each delivered entry carries, by entry file name (ADR-0023).
+/// What role each delivered entry carries, by entry file name.
 ///
 /// A line an older Client wrote carries no role, only a name; it reads back as an empty value —
 /// "this entry carries *a* role", which is all that version ever recorded and all that the
@@ -451,11 +447,12 @@ pub fn entry_roles(config_dir: &std::path::Path) -> BTreeMap<String, String> {
 /// Create `dir` (and its parents) and, on Unix, narrow it to `0700`.
 ///
 /// The state directory holds the Agent's identity and the Server-pushed configuration, and a
-/// config-map entry read by path (`${file:...}`) can be a certificate or a key (ADR-0023). At the
+/// config-map entry read by path (`${file:...}`) can be a certificate or a key. At the
 /// umask default the directory is world-listable, so on a multi-user host another local user could
 /// read that material; owner-only closes it. Where no process account is registered the Managed
 /// Process runs as this same user, so it still reads its own config; where one is, what it reads
-/// is shared with its group instead ([`create_shared_dir`]). On Windows the `%ProgramData%` ACL is what protects it (ADR-0019).
+/// is shared with its group instead ([`create_shared_dir`]). On Windows the `%ProgramData%` ACL is
+/// what protects it.
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -468,8 +465,7 @@ pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
 
 pub use crate::supervisor::ports::ProcessAccountGroup;
 
-/// How a directory the Client creates is shared with the process account's group (ADR-0059
-/// clause 6).
+/// How a directory the Client creates is shared with the process account's group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Shared {
     /// Passed through on the way to what is shared, never listed: `0710`. The state directory, the
@@ -494,16 +490,16 @@ impl Shared {
 }
 
 /// Create `dir` (and its parents) shared with `group` as `shared` says: owned by the group, at the
-/// mode of ADR-0059 clause 6. Where no process account is registered it is made as before: a
+/// group-shared mode. Where no process account is registered it is made as before: a
 /// kind's data directory ([`Shared::Written`]) by [`create_private_dir`], one of the Client's own
-/// directories owner-only and never through a link at its name (ADR-0054).
+/// directories owner-only and never through a link at its name.
 ///
 /// `dir` is `root` or beneath it, and `root` is a directory of the Client's that the process
 /// account writes neither in nor above: the state directory, the Supervisors' root, a
 /// Supervisor's directory. Every component beneath `root` is opened through the handle of the one
 /// before it and none through a link, whoever owns it, so a link the process account placed in a
-/// directory it writes cannot turn the Client's change on something else of its own (ADR-0059
-/// clause 6); on the way to `root` only the links of root's and of the Client's own account are
+/// directory it writes cannot turn the Client's change on something else of its own; on the way to
+/// `root` only the links of root's and of the Client's own account are
 /// followed, in a directory nobody else may write ([`handle::open_beneath`]). The group and the
 /// mode are changed through the directory's own handle. A parent this creates is passed through,
 /// `0710`, so the directory is reached; each parent that must be more is named by its own call.
@@ -555,10 +551,10 @@ pub(crate) fn create_shared_dir(
     Ok(())
 }
 
-/// The ACEs that grant the process account `sid` what `shared` says, on Windows (ADR-0059
-/// clause 6): for the directory itself, for a directory and for a file already in it. `None` for
+/// The ACEs that grant the process account `sid` what `shared` says, on Windows: for the directory
+/// itself, for a directory and for a file already in it. `None` for
 /// `Traversed`: the process account passes through a directory of the Client's by the
-/// `SeChangeNotifyPrivilege` the second service keeps (ADR-0059 clause 2), and is granted nothing
+/// `SeChangeNotifyPrivilege` the second service keeps, and is granted nothing
 /// there, so it lists nothing and reads nothing of the Client's own.
 ///
 /// `Read` is read and execute, inherited by everything in the directory. `Written` is modify on
@@ -589,7 +585,7 @@ pub(crate) fn grant_aces(sid: &str, shared: Shared) -> Option<[Vec<String>; 3]> 
 }
 
 /// Creates `dir` beneath `root` where it is missing and grants the process account `group` — its
-/// SID, on Windows — what `shared` says of it (ADR-0059 clause 6). Every component from `root` to
+/// SID, on Windows — what `shared` says of it. Every component from `root` to
 /// `dir` is opened as itself and held while the next is opened, none a link
 /// ([`crate::win32::files::open_beneath`]), and the DACL is set on the handle of `dir`. What is
 /// already in it is granted the same where `dir` was not granted it yet — a directory a Managed
@@ -634,7 +630,7 @@ fn grant(root: &Path, dir: &Path, group: ProcessAccountGroup, shared: Shared) ->
 }
 
 /// Directories reached through handles, never through a link: what the Client changes where the
-/// process account may write (ADR-0059 clauses 5, 6 and 10).
+/// process account may write.
 #[cfg(unix)]
 pub(crate) mod handle {
     use std::ffi::{CStr, CString, OsStr};
@@ -655,14 +651,14 @@ pub(crate) mod handle {
     /// right to read it, only to search it. Every walk opens each directory it passes this way:
     /// [`open_beneath`] each component before the last, and [`step_trusting`] each on the way to
     /// a root, from `/` on. So the Client passes through what it may only search, and the second
-    /// service, as the process account, through a Supervisor's directory (`0710`, ADR-0059
-    /// clause 6) to what it purges. On Linux a path-only handle.
+    /// service, as the process account, through a Supervisor's directory (`0710`) to what it
+    /// purges. On Linux a path-only handle.
     #[cfg(target_os = "linux")]
     pub(crate) const SEARCH: libc::c_int =
         libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     /// On macOS `O_SEARCH` (`O_EXEC | O_DIRECTORY`), which XNU authorizes as a search of the
     /// directory and not as a read (`vn_authorize_open_existing`). macOS has it from macOS 13 on,
-    /// the oldest macOS a Client runs on (ADR-0059 clause 9); an older kernel would open for
+    /// the oldest macOS a Client runs on; an older kernel would open for
     /// reading (`FFLAGS`), and a walk through a directory it may only search would fail there
     /// rather than reach further.
     #[cfg(target_os = "macos")]
@@ -1071,7 +1067,7 @@ pub(crate) mod handle {
 
     /// Gives every directory and regular file under `dir` to `group`, each at the mode it has
     /// without the group's and others' write bits: what an unpacked package holds, read and run
-    /// by the process account through its group (ADR-0059 clauses 6 and 11). A link, which no
+    /// by the process account through its group. A link, which no
     /// unpacked tree holds, and a file with a second hard link are left as they are.
     ///
     /// # Errors
@@ -1108,7 +1104,7 @@ pub(crate) mod handle {
 
     /// The directories beneath `dir` that this account — the Client — owns and lets its group
     /// write, its data directories: the outermost of each branch, by their paths relative to
-    /// `dir`. Where alone the process account can have written beneath `dir` (ADR-0059 clause 6).
+    /// `dir`. Where alone the process account can have written beneath `dir`.
     /// Walked through handles from `dir`, its own root ([`open_beneath`]), through the Client's
     /// own directories alone and never through a link; one it cannot read is passed over.
     ///
@@ -1202,7 +1198,7 @@ pub(crate) mod handle {
 /// Makes the regular file at `path` readable by `group` and no wider: `0640`, owned by the group.
 ///
 /// A file with a second hard link is left as it is and named in a warning, as the hand-over leaves
-/// one (ADR-0059 clause 10): its other name may be one of the Client's own records — a link to
+/// one: its other name may be one of the Client's own records — a link to
 /// `client-key.pem` placed while the Managed Process still ran as the Client — and sharing it would
 /// share that record too.
 #[cfg(unix)]
@@ -1227,7 +1223,7 @@ fn share_file(path: &Path, group: ProcessAccountGroup) -> io::Result<()> {
     file.set_permissions(std::fs::Permissions::from_mode(0o640))
 }
 
-/// Write `contents` to `path` readable by `group`: `0640`, owned by the group (ADR-0059 clause 6).
+/// Write `contents` to `path` readable by `group`: `0640`, owned by the group.
 /// Written owner-only as [`write_private`] writes it, never through a link, and only then given to
 /// the group. Where no process account is registered it is [`write_private`].
 pub(crate) fn write_shared(
@@ -1250,8 +1246,7 @@ pub(crate) fn write_shared(
 /// beside the `0700` directory: the file is created at that mode, so the bytes are never briefly
 /// world-readable, and it replaces a file of any mode whole. Written through a temporary name and a
 /// rename in the directory, never through a link at `path` or at its directory's name: an install
-/// writes the state directory as root, and the directory belongs to the service's account
-/// (ADR-0054).
+/// writes the state directory as root, and the directory belongs to the service's account.
 pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     crate::nofollow::write(path, contents, 0o600)
 }
@@ -1319,18 +1314,18 @@ fn entry_file_name(name: &str) -> String {
     }
 }
 
-/// The file under `state_dir` that holds the high-water marks (ADR-0043 clause 8). It sits outside
+/// The file under `state_dir` that holds the high-water marks. It sits outside
 /// `supervisor_dir`, and its name holds a `.`, which no Supervisor name can: no purge of a
 /// Supervisor's directory deletes it, even where `supervisor_dir` is `state_dir` itself.
 pub const HIGH_WATER_FILE: &str = "package-high-water.json";
 
-/// The high-water marks on the filesystem (ADR-0043 clause 8): `<state_dir>/package-high-water.json`,
+/// The high-water marks on the filesystem: `<state_dir>/package-high-water.json`,
 /// a JSON object mapping an Agent type to the highest version this Client installed for it,
 /// written owner-only through a temporary file and a rename.
 ///
 /// Read once, when the Client starts. A file that exists but does not parse, or that maps a type to
 /// a value that is not SemVer, is never read as empty: every mark then answers the reason, which
-/// refuses every Supervisor package until the operator repairs or deletes the file (clause 11).
+/// refuses every Supervisor package until the operator repairs or deletes the file.
 pub struct HighWaterFile {
     path: PathBuf,
     marks: std::sync::Mutex<Result<BTreeMap<String, String>, String>>,
@@ -1426,7 +1421,6 @@ mod windows_grants {
     /// On Windows a shared directory is reached through no junction: one on the way from the root
     /// is refused, and a data directory is granted to the process account — `LocalService`
     /// standing in — modify for what it holds and everything of it but `DELETE` on itself.
-    /// Verifies: ADR-0059
     #[cfg(windows)]
     #[test]
     fn on_windows_a_share_is_made_through_no_junction() {
@@ -1463,11 +1457,10 @@ mod windows_grants {
         assert!(dacl.holds("(A;OICIIO;0x1301bf;;;S-1-5-19)"), "{dacl:?}");
     }
 
-    /// On Windows the split of ADR-0059 clause 6 is made by ACL grants to the process account's
+    /// On Windows the split is made by ACL grants to the process account's
     /// SID: `program/`, the preflight's staging and `config/` read and executed, a kind's data
     /// directory modified beneath it but not removed itself, each inherited by what is in them,
     /// and the directories passed through granted nothing.
-    /// Verifies: ADR-0059
     #[test]
     fn the_process_account_is_granted_what_it_reads_and_writes_and_nothing_else() {
         let sid = "S-1-5-80-1-2-3-4-5";
@@ -1532,7 +1525,7 @@ mod tests {
     }
 
     /// The state directory holds the identity and the Server-pushed configuration — which can carry
-    /// secret material by path (ADR-0023) — so the directories are owner-only and the secret-bearing
+    /// secret material by path — so the directories are owner-only and the secret-bearing
     /// files are `0600`, whatever the process umask.
     #[cfg(unix)]
     #[test]
@@ -1588,7 +1581,6 @@ mod tests {
     /// directory are passed through, `0710`; a Supervisor's `config/` and its entries are read,
     /// `0750` and `0640`; a data directory is written, `2770`. The Client's own `config/`, the
     /// stored protobuf, the identity and the package record stay the Client's, `0700` and `0600`.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn with_a_process_account_its_group_reads_only_what_it_runs_on() {
@@ -1646,7 +1638,6 @@ mod tests {
     /// What `config/` held before a process account was registered is shared when the
     /// Supervisor's storage opens, so its Managed Process reads it before the next configuration
     /// arrives; a link there is left alone.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn what_config_held_before_is_shared_when_the_storage_opens() {
@@ -1671,8 +1662,7 @@ mod tests {
 
     /// A link in a directory the process account writes is never followed on the way to a
     /// directory the Client shares: the link is refused, and what it names is neither created nor
-    /// changed (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// changed.
     #[cfg(unix)]
     #[test]
     fn a_link_on_the_way_to_a_shared_directory_is_not_followed() {
@@ -1724,9 +1714,7 @@ mod tests {
     /// link of the process account's to the Client's records shares nothing of them. Run as root,
     /// every link here is root's; run as anyone else, the account's own. A link of the Client's
     /// own account on the way to the Supervisor's directory, in a directory only that account
-    /// writes, is followed, and a directory that is not beneath it by plain names is refused
-    /// (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// writes, is followed, and a directory that is not beneath it by plain names is refused.
     #[cfg(unix)]
     #[test]
     fn no_link_beneath_the_root_is_followed_whoever_owns_it() {
@@ -1795,9 +1783,7 @@ mod tests {
 
     /// A link on the way to a root is trusted only where root or the Client's own account owns it
     /// and the directory it is in, and nobody else may write that directory: one another account
-    /// placed, or one in a directory its group or anybody may write — `/tmp` among them — is not
-    /// (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// placed, or one in a directory its group or anybody may write — `/tmp` among them — is not.
     #[cfg(unix)]
     #[test]
     fn a_link_above_a_root_is_followed_only_where_it_is_trusted() {
@@ -1826,8 +1812,7 @@ mod tests {
 
     /// Every entry the Client keeps in its state directory under a name a Supervisor could carry
     /// is one the configuration refuses as a Supervisor's name there: the core's list is the
-    /// adapters' constants (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// adapters' constants.
     #[test]
     fn every_entry_of_the_clients_a_supervisor_could_be_named_after_is_listed() {
         let listed: Vec<&str> = crate::config::CLIENT_ENTRIES
@@ -1857,9 +1842,7 @@ mod tests {
     }
 
     /// A root reached through the system's own link — `/var/run` → `/run` on Linux, `/var` →
-    /// `private/var` on macOS — is reached: the link is root's, in a directory only root writes
-    /// (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// `private/var` on macOS — is reached: the link is root's, in a directory only root writes.
     #[cfg(unix)]
     #[test]
     fn a_root_reached_through_a_link_of_the_systems_is_reached() {
@@ -1880,8 +1863,7 @@ mod tests {
 
     /// What a purge names to the second service is where alone the process account can have
     /// written: the outermost directories the Client shares for writing, found through the
-    /// Client's own directories and through no link (ADR-0059 clauses 5 and 6).
-    /// Verifies: ADR-0059
+    /// Client's own directories and through no link.
     #[cfg(unix)]
     #[test]
     fn the_directories_shared_for_writing_are_found_through_no_link() {
@@ -1913,7 +1895,6 @@ mod tests {
 
     /// A parent the Client creates on the way to a shared directory is passed through by the
     /// process account's group, `0710`, and no wider.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn a_parent_made_on_the_way_is_passed_through_and_no_more() {
@@ -1938,7 +1919,6 @@ mod tests {
     /// owns in it to the process account's group, writable by it, once it is first shared: the
     /// Managed Process goes on writing its own state. A link is not followed, and a file with a
     /// second hard link is left as it is.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn a_data_directory_written_before_is_given_to_the_group_once_shared() {
@@ -1973,8 +1953,7 @@ mod tests {
 
     /// An enrolment keeps a state directory a Client with a process account laid out as it is —
     /// `0710`, in the process account's group — and writes its records `0600`; any other state
-    /// directory it narrows to the Client alone, as before (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// directory it narrows to the Client alone, as before.
     #[cfg(unix)]
     #[test]
     fn an_enrolment_keeps_a_shared_state_directory_shared() {
@@ -1998,7 +1977,6 @@ mod tests {
     /// A hard link in `config/` to one of the Client's records — placed while the Managed Process
     /// still ran as the Client — is not shared when the storage opens: the record behind it stays
     /// `0600`, and the Client's alone.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn a_hard_link_in_config_to_a_private_file_is_not_shared() {
@@ -2028,7 +2006,6 @@ mod tests {
     /// Without a process account every mode is what it was before there was one: directories
     /// `0700`, the stored configuration `0600`, and the identity and the package record at the
     /// umask, as a plain write leaves them.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn without_a_process_account_every_mode_stays_as_it_was() {
@@ -2086,7 +2063,7 @@ mod tests {
 
     #[test]
     fn a_new_offer_replaces_the_previous_entry_files() {
-        // The composed entry set changes over time (ADR-0023); an entry dropped upstream must
+        // The composed entry set changes over time; an entry dropped upstream must
         // not survive on disk, where it would still be handed to the Managed Process.
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = Storage::new(dir.path().to_path_buf()).expect("storage");
@@ -2169,7 +2146,6 @@ mod tests {
     /// Every entry is written through a temporary name and a rename, and that name is never one an
     /// entry is stored under: an entry named like another's temporary file stays on disk in
     /// whichever order the map yields the two.
-    /// Verifies: ADR-0017, ADR-0054
     #[test]
     fn no_entry_is_lost_to_another_entrys_temporary_name() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2188,7 +2164,6 @@ mod tests {
 
     /// An entry replaced by a rename is a new file: it belongs to the account the Client runs as,
     /// and it is owner-only like the one it replaces, whatever mode that one was left at.
-    /// Verifies: ADR-0017, ADR-0054
     #[cfg(unix)]
     #[test]
     fn a_replaced_entry_is_the_runtimes_own_and_owner_only() {
@@ -2211,10 +2186,9 @@ mod tests {
         assert_eq!(meta.gid(), gid);
     }
 
-    /// ADR-0023: a roled entry is written like any other — it has to be on disk for a
+    /// A roled entry is written like any other — it has to be on disk for a
     /// `${file:...}` reference to resolve — but it is not among the files the process is
     /// configured with.
-    // Verifies: ADR-0023
     #[test]
     fn a_roled_entry_is_written_but_not_offered_as_configuration() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2235,7 +2209,7 @@ mod tests {
         assert_eq!(entry_names(&config_dir), vec!["base"]);
     }
 
-    /// Any other value is handled like `supplementary` and never guessed at (ADR-0023).
+    /// Any other value is handled like `supplementary` and never guessed at.
     #[test]
     fn an_unknown_role_is_treated_like_supplementary() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2326,7 +2300,7 @@ mod tests {
     }
 
     /// A state directory with no bookkeeping file holds configuration alone, so everything in it
-    /// reads as configuration (ADR-0023).
+    /// reads as configuration.
     #[test]
     fn entries_without_bookkeeping_are_all_configuration() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2349,8 +2323,7 @@ mod tests {
     /// A configuration means the same on every host, so an entry name Windows cannot hold as a
     /// file — a device name, with or without an extension, or a name ending in a dot — is refused
     /// on every host, and the previous offer's files stay as they were. The refusal is what the
-    /// Agent reports `FAILED` with (ADR-0017 clause 7).
-    /// Verifies: ADR-0017
+    /// Agent reports `FAILED` with.
     #[test]
     fn an_entry_name_windows_cannot_hold_is_refused_on_every_host() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2379,7 +2352,6 @@ mod tests {
     /// Two entries that would land in one file — equal once mapped, or equal to a case-insensitive
     /// file system — are refused rather than one silently overwriting the other in an order the map
     /// decides.
-    /// Verifies: ADR-0017
     #[test]
     fn entries_that_would_share_a_file_are_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2417,10 +2389,9 @@ mod tests {
 
     /// A store cut short leaves the previous `remote-config.pb`, never a new one beside the
     /// previous offer's files: the drop then still reads the previous map and deletes what it
-    /// wrote instead of keeping it as the operator's (ADR-0017 clause 52). The store is stopped
+    /// wrote instead of keeping it as the operator's. The store is stopped
     /// by a directory standing where the next offer's entry file goes — `create_private_dir`
     /// resets the mode of `config/`, so a failed removal cannot be staged from here.
-    /// Verifies: ADR-0017
     #[test]
     fn a_store_cut_short_leaves_no_previous_entry_file_beside_a_new_pb() {
         let dir = tempfile::tempdir().expect("tempdir");

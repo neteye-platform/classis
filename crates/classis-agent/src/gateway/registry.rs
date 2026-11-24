@@ -1,6 +1,6 @@
-//! Where a `ServerToAgent` goes on its way down (ADR-0039 clause 5).
+//! Where a `ServerToAgent` goes on its way down.
 //!
-//! The Gateway routes by `instance_uid`, for the host it is bound to (ADR-0039 clause 5). Upward
+//! The Gateway routes by `instance_uid`, for the host it is bound to. Upward
 //! that needs no lookup — a report leaves on its own Agent's connection, once its `instance_uid`
 //! is bound to the host that sent it. Downward it does: the pool's reader tasks see replies for
 //! every Agent the Gateway carries, and each has to reach the downstream connection that Agent is
@@ -27,7 +27,7 @@ use crate::gateway::policy::End;
 struct Route {
     downstream: Downstream,
     /// The host the downstream connection's certificate names (`urn:classis:host:<id>`), the
-    /// one an offer relayed over it is recorded for (ADR-0026 clause 45).
+    /// one an offer relayed over it is recorded for.
     host: Option<String>,
 }
 
@@ -47,7 +47,7 @@ pub struct Registry {
     routes: Mutex<HashMap<InstanceUid, Route>>,
     /// The number the next plain-HTTP exchange is registered under.
     exchanges: AtomicU64,
-    /// What sees every offer on its way down (ADR-0026 clause 42).
+    /// What sees every offer on its way down.
     cache: Arc<PackageCache>,
 }
 
@@ -68,7 +68,7 @@ impl Registry {
     /// Ends the bindings of every host whose kept certificate end has passed by `now`, or, when
     /// `revoked` is given, whose certificate it says the revocation list names, and removes their routes under the
     /// same lock a bind takes, so no report binds an ended `instance_uid` anew before its old route
-    /// is gone (ADR-0058 clause 4). Returns what [`PackageCache::end_certificates`] does.
+    /// is gone. Returns what [`PackageCache::end_certificates`] does.
     pub fn end_certificates(
         &self,
         now: i64,
@@ -83,7 +83,7 @@ impl Registry {
     }
 
     /// Binds `uid` to `speaker` on its first report and, once the store holds what the binding
-    /// relies on (ADR-0058 clause 3), inserts the route `route` builds — only when `uid` is then
+    /// relies on, inserts the route `route` builds — only when `uid` is then
     /// bound to `speaker`. Beside it, the `instance_uid`s whose bindings made room.
     async fn bind_and_route(
         &self,
@@ -92,7 +92,7 @@ impl Registry {
         end: &End,
         route: impl FnOnce() -> Route,
     ) -> (bool, Vec<InstanceUid>) {
-        // A report binds its `instance_uid` to its host, the first one only (ADR-0039 clause 6);
+        // A report binds its `instance_uid` to its host, the first one only;
         // an `instance_uid` with a route here is never the binding that makes room. A report that
         // relies on its host's end while another report's move of it is written asks again once
         // that write is settled, a few times at most.
@@ -129,7 +129,7 @@ impl Registry {
 
     /// A WebSocket peer whose certificate speaks as `speaker`, and ends at `end`, claims an Agent,
     /// and gets it only when the Agent's `instance_uid` is bound to `speaker`: then the route is
-    /// its, and `false` leaves the route where it was (ADR-0039 clause 5). Claiming again from the
+    /// its, and `false` leaves the route where it was. Claiming again from the
     /// same host replaces the route: an Agent that reconnects through a second socket is reachable
     /// on the new one. Beside it, the `instance_uid`s whose bindings made room for this one, whose
     /// places upstream the caller releases.
@@ -149,8 +149,7 @@ impl Registry {
     }
 
     /// A plain-HTTP peer whose certificate speaks as `speaker`, and ends at `end`, waits for
-    /// exactly one reply for this Agent, when the Agent's `instance_uid` is bound to `speaker`
-    /// (ADR-0039 clause 5).
+    /// exactly one reply for this Agent, when the Agent's `instance_uid` is bound to `speaker`.
     /// Returns the number that [`Registry::abandon`] takes once the exchange ends without one, and
     /// `None` for an `instance_uid` that is not the host's; beside it, as [`Registry::attach`]
     /// does, the `instance_uid`s whose bindings made room.
@@ -173,7 +172,7 @@ impl Registry {
     }
 
     /// An enrolling peer's plain-HTTP exchange waits for exactly one reply for `uid`, binding
-    /// nothing (ADR-0039 clause 5): its exchange is its route for that reply alone. `None` — the
+    /// nothing: its exchange is its route for that reply alone. `None` — the
     /// report is not forwarded — for an `instance_uid` bound to a host or routed already, so an
     /// enrolling peer never takes another Agent's replies.
     pub fn expect_enrolment(
@@ -217,7 +216,7 @@ impl Registry {
     /// connection has claimed since.
     ///
     /// Nothing is sent upstream about it: a downstream Client that vanished said no goodbye, and
-    /// this Gateway does not say one for it (ADR-0015 clause 10).
+    /// this Gateway does not say one for it.
     pub fn detach_all(
         &self,
         uids: impl IntoIterator<Item = InstanceUid>,
@@ -235,8 +234,8 @@ impl Registry {
     }
 
     /// Hands one reply to whoever is waiting for that Agent, once the package cache has seen what
-    /// it offers — so an artifact the Agent asks for next is already recorded as offered to its host
-    /// (ADR-0026 clauses 42, 45).
+    /// it offers — so an artifact the Agent asks for next is already recorded as offered to its
+    /// host.
     pub async fn deliver(&self, uid: InstanceUid, reply: ServerToAgent) {
         // Taken out under the lock, awaited outside it: a slow downstream peer must not hold the
         // routing table while every other Agent's replies queue behind it.

@@ -1,4 +1,4 @@
-//! The listener an OpAMP endpoint is served on (ADR-0010): the bound on connection setup, the
+//! The listener an OpAMP endpoint is served on: the bound on connection setup, the
 //! client-certificate rules, and what the handshake carries into a request.
 
 use std::net::SocketAddr;
@@ -106,7 +106,6 @@ async fn get_text(client: &reqwest::Client, port: u16) -> reqwest::Result<String
 
 /// A peer that sends a request line and then falls silent is hung up on, rather than holding the
 /// connection for as long as it likes.
-/// Verifies: ADR-0010, ADR-0013
 #[tokio::test]
 async fn a_connection_that_never_finishes_its_headers_is_hung_up_on() {
     let bound = Duration::from_secs(1);
@@ -142,7 +141,6 @@ async fn a_plain_listener_carries_the_peer_and_no_certificate() {
 
 /// With an optional client certificate the handshake succeeds either way, and the request says
 /// whether a verified certificate came with it — so the application can require one per route.
-/// Verifies: ADR-0010
 #[tokio::test]
 async fn an_optional_client_certificate_is_carried_into_the_request() {
     let pki = Pki::new();
@@ -164,7 +162,6 @@ async fn an_optional_client_certificate_is_carried_into_the_request() {
 
 /// With a required client certificate, a peer without one never gets past the handshake, and one
 /// from another CA neither.
-/// Verifies: ADR-0010
 #[tokio::test]
 async fn a_required_client_certificate_refuses_the_handshake_without_one() {
     let pki = Pki::new();
@@ -203,7 +200,7 @@ fn unusable_material_names_the_part() {
 /// A client that offers TLS 1.2 alone never completes the handshake: the listener speaks TLS 1.3
 /// and nothing older. The client is built from the full ring provider, which still has its TLS 1.2
 /// suites, so the refusal is the listener's.
-/// Verifies: ADR-0010, ADR-0013, ADR-0015, Q-3
+/// Verifies: Q-3
 #[tokio::test]
 async fn a_client_offering_only_tls_1_2_is_refused() {
     let pki = Pki::new();
@@ -239,7 +236,6 @@ async fn a_client_offering_only_tls_1_2_is_refused() {
 
 /// A listener at its cap closes the next connection on accept, keeps the ones it holds, and takes
 /// a new one once a held one has gone.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn connections_past_the_cap_are_refused_while_established_ones_keep_working() {
     opamp::tls::install_ring_provider();
@@ -289,7 +285,7 @@ async fn connections_past_the_cap_are_refused_while_established_ones_keep_workin
 
 /// A listener without TLS on an address other than the loopback literals is refused before it
 /// accepts anything: plaintext is for the loopback alone.
-/// Verifies: ADR-0013, Q-1
+/// Verifies: Q-1
 #[tokio::test]
 async fn a_plaintext_listener_off_the_loopback_is_refused() {
     let listener = std::net::TcpListener::bind("0.0.0.0:0").expect("bind");
@@ -396,7 +392,6 @@ async fn status_of(socket: &mut TcpStream) -> String {
 }
 
 /// A body announced in the headers and never sent is answered `408`, not waited for.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn a_body_that_never_arrives_is_answered_408() {
     let port = spawn_paced();
@@ -405,7 +400,6 @@ async fn a_body_that_never_arrives_is_answered_408() {
 }
 
 /// A body that keeps arriving, but below the floor, is answered `408` the same way.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn a_body_that_trickles_is_answered_408() {
     let port = spawn_paced();
@@ -426,7 +420,6 @@ async fn a_body_that_trickles_is_answered_408() {
 }
 
 /// A slow body that keeps above the floor is taken whole, however many windows it spans.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn a_slow_body_above_the_floor_is_taken_whole() {
     let port = spawn_paced();
@@ -480,7 +473,6 @@ async fn close_code(socket: &mut TcpStream, within: Duration) -> Option<u16> {
 
 /// A WebSocket message that has begun and trickles below the floor closes its connection with
 /// `1008`.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn a_websocket_message_that_trickles_closes_with_1008() {
     let port = spawn_paced();
@@ -512,7 +504,6 @@ async fn a_websocket_message_that_trickles_closes_with_1008() {
 }
 
 /// A WebSocket with nothing in flight is left open, however many windows pass.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn an_idle_websocket_stays_open() {
     let port = spawn_paced();
@@ -529,7 +520,6 @@ fn full_ping() -> Vec<u8> {
 
 /// A message whose fragments are interleaved with Pings, which RFC 6455 allows, is judged by its
 /// data alone: the Pings are no progress on it, and it closes its connection with `1008`.
-/// Verifies: ADR-0013, ADR-0010
 #[tokio::test]
 async fn a_message_kept_open_by_pings_between_its_fragments_closes_with_1008() {
     let port = spawn_paced();
@@ -577,7 +567,6 @@ async fn a_message_kept_open_by_pings_between_its_fragments_closes_with_1008() {
 }
 
 /// A peer that only pings has no message in flight, and is left open.
-/// Verifies: ADR-0010
 #[tokio::test]
 async fn a_websocket_that_only_pings_stays_open() {
     let port = spawn_paced();
@@ -643,8 +632,6 @@ impl opamp::server::Handler for Stuck {
 /// A WebSocket session outlives the HTTP connection it was upgraded from, so the drain must reach
 /// it separately: one stuck in its handler is cut at the drain's deadline, and `serve` returns only
 /// once it is — whatever follows a listener's shutdown sees no session still at work.
-///
-/// Verifies: ADR-0013, ADR-0010
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_drain_cuts_a_stuck_websocket_session_at_its_deadline() {
     use futures_util::SinkExt;

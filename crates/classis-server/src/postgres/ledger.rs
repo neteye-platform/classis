@@ -1,4 +1,4 @@
-//! The register, the revocation list and the Hosts in PostgreSQL (ADR-0050 clauses 10 and 11): the
+//! The register, the revocation list and the Hosts in PostgreSQL: the
 //! PostgreSQL adapter behind [`LedgerStore`](crate::revocation::LedgerStore) — one row per
 //! certificate the Server signed, one per revocation, one per Host. Every call is one transaction,
 //! committed before the decision it answers is.
@@ -436,14 +436,12 @@ mod tests {
         assert_eq!(ledger.hosts, fewer);
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_ledger_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
         contract(&|| Box::new(FsLedgerStore::open(dir.path()).expect("open")));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_ledger_port_contract_holds_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -455,7 +453,6 @@ mod tests {
 
     /// A save of the Hosts that fails part-way leaves them as they were, and the next save still
     /// writes what changed: the adapter's memory follows only what committed.
-    /// Verifies: ADR-0050
     #[test]
     fn a_save_that_fails_part_way_leaves_nothing_of_itself() {
         let Some(test) = TestDatabase::named() else {

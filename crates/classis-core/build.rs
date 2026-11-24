@@ -1,14 +1,14 @@
-// The version this build reports (ADR-0012), baked in as
+// The version this build reports, baked in as
 // `OPAMP_PRODUCT_RELEASE` and read back through `classis_core::version::current`.
 //
-// It lives in the crate both binaries already depend on because ADR-0012 asks for a *single* helper
+// It lives in the crate both binaries already depend on because the version needs a *single* helper
 // that every surface reads, and `cargo:rustc-env` reaches only the crate whose script emitted it: a
 // second copy in either binary would be a second implementation of the same rule, free to drift
 // from this one.
 
 use git2::Repository;
 
-// A release tag is `v` and the version (ADR-0065, restating ADR-0012 clause 2). Only a `v` followed
+// A release tag is `v` and the version. Only a `v` followed
 // by a digit is one: `very-old` is no release tag, whatever it points at.
 const TAG_PREFIX: &str = "v";
 
@@ -57,7 +57,7 @@ fn resolve_version() -> Result<String, String> {
         );
     }
 
-    // The number itself, from the file that decides it (ADR-0012) or from the override.
+    // The number itself, from the file that decides it or from the override.
     let (base, source) = match std::env::var("OPAMP_PRODUCT_VERSION") {
         Ok(raw) => (
             parse_components(&raw).ok_or_else(|| {
@@ -150,7 +150,7 @@ fn parse_tag(tag: &str) -> Option<String> {
     parse_components(tag.strip_prefix(TAG_PREFIX)?)
 }
 
-/// Strict SemVer core grammar (ADR-0012): exactly three non-negative integers without leading
+/// Strict SemVer core grammar: exactly three non-negative integers without leading
 /// zeros, separated by `.` or `/` (mixed permitted), normalised to dots. No pre-release, no
 /// build metadata, no whitespace.
 fn parse_components(raw: &str) -> Option<String> {

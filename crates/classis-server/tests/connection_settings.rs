@@ -1,4 +1,4 @@
-//! Connection-settings offers (ADR-0014): hash-gated toward capable Agents, retried while an
+//! Connection-settings offers: hash-gated toward capable Agents, retried while an
 //! outcome is in flight, and silent once the fleet runs (or refused) exactly what is offered.
 
 mod support;
@@ -36,8 +36,7 @@ async fn exchange(server: &TestServer, msg: &opamp::proto::AgentToServer) -> Ser
 }
 
 /// The standing offer reaches a capable Agent with what it names — and no `headers`: nothing on
-/// the Agent plane reads one (ADR-0014 clause 1).
-/// Verifies: ADR-0014
+/// the Agent plane reads one.
 #[tokio::test]
 async fn the_offer_reaches_a_capable_agent_and_carries_no_headers() {
     let server = spawn_with(Some(offer())).await;
@@ -62,7 +61,6 @@ async fn the_offer_reaches_a_capable_agent_and_carries_no_headers() {
     assert!(settings.headers.is_none(), "an offer carries no headers");
 }
 
-/// Verifies: ADR-0014
 #[tokio::test]
 async fn no_offer_without_the_capability_or_without_a_configured_section() {
     let armed = spawn_with(Some(offer())).await;
@@ -86,7 +84,6 @@ async fn no_offer_without_the_capability_or_without_a_configured_section() {
     );
 }
 
-/// Verifies: ADR-0014
 #[tokio::test]
 async fn the_reported_hash_gates_reoffering() {
     let server = spawn_with(Some(offer())).await;

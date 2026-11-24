@@ -1,4 +1,4 @@
-//! The own-telemetry offer (ADR-0016): the Server names destinations, and only for the signals an
+//! The own-telemetry offer: the Server names destinations, and only for the signals an
 //! Agent says it can report.
 
 mod support;
@@ -43,7 +43,6 @@ fn report(capabilities: u64) -> AgentToServer {
 }
 
 /// An Agent declaring all three gets all three, with the configured headers on each.
-/// Verifies: ADR-0016
 #[tokio::test]
 async fn every_declared_signal_is_offered_a_destination() {
     let server = support::spawn_with_telemetry(offer()).await;
@@ -73,12 +72,11 @@ async fn every_declared_signal_is_offered_a_destination() {
     assert!(settings.opamp.is_none());
 }
 
-/// A withdrawal reaches the Agent (ADR-0016 rule 18): an endpoint configured empty is sent as an
+/// A withdrawal reaches the Agent: an endpoint configured empty is sent as an
 /// empty `destination_endpoint`, which is what stops that signal. It travels without the backend's
 /// credential — nobody is going to open that connection — and the offer is still an offer, so the
 /// Server declares `OffersConnectionSettings` and the hash gate closes on the acknowledgement like
 /// any other.
-/// Verifies: ADR-0016
 #[tokio::test]
 async fn a_withdrawn_signal_is_offered_as_an_empty_destination() {
     let withdrawal = classis_server::fleet::TelemetryOffer::from_config(
@@ -109,7 +107,6 @@ async fn a_withdrawn_signal_is_offered_as_an_empty_destination() {
 
 /// Capability negotiation is binding: a signal the Agent never declared is not offered, because an
 /// offer nobody can act on is one that would be re-sent forever.
-/// Verifies: ADR-0016
 #[tokio::test]
 async fn an_undeclared_signal_gets_no_destination() {
     let server = support::spawn_with_telemetry(offer()).await;
@@ -121,11 +118,10 @@ async fn an_undeclared_signal_gets_no_destination() {
     assert!(settings.own_traces.is_none());
 }
 
-/// ADR-0014 clause 3: a Server that can offer *anything* declares `OffersConnectionSettings`.
+/// A Server that can offer *anything* declares `OffersConnectionSettings`.
 /// Keying the bit on `[connection_offer]` alone left this Server exercising a capability it had not
 /// declared — and a Client that took the bitmask literally would then have withheld the
 /// acknowledgement, leaving the hash gate open and this offer repeating for ever.
-/// Verifies: ADR-0014
 #[tokio::test]
 async fn a_telemetry_only_server_declares_that_it_offers_connection_settings() {
     let server = support::spawn_with_telemetry(offer()).await;
@@ -140,7 +136,6 @@ async fn a_telemetry_only_server_declares_that_it_offers_connection_settings() {
 
 /// An Agent declaring none of the three is offered nothing at all — not an empty offer it would
 /// have to acknowledge.
-/// Verifies: ADR-0016
 #[tokio::test]
 async fn an_agent_that_reports_no_own_telemetry_is_offered_none() {
     let server = support::spawn_with_telemetry(offer()).await;

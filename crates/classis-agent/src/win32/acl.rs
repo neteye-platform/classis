@@ -1,4 +1,4 @@
-//! A file's DACL as SDDL text, and the changes the Client makes to it (ADR-0059 clauses 6 and 10):
+//! A file's DACL as SDDL text, and the changes the Client makes to it:
 //! an explicit grant to one account in place of the one it had, and the ACEs a child inherits
 //! from its parent.
 //!
@@ -324,7 +324,6 @@ mod tests {
     const PROCESS: &str = "S-1-5-80-1-2-3-4-5";
 
     /// A DACL is read as the system writes it, and one this module cannot read is refused.
-    /// Verifies: ADR-0059
     #[test]
     fn a_dacl_is_read_as_the_system_writes_it() {
         let text = "D:PAI(A;OICI;FA;;;SY)(A;OICIID;0x1200a9;;;BU)";
@@ -347,7 +346,6 @@ mod tests {
 
     /// A grant replaces the explicit allow ACEs of its account, alias or SID alike, keeps every
     /// other ACE and every inherited one, and goes before the inherited ones.
-    /// Verifies: ADR-0059
     #[test]
     fn a_grant_replaces_the_accounts_explicit_ace_in_order() {
         let dacl = Dacl::parse(&format!(
@@ -380,7 +378,6 @@ mod tests {
     /// What a parent passes on follows the rules of ACE inheritance: to a directory what is for
     /// containers, and what is for objects as inherit-only; to a file what is for objects; nothing
     /// past `NP`, and nothing that is for neither.
-    /// Verifies: ADR-0059
     #[test]
     fn a_child_inherits_by_the_rules_of_ace_inheritance() {
         let parent = Dacl::parse(

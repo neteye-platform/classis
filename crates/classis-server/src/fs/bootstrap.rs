@@ -1,4 +1,4 @@
-//! The bootstrap certificates the Server issued, on the filesystem (ADR-0028, ADR-0037): the
+//! The bootstrap certificates the Server issued, on the filesystem: the
 //! default adapter behind [`BootstrapStore`](crate::bootstrap::BootstrapStore).
 
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use crate::revocation::CertId;
 
 /// One JSON file per certificate under `<data_dir>/bootstrap/`, named after its issuer and serial
 /// as the register names a certificate, in a directory only its owner enters, and beside it the
-/// certificate's PKCS#12 file, `<issuer>-<serial>.p12`, when one was made (ADR-0029, ADR-0037).
+/// certificate's PKCS#12 file, `<issuer>-<serial>.p12`, when one was made.
 pub struct FsBootstrapStore {
     dir: PathBuf,
 }
@@ -120,7 +120,6 @@ mod tests {
 
     /// What was issued is still listed after a restart, under its issuer and serial, and a removal
     /// persists.
-    /// Verifies: ADR-0037
     #[test]
     fn entries_survive_a_reopen_and_a_removal_persists() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -144,7 +143,6 @@ mod tests {
 
     /// The PKCS#12 file lies beside its entry, owner-only, and goes with it; one beside no entry
     /// is no part of the layout.
-    /// Verifies: ADR-0029, ADR-0037
     #[test]
     fn a_pkcs12_file_is_kept_owner_only_and_removed_with_its_entry() {
         let dir = tempfile::tempdir().expect("tempdir");

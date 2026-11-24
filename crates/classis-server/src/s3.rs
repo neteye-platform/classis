@@ -1,8 +1,8 @@
-//! Artifact bytes in one bucket of an S3-compatible object store (ADR-0049): the second adapter
+//! Artifact bytes in one bucket of an S3-compatible object store: the second adapter
 //! behind [`BlobStore`](crate::blobs::BlobStore), beside the filesystem's.
 //!
 //! The port is synchronous and `object_store` is not, so the adapter bridges inside itself
-//! (ADR-0049 clause 1) through a [`Bridge`]: a small Tokio runtime of its own, onto which every
+//! through a [`Bridge`]: a small Tokio runtime of its own, onto which every
 //! operation is spawned while the calling thread waits on a plain channel. The upload, and the
 //! download from its open to its last chunk, call it from blocking threads; the rest from whatever
 //! thread they run on.
@@ -32,7 +32,7 @@ use crate::config::S3BlobsConfig;
 /// upload holds this much in memory while it is streamed.
 const PART_SIZE: usize = 8 * 1024 * 1024;
 
-/// The only `AWS_*` variables the Server reads (ADR-0049 clause 6): those of its platform's
+/// The only `AWS_*` variables the Server reads: those of its platform's
 /// workload identity, each with the setting it feeds. None of them names an endpoint, a bucket, a
 /// region or whether plaintext is allowed.
 const WORKLOAD_IDENTITY: [(&str, AmazonS3ConfigKey); 5] = [
@@ -56,7 +56,7 @@ const WORKLOAD_IDENTITY: [(&str, AmazonS3ConfigKey); 5] = [
     ),
 ];
 
-/// How long an S3 request may wait (ADR-0049 clause 5), so a store that stops answering fails the
+/// How long an S3 request may wait, so a store that stops answering fails the
 /// one call that needs it instead of holding it — and whatever lock its caller holds — forever.
 #[derive(Clone, Copy, Debug)]
 struct Limits {
@@ -82,8 +82,8 @@ const LIMITS: Limits = Limits {
     retry_for: Duration::from_secs(60),
 };
 
-/// How long the Server waits at startup for the bucket to answer, and how often it asks again
-/// (ADR-0062): the time the database gets, so a store and a database that come back together
+/// How long the Server waits at startup for the bucket to answer, and how often it asks again:
+/// the time the database gets, so a store and a database that come back together
 /// are both waited for.
 const START_WAIT: Duration = Duration::from_secs(180);
 const START_RETRY: Duration = Duration::from_secs(5);
@@ -104,7 +104,7 @@ const WILL_NOT_PASS: [&str; 10] = [
     "invalid certificate",
 ];
 
-/// Whether a failure to list the bucket at startup may pass on its own (ADR-0062).
+/// Whether a failure to list the bucket at startup may pass on its own.
 fn may_pass(error: &object_store::Error) -> bool {
     use object_store::Error as E;
     if matches!(
@@ -129,7 +129,7 @@ fn may_pass(error: &object_store::Error) -> bool {
 }
 
 /// One object per blob at `<prefix>blobs/<sha256>`, an upload in progress at
-/// `<prefix>staging/<random>`, and no key outside `<prefix>` (ADR-0049 clause 4).
+/// `<prefix>staging/<random>`, and no key outside `<prefix>`.
 pub struct S3BlobStore {
     store: Arc<AmazonS3>,
     bucket: String,
@@ -140,9 +140,9 @@ pub struct S3BlobStore {
 
 impl S3BlobStore {
     /// Connects to the bucket `config` names and checks that it can be listed. Nothing is created:
-    /// a bucket that does not exist fails here, naming it (ADR-0049 clause 4). A store that does
+    /// a bucket that does not exist fails here, naming it. A store that does
     /// not answer yet — the name not resolving, the connection refused, a server error — is asked
-    /// again for [`START_WAIT`] (ADR-0062); a refusal that will not change fails at once.
+    /// again for [`START_WAIT`]; a refusal that will not change fails at once.
     ///
     /// # Errors
     /// Returns an error naming the key when the secret or the CA file cannot be read, and naming
@@ -321,7 +321,7 @@ enum Kind {
 
 impl BlobStore for S3BlobStore {
     /// The upload goes to a staging key; once its hash is known it is copied to its blob's key
-    /// unless that is stored already, and the staging object is deleted (ADR-0049 clause 4). A
+    /// unless that is stored already, and the staging object is deleted. A
     /// stream that fails leaves no object under `blobs/`.
     fn put(&self, bytes: &mut dyn Read) -> Result<(String, u64), String> {
         let staging = self.staging_key()?;
@@ -379,7 +379,7 @@ impl BlobStore for S3BlobStore {
         self.delete_key(self.blob_key(sha256)?)
     }
 
-    /// Every blob with its size, from the listing alone: nothing is downloaded (ADR-0049 clause 4).
+    /// Every blob with its size, from the listing alone: nothing is downloaded.
     /// A staging object an interrupted upload left is deleted; any other key under `<prefix>`
     /// fails, naming it.
     fn list(&self) -> Result<Vec<(String, u64)>, String> {
@@ -460,7 +460,7 @@ impl Read for ObjectReader {
     }
 }
 
-/// The S3 client for `config`, with the credentials of clause 6 and the HTTP client of clause 5.
+/// The S3 client for `config`, with its credentials and its HTTP client.
 /// `variable` reads the environment, and is asked for the names of [`WORKLOAD_IDENTITY`] alone.
 fn builder(
     config: &S3BlobsConfig,
@@ -483,7 +483,7 @@ fn builder(
             let secret =
                 crate::config::read_secret_file("[blobs.s3] secret_access_key_file", file)?;
             // `object_store` takes the key as its own `String`: the copy is made at this call, and
-            // the one read is wiped when it is dropped (ADR-0057 clauses 3 and 4).
+            // the one read is wiped when it is dropped.
             builder = builder
                 .with_access_key_id(key_id.clone())
                 .with_secret_access_key(secret.as_str());
@@ -500,7 +500,7 @@ fn builder(
 }
 
 /// The HTTP client `object_store` is handed: the project's TLS 1.3, *ring*-only configuration with
-/// the public roots and the optional `ca_file` root (ADR-0049 clause 5). Plaintext only where the
+/// the public roots and the optional `ca_file` root. Plaintext only where the
 /// client's own options allow it: the loopback endpoint `[blobs.s3]` checked, and the platform's
 /// credential endpoints on their link-local addresses. No proxy and no other setting is taken from
 /// the environment.
@@ -560,7 +560,7 @@ impl HttpConnector for TlsConnector {
     }
 }
 
-/// Copies what the bucket lacks from `data_dir/blobs/` (ADR-0049 clause 7): every blob of
+/// Copies what the bucket lacks from `data_dir/blobs/`: every blob of
 /// `referenced` that `store` does not hold and `dir` does, hashed again on the way — a file whose
 /// content does not match its name fails, naming it — and uploaded as `put` does. Each is logged.
 /// `dir` is only read: removing it is the operator's.
@@ -627,7 +627,7 @@ mod tests {
     use crate::fs::FsBlobStore;
     use crate::packages::{PackageId, PackageStore, Platform};
 
-    /// The store the S3 tests run against (ADR-0049 clause 9), under a prefix of its own so that
+    /// The store the S3 tests run against, under a prefix of its own so that
     /// tests running at once never see each other's keys; `None`, said aloud, where none is named.
     fn named_store() -> Option<S3BlobsConfig> {
         let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
@@ -728,7 +728,7 @@ mod tests {
         }
     }
 
-    /// The blob port's contract, which every store keeps (ADR-0049 clause 1): identical bytes are
+    /// The blob port's contract, which every store keeps: identical bytes are
     /// one blob named by their hash; what was stored reads back, an upload of several parts and an
     /// empty one included; `list` names every blob with its size; deleting an absent blob is no
     /// error; and a stream that fails stores nothing.
@@ -778,7 +778,6 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0049
     #[test]
     fn the_blob_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -794,7 +793,6 @@ mod tests {
 
     /// Run from inside a runtime's own thread, as the Server's handlers call the port: the bridge
     /// neither panics there nor waits on the runtime it blocks, and the store is dropped there too.
-    /// Verifies: ADR-0049
     #[tokio::test(flavor = "current_thread")]
     async fn the_blob_port_contract_holds_on_s3() {
         let Some(config) = named_store() else { return };
@@ -812,8 +810,7 @@ mod tests {
 
     /// A failed upload leaves nothing under `blobs/`, and a staging object an interrupted upload
     /// left is deleted at the next startup; any other key under the prefix fails it, naming the
-    /// key (ADR-0049 clause 4).
-    /// Verifies: ADR-0049
+    /// key.
     #[test]
     fn leftover_staging_objects_go_and_unknown_keys_fail_startup_on_s3() {
         let Some(config) = named_store() else { return };
@@ -846,9 +843,7 @@ mod tests {
         clear(&store);
     }
 
-    /// The Server does not create its bucket: one that does not exist fails startup naming it
-    /// (ADR-0049 clause 4).
-    /// Verifies: ADR-0049
+    /// The Server does not create its bucket: one that does not exist fails startup naming it.
     #[test]
     fn a_bucket_that_does_not_exist_fails_startup_naming_it() {
         let Some(mut config) = named_store() else {
@@ -861,8 +856,7 @@ mod tests {
 
     /// Switching to S3 copies every referenced artifact the bucket lacks, verified against its
     /// name, and leaves the file where it is; the reverse — an entry whose blob neither the bucket
-    /// nor the copy can supply — fails startup naming the entry (ADR-0049 clause 7).
-    /// Verifies: ADR-0049
+    /// nor the copy can supply — fails startup naming the entry.
     #[test]
     fn switching_to_s3_copies_what_the_bucket_lacks_and_leaves_the_file() {
         let Some(config) = named_store() else { return };
@@ -913,11 +907,10 @@ mod tests {
         clear(&bucket);
     }
 
-    /// The copy of clause 7 reads `data_dir/blobs/` and nothing else: a referenced file the target
-    /// lacks is hashed and uploaded, the file stays, a second run copies nothing, and a file whose
-    /// content does not match its name fails, naming it. Run against a filesystem target, so it
-    /// needs no store.
-    /// Verifies: ADR-0049
+    /// The copy into the bucket reads `data_dir/blobs/` and nothing else: a referenced file the
+    /// target lacks is hashed and uploaded, the file stays, a second run copies nothing, and a file
+    /// whose content does not match its name fails, naming it. Run against a filesystem target, so
+    /// it needs no store.
     #[test]
     fn the_copy_from_the_filesystem_verifies_each_file_and_leaves_it() {
         let source = tempfile::tempdir().expect("tempdir");
@@ -977,9 +970,8 @@ mod tests {
 
     /// `AWS_ENDPOINT`, `AWS_ALLOW_HTTP` and their kin, set in the Server's environment, change
     /// neither the endpoint nor whether plaintext is allowed; the only `AWS_*` variables read are
-    /// those of the workload identity (ADR-0049 clauses 5 and 6). The environment is the real one
+    /// those of the workload identity. The environment is the real one
     /// of a child process, so whatever reads it — this module or the S3 client — is held to it.
-    /// Verifies: ADR-0049
     #[test]
     fn aws_variables_change_neither_the_endpoint_nor_plaintext() {
         let asked = std::cell::RefCell::new(Vec::new());
@@ -1121,7 +1113,6 @@ mod tests {
     /// What a store that does not answer yet is asked again for, and what it is not: a server
     /// error is asked again until the store lists the bucket; a bucket that does not exist, or
     /// credentials that are refused, fail at once however long the wait. Needs no store.
-    /// Verifies: ADR-0062
     #[test]
     fn a_store_that_does_not_answer_yet_is_asked_again_and_a_refusal_is_not() {
         const EMPTY: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult \
@@ -1178,7 +1169,6 @@ mod tests {
     }
 
     /// The failures that pass and those that do not, by what the store said.
-    /// Verifies: ADR-0062
     #[test]
     fn a_failed_listing_is_told_apart_by_what_the_store_said() {
         let generic = |text: &str| object_store::Error::Generic {
@@ -1211,9 +1201,8 @@ mod tests {
 
     /// A store that takes the connection and never answers fails the call within the limits —
     /// the silence of each attempt, retried — rather than holding it, and whatever lock its caller
-    /// holds, forever (ADR-0049 clause 5). The call is the listing at startup; every request goes
+    /// holds, forever. The call is the listing at startup; every request goes
     /// through the same client. Needs no store.
-    /// Verifies: ADR-0049
     #[test]
     fn a_store_that_never_answers_fails_the_call_within_the_limits() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -1260,9 +1249,7 @@ mod tests {
         );
     }
 
-    /// A static key pair's secret comes from its file, which its owner and group alone may read
-    /// (ADR-0049 clause 6).
-    /// Verifies: ADR-0049
+    /// A static key pair's secret comes from its file, which its owner and group alone may read.
     #[test]
     fn the_secret_file_is_read_and_must_be_the_servers_alone() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  WixUI_InstallDir with one page inserted (ADR-0019 clause 39):
+  WixUI_InstallDir with one page inserted:
 
       WelcomeDlg → InstallDirDlg → EndpointDlg → VerifyReadyDlg
 
@@ -16,7 +16,7 @@
       uses, that would have to be kept in sync. WelcomeDlg goes straight to InstallDirDlg, which is the removal WiX's own
       customization guide gives as its worked example.
     * **The x64 CheckTargetPath rows are inlined.** The toolset generates those per architecture
-      from a `?foreach?`; this package ships one architecture (ADR-0019 keeps Windows on arm64 out),
+      from a `?foreach?`; this package ships one architecture (Windows on arm64 is not a target),
       so the one variant is written out rather than generated.
 
   Everything else — the dialog refs, the browse plumbing, the maintenance and patch paths — is the

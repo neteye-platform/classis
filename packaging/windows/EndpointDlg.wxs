@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The one dialog this installer adds to the stock set (ADR-0019 clause 39): where the Server is, and
-  whether the fleet may update this Client itself (ADR-0018).
+  The one dialog this installer adds to the stock set: where the Server is, and
+  whether the fleet may update this Client itself.
 
   Geometry, control ids and button positions are InstallDirDlg's, so the page it follows and this
   one are the same page with a different field. The `!(loc.…)` strings resolve out of the WiX UI
@@ -31,7 +31,7 @@
         <Control Id="EndpointEdit" Type="Edit" X="20" Y="86" Width="320" Height="18" Property="ENDPOINT" />
 
         <!--
-          Checked by default (ADR-0018). The box is checked whenever SELFUPDATE is non-empty, and
+          Checked by default. The box is checked whenever SELFUPDATE is non-empty, and
           clearing it empties the property — which is what the package's SELFUPDATEFLAG condition
           reads. The answer goes into supervisor.toml either way, so it is visible and editable on the
           host afterwards rather than sunk into the installer.
@@ -43,9 +43,9 @@
                  Text="This is how the fleet patches the Client itself; without it this host is the one machine you update by hand. The Client only ever takes a package named after itself — anything else is refused and reported." />
 
         <!--
-          The client identity is not asked for (ADR-0019 clause 39): it is a pair of files the
+          The client identity is not asked for: it is a pair of files the
           operator puts on the host. The configuration lives under %ProgramData%, not in
-          INSTALLFOLDER (ADR-0019). No square brackets in the text: a control's Text is a formatted
+          INSTALLFOLDER. No square brackets in the text: a control's Text is a formatted
           string, and [name] would be replaced by the property of that name.
         -->
         <Control Id="IdentityNote" Type="Text" X="20" Y="160" Width="320" Height="44" NoPrefix="yes"

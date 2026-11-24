@@ -1,6 +1,6 @@
-//! A package signature, as a Client reads it from an offer and the Server from an upload
-//! (ADR-0063 clause 3): a bounded, strict-DER `PackageSignature`, then the chain and the signature
-//! up to a Root it was never issued by. Verifies: Q-2, ADR-0063
+//! A package signature, as a Client reads it from an offer and the Server from an upload:
+//! a bounded, strict-DER `PackageSignature`, then the chain and the signature
+//! up to a Root it was never issued by. Verifies: Q-2
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

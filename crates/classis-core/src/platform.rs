@@ -1,5 +1,5 @@
 //! This fleet's platform vocabulary: the spellings of an operating system and an architecture that
-//! mean one canonical `os.type` / `host.arch` value (ADR-0026).
+//! mean one canonical `os.type` / `host.arch` value.
 //!
 //! The canonical tokens are the semantic conventions'; the alias table is this project's leniency,
 //! so that a release file name and an Agent's report meet. Both ends read it, because they are two
@@ -32,8 +32,8 @@ const ARCH_ALIASES: &[(&str, &str)] = &[
 /// heard of it.
 ///
 /// One table for both ends, because they are two halves of one comparison: the Client writes this
-/// value into its `os.type` attribute and the Server matches an artifact's platform against it
-/// (ADR-0026). Two tables that disagreed would not fail — they would offer a host the wrong binary,
+/// value into its `os.type` attribute and the Server matches an artifact's platform against it.
+/// Two tables that disagreed would not fail — they would offer a host the wrong binary,
 /// or none, and say nothing.
 #[must_use]
 pub fn canonical_os(raw: &str) -> &str {
@@ -61,8 +61,7 @@ mod tests {
     use super::*;
 
     /// The pairs both ends depend on agreeing: the Client writes the left, the Server matches an
-    /// artifact's platform against the right (ADR-0026).
-    /// Verifies: ADR-0026
+    /// artifact's platform against the right.
     #[test]
     fn folds_the_spellings_this_project_does_not_control() {
         assert_eq!(canonical_os("macos"), "darwin");
@@ -78,7 +77,6 @@ mod tests {
 
     /// Rust names the host one way and the semantic conventions another, and this is the table that
     /// bridges them — so what a Client compiled by rustc reports is a token the Server knows.
-    /// Verifies: ADR-0026
     #[test]
     fn what_rust_calls_this_machine_folds_onto_a_canonical_token() {
         assert_eq!(
@@ -96,7 +94,6 @@ mod tests {
 
     /// A system the table has never heard of is served under its own name rather than refused: a
     /// fleet may run one, and offering it nothing would be the worse failure.
-    /// Verifies: ADR-0026
     #[test]
     fn an_unknown_token_passes_through_unchanged() {
         assert_eq!(canonical_os("plan9"), "plan9");

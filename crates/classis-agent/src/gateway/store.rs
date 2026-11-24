@@ -1,4 +1,4 @@
-//! Where a Gateway keeps its bindings across restarts (ADR-0058 clause 3):
+//! Where a Gateway keeps its bindings across restarts:
 //! `<state_dir>/gateway-packages/bindings`, a journal of [`Change`]s.
 //!
 //! The file begins with a line naming its format and version and holds one change per line, of at
@@ -439,7 +439,6 @@ mod tests {
 
     /// What the Gateway writes it reads back: every kind of change, a host with a space, a `%`
     /// and a character beyond ASCII among them.
-    /// Verifies: ADR-0058
     #[test]
     fn every_change_reads_back_as_written() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -466,7 +465,6 @@ mod tests {
     }
 
     /// A store that does not exist is an empty one.
-    /// Verifies: ADR-0058
     #[test]
     fn a_missing_store_is_empty() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -476,7 +474,6 @@ mod tests {
     /// A last line without its newline is dropped as a write a crash cut off, and the rest is
     /// read; a line before it that cannot be parsed, an unknown version, a missing first line and a
     /// line longer than its bound make the store unreadable.
-    /// Verifies: ADR-0058
     #[test]
     fn only_a_last_line_without_its_newline_is_dropped() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -527,7 +524,6 @@ mod tests {
     }
 
     /// A store larger than its bound is refused before it is read.
-    /// Verifies: ADR-0058
     #[test]
     fn a_store_past_its_bound_is_unreadable() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -541,7 +537,6 @@ mod tests {
     }
 
     /// A store that is a link, a directory, or on Unix one that is not `0600`, is unreadable.
-    /// Verifies: ADR-0058
     #[test]
     fn a_store_that_is_no_private_regular_file_is_unreadable() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -572,7 +567,6 @@ mod tests {
 
     /// A store rewritten whole from what replaying it leaves reads back to the same bindings, in
     /// the same order, and holds one line per binding and per host.
-    /// Verifies: ADR-0058
     #[test]
     fn a_compacted_store_loads_to_the_same_bindings() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -613,7 +607,6 @@ mod tests {
 
     /// A change whose line would be longer than its bound is not written, and nothing of the
     /// append is.
-    /// Verifies: ADR-0058
     #[test]
     fn a_change_too_long_for_a_line_is_not_written() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -631,7 +624,6 @@ mod tests {
     /// A rewrite that fails once its new file is in place leaves the journal appending nothing,
     /// so no change lands in a file that is no longer the store; the next rewrite succeeds and the
     /// journal appends again.
-    /// Verifies: ADR-0058
     #[test]
     fn a_rewrite_that_fails_after_its_rename_appends_nothing_until_rewritten() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -658,7 +650,6 @@ mod tests {
 
     /// An append that fails after its bytes are written is cut back: the store reads as before,
     /// and the next append lands after what it held.
-    /// Verifies: ADR-0058
     #[test]
     fn a_failed_append_is_cut_back() {
         let dir = tempfile::tempdir().expect("tempdir");

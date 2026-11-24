@@ -1,4 +1,4 @@
-//! The `server` binary behind a reverse proxy (ADR-0064): it speaks plain HTTP on both planes
+//! The `server` binary behind a reverse proxy: it speaks plain HTTP on both planes
 //! whatever the address, refuses the sections of TLS and mutual TLS by name, and logs the keys its
 //! environment set before it serves.
 #![cfg(unix)]
@@ -41,7 +41,6 @@ fn server_toml(dir: &Path, extra: &str) -> (std::path::PathBuf, u16, u16) {
 
 /// A section of TLS, mutual TLS or Agent authentication in `server.toml` stops the Server at
 /// startup, naming the section and the decision — it is never ignored.
-/// Verifies: ADR-0064
 #[test]
 fn a_tls_section_stops_the_server_naming_it() {
     for section in [
@@ -65,7 +64,6 @@ fn a_tls_section_stops_the_server_naming_it() {
 }
 
 /// `server pki` says it is removed, rather than failing as an unknown word.
-/// Verifies: ADR-0064
 #[test]
 fn the_pki_command_is_removed_by_name() {
     let output = Command::new(env!("CARGO_BIN_EXE_server"))
@@ -83,7 +81,6 @@ fn the_pki_command_is_removed_by_name() {
 /// The Server serves both planes in plain HTTP — the Operator plane's probes without a credential,
 /// the Agent plane's endpoint without one — and logs the keys its environment set before it
 /// serves, none of their values.
-/// Verifies: ADR-0064, ADR-0051
 #[tokio::test]
 async fn the_server_serves_plain_http_and_logs_the_keys_its_environment_set() {
     opamp::tls::install_ring_provider();

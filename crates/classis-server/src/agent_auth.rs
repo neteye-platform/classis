@@ -1,4 +1,4 @@
-//! Where the authentication of Agents plugs in (ADR-0064).
+//! Where the authentication of Agents plugs in.
 //!
 //! The Server speaks plain HTTP behind a reverse proxy, and it does not authenticate Agents: what
 //! admits an Agent — a random string it presents, checked by a library in front of the Server —
@@ -9,7 +9,7 @@
 //!
 //! The only implementation today is [`AdmitEveryone`]. Without an authenticator in front of it, any
 //! peer that reaches the Agent port is admitted and may claim any identity in its OpAMP messages:
-//! the port must be reachable through the authenticating proxy alone (ADR-0064).
+//! the port must be reachable through the authenticating proxy alone.
 
 use axum::http::HeaderMap;
 
@@ -38,7 +38,7 @@ pub trait AgentAuthenticator: Send + Sync {
     fn authenticate(&self, headers: &HeaderMap) -> Result<Admitted, Refusal>;
 }
 
-/// Admits every request: the Server authenticates no Agent (ADR-0064).
+/// Admits every request: the Server authenticates no Agent.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AdmitEveryone;
 
@@ -54,7 +54,6 @@ mod tests {
     use axum::http::{header, HeaderValue};
 
     /// The only implementation admits a request with no credential at all, and one with any.
-    /// Verifies: ADR-0064
     #[test]
     fn admit_everyone_admits_with_or_without_a_credential() {
         let mut headers = HeaderMap::new();

@@ -1,10 +1,10 @@
-//! The bootstrap PKCS#12 file written and read with `p12-keystore` (ADR-0029 clauses 1 and 7).
+//! The bootstrap PKCS#12 file written and read with `p12-keystore`.
 //!
 //! Reading is bounded: a file over [`MAX_FILE_BYTES`] is refused before it is parsed, and
 //! `p12-keystore` itself refuses work factors above a million iterations. Before anything is
-//! decrypted, the file's structure is held to clause 1's family: a MAC of HMAC with SHA-2, and every
-//! encryption PBES2 with PBKDF2-HMAC-SHA-2 and AES-CBC — no PBES1, no scrypt, no AES-GCM, no key in
-//! the clear. `p12-keystore` would read several of those.
+//! decrypted, the file's structure is held to the family of the scheme it is written with: a MAC of
+//! HMAC with SHA-2, and every encryption PBES2 with PBKDF2-HMAC-SHA-2 and AES-CBC — no PBES1, no
+//! scrypt, no AES-GCM, no key in the clear. `p12-keystore` would read several of those.
 
 use std::fmt;
 
@@ -49,8 +49,8 @@ pub fn seal(
         .map_err(|e| format!("cannot write the PKCS#12 file: {e}"))
 }
 
-/// What a file holds: the certificate and its key, DER, the key PKCS#8 and wiped when it is dropped
-/// (ADR-0057). Its `Debug` names neither.
+/// What a file holds: the certificate and its key, DER, the key PKCS#8 and wiped when it is
+/// dropped. Its `Debug` names neither.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Identity {
     pub certificate_der: Vec<u8>,
@@ -81,7 +81,7 @@ impl fmt::Display for OpenError {
     }
 }
 
-/// The certificate and key in `bytes`, under `password` (ADR-0029 clause 7).
+/// The certificate and key in `bytes`, under `password`.
 ///
 /// # Errors
 /// [`OpenError::WrongPassword`] when the MAC fails, and [`OpenError::Invalid`] for a file over
@@ -95,7 +95,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<Identity, OpenError> {
     }
     let pfx = ::pkcs12::pfx::Pfx::from_der(bytes)
         .map_err(|e| invalid(format!("not a PKCS#12 file: {e}")))?;
-    clause_one(&pfx).map_err(invalid)?;
+    admitted_family(&pfx).map_err(invalid)?;
     let archive = Pkcs12Archive::from_pkcs12(bytes, password).map_err(|e| match e {
         p12_keystore::error::Error::MacError(_) => OpenError::WrongPassword,
         other => invalid(format!("cannot be read: {other}")),
@@ -106,7 +106,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<Identity, OpenError> {
             archive.keys.len()
         )));
     };
-    // `p12-keystore` keeps its own copy, which it does not wipe (ADR-0057 clause 4).
+    // `p12-keystore` keeps its own copy, which it does not wipe.
     let private_key_der = Zeroizing::new(key.key.as_der().to_vec());
     let public = rcgen::KeyPair::try_from(private_key_der.as_slice())
         .map_err(|e| invalid(format!("its private key cannot be read: {e}")))?;
@@ -138,11 +138,11 @@ const PBES2: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.5
 const DATA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.1");
 const ENCRYPTED_DATA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.6");
 
-/// Whether the file is of clause 1's family, read from its structure before anything is
+/// Whether the file is of the admitted family, read from its structure before anything is
 /// decrypted: a MAC — without one anyone could swap the certificate without the password — of
 /// HMAC with SHA-2, and every encrypted part PBES2 with PBKDF2-HMAC-SHA-2 and AES-CBC. A key in the
 /// clear, and any bag but an encrypted key and a certificate, is refused.
-fn clause_one(pfx: &::pkcs12::pfx::Pfx) -> Result<(), String> {
+fn admitted_family(pfx: &::pkcs12::pfx::Pfx) -> Result<(), String> {
     let der = |e: der::Error| format!("not a PKCS#12 file: {e}");
     let mac = pfx.mac_data.as_ref().ok_or("carries no MAC")?;
     if !SHA_2.contains(&mac.mac.algorithm.oid) {
@@ -169,7 +169,7 @@ fn clause_one(pfx: &::pkcs12::pfx::Pfx) -> Result<(), String> {
             )
             .map_err(der)?;
             let algorithm = &encrypted.enc_content_info.content_enc_alg;
-            pbes2_of_clause_one(algorithm.oid, algorithm.parameters.as_ref())?;
+            admitted_pbes2(algorithm.oid, algorithm.parameters.as_ref())?;
         } else if safe.content_type == DATA {
             let bags = ::pkcs12::safe_bag::SafeContents::from_der(&content(&safe.content)?)
                 .map_err(der)?;
@@ -180,7 +180,7 @@ fn clause_one(pfx: &::pkcs12::pfx::Pfx) -> Result<(), String> {
                         ::pkcs12::pbe_params::EncryptedPrivateKeyInfo::from_der(value.value())
                             .map_err(der)?;
                     let algorithm = &key.encryption_algorithm;
-                    pbes2_of_clause_one(algorithm.oid, algorithm.parameters.as_ref())?;
+                    admitted_pbes2(algorithm.oid, algorithm.parameters.as_ref())?;
                 } else if bag.bag_id != ::pkcs12::PKCS_12_CERT_BAG_OID {
                     return Err(format!(
                         "holds a bag that is neither an encrypted key nor a certificate ({})",
@@ -196,7 +196,7 @@ fn clause_one(pfx: &::pkcs12::pfx::Pfx) -> Result<(), String> {
 }
 
 /// Whether an encryption is PBES2 with PBKDF2-HMAC-SHA-2 and AES-CBC.
-fn pbes2_of_clause_one(oid: ObjectIdentifier, parameters: Option<&Any>) -> Result<(), String> {
+fn admitted_pbes2(oid: ObjectIdentifier, parameters: Option<&Any>) -> Result<(), String> {
     let refused = || {
         format!(
             "is encrypted with a scheme other than PBES2, PBKDF2-HMAC-SHA-2 and AES-CBC ({oid})"
@@ -255,7 +255,6 @@ mod tests {
 
     const PASSWORD: &str = "correct horse battery";
 
-    /// Verifies: ADR-0029
     #[test]
     fn a_sealed_file_opens_under_its_password_to_exactly_the_certificate_and_its_key() {
         let (certificate, key) = pair("bootstrap");
@@ -275,7 +274,6 @@ mod tests {
 
     /// The key a file opens to is held in a buffer wiped when it is dropped: were it a plain
     /// buffer again, this would not compile.
-    /// Verifies: ADR-0057
     #[test]
     fn the_key_a_file_opens_to_is_held_in_a_zeroizing_buffer() {
         fn key_of(identity: Identity) -> Zeroizing<Vec<u8>> {
@@ -290,9 +288,8 @@ mod tests {
         assert_eq!(*key_of(identity), [1, 2, 3]);
     }
 
-    /// The file is the scheme ADR-0029 clause 1 names: PBES2 with AES-256 and a SHA-256 MAC, at
-    /// 600 000 iterations.
-    /// Verifies: ADR-0029
+    /// The file is the scheme it is written with: PBES2 with AES-256 and a SHA-256 MAC, at 600 000
+    /// iterations.
     #[test]
     fn a_sealed_file_is_pbes2_with_aes_256_and_a_sha_256_mac() {
         let (certificate, key) = pair("bootstrap");
@@ -313,7 +310,6 @@ mod tests {
         assert!(text.contains(aes256), "AES-256-CBC");
     }
 
-    /// Verifies: ADR-0029
     #[test]
     fn a_file_is_refused_when_large_without_a_mac_or_not_one_key_with_its_certificate() {
         assert!(matches!(

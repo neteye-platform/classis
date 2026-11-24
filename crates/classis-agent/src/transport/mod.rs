@@ -1,4 +1,4 @@
-//! The Client's upstream connection (ADR-0013, ADR-0010). The connection itself — the transport,
+//! The Client's upstream connection. The connection itself — the transport,
 //! its TLS, backoff, heartbeat, framing, limits, throttling, the goodbye — is `opamp::client`'s.
 //! What is the Client's is which material it is built from, in [`connection`], and [`Upstream`]:
 //! the session over the [`Engine`], with the flows that follow a reply.
@@ -37,7 +37,7 @@ pub(crate) struct Upstream<'a> {
     pub enrolment_refused: bool,
 }
 
-/// Whether this Client enrols over plain HTTP (ADR-0039 clause 11): it holds no certificate the
+/// Whether this Client enrols over plain HTTP: it holds no certificate the
 /// Server issued, it presents one — the bootstrap certificate, or one an operator provisioned,
 /// which it cannot tell apart — and its endpoint is `https://` or `http://`. It then sends one
 /// report, its certificate signing request and nothing else, which is what a Gateway relays for an
@@ -145,20 +145,20 @@ async fn flush_owed<S: ReportSink>(engine: &mut Engine, sink: &mut S) -> Result<
     }
 }
 
-/// The Client's own flows after a reply, the same for both transports (ADR-0010): what the reply
+/// The Client's own flows after a reply, the same for both transports: what the reply
 /// left to do, in one order.
 ///
-/// 1. A connection-settings offer (ADR-0014) — verified OpAMP settings end the
+/// 1. A connection-settings offer — verified OpAMP settings end the
 ///    connection; an offer applied in place owes its acknowledgement now.
 /// 2. Ask for a certificate, now that the Server's capabilities are known and an offered
-///    certificate is in force (ADR-0021).
-/// 3. Offered packages are downloaded and verified (ADR-0026).
+///    certificate is in force.
+/// 3. Offered packages are downloaded and verified.
 /// 4. **The self-update restart, before anything is applied after it.** The `Installing` the
-///    package step just owed is the last thing this version says (ADR-0018). It ends the run, so
+///    package step just owed is the last thing this version says. It ends the run, so
 ///    `AfterReply::End` means exactly this.
-/// 5. The self-Agent's Supervisor set (ADR-0017), whose retired Agents' goodbyes go out with it.
+/// 5. The self-Agent's Supervisor set, whose retired Agents' goodbyes go out with it.
 ///
-/// While `enrolling` over plain HTTP the request rides the enrolment report instead (ADR-0039).
+/// While `enrolling` over plain HTTP the request rides the enrolment report instead.
 pub async fn after_reply<S: ReportSink>(
     engine: &mut Engine,
     config: &mut ClientConfig,
@@ -202,7 +202,7 @@ pub async fn after_reply<S: ReportSink>(
     AfterReply::Continue
 }
 
-/// Downloads, verifies, and applies any package the Engine has queued (ADR-0026). Each is handled
+/// Downloads, verifies, and applies any package the Engine has queued. Each is handled
 /// in turn — download and verification are the transport's, the swap is the Supervisor's — and its
 /// outcome (`Installed`/`InstallFailed`) is reported back through the Engine. Returns whether any
 /// package was processed, so the caller flushes the owed status reports.
@@ -212,7 +212,7 @@ pub async fn after_reply<S: ReportSink>(
 /// caller on the next exchange.
 ///
 /// A shutdown ends a download where it stands — on the wire or waiting out a `Retry-After`
-/// (ADR-0026 clause 49) — and nothing is reported for it.
+/// — and nothing is reported for it.
 pub async fn process_package_downloads<S: ReportSink>(
     engine: &mut Engine,
     config: &ClientConfig,
@@ -233,7 +233,7 @@ pub async fn process_package_downloads<S: ReportSink>(
         );
         let progress = crate::packages::Progress::default();
         let started = std::time::Instant::now();
-        // The install's trace (ADR-0016), opened here because this is where the operation begins:
+        // The install's trace, opened here because this is where the operation begins:
         // the download and the verification are this task's, the staging and the swap are the
         // Supervisor's, and the span travels to it with the artifact so the two are one trace.
         let span = tracing::info_span!(
@@ -243,9 +243,9 @@ pub async fn process_package_downloads<S: ReportSink>(
             otel.status_code = tracing::field::Empty,
             otel.status_description = tracing::field::Empty,
         );
-        // Each Agent stages into its own directory (ADR-0017), so the Supervisor's install is a
+        // Each Agent stages into its own directory, so the Supervisor's install is a
         // rename beside the download rather than a copy across filesystems. Keyed by the block
-        // name behind the Agent, never by index — the Agent set can change at runtime (ADR-0017).
+        // name behind the Agent, never by index — the Agent set can change at runtime.
         let staging_dir = config.staging_dir_for(engine.block_name(index));
         let download =
             crate::packages::download_and_verify(&package, config, &staging_dir, &progress)
@@ -270,7 +270,7 @@ pub async fn process_package_downloads<S: ReportSink>(
             Ok(staged) => {
                 engine.apply_package(index, staged, version, hash, &span);
                 if engine.restart_for_update() {
-                    // A self-update moved the `current` pointer (ADR-0018). Whatever else was
+                    // A self-update moved the `current` pointer. Whatever else was
                     // queued is moot: this process is about to be replaced, and the caller ends
                     // the run once the owed `Installing` has gone out.
                     break;
@@ -286,7 +286,7 @@ pub async fn process_package_downloads<S: ReportSink>(
     true
 }
 
-/// Applies the self-Agent's received configuration — its Supervisor set (ADR-0017) — if one is
+/// Applies the self-Agent's received configuration — its Supervisor set — if one is
 /// pending, and sends the retired Agents' goodbyes through `sink`. Returns whether an apply ran,
 /// so the caller flushes the owed status reports.
 pub async fn process_self_configuration<S: ReportSink>(
@@ -299,7 +299,7 @@ pub async fn process_self_configuration<S: ReportSink>(
         return false;
     };
     // A second gate behind the capability the Agent does not declare: on a host that keeps its
-    // set no path reaches the apply (ADR-0017 clause 43).
+    // set no path reaches the apply.
     if !config.server_manages_set() {
         tracing::warn!(
             hash = %hex::encode(&offer.config_hash),
@@ -321,11 +321,11 @@ pub enum OfferOutcome {
     /// No offer was pending.
     None,
     /// The offer was applied — or refused — in place. The acknowledgement is owed, and the
-    /// connection stays up. A telemetry-only offer always lands here (ADR-0014 clause 6): no
+    /// connection stays up. A telemetry-only offer always lands here: no
     /// destination it names is reached over the OpAMP connection, so there is nothing to reconnect
     /// for.
     Applied,
-    /// Verified OpAMP settings took effect (ADR-0014): the caller drops the connection so the
+    /// Verified OpAMP settings took effect: the caller drops the connection so the
     /// runtime re-resolves the effective configuration and reconnects with them.
     Reconnect,
 }
@@ -338,17 +338,16 @@ pub enum OfferOutcome {
 /// The order of the steps is load-bearing:
 ///
 /// 1. **The OpAMP half, only when there is one.** It is verified by actually connecting, which is
-///    ADR-0014's MUST and is scoped to this half alone — the Baseline puts that requirement under
-///    `ConnectionSettingsOffers.opamp` and justifies it by not losing access to the *Server*. A
-///    telemetry destination cannot be proved that way and is not: a receiver that is momentarily
+///    the Baseline's MUST and is scoped to this half alone — the Baseline puts that requirement
+///    under `ConnectionSettingsOffers.opamp` and justifies it by not losing access to the *Server*.
+///    A telemetry destination cannot be proved that way and is not: a receiver that is momentarily
 ///    down is not an offer that is wrong.
 /// 2. **Persist, then apply telemetry from what was persisted** — never from the raw offer. An
 ///    offer that says nothing about telemetry — an endpoint move, a heartbeat, a certificate —
 ///    would otherwise compare against `metrics: None, traces: None, logs: None` and
 ///    tear down exporters the Server never mentioned. `merge` is what puts those back. What it no
-///    longer puts back is a signal left out of an offer that *does* name one: that is a stop, and
-///    ADR-0016 is where the difference is decided.
-/// 3. **One acknowledgement for the whole message** (ADR-0014 clause 7). The Baseline hashes all
+///    longer puts back is a signal left out of an offer that *does* name one: that is a stop.
+/// 3. **One acknowledgement for the whole message**. The Baseline hashes all
 ///    settings together, so the Agent answers the message, not its parts: a single status whose
 ///    `error_message` names everything dropped across both halves.
 ///
@@ -364,7 +363,7 @@ pub async fn process_connection_offer(
         return OfferOutcome::None;
     };
     // Opened here rather than on the function, which is called once per exchange and would
-    // otherwise trace every poll that had nothing to do (ADR-0016 clause 19). What follows is one
+    // otherwise trace every poll that had nothing to do. What follows is one
     // operation with an outcome the Server is told about, which is what a span is for here.
     //
     // `reconnect` is a field and not a phase: the reconnection itself happens after this returns,
@@ -391,7 +390,7 @@ pub async fn process_connection_offer(
             return OfferOutcome::Applied;
         }
         // The issued certificate is stored only now, after connecting with it proved it works — the
-        // old one stays in force until here (ADR-0021).
+        // old one stays in force until here.
         if let Some(certificate) = &settings.certificate {
             if let Err(e) = crate::csr::accept(&config.state_dir, &certificate.cert) {
                 tracing::warn!(error = %e, "cannot store the issued certificate");
@@ -437,8 +436,7 @@ pub async fn process_connection_offer(
     }
 }
 
-/// The upstream connection `supervisor.toml` describes, with the client identity in force
-/// (ADR-0021).
+/// The upstream connection `supervisor.toml` describes, with the client identity in force.
 ///
 /// # Errors
 /// Returns an error when a TLS file cannot be read.
@@ -449,7 +447,7 @@ pub fn connection(config: &ClientConfig) -> Result<Connection, String> {
 /// The same connection with other TLS material — a candidate certificate under test.
 ///
 /// It carries no `Authorization`: the Server admits by the client certificate alone, and this
-/// Client sends no credential upstream (ADR-0021 clause 3).
+/// Client sends no credential upstream.
 #[must_use]
 pub fn connection_with(config: &ClientConfig, tls: ClientTls) -> Connection {
     Connection {
@@ -487,7 +485,7 @@ pub async fn run(
         match opamp::client::connection::run(&connection, &mut session, shutdown).await? {
             Ended::Stopped => RunOutcome::Shutdown,
             Ended::Reconnect => RunOutcome::Reconfigured,
-            // The only end the Client asks for is the self-update restart (ADR-0018).
+            // The only end the Client asks for is the self-update restart.
             Ended::End => RunOutcome::RestartForUpdate,
         },
     )
@@ -498,11 +496,11 @@ pub async fn run(
 pub enum RunOutcome {
     /// The operator stopped the Client; processes are down, goodbyes sent.
     Shutdown,
-    /// Verified connection settings took effect (ADR-0014): the runtime re-resolves the
+    /// Verified connection settings took effect: the runtime re-resolves the
     /// effective configuration and reconnects — possibly on the other transport.
     Reconfigured,
-    /// A self-update installed a new version of the Client and moved the `current` pointer
-    /// (ADR-0018). The run ends here and the process exits asking for a restart; what comes back
+    /// A self-update installed a new version of the Client and moved the `current` pointer.
+    /// The run ends here and the process exits asking for a restart; what comes back
     /// up is the new version, which reports the outcome.
     RestartForUpdate,
 }
@@ -548,7 +546,7 @@ mod tests {
         }
     }
 
-    /// ADR-0014: an offer carrying only a telemetry destination is applied **in place** — no
+    /// An offer carrying only a telemetry destination is applied **in place** — no
     /// verification by connecting, no reconnect — and acknowledged. Before it, the Client required
     /// `opamp` to be present and dropped this message whole: no `APPLYING`, no status, no
     /// exporters, and a Server whose hash gate therefore never closed and re-offered for ever.
@@ -557,7 +555,7 @@ mod tests {
         opamp::tls::install_ring_provider();
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut engine, config, uid) = engine_with_state_dir(&dir);
-        // Loopback is the cleartext exception (ADR-0016) — nothing leaves the machine.
+        // Loopback is the cleartext exception — nothing leaves the machine.
         engine.handle(&telemetry_only_offer(
             uid,
             "http://127.0.0.1:4318/v1/metrics",
@@ -599,13 +597,12 @@ mod tests {
 
     /// And a destination this Client refuses is reported `FAILED` naming the reason, on the same
     /// offer — not warned to a log while the Server is told everything applied.
-    /// Verifies: ADR-0016
     #[tokio::test]
     async fn a_refused_telemetry_destination_is_reported_failed_on_the_same_offer() {
         opamp::tls::install_ring_provider();
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut engine, config, uid) = engine_with_state_dir(&dir);
-        // Cleartext to a public host name: the Baseline's "MAY refuse", taken (ADR-0016).
+        // Cleartext to a public host name: the Baseline's "MAY refuse", taken.
         engine.handle(&telemetry_only_offer(
             uid,
             "http://collector.example:4318/v1/metrics",
@@ -643,8 +640,7 @@ mod tests {
     }
 
     /// The Supervisor-set apply refuses to run on a host that keeps its set, whatever put a set in
-    /// front of it: nothing is written and nothing is sent (ADR-0017 clause 43).
-    /// Verifies: ADR-0017
+    /// front of it: nothing is written and nothing is sent.
     #[tokio::test]
     async fn the_supervisor_set_apply_refuses_to_run_on_a_host_that_keeps_its_set() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -677,7 +673,6 @@ mod tests {
 
     /// A shutdown ends a download that is waiting out a `Retry-After` from its Server origin: the
     /// call returns at once, and no failure is reported for the download.
-    /// Verifies: ADR-0026
     #[tokio::test]
     async fn a_shutdown_stops_a_download_waiting_out_retry_after() {
         opamp::tls::install_ring_provider();
@@ -774,13 +769,12 @@ mod tests {
     /// The Baseline permits interim status reports while a package downloads, and this is what
     /// they are for: a transfer that takes longer than a moment stays visible instead of looking
     /// like a stuck install. Driven by a server that trickles the artifact out.
-    /// Verifies: ADR-0026
     #[tokio::test]
     async fn a_slow_download_is_reported_as_downloading_with_progress() {
         opamp::tls::install_ring_provider();
         let artifact = vec![7u8; 3072];
         let content_hash = Sha256::digest(&artifact).to_vec();
-        // Signed by a Package Signer of a test Root: a Client takes nothing unsigned (ADR-0066).
+        // Signed by a Package Signer of a test Root: a Client takes nothing unsigned.
         let root = classis_core::package::testing::TestRoot::new();
         let signature = root.signer().sign_artifact(
             "otelcol",
@@ -822,8 +816,7 @@ mod tests {
         state.accept_packages();
         let mut engine = Engine::new(vec![state]);
         let uid = engine.poll_reports()[0].instance_uid.clone();
-        // A Client verifies up to its Package Roots, and fetches from its own Server's origin
-        // (ADR-0066, ADR-0033).
+        // A Client verifies up to its Package Roots, and fetches from its own Server's origin.
         let config = ClientConfig {
             endpoint: format!("ws://{addr}/v1/opamp"),
             state_dir: dir.path().to_path_buf(),

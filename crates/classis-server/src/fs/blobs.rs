@@ -1,4 +1,4 @@
-//! Artifact bytes on the filesystem (ADR-0037 clause 4): the default adapter behind
+//! Artifact bytes on the filesystem: the default adapter behind
 //! [`BlobStore`](crate::blobs::BlobStore).
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ pub struct FsBlobStore {
 
 impl FsBlobStore {
     /// Opens the store in the data directory `root`, creating `blobs/` owner-only. The package
-    /// store lists it once when it opens, which hashes every blob again (ADR-0037 clause 4).
+    /// store lists it once when it opens, which hashes every blob again.
     ///
     /// # Errors
     /// Returns an error when the directory cannot be created.
@@ -112,7 +112,7 @@ impl BlobStore for FsBlobStore {
         super::remove_file(&self.path(sha256)?)
     }
 
-    /// Every blob, each hashed again by streaming it — the startup check of ADR-0037 clause 4. A
+    /// Every blob, each hashed again by streaming it — the startup check. A
     /// blob whose content does not match its name fails naming it, and so does anything in the
     /// directory that is not a blob; a staging file a crash left is removed.
     fn list(&self) -> Result<Vec<(String, u64)>, String> {
@@ -161,7 +161,6 @@ mod tests {
     use super::*;
 
     /// Identical bytes are stored once, under their hash, owner-only; what was stored reads back.
-    /// Verifies: ADR-0037
     #[test]
     fn identical_bytes_are_one_blob_named_by_its_hash() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -216,7 +215,6 @@ mod tests {
 
     /// A blob whose content does not match its name fails the startup listing naming it, and so
     /// does a file that is no blob; a staging file a crash left is removed.
-    /// Verifies: ADR-0037
     #[test]
     fn a_blob_that_does_not_match_its_name_fails_the_open_naming_it() {
         let dir = tempfile::tempdir().expect("tempdir");

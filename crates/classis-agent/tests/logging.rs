@@ -1,4 +1,4 @@
-//! The Client's own log file, driven through the real binary (ADR-0019).
+//! The Client's own log file, driven through the real binary.
 //!
 //! The unit tests cover the writer and the rotation; what they cannot show is the thing the
 //! decision exists for — that a process started the way a service manager starts it actually
@@ -66,7 +66,6 @@ fn wait_for_log(dir: &Path, within: Duration) -> Option<std::path::PathBuf> {
 
 /// The whole point: started as a service, the Client writes a log somebody can read — which on
 /// Windows is the only copy that exists, since the SCM discards stderr.
-/// Verifies: ADR-0019
 #[test]
 fn a_service_run_writes_a_log_file() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -90,7 +89,6 @@ fn a_service_run_writes_a_log_file() {
 /// A person at a terminal is already reading stderr, so nothing is written to disk. This is the
 /// half that keeps the feature from quietly leaving files behind every time somebody runs the
 /// Client by hand.
-/// Verifies: ADR-0019
 #[test]
 fn a_foreground_run_writes_no_log_file() {
     let dir = tempfile::tempdir().expect("tempdir");

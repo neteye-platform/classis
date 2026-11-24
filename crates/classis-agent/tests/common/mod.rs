@@ -5,7 +5,7 @@ use std::path::Path;
 /// Writes a throwaway self-signed client certificate and key into `dir` and returns the `[tls]`
 /// table that names them, to be appended at the end of a `supervisor.toml`.
 ///
-/// The Client refuses to start without a client certificate (ADR-0021). The test Servers serve
+/// The Client refuses to start without a client certificate. The test Servers serve
 /// plaintext with an open admission and do not check it, so the files only have to exist and
 /// parse.
 pub fn client_identity(dir: &Path) -> String {
@@ -27,7 +27,7 @@ pub fn client_identity(dir: &Path) -> String {
 
 /// The fleet state on `dir` with the Deployments armed, as the binary wires it: the Configuration
 /// store under `fleet-configs`, and an empty package store under `packages`, which arms the
-/// Deployments that release Configurations and Packages alike (ADR-0034).
+/// Deployments that release Configurations and Packages alike.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub fn fleet_state(dir: &Path) -> classis_server::fleet::AppState {
     let packages =
@@ -41,7 +41,7 @@ pub fn fleet_state(dir: &Path) -> classis_server::fleet::AppState {
 }
 
 /// Saves a top-level Configuration for the Agent type `service_name` — content only, distributed
-/// to nobody (ADR-0034).
+/// to nobody.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub fn save(state: &classis_server::fleet::AppState, name: &str, body: &str, service_name: &str) {
     state
@@ -66,7 +66,7 @@ pub const CHANNEL: (&str, &str) = ("channel", "e2e");
 pub const FLEET_DEPLOYMENT: &str = "fleet";
 
 /// Aims the Deployment `deployment` at `selector`, puts `configurations` into it beside what it
-/// already holds, and rolls it out (ADR-0034) — answering how many Agents the press moved.
+/// already holds, and rolls it out — answering how many Agents the press moved.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub fn release(
     state: &classis_server::fleet::AppState,
@@ -96,7 +96,7 @@ pub fn release(
 }
 
 /// Releases `configurations` to every Agent the Server knows now, the way an operator does since
-/// ADR-0034: each Agent is labelled into the [`CHANNEL`] (beside the labels it has), and the
+/// Each Agent is labelled into the [`CHANNEL`] (beside the labels it has), and the
 /// [`FLEET_DEPLOYMENT`] aimed at that channel holds the Configurations and is rolled out. An Agent
 /// that appears later waits, as it would for any press.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
@@ -117,7 +117,7 @@ pub fn release_to_every_agent(
     release(state, FLEET_DEPLOYMENT, &[CHANNEL], configurations)
 }
 
-/// The Package Roots of these tests (ADR-0066): `ours`, which the Client under test trusts through
+/// The Package Roots of these tests: `ours`, which the Client under test trusts through
 /// [`classis_core::package::DEBUG_ROOT_ENV`] — a debug build only — and the Server too, and
 /// `theirs`, which only the Server trusts, so a signature it holds can still fail the Client's own
 /// check.
@@ -170,7 +170,7 @@ pub fn package_root_file(dir: &Path) -> std::path::PathBuf {
     path
 }
 
-/// A Server's package store on `dir`, checking signatures up to both test Roots (ADR-0066).
+/// A Server's package store on `dir`, checking signatures up to both test Roots.
 #[allow(dead_code)]
 pub fn server_store(dir: &Path) -> classis_server::packages::PackageStore {
     let roots = package_roots();

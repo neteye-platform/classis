@@ -34,22 +34,21 @@
   // `postCreateCommand` below, which also installs the system packages listed there.
 
   // DevContainer Features layered on top of the base image. The container intentionally has NO
-  // access to the host Docker daemon (no socket mount) — see ADR-0002. Manage the host's containers
-  // from a host-side VS Code extension instead (README → "Host container management").
+  // access to the host Docker daemon (no socket mount). Manage the host's containers from a
+  // host-side VS Code extension instead (README → "Host container management").
   "features": {
     // GitHub CLI (`gh`) — used by the coding agent for GitHub operations and as the git
     // credential helper. Git writes still require explicit human approval (see AGENTS.md §6).
     "ghcr.io/devcontainers/features/github-cli:1": {},
     // Rust stable toolchain (rustup + cargo, with rustfmt & clippy) — the project's language
-    // toolchain (ADR-0010). The build chain needs no system protoc (ADR-0011 uses the
-    // pure-Rust protox), so no extra system packages are required here.
+    // toolchain. The build chain needs no system protoc (it uses the pure-Rust protox), so no
+    // extra system packages are required here.
     "ghcr.io/devcontainers/features/rust:1": {}
   },
 
   // System packages the base image does not carry, installed once when the container is created.
   //
-  // Both are *developer tooling* — nothing shipped depends on them, which is why they
-  // need no ADR (AGENTS.md §3.6) — and each earns its place:
+  // Both are *developer tooling* — nothing shipped depends on them — and each earns its place:
   //
   //   socat     forwards the host's development stores onto this container's loopback, see
   //             `postStartCommand` below.
@@ -61,8 +60,8 @@
 
   // Runs inside the container on every start. The development stores run on the host, apart from
   // this container (dev/compose.yaml); this puts their rustfs on the container's loopback at :9100,
-  // the S3 store a development Server may use (ADR-0049), and their PostgreSQL at :5432, the
-  // database it may keep its records in (ADR-0050). See dev/README.md.
+  // the S3 store a development Server may use, and their PostgreSQL at :5432, the
+  // database it may keep its records in. See dev/README.md.
   "postStartCommand": ".devcontainer/forward-dev-stores.sh",
 
   "customizations": {
@@ -79,7 +78,7 @@
     }
   },
 
-  // The Server's two planes (ADR-0013), published the way each one is meant to be reached.
+  // The Server's two planes, published the way each one is meant to be reached.
   //
   // The Agent plane (4320, OpAMP + package downloads) is where the fleet connects, so `appPort`
   // publishes it through Docker itself (`-p 0.0.0.0:4320:4320`) and the Server is reachable from

@@ -1,5 +1,5 @@
-//! Which TLS material the Client uses (ADR-0013, ADR-0021), read from disk and handed to `opamp` as
-//! [`ClientTls`] (ADR-0010).
+//! Which TLS material the Client uses, read from disk and handed to `opamp` as
+//! [`ClientTls`].
 //!
 //! The decisions are the Client's: an optional CA file that *replaces* the built-in roots, and the
 //! identity in force — the one the Server issued, else the one the operator configured. Building a
@@ -14,19 +14,19 @@ use zeroize::Zeroizing;
 use crate::config::ClientConfig;
 
 /// The Server-issued client certificate, in the state directory beside the connection settings —
-/// it belongs to the Client's one upstream connection, not to any single Agent (ADR-0021).
+/// it belongs to the Client's one upstream connection, not to any single Agent.
 pub const ISSUED_CERT_FILE: &str = "client-cert.pem";
 /// The private key of [`ISSUED_CERT_FILE`]. Generated on this host and never sent anywhere: what
 /// leaves is a CSR over its public half.
 pub const ISSUED_KEY_FILE: &str = "client-key.pem";
 /// The key a request in flight asks to be certified, kept apart from [`ISSUED_KEY_FILE`] so the
-/// certificate in force keeps its own key until the new one is proved (ADR-0021 clause 11).
+/// certificate in force keeps its own key until the new one is proved.
 pub const PENDING_KEY_FILE: &str = "client-key.pending.pem";
 /// An issued certificate staged beside [`PENDING_KEY_FILE`] while the two are put in force, so a
 /// swap cut short is completed at the next start rather than leaving a mismatched pair.
 pub const PENDING_CERT_FILE: &str = "client-cert.pending.pem";
 /// The request in flight, re-sent unchanged until it is answered — the enrolment queue knows a
-/// request by its public key (ADR-0021 clause 21).
+/// request by its public key.
 pub const PENDING_CSR_FILE: &str = "client-csr.pending.pem";
 
 /// The trust and the identity in force.
@@ -38,7 +38,7 @@ pub fn client_tls(config: &ClientConfig) -> Result<ClientTls, String> {
 }
 
 /// The same, for a **candidate** identity: an offered certificate is proved by connecting with it
-/// before it is stored (ADR-0014's MUST, applied to the certificate in ADR-0021), so the
+/// before it is stored (the Baseline's MUST, applied to the certificate), so the
 /// certificate under test comes from the offer while its key is the pending one on disk.
 ///
 /// # Errors
@@ -67,14 +67,14 @@ pub fn client_tls_for(
                 ));
             }
             // `opamp` takes the key as its own buffer; the copy is made here and the one read
-            // is wiped (ADR-0057 clause 3).
+            // is wiped.
             Some(Identity {
                 cert_pem: cert.to_vec(),
                 key_pem: key_in(&key, state_file(&key)?)?.to_vec(),
             })
         }
         // An identity opened from a `bootstrap.p12` stands in for the configured one until the
-        // Server's certificate is stored (ADR-0029 clause 7); the issued one outranks both.
+        // Server's certificate is stored; the issued one outranks both.
         None => match (&config.bootstrap_identity, config.is_enrolled()) {
             (Some(bootstrap), false) => Some(Identity {
                 cert_pem: bootstrap.cert_pem.clone(),
@@ -123,7 +123,7 @@ fn certificates_in(path: &Path, pem: Vec<u8>) -> Result<Vec<u8>, String> {
 }
 
 /// A PEM file holding a private key, parsed here so that a bad one is named by its path. The key
-/// is held, and parsed, in buffers wiped when they are dropped (ADR-0057).
+/// is held, and parsed, in buffers wiped when they are dropped.
 pub(crate) fn key_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, String> {
     key_in(path, read(path)?)
 }
@@ -136,8 +136,8 @@ fn key_in(path: &Path, pem: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(pem)
 }
 
-/// The identity in the PKCS#12 file at `path`, under `password`, as PEM in memory (ADR-0029
-/// clause 7). A file over [`classis_core::pkcs12::MAX_FILE_BYTES`] is refused before it is read.
+/// The identity in the PKCS#12 file at `path`, under `password`, as PEM in memory. A file over
+/// [`classis_core::pkcs12::MAX_FILE_BYTES`] is refused before it is read.
 ///
 /// # Errors
 /// [`OpenError::WrongPassword`](classis_core::pkcs12::file::OpenError) when the password does not
@@ -159,7 +159,7 @@ pub fn pkcs12_identity(
         return Err(invalid(format!("larger than {limit} bytes")));
     }
     let file = std::fs::File::open(path).map_err(|e| invalid(format!("cannot read it: {e}")))?;
-    // Read at its final size, so no grown buffer is left behind unwiped (ADR-0057).
+    // Read at its final size, so no grown buffer is left behind unwiped.
     let mut bytes = Zeroizing::new(Vec::with_capacity(
         usize::try_from(meta.len()).unwrap_or_default(),
     ));
@@ -180,7 +180,7 @@ pub fn pkcs12_identity(
 }
 
 /// `der` as one PEM block, in buffers wiped when they are dropped and sized up front, so none is
-/// grown and left behind (ADR-0057).
+/// grown and left behind.
 fn pem_block(label: &str, der: &[u8]) -> Zeroizing<String> {
     use base64::Engine as _;
     let body = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(der));
@@ -206,7 +206,7 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// A file of the state directory, never read through a link: an install reads it as root, and the
-/// directory belongs to the service's account (ADR-0054).
+/// directory belongs to the service's account.
 fn state_file(path: &Path) -> Result<Vec<u8>, String> {
     crate::nofollow::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
@@ -216,9 +216,7 @@ mod tests {
     use super::*;
 
     /// A `bootstrap.p12` opens to PEM in memory and stands in for the configured identity until
-    /// the Server's certificate is stored; a file over the bound is refused unread (ADR-0029
-    /// clause 7).
-    /// Verifies: ADR-0029
+    /// the Server's certificate is stored; a file over the bound is refused unread.
     #[test]
     fn an_opened_bootstrap_p12_is_presented_until_the_client_is_enrolled() {
         use classis_core::pkcs12::file::OpenError;
@@ -291,7 +289,6 @@ mod tests {
     /// bootstrap identity, a key file, a bootstrap password, the Supervisor Endpoint token and
     /// `[packages] archive_key`.
     /// Were any of them a plain buffer again, this would not compile.
-    /// Verifies: ADR-0057
     #[test]
     fn the_clients_secrets_are_held_in_zeroizing_buffers() {
         use crate::config::BootstrapIdentity;
