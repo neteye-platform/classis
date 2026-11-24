@@ -11,6 +11,8 @@ its tag exists.
 
 ## [Unreleased]
 
+## [0.2.0]
+
 ### Added
 
 - **Each release signs the Client's archives**. Beside every
@@ -27,7 +29,8 @@ its tag exists.
   Clients are not told.
 - **A release starts from a pushed tag, `v<version>`.** The `Release` workflow
   no longer creates the tag, and a run started by hand is a dry run. The tag is
-  `v0.1.0`; a build recognises a release by it.
+  `v` followed by the version, `v0.2.0` for this release; a build recognises a
+  release by it.
 
 ### Changed
 
