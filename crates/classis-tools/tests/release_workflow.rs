@@ -1,4 +1,4 @@
-//! The release workflow, read as data (ADR-0028 clauses 17 to 19): which rows build and publish the
+//! The release workflow, read as data: which rows build and publish the
 //! operator tool, how its archives are named, packed and checked, and that what selects the
 //! Client's archives never picks up one of the operator tool's. Read as text, step by step — the
 //! workflow is the contract, and parsing its YAML would add a dependency to state what a line says.
@@ -52,7 +52,6 @@ fn glob(pattern: &str, name: &str) -> bool {
     }
 }
 
-// Verifies: ADR-0028
 #[test]
 fn the_operator_tool_is_built_for_two_targets_and_its_version_asserted_where_it_runs() {
     let workflow = workflow();
@@ -101,7 +100,6 @@ fn the_operator_tool_is_built_for_two_targets_and_its_version_asserted_where_it_
 
 /// The release's three targets, each built on a runner that runs it, so every row asserts the
 /// version its own binary reports and none skips it.
-// Verifies: ADR-0067
 #[test]
 fn the_release_builds_three_targets_each_on_a_runner_that_runs_it() {
     let workflow = workflow();
@@ -145,7 +143,6 @@ fn the_release_builds_three_targets_each_on_a_runner_that_runs_it() {
 
 /// The workflows that build and test the product on a platform name no macOS target and no macOS
 /// runner.
-// Verifies: ADR-0067
 #[test]
 fn no_workflow_builds_or_tests_on_macos() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
@@ -163,7 +160,6 @@ fn no_workflow_builds_or_tests_on_macos() {
     assert!(found.is_empty(), "a macOS target or runner: {found:#?}");
 }
 
-// Verifies: ADR-0028
 #[test]
 fn each_archive_is_named_like_the_clients_packed_by_the_tool_and_checksummed() {
     let workflow = workflow();
@@ -225,7 +221,6 @@ fn each_archive_is_named_like_the_clients_packed_by_the_tool_and_checksummed() {
     }
 }
 
-// Verifies: ADR-0028
 #[test]
 fn the_notes_upload_loop_selects_the_clients_archives_alone() {
     let workflow = workflow();
@@ -256,7 +251,6 @@ fn the_notes_upload_loop_selects_the_clients_archives_alone() {
     }
 }
 
-// Verifies: ADR-0028
 #[test]
 fn the_crate_declares_one_binary_and_no_library() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -303,14 +297,13 @@ fn words_after<'w>(text: &'w str, prefix: &str) -> Vec<&'w str> {
         .collect()
 }
 
-/// The action a `uses:` value names, without its ref: the pin and its comment are ADR-0060's, and
-/// `scripts/check-action-refs.sh` holds them.
+/// The action a `uses:` value names, without its ref: the pin and its comment are held by
+/// `scripts/check-action-refs.sh`.
 fn action(uses: &str) -> &str {
     uses.split_once('@').map_or(uses, |(action, _)| action)
 }
 
-/// What every release publishes, as the `publish` job's globs name it (ADR-0045 clause 8, with
-/// the signatures ADR-0065 clause 9 keeps).
+/// What every release publishes, as the `publish` job's globs name it, the signatures included.
 const PUBLISHED: [&str; 7] = [
     "*.tar.gz",
     "*.tar.gz.sig",
@@ -321,7 +314,6 @@ const PUBLISHED: [&str; 7] = [
     "SHA256SUMS",
 ];
 
-// Verifies: ADR-0045
 #[test]
 fn only_the_publish_job_may_attest() {
     let workflow = workflow();
@@ -334,7 +326,7 @@ fn only_the_publish_job_may_attest() {
 
     let publish = job(&workflow, "publish");
     let permissions = permissions(publish);
-    // `packages: write` pushes the image's attestation and tags the image (ADR-0052 clause 11).
+    // `packages: write` pushes the image's attestation and tags the image.
     for grant in [
         "id-token: write",
         "attestations: write",
@@ -375,7 +367,7 @@ fn only_the_publish_job_may_attest() {
         ]
     );
 
-    // It downloads the SBOMs, the two programs' archives and the signatures (ADR-0065 clause 9),
+    // It downloads the SBOMs, the two programs' archives and the signatures,
     // and not the tracked certificate, which travels inside each signature, nor the Server's binaries, which ship inside the image alone,
     // nor the archives' lone checksums, which were the signing job's. Every artifact the workflow
     // uploads under another name is one of those, and the pattern names each.
@@ -411,7 +403,6 @@ fn only_the_publish_job_may_attest() {
     );
 }
 
-// Verifies: ADR-0045
 #[test]
 fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
     let workflow = workflow();
@@ -476,7 +467,6 @@ fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
     assert_eq!(published, PUBLISHED, "{release}");
 }
 
-// Verifies: ADR-0045
 #[test]
 fn the_sbom_job_writes_one_sbom_per_program_and_target_with_a_pinned_tool() {
     let workflow = workflow();
@@ -565,7 +555,6 @@ fn the_sbom_job_writes_one_sbom_per_program_and_target_with_a_pinned_tool() {
     }
 }
 
-// Verifies: ADR-0045
 #[test]
 fn the_notes_say_how_to_verify() {
     let workflow = workflow();
@@ -645,7 +634,6 @@ fn all<'i>(instructions: &'i [(String, String)], keyword: &str) -> Vec<&'i str> 
 
 const BASE: &str = "gcr.io/distroless/cc-debian13:nonroot";
 
-// Verifies: ADR-0052
 #[test]
 fn the_containerfile_copies_the_release_binary_onto_a_pinned_distroless_base_and_runs_nothing() {
     let text = containerfile();
@@ -744,7 +732,6 @@ fn the_containerfile_copies_the_release_binary_onto_a_pinned_distroless_base_and
     );
 }
 
-// Verifies: ADR-0052
 #[test]
 fn both_linux_rows_build_the_server_and_assert_its_version() {
     let workflow = workflow();
@@ -796,7 +783,6 @@ fn both_linux_rows_build_the_server_and_assert_its_version() {
     assert!(!upload.contains(".sha256"), "{upload}");
 }
 
-// Verifies: ADR-0052
 #[test]
 fn the_sbom_job_describes_the_server_for_both_linux_targets() {
     let workflow = workflow();
@@ -817,7 +803,6 @@ fn the_sbom_job_describes_the_server_for_both_linux_targets() {
     assert_eq!(linux, 2, "{write}");
 }
 
-// Verifies: ADR-0052
 #[test]
 fn the_image_job_builds_checks_and_pushes_by_digest_alone() {
     let workflow = workflow();
@@ -953,7 +938,6 @@ fn the_image_job_builds_checks_and_pushes_by_digest_alone() {
     }
 }
 
-// Verifies: ADR-0052
 #[test]
 fn the_publish_job_attests_and_verifies_the_image_before_it_tags_it() {
     let workflow = workflow();
@@ -1014,7 +998,6 @@ fn the_publish_job_attests_and_verifies_the_image_before_it_tags_it() {
     assert!(order.is_sorted(), "{order:?}");
 }
 
-// Verifies: ADR-0052
 #[test]
 fn the_notes_name_the_image_by_its_digest_and_say_how_to_verify_it() {
     let workflow = workflow();
@@ -1056,7 +1039,6 @@ fn actions(job: &str) -> Vec<&str> {
         .collect()
 }
 
-// Verifies: ADR-0065
 #[test]
 fn a_release_starts_only_from_a_tag_a_person_pushed() {
     let workflow = workflow();
@@ -1095,7 +1077,7 @@ fn a_release_starts_only_from_a_tag_a_person_pushed() {
     );
     assert!(read.contains("else\n  publish=false\nfi"), "{read}");
 
-    // The tagged commit must be on main (clause 4).
+    // The tagged commit must be on main.
     let on_main = step(version, "The tag is on main");
     assert!(
         on_main.contains("if: steps.read.outputs.publish == 'true'"),
@@ -1107,7 +1089,6 @@ fn a_release_starts_only_from_a_tag_a_person_pushed() {
     );
 }
 
-// Verifies: ADR-0065
 #[test]
 fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_repository() {
     let workflow = workflow();
@@ -1139,7 +1120,7 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
     assert_eq!(grants(permissions(sign)), ["contents: read"]);
 
     // No checkout, no build, two kinds of action: it fetches the archives' checksums and the
-    // tracked certificate, and hands back the signatures (ADR-0065 clause 6).
+    // tracked certificate, and hands back the signatures.
     assert!(!sign.contains("actions/checkout"), "{sign}");
     assert!(!sign.contains("cargo "), "{sign}");
     assert_eq!(
@@ -1191,7 +1172,6 @@ fn openssl_3() {
     );
 }
 
-// Verifies: ADR-0065, ADR-0066
 #[test]
 fn the_signing_step_signs_the_statement_the_client_verifies() {
     use classis_core::package::testing::TestRoot;
@@ -1289,7 +1269,7 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
         .expect("remove");
 
     // A key that is not the tracked certificate's is refused: each signature is verified under the
-    // certificate before it is kept (ADR-0065 clause 6).
+    // certificate before it is kept.
     let other = root.signer();
     std::fs::write(&key_file, other.pkcs8_v1()).expect("another key");
     let sig_file = entries.join("supervisor_1.2.3_linux_amd64.tar.gz.sig");
@@ -1310,7 +1290,6 @@ fn the_signing_step_signs_the_statement_the_client_verifies() {
     assert!(!run().success(), "a non-certificate was carried");
 }
 
-// Verifies: ADR-0065, ADR-0066
 #[test]
 fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
     let workflow = workflow();
@@ -1350,7 +1329,6 @@ fn the_signatures_and_the_tracked_certificate_reach_the_sign_job() {
     assert!(!notes.contains("package-signing-key.pub"), "{notes}");
 }
 
-// Verifies: ADR-0065, ADR-0066
 #[test]
 fn the_tracked_certificate_is_a_package_signer() {
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/package-signer.der");
@@ -1393,7 +1371,6 @@ fn the_tracked_certificate_is_a_package_signer() {
 /// A release is started by a signed tag, which is an annotated one: `ls-remote` lists it as its
 /// tag object and as the commit it names. The step that refuses a spent number takes the tag that
 /// started the run, whichever of the two `GITHUB_SHA` holds, and refuses one on another commit.
-// Verifies: ADR-0065
 #[test]
 fn the_version_step_takes_the_annotated_tag_that_started_the_run() {
     let workflow = workflow();

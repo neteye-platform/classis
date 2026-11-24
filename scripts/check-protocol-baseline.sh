@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The Protocol Baseline check (ADR-0011 clause 4, specification G-13): the pinned upstream
+# The Protocol Baseline check (specification G-13): the pinned upstream
 # opamp-spec version all protocol code is written against must stay a deliberate choice, so the pin
 # is compared with upstream's newest release and a divergence is reported rather than discovered.
 #

@@ -1,11 +1,11 @@
-//! The Client's own log on disk, while it runs as a service (ADR-0019).
+//! The Client's own log on disk, while it runs as a service.
 //!
 //! The Windows SCM discards a service's stderr, so a Client installed there had no readable log at
 //! all; systemd does capture it, and the file is written on Linux too so that "where are the logs"
 //! has one answer everywhere — including in a container, where there is no journal. In the
 //! foreground nothing is written: somebody is reading stderr there.
 //!
-//! This is not the OTLP own-logs bridge (ADR-0016) under another name. That one needs a Server that
+//! This is not the OTLP own-logs bridge under another name. That one needs a Server that
 //! is already reachable, which is exactly what a bad `supervisor.toml`, an unusable certificate, or a
 //! refused endpoint is not.
 //!
@@ -91,7 +91,7 @@ fn prepare(dir: &Path, private: bool) -> std::io::Result<()> {
 }
 
 /// Creates the log directory owner-only, `0700`, and narrows one that exists, with the Client's
-/// log files already in it, to the Client alone: `0700` and `0600` (ADR-0059 clause 6). For a log
+/// log files already in it, to the Client alone: `0700` and `0600`. For a log
 /// directory beneath a state directory that the process account's group passes through, which
 /// [`is_private`] decides: the log is never among what that group reads. The appender creates each
 /// day's file at the umask; the directory is what keeps it.
@@ -135,8 +135,8 @@ fn keep_private(dir: &Path) -> std::io::Result<()> {
 /// Where a process account is registered, refuses a `dir` that narrowing would take from the
 /// process account's group, or that would put the log where that group reads or writes: one
 /// named with `..`, the state directory itself, the Supervisors' root `supervisors_root` or one
-/// it lies beneath, and the directory of one of `supervisors` or one beneath it (ADR-0059 clause
-/// 6). Another directory beneath the Supervisors' root is not refused: `<state_dir>/logs`, the
+/// it lies beneath, and the directory of one of `supervisors` or one beneath it. Another directory
+/// beneath the Supervisors' root is not refused: `<state_dir>/logs`, the
 /// default, lies there where the Supervisors' root is the state directory itself.
 pub fn is_private(
     dir: &Path,
@@ -184,7 +184,7 @@ pub fn is_private(
 /// Where the log goes for a given state directory, unless `[logging] dir` names somewhere else.
 ///
 /// The state directory is the right home: it survives a self-update and `uninstall` deliberately
-/// does not delete it (ADR-0019), so a log explaining a failed install is still there afterwards.
+/// does not delete it, so a log explaining a failed install is still there afterwards.
 pub fn default_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(DIR_NAME)
 }
@@ -198,7 +198,6 @@ mod tests {
 
     /// Until a directory is named, the writer swallows everything rather than failing: it is
     /// consulted from the first line of `main`, before any instance exists.
-    /// Verifies: ADR-0019
     #[test]
     fn the_writer_discards_until_a_file_is_opened() {
         // `FILE` is process-global and another test may have opened it, so this asserts the
@@ -210,7 +209,6 @@ mod tests {
         }
     }
 
-    /// Verifies: ADR-0019
     #[test]
     fn the_log_directory_hangs_off_the_state_directory() {
         assert_eq!(
@@ -255,11 +253,10 @@ mod tests {
         );
     }
 
-    /// The log is the Client's alone (ADR-0059 clause 6) where a process account passes through
+    /// The log is the Client's alone where a process account passes through
     /// the state directory it lies in: its directory is made `0700`, and one that exists — made at
     /// the umask by an earlier version — is narrowed to `0700` with the Client's log files in it
     /// `0600`. A file there that the appender did not name is left as it is.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_log_directory_and_its_files_are_the_clients_alone() {
@@ -290,8 +287,7 @@ mod tests {
     /// is refused: the state directory itself, the Supervisors' root or a directory above it, a
     /// Supervisor's directory or one beneath it, and a path that reaches any of them through `..`.
     /// A real subdirectory of the state directory is narrowed, and so is one beside a Supervisors'
-    /// root the operator moved out of it (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// root the operator moved out of it.
     #[test]
     fn a_log_directory_the_process_accounts_group_passes_through_is_refused() {
         let state = Path::new("/var/lib/classis/state");
@@ -334,8 +330,7 @@ mod tests {
 
     /// Where the Supervisors' root is the state directory itself, the default log directory
     /// `<state_dir>/logs` is the Client's and narrowed, unless a Supervisor is named `logs`; a
-    /// Supervisor's directory there is refused as anywhere (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// Supervisor's directory there is refused as anywhere.
     #[test]
     fn the_default_log_directory_is_kept_where_the_supervisors_root_is_the_state_directory() {
         let state = Path::new("/var/lib/classis/state");
@@ -349,8 +344,7 @@ mod tests {
 
     /// A log directory is kept private only beneath the state directory and only where a process
     /// account is registered; otherwise — and in a directory the operator chose elsewhere, such
-    /// as `/var/log` — the directory and what it holds stay as they are (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// as `/var/log` — the directory and what it holds stay as they are.
     #[cfg(unix)]
     #[test]
     fn a_log_directory_elsewhere_or_without_a_process_account_is_left_as_it_is() {

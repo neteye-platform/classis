@@ -1,4 +1,4 @@
-//! Configurations in PostgreSQL (ADR-0050 clause 14): the PostgreSQL adapter behind
+//! Configurations in PostgreSQL: the PostgreSQL adapter behind
 //! [`ConfigBackend`](crate::configs::ConfigBackend) — one row per Configuration, its retained
 //! revisions in rows of their own, each call one transaction.
 
@@ -115,8 +115,7 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Configur
 }
 
 /// Creates or replaces one Configuration and makes its retained revisions exactly `config`'s,
-/// inside the caller's transaction — the write this store and a rollout's revisions (ADR-0050
-/// clause 3) share.
+/// inside the caller's transaction — the write this store and a rollout's revisions share.
 pub(crate) async fn write(
     client: &impl GenericClient,
     config: &Configuration,
@@ -221,14 +220,12 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_configuration_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
         contract(&|| Box::new(FsConfigBackend::open(dir.path()).expect("open")));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_configuration_port_contract_holds_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -252,7 +249,6 @@ mod tests {
         assert_eq!(store.load().expect("load"), [before]);
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn a_put_that_fails_part_way_leaves_nothing_of_itself_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -266,7 +262,6 @@ mod tests {
 
     /// Run from inside a runtime's own thread, as the Server's handlers call the port: the bridge
     /// never needs the thread that waits for it.
-    /// Verifies: ADR-0050
     #[tokio::test(flavor = "current_thread")]
     async fn a_put_that_fails_part_way_leaves_nothing_of_itself_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -281,7 +276,6 @@ mod tests {
     }
 
     /// A row that does not decode fails the load naming it, rather than being skipped.
-    /// Verifies: ADR-0050
     #[test]
     fn a_configuration_row_that_does_not_decode_fails_the_load_naming_it() {
         let Some(test) = TestDatabase::named() else {

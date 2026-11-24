@@ -1,4 +1,4 @@
-//! The Supervisor-set apply (ADR-0017): what the Client does with a remote configuration offered
+//! The Supervisor-set apply: what the Client does with a remote configuration offered
 //! to its **own** Agent.
 //!
 //! Only the `[[supervisor]]` blocks of the offered document are read — every other top-level key
@@ -6,7 +6,7 @@
 //! never write. The offered set is validated against the running configuration's globals first;
 //! then the Supervisors that left or changed are stopped, the merged document is written to
 //! `supervisor.toml` — surgically, so the operator's comments and layout survive — the removed
-//! Supervisors' directories are purged (ADR-0017), and the changed and added Supervisors are
+//! Supervisors' directories are purged, and the changed and added Supervisors are
 //! started from the file just written. Unchanged Supervisors ride through untouched.
 
 use std::path::Path;
@@ -43,7 +43,7 @@ pub async fn apply(
     shutdown: &Shutdown,
 ) -> Vec<AgentToServer> {
     let hash = offer.config_hash.clone();
-    // The outcome the Server is told is the outcome the trace carries (ADR-0016), including the
+    // The outcome the Server is told is the outcome the trace carries, including the
     // distinction this module exists to keep: a refusal touched nothing, a failure did.
     let span = tracing::Span::current();
     match apply_inner(engine, config, &offer, shutdown).await {
@@ -98,11 +98,11 @@ async fn apply_inner(
     for block in &blocks {
         validate_offered_block(&candidate, block).map_err(Refused)?;
         // Against what runs now: the operator's `[supervisors]` and the running block of the
-        // same name decide what a delivered block may bring (ADR-0017 clauses 38, 39).
+        // same name decide what a delivered block may bring.
         crate::supervisor::check_delivered_block(config, block).map_err(Refused)?;
     }
     // What will be written is rendered now, before anything stops, and must read back as exactly
-    // the set just checked: what is checked is what is written (ADR-0017 clause 28).
+    // the set just checked: what is checked is what is written.
     let rendered = render_supervisors(&path, tables)
         .and_then(|text| reads_back_as(&text, &blocks).map(|()| text))
         .map_err(Refused)?;
@@ -114,7 +114,7 @@ async fn apply_inner(
         removed,
     } = plan(&config.supervisors, &blocks);
 
-    // A removed Supervisor is uninstalled (ADR-0017) — its adapter answers before the purge
+    // A removed Supervisor is uninstalled — its adapter answers before the purge
     // below — while a changed one is only stopped and restarts under its name.
     let goodbyes = engine
         .retire_supervisors(&stopping, &removed)
@@ -141,14 +141,14 @@ async fn apply_inner(
     };
 
     // Written: the file no longer names the removed Supervisors, so their directories go with
-    // them (ADR-0017) — program, packages, configuration, identity. The changed blocks in
+    // them — program, packages, configuration, identity. The changed blocks in
     // `stopping` restart under their names and keep theirs.
     drop(write);
     {
         let purge = tracing::info_span!("purge", removed = removed.len());
         // Moved aside first, so nothing that goes on removing from them reaches a Supervisor added
         // again under the same name. What the process account wrote and the Client cannot remove
-        // goes next, through the second service (ADR-0059 clause 5); the Client then deletes the
+        // goes next, through the second service; the Client then deletes the
         // rest.
         let tombs = purge.in_scope(|| entomb(config, &removed));
         release_removed(engine.plugins().as_deref(), &tombs)
@@ -180,7 +180,7 @@ async fn apply_inner(
     }
 }
 
-/// What applying an offered set does to the running one (ADR-0017), by Supervisor name.
+/// What applying an offered set does to the running one, by Supervisor name.
 #[derive(Debug, PartialEq, Eq)]
 struct Plan {
     /// Removed and changed: stopped before the file is written.
@@ -245,7 +245,7 @@ struct Tomb {
 enum Aside {
     /// Nothing: a block that failed to start owns no directory yet, and purged is what it is.
     Nothing,
-    /// A link, which is removed as a link and never followed (ADR-0017 clause 35).
+    /// A link, which is removed as a link and never followed.
     Link,
     /// The directory, now under this tombstone name.
     Moved(String),
@@ -254,10 +254,10 @@ enum Aside {
 /// Moves each removed Supervisor's directory aside, beneath the Supervisors' root, to a tombstone
 /// name no Supervisor can carry, so that whatever goes on removing from it after the purge gave up
 /// — the second service, past the purge's deadline — never reaches a Supervisor added again under
-/// the same name, which gets a fresh directory (ADR-0017 clause 34). A link where a directory
-/// should be is removed, never followed (clause 35). What cannot be moved is a warning, and stays
-/// an orphan (clause 36). The tombstones earlier purges could not delete go with them: their names
-/// record that the Client meant to remove them (ADR-0059 clause 12), and no other orphan is taken.
+/// the same name, which gets a fresh directory. A link where a directory
+/// should be is removed, never followed. What cannot be moved is a warning, and stays
+/// an orphan. The tombstones earlier purges could not delete go with them: their names
+/// record that the Client meant to remove them, and no other orphan is taken.
 fn entomb(config: &ClientConfig, removed: &[String]) -> Vec<Tomb> {
     if removed.is_empty() {
         return Vec::new();
@@ -302,12 +302,12 @@ fn tombstones(root: &Path) -> Vec<Tomb> {
 }
 
 /// Removes again the tombstones beneath `root` that earlier purges could not delete, the way a
-/// purge removes its own (ADR-0059 clause 12): what the process account wrote through `plugins` —
+/// purge removes its own: what the process account wrote through `plugins` —
 /// the second service, within the purge's deadline, reaching it included — and the rest by the
-/// Client. It runs beside the start and never holds it up (ADR-0059 clause 2): the work is
+/// Client. It runs beside the start and never holds it up: the work is
 /// spawned, and tried once. A tombstone that is still not gone — the second service was not
 /// reached, or a file will not delete — is a warning, and the next start or purge tries it once
-/// more. No other orphan is touched (ADR-0017 clause 37).
+/// more. No other orphan is touched.
 pub(crate) fn reap_tombstones(
     root: &Path,
     plugins: std::sync::Arc<dyn crate::supervisor::ports::PluginRegistry>,
@@ -325,7 +325,7 @@ pub(crate) fn reap_tombstones(
 /// Moves the directory `name` beneath `root` aside to a fresh tombstone name, through the root's
 /// own handle: neither the entry nor anything beneath the root is followed as a link. So no
 /// directory whose resolved path lies outside the root is reached at all, and none is moved or
-/// removed (ADR-0017 clause 35): the entry is the root's own, and its tombstone stays beside it.
+/// removed: the entry is the root's own, and its tombstone stays beside it.
 #[cfg(unix)]
 fn move_aside(root: &Path, name: &str) -> std::io::Result<Aside> {
     use crate::storage::handle;
@@ -379,7 +379,7 @@ fn move_aside(root: &Path, name: &str) -> std::io::Result<Aside> {
 }
 
 /// Moves the directory `name` beneath `root` aside to a fresh tombstone name; a link is removed,
-/// and a directory whose resolved path lies outside the root is left alone (ADR-0017 clause 35).
+/// and a directory whose resolved path lies outside the root is left alone.
 #[cfg(not(unix))]
 fn move_aside(root: &Path, name: &str) -> std::io::Result<Aside> {
     let dir = root.join(name);
@@ -411,8 +411,8 @@ fn move_aside(root: &Path, name: &str) -> std::io::Result<Aside> {
 }
 
 /// Asks `plugins` — the second service, where a process account is registered — to remove what
-/// the Managed Processes wrote in each tomb and the Client cannot remove itself (ADR-0059 clause
-/// 5). What is left is a warning, and the purge leaves it an orphan (ADR-0017 clause 36).
+/// the Managed Processes wrote in each tomb and the Client cannot remove itself. What is left is a
+/// warning, and the purge leaves it an orphan.
 async fn release_removed(
     plugins: Option<&dyn crate::supervisor::ports::PluginRegistry>,
     tombs: &[Tomb],
@@ -436,14 +436,13 @@ async fn release_removed(
 }
 
 /// Deletes each tomb whole — program, packages, configuration, and the `instance-uid` whose Agent
-/// has already said its goodbye (ADR-0017). It does not touch
-/// `<state_dir>/package-high-water.json` (ADR-0043 clause 14): whatever a re-added Supervisor
+/// has already said its goodbye. It does not touch
+/// `<state_dir>/package-high-water.json`: whatever a re-added Supervisor
 /// installs, under the same name or another, is held to the mark of its Agent type. Runs only after the
 /// rewritten `supervisor.toml` no longer names the Supervisor: a failed write restarts the stopped
 /// set from the old file, which needs the data intact. A directory that will not delete is a
 /// warning, never a `FAILED` apply — the set the Server asked for is running; the tombstone left
-/// is reported and removed again at the next start and with the next purge (ADR-0017 clause 36,
-/// ADR-0059 clause 12).
+/// is reported and removed again at the next start and with the next purge.
 fn bury(tombs: &[Tomb]) {
     for tomb in tombs {
         match remove_tomb(&tomb.path) {
@@ -510,7 +509,7 @@ fn start(
 ) -> Result<(), String> {
     let index = engine.next_index();
     // The plugins the startup started its Supervisors with, so this one starts its Managed
-    // Process the same way (ADR-0059 clause 3). An Engine without them is not told who starts a
+    // Process the same way. An Engine without them is not told who starts a
     // program, and guessing the Client itself would start one outside the process account.
     let plugins = engine.plugins().ok_or_else(|| {
         format!(
@@ -518,8 +517,8 @@ fn start(
             block.name
         )
     })?;
-    // The marks the startup read, so a re-added Supervisor is held to its type's mark (ADR-0043
-    // clause 14). An Engine built without them reads them from `state_dir` now.
+    // The marks the startup read, so a re-added Supervisor is held to its type's mark. An Engine
+    // built without them reads them from `state_dir` now.
     let marks = match engine.high_water() {
         Some(marks) => marks,
         None => {
@@ -542,7 +541,7 @@ fn start(
     Ok(())
 }
 
-/// Reads the offered Supervisor set out of the composed config map (ADR-0017): every entry is
+/// Reads the offered Supervisor set out of the composed config map: every entry is
 /// parsed as TOML, the union of their `[[supervisor]]` blocks is the set, and every other
 /// top-level key is ignored — the boundary is enforced by what the Client takes. Returns the
 /// parsed blocks beside their verbatim tables, which is what the write puts into `supervisor.toml`
@@ -622,15 +621,15 @@ pub fn offered_blocks(
 }
 
 /// Validates one offered `[[supervisor]]` block before any running process is touched: the startup
-/// loader's own checks (block schema, program-path resolution, ports, timeouts — ADR-0017 point 28),
-/// and then the delivery-path constraint of ADR-0017.
+/// loader's own checks (block schema, program-path resolution, ports, timeouts),
+/// and then the delivery-path constraint.
 ///
 /// A Server-delivered block may name only a program **this Client owns** — a bare file name, whose
-/// program lives in a directory this Client created and updates from signature-verified packages
-/// (ADR-0017). Letting the Server spawn a program on the machine would be arbitrary code execution
+/// program lives in a directory this Client created and updates from signature-verified packages.
+/// Letting the Server spawn a program on the machine would be arbitrary code execution
 /// that never passes through package signing.
 ///
-/// That rule **cannot fire** (ADR-0017): no block naming a program on the machine parses at all,
+/// That rule **cannot fire**: no block naming a program on the machine parses at all,
 /// from any principal, so every block reaching here already satisfies it. The check stays as
 /// defence in depth against a future shape nobody has thought of yet — deleting a guard because it
 /// currently cannot trigger is how it comes back — and `resolve_block_program` below is what
@@ -658,8 +657,8 @@ fn supervisor_tables(item: &toml_edit::Item) -> Option<Vec<toml_edit::Table>> {
 }
 
 /// Replaces the `[[supervisor]]` blocks of `supervisor.toml` with the offered ones and leaves every
-/// other line of the file exactly as the operator wrote it — comments, ordering, formatting
-/// (ADR-0017). A file that does not exist yet is created; the write goes through a sibling
+/// other line of the file exactly as the operator wrote it — comments, ordering, formatting.
+/// A file that does not exist yet is created; the write goes through a sibling
 /// temporary file so a crash never leaves a half-written configuration. Returns the new text.
 #[cfg(test)]
 fn write_supervisors(
@@ -677,8 +676,7 @@ fn write_supervisors(
 /// its sub-tables are therefore renumbered in array order, after everything the file already has.
 ///
 /// The file may hold `[packages] archive_key`, so the text read and the text rendered are held in
-/// buffers wiped when they are dropped; what `toml_edit` keeps while it edits is its own
-/// (ADR-0057).
+/// buffers wiped when they are dropped; what `toml_edit` keeps while it edits is its own.
 fn render_supervisors(
     path: &Path,
     tables: Vec<toml_edit::Table>,
@@ -751,8 +749,7 @@ fn reads_back_as(text: &str, blocks: &[SupervisorBlock]) -> Result<(), String> {
     Ok(())
 }
 
-/// Replaces `path` with `new_text` in one step, and hands the text back still in its wiped buffer
-/// (ADR-0057).
+/// Replaces `path` with `new_text` in one step, and hands the text back still in its wiped buffer.
 fn replace_file(path: &Path, new_text: Zeroizing<String>) -> Result<Zeroizing<String>, String> {
     let tmp = path.with_extension("toml.tmp");
     write_replacement(&tmp, path, &new_text)?;
@@ -768,7 +765,8 @@ fn replace_file(path: &Path, new_text: Zeroizing<String>) -> Result<Zeroizing<St
 /// widened after — so the rename cannot loosen permissions. `supervisor.toml` may hold
 /// `[packages] archive_key` in cleartext and is created `0600` (`config_init::write_new`); writing
 /// the temp file at the default umask (`0644`) and renaming it over the original, as this did
-/// before, left that secret world-readable after every Server-driven reconfigure (ADR-0017). A file that does not
+/// before, left that secret world-readable after every Server-driven reconfigure. A file that does
+/// not
 /// exist yet falls back to `0600`, the same floor `write_new` uses. The operator's own mode, if
 /// they widened or narrowed it deliberately, is preserved.
 fn write_replacement(tmp: &Path, target: &Path, contents: &str) -> Result<(), String> {
@@ -825,7 +823,7 @@ mod tests {
         }
     }
 
-    /// ADR-0017 point 27: only the `[[supervisor]]` blocks are read; a full `supervisor.toml`-shaped
+    /// Only the `[[supervisor]]` blocks are read; a full `supervisor.toml`-shaped
     /// document may be offered and exactly its fleet-manageable half takes effect.
     #[test]
     fn foreign_top_level_keys_are_ignored() {
@@ -862,7 +860,6 @@ mod tests {
 
     /// The set is stored as entry files once it applied, so entry names no host could store are
     /// refused before anything stops, not found out after the set already runs.
-    /// Verifies: ADR-0017
     #[test]
     fn an_offer_whose_entries_cannot_all_be_stored_is_refused() {
         let block = "[[supervisor]]\ntype = \"command\"\nname = \"agent\"\ncommand = \"agent\"\n";
@@ -877,7 +874,7 @@ mod tests {
     }
 
     /// A block the startup parser would refuse is refused here, naming the entry — the same
-    /// strictness ADR-0010 asks of the file.
+    /// strictness the startup loader applies to the file.
     #[test]
     fn a_malformed_block_names_its_entry() {
         let offer = offer_of(&[(
@@ -908,7 +905,6 @@ mod tests {
     const AGENT: &str =
         "[[supervisor]]\ntype = \"command\"\nname = \"agent\"\ncommand = \"agent\"\n";
 
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_block_may_not_add_environment_the_operator_did_not_allow() {
         let block = delivered(&format!("{AGENT}env = {{ OTEL_RESOURCE = \"a\" }}\n"));
@@ -926,7 +922,6 @@ mod tests {
         crate::supervisor::check_delivered_block(&allowing, &block).expect("allowed by prefix");
     }
 
-    /// Verifies: ADR-0017
     #[test]
     fn a_loader_variable_is_refused_whatever_the_operator_allowed() {
         let allowing = running("[supervisors]\ndelivered_env = [\"*\"]\n", AGENT);
@@ -950,7 +945,6 @@ mod tests {
 
     /// An allowed name still may not point at a file the Server delivered into the Supervisor's
     /// own directories — the OpenTelemetry Java agent would load a jar from there.
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_value_may_not_point_into_its_own_directories() {
         let allowing = running("[supervisors]\ndelivered_env = [\"OTEL_*\"]\n", AGENT);
@@ -965,7 +959,6 @@ mod tests {
 
     /// The interpreters' and shells' own loader variables are refused like the dynamic loader's,
     /// in any case, whatever the operator allowed and whatever the value.
-    /// Verifies: ADR-0017
     #[test]
     fn an_interpreter_or_shell_loader_variable_is_refused_whatever_the_operator_allowed() {
         let allowing = running("[supervisors]\ndelivered_env = [\"*\"]\n", AGENT);
@@ -990,7 +983,6 @@ mod tests {
     /// A value naming a path under the Supervisors' root is refused as the placeholders are: the
     /// Server delivers files there that no one signed. `delivered_env = ["*"]` itself stands, a
     /// value the running block already carries stands, and a sibling of the root is not under it.
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_value_may_not_name_a_path_under_the_supervisors_root() {
         let root = std::env::temp_dir().join("fleet-supervisors");
@@ -1028,7 +1020,6 @@ mod tests {
 
     /// Tables from two entries keep their sub-tables: what is written reads back as the set that
     /// was checked, and a `[supervisor.env]` never moves under another block's header.
-    /// Verifies: ADR-0017
     #[test]
     fn delivered_tables_from_two_entries_keep_their_sub_tables() {
         let offer = offer_of(&[
@@ -1061,7 +1052,6 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_block_keeps_the_environment_it_already_runs_with() {
         let operators = format!("{AGENT}env = {{ LD_LIBRARY_PATH = \"/opt/vendor/lib\" }}\n");
@@ -1072,7 +1062,6 @@ mod tests {
         assert!(crate::supervisor::check_delivered_block(&config, &changed).is_err());
     }
 
-    /// Verifies: ADR-0017
     #[test]
     fn delivered_arguments_need_the_operators_consent() {
         let with_args = delivered(&format!(
@@ -1096,8 +1085,7 @@ mod tests {
     /// With every argument and variable allowed, a listed Supervisor's delivered block still
     /// equals its running block whole: a changed `args`, `version_args`, `env` entry or core key,
     /// an added key and a dropped one are each refused naming the block and the key, and the
-    /// running block delivered back passes (ADR-0017 clause 54).
-    /// Verifies: ADR-0017
+    /// running block delivered back passes.
     #[test]
     fn a_delivered_block_for_a_listed_supervisor_must_equal_the_running_block_whole() {
         let body = "args = [\"-c\", \"/etc/agent.conf\"]\nversion_args = [\"-v\"]\n\
@@ -1149,7 +1137,7 @@ mod tests {
         let err = crate::supervisor::check_delivered_block(&config, &other_kind)
             .expect_err("another kind under the listed name");
         assert!(err.contains("type"), "{err}");
-        // An unlisted Supervisor under the same consent takes them, as ADR-0017 lets it.
+        // An unlisted Supervisor under the same consent takes them.
         let unlisted = running(
             "[supervisors]\ndelivered_args = true\ndelivered_env = [\"*\"]\n",
             &operators,
@@ -1165,8 +1153,7 @@ mod tests {
 
     /// A listed Supervisor that does not run yet is added naming its program and nothing else:
     /// `type`, `name` and the kind's program key where the kind does not name its own pass, and
-    /// any further key — an empty one included — fails the offer naming it (ADR-0017 clause 54).
-    /// Verifies: ADR-0017
+    /// any further key — an empty one included — fails the offer naming it.
     #[test]
     fn an_added_listed_supervisor_carries_only_what_names_its_program() {
         let config = running(LISTED_GLOBALS, "");
@@ -1197,9 +1184,7 @@ mod tests {
     }
 
     /// A Supervisor a set apply adds starts its Managed Process through the Spawner the Engine was
-    /// built with — here the second service's channel — as every Supervisor of the startup does
-    /// (ADR-0059 clause 3).
-    /// Verifies: ADR-0059
+    /// built with — here the second service's channel — as every Supervisor of the startup does.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_supervisor_a_set_apply_adds_starts_through_the_engines_spawner() {
@@ -1263,9 +1248,7 @@ mod tests {
     }
 
     /// An Engine that was not told who starts its programs starts no Supervisor at all, rather
-    /// than the Client starting the program itself outside the process account (ADR-0059
-    /// clause 3).
-    /// Verifies: ADR-0059
+    /// than the Client starting the program itself outside the process account.
     #[tokio::test]
     async fn an_engine_without_its_plugins_starts_no_supervisor() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1283,8 +1266,7 @@ mod tests {
     /// The switch lives where the Server cannot write: a set that removes the listed block and
     /// delivers it again starts an Agent still without `AcceptsRemoteConfig`, the written file
     /// keeps `[supervisors]` byte for byte, and a block bringing arguments fails the whole offer
-    /// with the file untouched (ADR-0017 clauses 48 and 54).
-    /// Verifies: ADR-0017
+    /// with the file untouched.
     #[tokio::test]
     async fn a_delivered_set_cannot_switch_remote_config_back_on_for_a_listed_name() {
         use opamp::proto::{AgentCapabilities, RemoteConfigStatuses};
@@ -1360,8 +1342,7 @@ mod tests {
     /// keeps there fails startup, and an offered set carrying one is refused whole, naming the
     /// Supervisor and the entry, before anything stops or the file changes: a Supervisor `logs`
     /// would share the Client's log directory with the process account's group, and its purge
-    /// would delete it (ADR-0059 clause 6, ADR-0017 clause 28).
-    /// Verifies: ADR-0059
+    /// would delete it.
     #[tokio::test]
     async fn a_supervisor_named_after_an_entry_of_the_clients_is_refused() {
         use opamp::proto::RemoteConfigStatuses;
@@ -1423,7 +1404,7 @@ mod tests {
         assert_eq!(engine.next_index(), 2, "the running set stays");
     }
 
-    /// ADR-0017: a Server-delivered block that names an **absolute** program path is refused as a
+    /// A Server-delivered block that names an **absolute** program path is refused as a
     /// whole — that is the machine's own process, and letting the Server spawn one would run
     /// arbitrary code that never passed through package signing. The refusal names the block and the
     /// path, and (being a validation failure) leaves the running set and the file untouched.
@@ -1440,7 +1421,7 @@ mod tests {
 
     /// The attack this guard stands against: a Server that delivers a block spawning a program on
     /// the machine with arguments of its choosing. It is refused a step earlier and for a broader
-    /// reason (ADR-0017) — no block naming a program on the machine parses, from any principal —
+    /// reason — no block naming a program on the machine parses, from any principal —
     /// but the delivery path must still refuse it, which is what this asserts.
     #[test]
     fn a_server_delivered_block_may_not_name_an_absolute_program() {
@@ -1462,7 +1443,7 @@ mod tests {
         assert!(err.contains(program), "names the path: {err}");
     }
 
-    /// The counterpart: a bare file name is a program this Client owns (ADR-0017), so a delivered
+    /// The counterpart: a bare file name is a program this Client owns, so a delivered
     /// block that names one is accepted — the only shape there is.
     #[test]
     fn a_server_delivered_block_naming_a_bare_program_is_accepted() {
@@ -1517,8 +1498,7 @@ mod tests {
     }
 
     /// The write replaces exactly the `[[supervisor]]` blocks. Everything the operator wrote —
-    /// comments, ordering, unrelated sections — survives byte for byte (ADR-0017 point 31).
-    // Verifies: ADR-0017
+    /// comments, ordering, unrelated sections — survives byte for byte.
     #[test]
     fn the_write_replaces_blocks_and_keeps_the_operators_file() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1555,7 +1535,6 @@ mod tests {
     /// `allowed_sources`, the
     /// operator's consent in `[supervisors]`, self-update, Gateway Mode — the file keeps the
     /// operator's values and gains none of the offered ones.
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_set_writes_nothing_beyond_the_supervisor_blocks() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1617,7 +1596,6 @@ mod tests {
 
     /// A delivered block of a kind this Client was not built with is refused, naming the kind —
     /// a Server cannot conjure a Supervisor type.
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_block_of_an_unknown_type_is_refused() {
         let offer = offer_of(&[(
@@ -1637,7 +1615,6 @@ mod tests {
     /// Neither a delivered Supervisor name nor a delivered program name can leave the directories
     /// this Client owns: a name is one path component of a fixed grammar, and a program a bare
     /// file name inside `program/`.
-    /// Verifies: ADR-0017
     #[test]
     fn a_delivered_name_or_program_that_traverses_is_refused() {
         for name in ["..", "../etc", "a/b", "a\\b", "Agent"] {
@@ -1727,10 +1704,9 @@ mod tests {
         assert_eq!(mode, 0o600, "a new file is owner-only, got {mode:o}");
     }
 
-    /// ADR-0017: the apply is a diff by name. An unchanged block rides through — neither stopped
+    /// The apply is a diff by name. An unchanged block rides through — neither stopped
     /// nor started — a changed one is stopped and started but keeps its directory, a vanished one
-    /// is stopped and removed, and a new one is only started (point 14: removal is keyed by name).
-    /// Verifies: ADR-0017
+    /// is stopped and removed, and a new one is only started (removal is keyed by name).
     #[test]
     fn the_plan_is_a_diff_by_name_and_unchanged_blocks_ride_through() {
         let parse = |text: &str| -> Vec<SupervisorBlock> {
@@ -1757,10 +1733,9 @@ mod tests {
         );
     }
 
-    /// ADR-0017: the purge deletes exactly the removed Supervisor's directory — whole, identity
+    /// The purge deletes exactly the removed Supervisor's directory — whole, identity
     /// included — leaves the neighbours untouched, and a directory that never materialized is
     /// nothing to report.
-    // Verifies: ADR-0017
     #[test]
     fn the_purge_deletes_exactly_the_removed_supervisors_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1787,10 +1762,9 @@ mod tests {
 
     /// Where a process account is registered, the purge first has the second service remove what
     /// the removed Supervisor's Managed Processes wrote — a directory an agent made `0755`, as Go's
-    /// `MkdirAll` does, a read-only one inside it — and then deletes the rest: nothing is left
-    /// (ADR-0059 clause 5, ADR-0017 clause 34). The in-process service runs as this test's uid, so
+    /// `MkdirAll` does, a read-only one inside it — and then deletes the rest: nothing is left.
+    /// The in-process service runs as this test's uid, so
     /// the read-only directory is what the Client could not remove without it.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[tokio::test]
     async fn the_purge_has_the_second_service_remove_what_the_processes_wrote() {
@@ -1808,7 +1782,7 @@ mod tests {
         let cache = made.join("cache");
         std::fs::create_dir_all(&cache).expect("mkdir");
         std::fs::set_permissions(&made, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        // A data directory the Client shares for writing (ADR-0059 clause 6).
+        // A data directory the Client shares for writing.
         std::fs::set_permissions(gone.join("data"), std::fs::Permissions::from_mode(0o2770))
             .expect("chmod");
         std::fs::write(cache.join("module"), b"x").expect("write");
@@ -1850,8 +1824,7 @@ mod tests {
 
     /// One apply waits for the second service once, however many Supervisors it removes: two
     /// removed Supervisors and a service that never answers hold it [`PURGE_ANSWER`], not twice
-    /// that (ADR-0059 clause 2).
-    /// Verifies: ADR-0059
+    /// that.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_apply_waits_for_a_service_that_does_not_answer_once() {
@@ -1873,8 +1846,7 @@ mod tests {
 
     /// A second service that cannot be reached holds one apply [`PURGE_ANSWER`] for all its
     /// removed Supervisors, and the next apply in the same outage tries once rather than waiting
-    /// again: the wait the deadline cut short counts as given up on (ADR-0059 clause 2).
-    /// Verifies: ADR-0059
+    /// again: the wait the deadline cut short counts as given up on.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_apply_waits_for_a_service_that_cannot_be_reached_once_per_outage() {
@@ -1905,8 +1877,7 @@ mod tests {
     /// What goes on being removed after the purge gave up never reaches a Supervisor added again
     /// under the same name: the second service answers past the purge's deadline and only then
     /// removes what the process account wrote, while `gone` has been purged and added again in
-    /// between; the new `gone` keeps its data (ADR-0017 clause 34, ADR-0059 clause 2).
-    /// Verifies: ADR-0059
+    /// between; the new `gone` keeps its data.
     #[cfg(unix)]
     #[tokio::test]
     async fn what_a_purge_removes_after_its_deadline_misses_a_supervisor_added_again() {
@@ -1951,8 +1922,7 @@ mod tests {
 
     /// A tombstone an earlier purge could not delete goes with the next purge, its name recording
     /// that the Client meant to remove it; every other orphan stays — a directory no block names,
-    /// and one that only looks like a tombstone (ADR-0059 clause 12, ADR-0017 clause 37).
-    /// Verifies: ADR-0059
+    /// and one that only looks like a tombstone.
     #[test]
     fn the_next_purge_removes_a_tombstone_left_behind() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2004,9 +1974,7 @@ mod tests {
 
     /// What a start removes again: the tombstones alone, each named to the second service by its
     /// Supervisor and asked once, the Client's part only after the service answered — beside the
-    /// start, which does not wait for the answer (ADR-0059 clauses 2, 5 and 12, ADR-0017 clause
-    /// 37).
-    /// Verifies: ADR-0059
+    /// start, which does not wait for the answer.
     #[tokio::test]
     async fn a_start_removes_the_tombstones_again_beside_it() {
         use crate::supervisor::ports::{Plugin, PluginRegistry, Purged};
@@ -2068,9 +2036,7 @@ mod tests {
 
     /// A Supervisors' root reached through a link of the Client's own account — one beneath a data
     /// root the hand-over gave the Client, or `~/.local` → `/data` for `--user` — is purged
-    /// through it: the link is the Client's, in a directory only the Client writes (ADR-0017
-    /// clause 34, ADR-0059 clause 6).
-    /// Verifies: ADR-0017
+    /// through it: the link is the Client's, in a directory only the Client writes.
     #[cfg(unix)]
     #[test]
     fn a_root_reached_through_a_link_of_the_clients_own_is_purged() {
@@ -2100,8 +2066,7 @@ mod tests {
     /// `otelcol` installs `0.110.0`, a set without `a` purges it, and sets adding `b` and then `a`
     /// again follow. The mark file survives the purge — here with `supervisor_dir` at `state_dir`
     /// itself — and each re-added Supervisor refuses `0.109.0` naming the mark, and takes
-    /// `0.110.0+other` and `0.111.0` (ADR-0043 clauses 8 and 14).
-    /// Verifies: ADR-0043
+    /// `0.110.0+other` and `0.111.0`.
     #[test]
     fn a_purged_and_re_added_supervisor_is_held_to_its_types_mark() {
         use crate::storage::{HighWaterFile, Storage, HIGH_WATER_FILE};
@@ -2185,9 +2150,9 @@ mod tests {
         }
     }
 
-    /// ADR-0017 hardening: the purge never recurses through a symlink planted where a Supervisor's
+    /// Hardening: the purge never recurses through a symlink planted where a Supervisor's
     /// directory should be — it removes the link, not what it points at. A `name` cannot itself
-    /// traverse (ADR-0017), so this is the only way the delete could have escaped, and it does not.
+    /// traverse, so this is the only way the delete could have escaped, and it does not.
     #[cfg(unix)]
     #[test]
     fn the_purge_does_not_follow_a_symlink_out_of_the_supervisors_root() {

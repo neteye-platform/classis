@@ -1,4 +1,4 @@
-//! A Supervisor set a Server delivers as a remote configuration (ADR-0017): entries of TOML read
+//! A Supervisor set a Server delivers as a remote configuration: entries of TOML read
 //! for their `[[supervisor]]` blocks, then each block held to what a running configuration that
 //! allows every name and argument still refuses. A NUL byte separates one entry from the next, so
 //! blocks from several entries meet as they do in a composed config map. Verifies: Q-2

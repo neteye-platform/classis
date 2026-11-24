@@ -1,36 +1,36 @@
 #!/bin/sh
-# Post-install for the `.deb` and the `.rpm` alike (ADR-0019 clause 36, ADR-0029 clause 13).
+# Post-install for the `.deb` and the `.rpm` alike.
 #
 # The package delivered `/usr/libexec/classis/supervisor` and nothing else. The install itself —
 # the versioned layout, the `current` pointer, the systemd unit — belongs to the Client's own
-# `service install` (ADR-0019), which is all this calls. No package ships a unit file: one that did
-# would know nothing of ADR-0019's service name or ADR-0018's restart policy, and there would be two
+# `service install`, which is all this calls. No package ships a unit file: one that did
+# would know nothing of the Client's service name or its restart policy, and there would be two
 # registrations disagreeing about which is the real one.
 #
-# What an operator invokes on PATH is a symlink through the layout's `current` pointer (ADR-0019),
+# What an operator invokes on PATH is a symlink through the layout's `current` pointer,
 # laid here — so `classis --version` answers for the binary the service runs, not for whatever
 # this package happened to deliver. The link carries the **product's** name and the file it resolves
-# to carries the program's (ADR-0019 clause 3): two variant builds must not collide on one
+# to carries the program's: two variant builds must not collide on one
 # `/usr/bin` entry, and they would if the link were named after the program they share.
 #
 # The paths name the default system roots (`default_layout_root` and `default_root` in
 # crates/classis-agent/src/service/manager.rs), the only roots a packaged install ever uses: this script
 # never passes `--root`. They are two roots on Linux — the executable layout under `/opt`, because
 # SELinux never lets systemd execute a binary labeled `var_lib_t`; the configuration and state under
-# `/var/lib`, where data belongs (ADR-0019 clause 8).
+# `/var/lib`, where data belongs.
 #
-# The service runs under the system account `classis` (ADR-0042 clause 5). It is created here
+# The service runs under the system account `classis`. It is created here
 # where it is missing — on every run, also on a host that stays root, so that moving such a host is
 # one command — and never modified or removed. Only a first registration, where no unit exists, is
 # told the account; every later one runs `service install` without `--run-as`, which keeps the
-# account the unit names (ADR-0042 clause 2). A host that chose root with `--run-as root` stays root.
+# account the unit names. A host that chose root with `--run-as root` stays root.
 #
-# There is no migration branch here, and that is ADR-0042 clause 1: an upgrade is a
-# re-registration, so there is nothing to carry across.
+# There is no migration branch here: an upgrade is a re-registration, so there is nothing to carry
+# across.
 #
 # dpkg calls this as `postinst configure <old-version>`, rpm as `%post <count>`. The two argument
 # conventions have nothing in common, so nothing here reads "$1" except to bow out of dpkg's abort
-# paths — everything else is idempotent by ADR-0019 and safe on either.
+# paths — everything else is idempotent by design and safe on either.
 set -e
 
 case "${1-}" in

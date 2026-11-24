@@ -1,5 +1,5 @@
 # Classis Server configuration. Every setting has a default, shown here. The Server speaks
-# plain HTTP behind a reverse proxy that terminates TLS and authenticates the Agents (ADR-0064);
+# plain HTTP behind a reverse proxy that terminates TLS and authenticates the Agents;
 # it has no [tls] and checks no Agent's credential, and a [tls], [rest.tls], [client_ca],
 # [enrolment] or [agents.auth] section is refused. Start with:
 # cargo run -p classis-server -- --config server.toml
@@ -187,7 +187,7 @@ max_package_size_bytes = 1073741824
 # ca_file = "/etc/opamp/db-ca.pem"      # optional: the roots the database's certificate is checked against
 
 # The AGENT PLANE's admission: none. The Server admits every request of the Agent plane and
-# authenticates no Agent (ADR-0064): the reverse proxy in front of it does, and the Agent port must
+# authenticates no Agent: the reverse proxy in front of it does, and the Agent port must
 # be reachable through it alone, because any peer that reaches it may claim any identity. There is
 # no [agents.auth]: the section is refused. Behind the proxy the peer address the throttle counts is
 # X-Forwarded-For's, trusted from any source: keep the Server's ports closed to everything but
@@ -330,3 +330,10 @@ max_connections = 256
 # — never both:
 # [rest.auth]
 # basic_users_file = "/run/secrets/basic-users.toml"
+
+# Package Signers this Server refuses, OPTIONAL: each the SHA-256 of the signer's DER certificate,
+# 64 lowercase hex digits, at most 64. Use it when a signer's key may be exposed. A signature of a
+# listed signer is refused on upload, and the entries it signed are offered to nobody until they are
+# signed again by another signer. Clients are not told; a change takes effect on restart.
+# [packages]
+# revoked_signers = ["0000000000000000000000000000000000000000000000000000000000000000"]

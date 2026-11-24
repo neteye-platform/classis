@@ -1,4 +1,4 @@
-//! What bounds a connection before it is a request (ADR-0013).
+//! What bounds a connection before it is a request.
 //!
 //! Every other limit this Server enforces starts at a request. These tests drive the two rules that
 //! apply earlier: a peer that never finishes its headers is hung up on, and a peer that finishes
@@ -43,7 +43,6 @@ async fn spawn() -> (std::net::SocketAddr, tempfile::TempDir) {
 /// the Server. Without that measure it would be held open indefinitely — hyper's own default
 /// timeout resolves to nothing while no timer is installed, and neither `axum::serve` nor
 /// `axum_server` installs one.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn a_connection_that_never_finishes_its_headers_is_hung_up_on() {
     let (addr, _dir) = spawn().await;
@@ -70,7 +69,6 @@ async fn a_connection_that_never_finishes_its_headers_is_hung_up_on() {
 /// The other half, and the one worth guarding: the bound is on connection *setup*, so an
 /// established WebSocket session may sit idle far longer than it and stay up. This is what a
 /// request-level timeout would have broken.
-/// Verifies: ADR-0013
 #[tokio::test]
 async fn an_established_session_outlives_the_header_bound() {
     let (addr, _dir) = spawn().await;

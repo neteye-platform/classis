@@ -1,4 +1,4 @@
-//! The downstream hop's TLS (ADR-0015, ADR-0021): a Gateway serves the downstream endpoint over
+//! The downstream hop's TLS: a Gateway serves the downstream endpoint over
 //! mutual TLS 1.3 only, and *requires* a downstream Agent to present a certificate that chains to
 //! `client_ca_file`. Without the full `[gateway.tls]` section it does not start. That handshake is
 //! the admission: nothing a downstream peer presents beyond it travels upstream.
@@ -222,7 +222,7 @@ fn client(pki: &Pki, identity: Option<(String, String)>) -> reqwest::Client {
 /// With a client CA configured, a downstream Agent that presents a certificate reaches the Server
 /// through the Gateway over TLS — and its reply comes back addressed to it. This is the hop working
 /// end to end, encrypted, with the CA accepting a valid peer.
-/// Verifies: ADR-0015, ADR-0021, G-15, G-17
+/// Verifies: G-15, G-17
 #[tokio::test]
 async fn a_downstream_agent_with_a_certificate_reaches_the_server_over_tls() {
     let (server, state, _server_dir) = spawn_server().await;
@@ -257,7 +257,7 @@ async fn a_downstream_agent_with_a_certificate_reaches_the_server_over_tls() {
 /// cap of one, both Agents reach the Server over the single connection the Gateway opened. The pool
 /// is not divided by downstream peer, because nothing sent upstream depends on which peer an Agent
 /// came through.
-/// Verifies: ADR-0015, G-15
+/// Verifies: G-15
 #[tokio::test]
 async fn downstream_peers_with_different_certificates_share_one_upstream_connection() {
     let (server, state, seen, _server_dir) = spawn_watched_server().await;
@@ -306,7 +306,6 @@ async fn downstream_peers_with_different_certificates_share_one_upstream_connect
 /// A downstream peer that sends an `Authorization` header is admitted by its certificate as any
 /// other, and the Server receives no `Authorization` from the Gateway: not that one, and none in
 /// its place.
-/// Verifies: ADR-0015, ADR-0021
 #[tokio::test]
 async fn a_downstream_authorization_header_is_ignored_and_not_forwarded() {
     let (server, state, seen, _server_dir) = spawn_watched_server().await;
@@ -346,7 +345,6 @@ async fn a_downstream_authorization_header_is_ignored_and_not_forwarded() {
 /// The same on the other transport: a downstream WebSocket peer whose upgrade carries an
 /// `Authorization` header is admitted by its certificate and answered, and the Server receives no
 /// `Authorization` from the Gateway.
-/// Verifies: ADR-0015, ADR-0021
 #[tokio::test]
 async fn a_downstream_websocket_authorization_header_is_ignored_and_not_forwarded() {
     use futures_util::{SinkExt as _, StreamExt as _};
@@ -418,8 +416,6 @@ async fn a_downstream_websocket_authorization_header_is_ignored_and_not_forwarde
 }
 
 /// A peer presenting *no* certificate is turned away at the handshake.
-///
-/// Verifies: ADR-0015, ADR-0021
 #[tokio::test]
 async fn a_downstream_peer_without_a_certificate_is_refused() {
     let (server, _state, _server_dir) = spawn_server().await;
@@ -440,7 +436,6 @@ async fn a_downstream_peer_without_a_certificate_is_refused() {
 
 /// A Gateway serving TLS does not also answer plaintext on the same port: a cleartext HTTP request
 /// fails rather than exposing the hop the section was configured to protect.
-/// Verifies: ADR-0015
 #[tokio::test]
 async fn the_tls_endpoint_does_not_answer_plaintext() {
     opamp::tls::install_ring_provider();
@@ -462,8 +457,6 @@ async fn the_tls_endpoint_does_not_answer_plaintext() {
 
 /// A peer presenting a certificate from *another* CA is turned away at the handshake: only the
 /// configured `client_ca_file` admits.
-///
-/// Verifies: ADR-0015
 #[tokio::test]
 async fn a_downstream_peer_with_a_certificate_from_another_ca_is_refused() {
     let (server, state, _server_dir) = spawn_server().await;
@@ -486,8 +479,6 @@ async fn a_downstream_peer_with_a_certificate_from_another_ca_is_refused() {
 
 /// A Gateway whose `[gateway.tls]` lacks `client_ca_file` does not start: the load refuses the
 /// file, and `run_on` refuses the configuration rather than serving without client certificates.
-///
-/// Verifies: ADR-0015
 #[tokio::test]
 async fn a_gateway_without_a_client_ca_does_not_start() {
     let (server, _state, _server_dir) = spawn_server().await;
@@ -517,8 +508,6 @@ async fn a_gateway_without_a_client_ca_does_not_start() {
 
 /// A Gateway without `[gateway.tls]` does not start, on the loopback too: `run_on` refuses the
 /// configuration rather than serving the downstream endpoint in plaintext.
-///
-/// Verifies: ADR-0015
 #[tokio::test]
 async fn a_gateway_without_tls_on_loopback_does_not_start() {
     let (server, _state, _server_dir) = spawn_server().await;
@@ -544,7 +533,6 @@ async fn a_gateway_without_tls_on_loopback_does_not_start() {
 /// the mutual-TLS handshake and then never finishes its request headers is hung up on, as the
 /// Server's Agent plane does (`connection_setup.rs`). The handshake bound is 10 seconds; closing well
 /// inside it shows the header bound did the work.
-/// Verifies: ADR-0010, ADR-0015
 #[tokio::test]
 async fn a_downstream_connection_that_never_finishes_its_headers_is_hung_up_on() {
     use std::io::{Read as _, Write as _};
@@ -591,9 +579,7 @@ async fn a_downstream_connection_that_never_finishes_its_headers_is_hung_up_on()
 }
 
 /// A Gateway serves on its download route only what it relayed an offer of: the Server behind it
-/// serves the artifact, and the Gateway, which relayed no offer of it, answers `404`
-/// (ADR-0026 clause 45).
-/// Verifies: ADR-0026
+/// serves the artifact, and the Gateway, which relayed no offer of it, answers `404`.
 #[tokio::test]
 async fn the_gateway_serves_no_artifact_it_relayed_no_offer_for() {
     // The reqwest clients below need the process provider; run alone, no other test installs it.

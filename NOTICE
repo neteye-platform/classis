@@ -9,7 +9,7 @@ Licensed under the MIT License (LICENSE-MIT) or the Apache License, Version 2.0
 -------------------------------------------------------------------------------
 
 This product bundles the following third-party software, vendored as a static
-asset embedded into the Server binary (ADR-0010):
+asset embedded into the Server binary:
 
 Redoc (redoc@2.5.3) — crates/classis-server/static/redoc.standalone.js
   Copyright (c) Redocly
@@ -17,7 +17,7 @@ Redoc (redoc@2.5.3) — crates/classis-server/static/redoc.standalone.js
   https://github.com/Redocly/redoc
 
 Shiki (shiki@4.5.0) — crates/classis-server/static/shiki.js, built by
-scripts/vendor-shiki.sh (ADR-0038), bundling:
+scripts/vendor-shiki.sh, bundling:
   shiki, @shikijs/core, @shikijs/engine-javascript, @shikijs/langs,
   @shikijs/primitive, @shikijs/types (4.5.0)
     Copyright (c) 2021 Pine Wu, Copyright (c) 2023 Anthony Fu

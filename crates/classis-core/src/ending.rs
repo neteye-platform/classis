@@ -1,4 +1,4 @@
-//! When a certificate counts as ending (ADR-0028 clause 11): one rule, plain date arithmetic on
+//! When a certificate counts as ending: one rule, plain date arithmetic on
 //! Unix seconds, so the operator tool's `pki status`, the Server's `pki status` and the running
 //! Server judge alike. Each program reads the certificate itself; this module only judges the
 //! dates.
@@ -33,7 +33,7 @@ pub fn standing(not_before: i64, not_after: i64, now: i64) -> Standing {
     }
 }
 
-/// The exit code of a `pki status` command (ADR-0028 clause 12): `0` when nothing is ending, `1`
+/// The exit code of a `pki status` command: `0` when nothing is ending, `1`
 /// when something is, `2` when something has ended.
 #[must_use]
 pub fn exit_code(standings: impl IntoIterator<Item = Standing>) -> i32 {
@@ -58,7 +58,6 @@ mod tests {
         standing(NOW - lived * DAY, NOW + left * DAY, NOW)
     }
 
-    // Verifies: ADR-0028
     #[test]
     fn thirty_days_ahead_or_the_last_third_of_a_shorter_life() {
         assert_eq!(lived(0, 400), Standing::Fine);
@@ -69,7 +68,6 @@ mod tests {
         assert_eq!(lived(7, 3), Standing::Ending);
     }
 
-    // Verifies: ADR-0028
     #[test]
     fn status_exits_by_the_worst_end() {
         assert_eq!(exit_code([lived(0, 400)]), 0);

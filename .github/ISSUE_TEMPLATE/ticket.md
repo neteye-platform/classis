@@ -1,6 +1,6 @@
 ---
 name: Ticket
-about: One tracer-bullet slice of a feature spec (ADR-0004)
+about: One tracer-bullet slice of a feature spec
 title: "[Ticket] "
 labels: ticket
 ---
@@ -9,8 +9,7 @@ labels: ticket
      change touches, demoable or verifiable on its own, sized to one fresh
      agent session. A child of its feature spec. Claim it by assigning
      yourself BEFORE any work, so parallel sessions skip it. Closed by the
-     pull request that lands it ("Closes #<this>"). Decided in
-     docs/adr/0004-feature-layer.md. -->
+     pull request that lands it ("Closes #<this>"). -->
 
 ## Parent
 
@@ -33,7 +32,7 @@ labels: ticket
 ## Read first
 
 <!-- What the session that works this ticket loads before anything else: the
-     accepted ADRs whose "Applies to" it touches, the glossary terms and
+     parts of docs/ARCHITECTURE.md it touches, the glossary terms and
      conventions in play, the golden path it copies from, the seam its tests
      go on. Everything else it explores as needed (AGENTS.md
      [§4](../../AGENTS.md#4-working-style)). -->

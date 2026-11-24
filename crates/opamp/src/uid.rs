@@ -1,4 +1,4 @@
-//! The Agent's Instance UID — the routing key of the whole protocol (ADR-0015).
+//! The Agent's Instance UID — the routing key of the whole protocol.
 //!
 //! The Baseline requires the `instance_uid` to be 16 bytes and recommends UUID v7. Both ends route
 //! by it and never by the connection, so it gets a real type here instead of `Vec<u8>` scattered

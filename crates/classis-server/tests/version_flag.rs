@@ -1,4 +1,4 @@
-//! `server --version` states the version this build actually is (ADR-0012).
+//! `server --version` states the version this build actually is.
 //!
 //! The regression: it printed `CARGO_PKG_VERSION`, which is the number in `Cargo.toml` and so the
 //! release this build is *heading for* — a development build claimed to be the release, and the

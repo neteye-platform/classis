@@ -1,4 +1,4 @@
-//! No source of the product is conditional on macOS (ADR-0067 clause 2). Every Rust file under
+//! No source of the product is conditional on macOS. Every Rust file under
 //! `crates/` is read as text, so a branch is found whatever the host compiles, and whatever the
 //! `cfg` it sits in.
 
@@ -16,7 +16,6 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Verifies: ADR-0067
 #[test]
 fn no_rust_source_names_target_os_macos() {
     // Joined here, so this file does not name it. Spaces are dropped before the match, so the

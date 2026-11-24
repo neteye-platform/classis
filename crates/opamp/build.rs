@@ -1,8 +1,8 @@
-// The OpAMP protobuf types, generated from the vendored, pinned schema (ADR-0011).
+// The OpAMP protobuf types, generated from the vendored, pinned schema.
 //
 // Nothing else happens here, and nothing here needs more than this package: the schema ships
 // inside it, protox compiles it without a system `protoc`, and the output goes only to `OUT_DIR`.
-// That is what lets the crate build wherever it is fetched to (ADR-0010).
+// That is what lets the crate build wherever it is fetched to.
 
 /// The Protocol Baseline. The single place the proto path derives from, which is what kept
 /// upstream's relocation of the files (`proto/` to `proto/opamp/v1/`, adopted with `v0.19.0`) a

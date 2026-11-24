@@ -12,7 +12,7 @@ description:
 The rule is
 [`AGENTS.md` §5](../../../AGENTS.md#5-quality-bar--definition-of-done). This
 skill is what the reviewer is given and the order in which it reports; it states
-no rule of its own ([ADR-0005](../../../docs/adr/0005-procedures-as-skills.md)).
+no rule of its own.
 
 ## 1. Inputs — and nothing else
 
@@ -25,11 +25,9 @@ The reviewer runs in a context that did not write the change and is handed only:
 - the _Doubts_ section of the pull request draft: what the implementer disagreed
   with and what it could not confirm;
 - [`docs/CONVENTIONS.md`](../../../docs/CONVENTIONS.md);
-- the golden path named in
+- the golden path and the key decisions in
   [`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md);
-- the accepted ADRs whose _Applies to_ the diff touches, found through the index
-  in [`docs/adr/README.md`](../../../docs/adr/README.md);
-- the output of the sensors the toolchain ADR names, and of
+- the output of
   [`scripts/check-all.sh`](../../../scripts/check-all.sh), whose tests-kept
   sensor lists the test files deleted and the skip markers added since the base.
 
@@ -43,21 +41,21 @@ came to be.
 its tests: met, not met, or met by a test that does not decide it. Scope the
 task did not ask for is a finding.
 
-**Does it meet the bar?** Simplicity first
-([`AGENTS.md` §1](../../../AGENTS.md#1-principles)): is there a smaller change
-that meets the same criteria; what did the diff add that nothing asked for, such
-as an abstraction, a dependency, a parameter, a flag, a fallback, or a comment
-restating the code; what could be deleted. Then each bullet of
-[`AGENTS.md` §5](../../../AGENTS.md#5-quality-bar--definition-of-done) that
-applies: builds and passes; new behaviour has tests and a bug fix its regression
-test; the tests go through interfaces the implementation can change behind and
-take their expected values from the criterion, not from the code under test;
-every accepted ADR and criterion the change touches is cited by a test; nothing
-weakened the suite; the diff is releasable; `ARCHITECTURE.md` moved with the
-structure. Then the conventions, the ADRs, and the sensor output; a sensor
-finding the implementer suppressed is a finding here. Last, the _Doubts_: each
-disagreement checked against its evidence, each unconfirmed point confirmed or
-left open by name. A "none" is checked like any other claim.
+**Does it meet the bar?** Simplicity first ([`AGENTS.md`
+§1](../../../AGENTS.md#1-principles)): is there a smaller change that meets the
+same criteria; what did the diff add that nothing asked for, such as an
+abstraction, a dependency, a parameter, a flag, a fallback, or a comment
+restating the code; what could be deleted. Then each bullet of [`AGENTS.md`
+§5](../../../AGENTS.md#5-quality-bar--definition-of-done) that applies: builds
+and passes; new behaviour has tests and a bug fix its regression test; the tests
+go through interfaces the implementation can change behind and take their
+expected values from the criterion, not from the code under test; every
+criterion the change touches is cited by a test; nothing weakened the suite; the
+diff is releasable; `ARCHITECTURE.md` moved with the structure. Then the
+conventions, the key decisions, and the sensor output; a sensor finding the
+implementer suppressed is a finding here. Last, the _Doubts_: each disagreement
+checked against its evidence, each unconfirmed point confirmed or left open by
+name. A "none" is checked like any other claim.
 
 ## 3. Tests that changed
 

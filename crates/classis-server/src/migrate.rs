@@ -1,4 +1,4 @@
-//! `server migrate` (ADR-0037 clause 14): moves the state an older Server kept under `config_dir`
+//! `server migrate`: moves the state an older Server kept under `config_dir`
 //! and `packages_dir` into a new `data_dir`, once, while the Server is stopped.
 //!
 //! The Server reads no older layout; this is the one place that knows it, and it knows the layout
@@ -17,7 +17,7 @@
 //!   signatures moved onto the entries, and a Package that was not carried leaves them, named.
 //! - **Configurations** keep their content; each loses its Selector, and is listed with the
 //!   Selector it had, for the operator to place in a Deployment. One without an Agent type is not
-//!   carried, because the Server refuses it at startup (ADR-0034 clause 1): it is listed, and its
+//!   carried, because the Server refuses it at startup: it is listed, and its
 //!   file stays in the old directory for the operator to save again with a type.
 //! - **Agents** are carried with their labels moved into the record. A Package released through a
 //!   Deployment stays assigned through it, while both were carried. A 0.5 Server released every
@@ -146,7 +146,7 @@ fn carry_register(config_dir: &Path, data_dir: &Path, report: &mut Report) -> Re
     let list = old.join("revocations.json");
     if list.exists() {
         // Byte for byte: the Server reads the list as it always has, and drops a credential entry
-        // it may still hold on its first load (ADR-0021 clause 36).
+        // it may still hold on its first load.
         match copy_owner_only(&list, &data_dir.join(fs::REVOCATIONS)) {
             Ok(()) => report.line("carried: the revocation list"),
             Err(e) => report.failed(format!("the revocation list: {e}")),
@@ -405,7 +405,7 @@ fn carry_packages(
                 continue;
             }
         };
-        // A version that is a token but not SemVer is carried over as read (ADR-0043 clause 3):
+        // A version that is a token but not SemVer is carried over as read:
         // the new Server keeps it, warns about it, and writes nothing to it.
         let id = match PackageId::load(&old.agent_type, &old.version) {
             Ok(id) => id,
@@ -427,7 +427,7 @@ fn carry_packages(
             if let Some(url) = entry.source_url {
                 report.line(format!(
                     "dropped: {id} for {tag} — a referenced entry ({url}); every artifact is \
-                     uploaded now (ADR-0033)"
+                     uploaded now"
                 ));
                 continue;
             }
@@ -567,7 +567,7 @@ fn carry_configurations(
         }
         if crate::configs::check_type(&config.saved).is_err() {
             report.line(format!(
-                "listed: Configuration {} was not carried — it has no Agent type (service_name),                  which every Configuration needs (ADR-0034); save it again with a type from {},                  which stays where it is; it had the Selector {}",
+                "listed: Configuration {} was not carried — it has no Agent type (service_name),                  which every Configuration needs; save it again with a type from {},                  which stays where it is; it had the Selector {}",
                 config.name,
                 path.display(),
                 selector_text(&selector)
@@ -577,7 +577,7 @@ fn carry_configurations(
         backend.put(&config)?;
         report.line(format!(
             "listed: Configuration {} had the Selector {} — put it into a Deployment whose \
-             Selector aims it (ADR-0034)",
+             Selector aims it",
             config.name,
             selector_text(&selector)
         ));
@@ -974,7 +974,6 @@ mod tests {
     /// and lists every Configuration's old Selector, and a Configuration without an Agent type it
     /// lists and does not carry, leaving its file — and the new data directory opens as the Server
     /// opens it.
-    /// Verifies: ADR-0037
     #[test]
     fn migrate_carries_an_old_layout_into_a_data_directory() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1020,7 +1019,7 @@ mod tests {
         let id = PackageId::new("otelcol", "1.0.0").expect("id");
         let summary = packages.summary(&id).expect("carried");
         assert_eq!(summary.entries.len(), 1);
-        // Carried as it was; a store armed with no verifier offers it to nobody (ADR-0066).
+        // Carried as it was; a store armed with no verifier offers it to nobody.
         let platform = crate::packages::Platform::new("linux", "amd64").expect("platform");
         assert_eq!(
             packages.stored_signature(&id, &platform).map(hex::encode),
@@ -1117,7 +1116,6 @@ mod tests {
     }
 
     /// An entry its Deployments held different signatures for is carried unsigned and named.
-    /// Verifies: ADR-0037
     #[test]
     fn differing_signatures_leave_the_entry_unsigned_and_named() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1142,7 +1140,6 @@ mod tests {
 
     /// A Package deleted before the migration but still named in a Deployment is not carried
     /// into that Deployment, and the report names it.
-    /// Verifies: ADR-0037
     #[test]
     fn a_deployment_naming_a_deleted_package_loses_that_name() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1172,7 +1169,6 @@ mod tests {
     /// A Package whose metadata does not carry leaves every Deployment that named it, and an
     /// Agent's Package assignment through it is dropped with a line — though its directory still
     /// holds a `package.json`.
-    /// Verifies: ADR-0037
     #[test]
     fn a_package_that_does_not_carry_leaves_its_deployments_and_assignments() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1215,7 +1211,6 @@ mod tests {
 
     /// An artifact whose bytes do not match its own entry's recorded hash is dropped, and the blob
     /// of those bytes stays when another carried entry holds the same bytes.
-    /// Verifies: ADR-0037
     #[test]
     fn a_mismatching_artifact_leaves_the_blob_another_entry_holds() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1252,7 +1247,6 @@ mod tests {
 
     /// The migration writes into an empty data directory only, and trust data it cannot carry
     /// makes it fail.
-    /// Verifies: ADR-0037
     #[test]
     fn migrate_refuses_a_data_directory_that_is_not_empty_and_fails_on_lost_trust_data() {
         let root = tempfile::tempdir().expect("tempdir");

@@ -1,9 +1,9 @@
-//! The Agent-record storage port (ADR-0024).
+//! The Agent-record storage port.
 //!
 //! The fleet is loaded whole at startup and held in memory; at runtime the store receives writes
 //! and deletions for single Agents — `load`, `put`, `remove`, `rekey` — and one operation for a
-//! rollout, which writes the revisions it pins and the assignments that pin them together
-//! (ADR-0037 clause 3). The integrity questions a deletion asks — is this pinned, which revisions
+//! rollout, which writes the revisions it pins and the assignments that pin them together.
+//! The integrity questions a deletion asks — is this pinned, which revisions
 //! are referenced — are queries of the port too, so an adapter over a database answers them from
 //! its rows rather than the caller from a scan. The port speaks the *typed* record: what bytes or
 //! rows a backend turns it into is the adapter's own business.
@@ -43,19 +43,19 @@ pub struct PersistedAgent {
     pub connection_settings_status: Option<ConnectionSettingsStatus>,
     pub package_statuses: Option<PackageStatuses>,
     pub available_components: Option<AvailableComponents>,
-    /// The transport the last report arrived on — informational, never a routing key (ADR-0015).
+    /// The transport the last report arrived on — informational, never a routing key.
     pub transport: Transport,
     pub last_seen_ms: u64,
-    /// A queued restart is operator intent and survives like any other (ADR-0024).
+    /// A queued restart is operator intent and survives like any other.
     pub restart_pending: bool,
-    /// What the operator's last rollout released to this Agent (ADR-0034 clause 5): the
+    /// What the operator's last rollout released to this Agent: the
     /// Deployment, the Package pinned, and each Configuration's pinned revision. `None` — nothing
     /// has been rolled out.
     pub assignment: Option<crate::fleet::Assignment>,
-    /// The operator's labels on this Agent (ADR-0035 clause 6): part of its record, so they follow
+    /// The operator's labels on this Agent: part of its record, so they follow
     /// a re-key and leave with a forget.
     pub labels: BTreeMap<String, String>,
-    /// The Host the Agent last arrived over (ADR-0035 clause 2) — its own on a direct connection,
+    /// The Host the Agent last arrived over — its own on a direct connection,
     /// the Gateway's behind one; `None` without `[client_ca]`. It grants nothing.
     pub host: Option<String>,
 }
@@ -63,9 +63,9 @@ pub struct PersistedAgent {
 impl PersistedAgent {
     /// A digest over the *durable* content — everything except `last_seen_ms` and `sequence_num`,
     /// which move on every report. This is what the caller's dirty check compares, so the common
-    /// heartbeat, which changes nothing else, reaches no adapter at all (ADR-0024).
+    /// heartbeat, which changes nothing else, reaches no adapter at all.
     ///
-    /// It is computed from the record itself, never from an adapter's format (ADR-0006): each
+    /// It is computed from the record itself, never from an adapter's format: each
     /// field length-prefixed so neighbours cannot run together, the wire-typed ones in their
     /// protobuf encoding. The digest lives in memory only, so its layout is free to change. The
     /// destructuring names every field, so a new one does not compile until it is placed here.
@@ -141,7 +141,7 @@ impl PersistedAgent {
     }
 }
 
-/// What an assignment can pin (ADR-0034 clause 8): what a deletion asks about before it goes.
+/// What an assignment can pin: what a deletion asks about before it goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pin<'a> {
     /// A Configuration, at any of its revisions.
@@ -164,18 +164,18 @@ impl Pin<'_> {
     }
 }
 
-/// The storage port (ADR-0024, ADR-0037): the only thing the fleet logic knows about persistence. A
+/// The storage port: the only thing the fleet logic knows about persistence. A
 /// database or an external store is a new implementation of these operations plus one wiring
 /// line — the rest of the Server is, by construction, unaffected.
 pub trait AgentStore: Send + Sync {
     /// Every persisted record, once, at startup. A record that cannot be read fails loudly — a
-    /// fleet that silently lost members is worse than one that refuses to start (ADR-0010).
+    /// fleet that silently lost members is worse than one that refuses to start.
     fn load(&self) -> Result<HashMap<InstanceUid, PersistedAgent>, String>;
 
     /// Creates or replaces one record.
     fn put(&self, uid: &InstanceUid, record: &PersistedAgent) -> Result<(), String>;
 
-    /// Forgets one record (ADR-0024); removing what is already absent is not an error.
+    /// Forgets one record; removing what is already absent is not an error.
     fn remove(&self, uid: &InstanceUid) -> Result<(), String>;
 
     /// The identity reassignment (`RequestInstanceUid`): one operation, so an adapter with atomic
@@ -190,7 +190,7 @@ pub trait AgentStore: Send + Sync {
         self.remove(old)
     }
 
-    /// A rollout (ADR-0037 clause 3): the Configurations whose retained revisions it pins, and
+    /// A rollout: the Configurations whose retained revisions it pins, and
     /// the records carrying the assignments that pin them, as one operation. An adapter that
     /// cannot make it one step writes the revisions first, so a failure part-way leaves at most a
     /// revision nothing references — which the next load collects — and never an assignment
@@ -207,11 +207,11 @@ pub trait AgentStore: Send + Sync {
         agents: &[(InstanceUid, PersistedAgent)],
     ) -> Result<(), String>;
 
-    /// How many stored assignments pin `pin` (ADR-0034 clause 8).
+    /// How many stored assignments pin `pin`.
     fn pinning(&self, pin: Pin<'_>) -> usize;
 
     /// The revision hashes of the Configuration `name` that stored assignments reference — what
-    /// its retained revisions are collected down to (ADR-0025).
+    /// its retained revisions are collected down to.
     fn referenced_revisions(&self, name: &str) -> BTreeSet<String>;
 }
 

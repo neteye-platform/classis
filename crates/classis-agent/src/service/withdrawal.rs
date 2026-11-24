@@ -1,4 +1,4 @@
-//! What an install on Windows left to finish, kept until it is done (ADR-0059 clauses 1 and 6): a
+//! What an install on Windows left to finish, kept until it is done: a
 //! withdrawal that is due, and the services it stopped that are to run again.
 //!
 //! What a former account was granted is withdrawn after the SCM names its successor: before, the
@@ -271,7 +271,7 @@ pub enum HaltFailed {
     Stopped(String),
 }
 
-/// Stops both services for a change, recorded around it in `store` (ADR-0059 clauses 1 and 2):
+/// Stops both services for a change, recorded around it in `store`:
 /// what `running` says runs is added to what `pending` already names to run again, and written —
 /// with the withdrawal due — before `halt` stops anything; what `halt` found running beyond that is
 /// added after it. Where `halt` fails, what is to run again is set from what the SCM reports then,
@@ -329,7 +329,7 @@ pub fn halt_recorded(
     }
 }
 
-/// What an uninstall does, over its seams (ADR-0059 clauses 1 and 6): it stops both services
+/// What an uninstall does, over its seams: it stops both services
 /// through `halt`, which starts nothing again; completes the recorded withdrawal through
 /// `complete`, and then removes the record through `remove` — only where it holds the install lock
 /// (`locked`) and both services stopped; and deregisters both through `deregister`, always: an
@@ -490,7 +490,7 @@ impl Store for Registry {
     }
 }
 
-/// The roots a withdrawal walks (ADR-0059 clause 16): the layout root, the data root, the state
+/// The roots a withdrawal walks: the layout root, the data root, the state
 /// directory, the configuration file and the fleet files copied beside it, and the Supervisors'
 /// root where it lies beneath the first three. One outside them all stays the operator's, and is
 /// not among them.
@@ -518,7 +518,6 @@ mod tests {
 
     /// A Supervisors' root the configuration places outside every root the install acts on is not
     /// walked by a withdrawal: it stays the operator's. One beneath them is.
-    /// Verifies: ADR-0059
     #[test]
     fn a_withdrawal_walks_no_supervisors_root_outside_the_installs_roots() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -568,8 +567,7 @@ mod tests {
 
     /// A withdrawal that failed — an install interrupted after the SCM switched — is still
     /// recorded, and the next install, which finds no former account of its own, completes it from
-    /// the record and removes it; one that succeeds leaves no record (ADR-0059 clauses 1 and 6).
-    /// Verifies: ADR-0059
+    /// the record and removes it; one that succeeds leaves no record.
     #[test]
     fn an_interrupted_withdrawal_is_completed_by_the_next_install() {
         let store = Memory::default();
@@ -640,8 +638,7 @@ mod tests {
     /// The services a stop left stopped are recorded with the withdrawal, and an install that
     /// fails after the stop leaves them recorded: the next install, whose own stop finds them
     /// stopped, starts again what ran before the first. They are struck once they run, after the
-    /// withdrawal, and the record goes with them (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// withdrawal, and the record goes with them.
     #[test]
     fn what_a_failed_install_stopped_is_started_by_the_next() {
         let store = Memory::default();
@@ -683,8 +680,7 @@ mod tests {
     /// An operator's `service start` or `service stop` after a failed install strikes what that
     /// install recorded to start again — the operator decides when the services run from then on,
     /// and the next install does not start what was stopped by hand — while a withdrawal still due
-    /// stays recorded (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// stays recorded.
     #[test]
     fn an_operators_start_or_stop_strikes_what_is_to_run_again() {
         let store = Memory::default();
@@ -738,8 +734,7 @@ mod tests {
 
     /// What runs is recorded before anything is stopped: the stop finds it written, and a record
     /// that cannot be written stops nothing. What the stop found running beyond it is added after
-    /// it (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// it.
     #[test]
     fn what_runs_is_recorded_before_the_stop_and_amended_after_it() {
         let store = Memory::default();
@@ -783,9 +778,7 @@ mod tests {
 
     /// Where the stop fails, what is to run again is set from what the SCM reports then: what ran
     /// before this install, and what ran when it began and runs no more — a restart that failed,
-    /// or a stop that timed out and completed after all — and nothing that runs again or never ran
-    /// (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// or a stop that timed out and completed after all — and nothing that runs again or never ran.
     #[test]
     fn a_failed_stop_records_what_runs_no_more() {
         // Both ran; the stop of the second timed out, the Client's restart failed, and the second
@@ -895,9 +888,7 @@ mod tests {
 
     /// An uninstall withdraws only once both services are stopped and the install lock is held,
     /// and leaves the record alone otherwise; it deregisters both always — after a failed stop,
-    /// without the lock, after a failed withdrawal — and reports every step that failed (ADR-0059
-    /// clauses 1 and 6).
-    /// Verifies: ADR-0059
+    /// without the lock, after a failed withdrawal — and reports every step that failed.
     #[test]
     fn an_uninstall_always_deregisters_and_withdraws_only_once_both_are_stopped() {
         #[derive(Default)]
@@ -968,7 +959,6 @@ mod tests {
 
     /// A record whose removal fails is not passed off as removed: the completion says so, and
     /// what it records stays to be read again.
-    /// Verifies: ADR-0059
     #[test]
     fn a_failed_clear_keeps_the_record() {
         let store = Memory {
@@ -992,7 +982,6 @@ mod tests {
 
     /// The record is read back as it was written, and what is no record is refused rather than
     /// passed over.
-    /// Verifies: ADR-0059
     #[test]
     fn a_record_reads_back_and_what_is_none_is_refused() {
         let mut pending = Pending::default();
@@ -1024,7 +1013,6 @@ mod tests {
     /// `LocalSystem` and the Administrators alone — nobody else may write it — and a key that
     /// carries any other DACL, or that another account owns, is refused. A key of the test's own
     /// stands in for the install's; its parent goes with it once empty.
-    /// Verifies: ADR-0059
     #[cfg(windows)]
     #[test]
     fn on_windows_the_record_round_trips_through_a_key_only_the_administrators_write() {

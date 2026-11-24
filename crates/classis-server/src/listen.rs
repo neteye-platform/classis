@@ -1,5 +1,5 @@
-//! How the Server's two planes are served (ADR-0013). The listener, its TLS and its bounds on
-//! connection setup are `opamp`'s (ADR-0010); what is the Server's is that both planes share one
+//! How the Server's two planes are served. The listener, its TLS and its bounds on
+//! connection setup are `opamp`'s; what is the Server's is that both planes share one
 //! handle and one idea of shutting down.
 
 use std::net::TcpListener;
@@ -14,11 +14,11 @@ use rustls::ServerConfig;
 /// Bounded on purpose: an Agent's WebSocket is idle most of the time and would otherwise decide
 /// how long a restart takes. Its session is told to close at once, with the close code for a server
 /// going away; whatever has not ended by the deadline is cut, and only then does the record flush
-/// that follows shutdown (ADR-0024) run.
+/// that follows shutdown run.
 pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 
 /// A plane on an already-bound listener, over TLS when `tls` is given, holding at most
-/// `max_connections` at once (ADR-0013). `handle` is shared by both planes, so one signal drains
+/// `max_connections` at once. `handle` is shared by both planes, so one signal drains
 /// both.
 #[must_use]
 pub fn plane(
@@ -35,7 +35,7 @@ pub fn plane(
 }
 
 /// A plane on an already-bound listener, served in plaintext on any address: the Server sits
-/// behind a reverse proxy that terminates TLS (ADR-0064), so the connection it accepts is the
+/// behind a reverse proxy that terminates TLS, so the connection it accepts is the
 /// proxy's. `handle` is shared by both planes, as for [`plane`].
 #[must_use]
 pub fn plain_plane(listener: TcpListener, max_connections: usize, handle: Handle) -> Listener {

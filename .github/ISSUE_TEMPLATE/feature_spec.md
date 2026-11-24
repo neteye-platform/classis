@@ -1,6 +1,6 @@
 ---
 name: Feature spec
-about: Plan a change larger than one agent session (ADR-0004)
+about: Plan a change larger than one agent session
 title: "[Spec] "
 labels: spec
 ---
@@ -8,10 +8,9 @@ labels: spec
 <!-- The destination of a piece of work larger than one agent session,
      written from the user's side. It is disposable: it closes when its
      tickets have merged and the design revision has run, and whatever has
-     to last moves into docs/SPECIFICATION.md, an ADR, or
-     docs/ARCHITECTURE.md. No file paths or code; they go stale. How it is
-     written is the plan-feature skill under .agents/skills/. Decided in
-     docs/adr/0004-feature-layer.md. -->
+     to last moves into docs/SPECIFICATION.md or docs/ARCHITECTURE.md. No
+     file paths or code; they go stale. How it is written is the
+     plan-feature skill under .agents/skills/. -->
 
 ## Problem
 
@@ -49,8 +48,8 @@ labels: spec
 <!-- Modules touched and the interfaces that change, schema and contract
      changes, clarifications from the human, in the project vocabulary,
      without file paths or code snippets. Any decision that is
-     architecture-relevant is an ADR, not a bullet here (AGENTS.md
-     [§3](../../AGENTS.md#3-adr-rules)). -->
+     architecture-relevant is agreed with the human before implementation
+     starts (AGENTS.md [§3](../../AGENTS.md#3-decisions)). -->
 
 -
 
@@ -69,8 +68,7 @@ labels: spec
 
 -
 
-## ADR impact
+## Key decisions
 
-<!-- Which accepted ADRs bind this work (by number), and whether it needs a
-     new `proposed` ADR before implementation starts (AGENTS.md
-     [§3](../../AGENTS.md#3-adr-rules)). "None" is an answer; write why. -->
+<!-- Which key decisions of docs/ARCHITECTURE.md this work relies on or
+     changes. "None" is an answer; write why. -->

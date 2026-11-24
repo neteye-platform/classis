@@ -6,15 +6,15 @@ name: Checks
 # scripts/check-all.sh runs the same checks in the same order locally (AGENTS.md §5); a check
 # added here is added there in the same change.
 # - Docs: the Protocol Baseline that docs/CONFORMANCE.md pins is compared with upstream's newest
-#   opamp-spec release, and a newer one is reported (ADR-0011), by scripts/check-protocol-baseline.sh
+#   opamp-spec release, and a newer one is reported, by scripts/check-protocol-baseline.sh
 #   after its own self-test has passed.
 # - Dev Container: no host Docker socket, Features pinned and locked, the container-management
-#   extension on the host side (ADR-0002), checked by scripts/check-devcontainer.sh after its own
+#   extension on the host side, checked by scripts/check-devcontainer.sh after its own
 #   self-test has passed.
 # - Action references: every action a workflow uses, actions/* included, is pinned to a commit
 #   SHA with its ref in a comment, and that ref still leads to the pinned commit: a release tag,
 #   or, for the organisation's own repositories, a branch that contains it; Renovate, on the
-#   organisation preset, raises every update, and no Dependabot configuration is left (ADR-0060).
+#   organisation preset, raises every update, and no Dependabot configuration is left.
 #   Checked by scripts/check-action-refs.sh --resolve, which reads the tags with git ls-remote and
 #   fetches the branches' commit graphs, after its own self-test has passed. The same job runs
 #   scripts/check-build-hardening.sh after its self-test: no checkout keeps the token, the release
@@ -30,7 +30,7 @@ name: Checks
 #   git hooks under .githooks/, which refuse a commit on main and a push while the checks are
 #   red: a hook that is wrong guards nothing.
 # - Rust: the Cargo workspace built, tested and linted by scripts/check-rust.sh — the commands of
-#   README.md → "Build, Test & Run", on the stack of ADR-0010 — the same script
+#   README.md → "Build, Test & Run" — the same script
 #   scripts/check-all.sh runs, so the build and the tests gate a push as they gate a merge. The one
 #   job of this workflow that installs something: rustup reads rust-toolchain.toml on first use,
 #   and the cache keeps the build within its timeout.

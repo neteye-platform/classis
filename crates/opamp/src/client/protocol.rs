@@ -1,4 +1,4 @@
-//! One Agent's OpAMP state machine, as the specification defines it (ADR-0010).
+//! One Agent's OpAMP state machine, as the specification defines it.
 //!
 //! It decides **which** fields a report carries — a full snapshot or only what changed, and only
 //! what the Server's Capability Set licenses — and settles what a reply means for the protocol:
@@ -65,11 +65,11 @@ pub struct AgentProtocol {
     /// what the Server cannot accept is not reported.
     server_capabilities: Option<u64>,
     /// The Server has sent a connection-settings offer at least once, and therefore takes the
-    /// status for one whatever its bitmask says (ADR-0014 clause 13).
+    /// status for one whatever its bitmask says.
     settings_offered: bool,
     remote_config_status: Option<RemoteConfigStatus>,
     connection_settings_status: Option<ConnectionSettingsStatus>,
-    /// A certificate signing request to send once (ADR-0021).
+    /// A certificate signing request to send once.
     pending_csr: Option<Vec<u8>>,
     // What the next report owes: a full snapshot, or each part that changed.
     send_full: bool,
@@ -174,7 +174,7 @@ impl AgentProtocol {
         self.send_components_full = true;
     }
 
-    /// Queues a certificate signing request for the next report (ADR-0021).
+    /// Queues a certificate signing request for the next report.
     pub fn request_certificate(&mut self, csr: Vec<u8>) {
         self.pending_csr = Some(csr);
     }
@@ -206,7 +206,7 @@ impl AgentProtocol {
             msg.health = Some(content.health());
         }
         if self.send_full || self.send_config_status {
-            // Deliberately **not** gated on `OffersRemoteConfig` (ADR-0014 clause 16), and this is a
+            // Deliberately **not** gated on `OffersRemoteConfig`, and this is a
             // decision rather than an oversight — do not "fix" it. That bit says the Server *can
             // offer* configuration; what licenses an inbound status report is `AcceptsStatus`, which
             // every Server MUST set, and no `AcceptsRemoteConfigStatus` exists. Gating here would
@@ -343,7 +343,7 @@ impl AgentProtocol {
         received.remote_config = reply.remote_config.as_ref();
         if let Some(offers) = &reply.connection_settings {
             // A Server that has sent an offer accepts the status for it, whatever its capability
-            // bitmask says (ADR-0014 clause 13) — latched even for an offer the application cannot
+            // bitmask says — latched even for an offer the application cannot
             // act on, because a Server that offers and then learns nothing can never stop offering.
             self.settings_offered = true;
             received.connection_settings = Some(offers);
@@ -362,7 +362,7 @@ impl AgentProtocol {
             .unwrap_or(true)
     }
 
-    /// A **received offer outranks the bitmask** (ADR-0014 clause 13). Gating on the capability alone
+    /// A **received offer outranks the bitmask**. Gating on the capability alone
     /// would deadlock against Servers that offer without declaring it — including this project's
     /// own, which sets the bit from `[connection_offer]` and so omits it for a telemetry-only or
     /// `[client_ca]`-only configuration.

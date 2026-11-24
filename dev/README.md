@@ -1,10 +1,8 @@
 # Development stores
 
 The S3-compatible store and the PostgreSQL database a development Server keeps
-its artifacts and its records in
-([ADR-0049](../docs/adr/0049-artifact-bytes-may-live-in-an-s3-compatible-object-store.md),
-[ADR-0050](../docs/adr/0050-the-servers-records-may-live-in-postgresql.md)). It
-is a Compose project of its own, run on the host:
+its artifacts and its records in. It is a Compose project of its own, run on the
+host:
 
 ```sh
 docker compose -f dev/compose.yaml up -d     # on the host, from the repository root
@@ -12,10 +10,8 @@ docker compose -f dev/compose.yaml up -d     # on the host, from the repository 
 
 ## Reaching it from the Dev Container
 
-The Dev Container has no Docker socket
-([ADR-0002](../docs/adr/0002-dev-container-runtime.md)) and needs none for this:
-it reaches the stores **through the host**, over the ports `compose.yaml`
-publishes.
+The Dev Container has no Docker socket and needs none for this: it reaches the
+stores **through the host**, over the ports `compose.yaml` publishes.
 [`.devcontainer/forward-dev-stores.sh`](../.devcontainer/forward-dev-stores.sh),
 run by `postStartCommand` on every start, listens on `127.0.0.1:9100` and
 `127.0.0.1:5432` inside the container and passes each connection on to the same

@@ -1,18 +1,17 @@
-//! `classisctl package` — fetching, building, hashing and signing Classis packages
-//! (ADR-0026, ADR-0028).
+//! `classisctl package` — fetching, building, hashing and signing Classis packages.
 //!
 //! `sign` makes a **raw Ed25519** signature over a statement of what the artifact is — its Agent
-//! type, its version and its SHA-256 (`classis_core::package::statement`, ADR-0026). The Client
+//! type, its version and its SHA-256 (`classis_core::package::statement`). The Client
 //! and the Server no longer accept one: a Package's signature carries a Package Signer
-//! certificate that a compiled-in Package Root issued (ADR-0066), as a release's `.sig` holds it.
+//! certificate that a compiled-in Package Root issued, as a release's `.sig` holds it.
 //! `pack` builds the artifact: it writes container formats [`classis_agent::archive`] can open, with the member named the way the
 //! Supervisor will look for it, and its tests open what it wrote with that same module.
 //!
-//! It is part of the operator tool, which lives in its own crate for that reason (ADR-0010,
-//! ADR-0028): nothing the Server or Client runtime does depends on it, and a managed host never
+//! It is part of the operator tool, which lives in its own crate for that reason: nothing the
+//! Server or Client runtime does depends on it, and a managed host never
 //! runs it. `fetch` is [`crate::fetch`]; the rest is here.
 //!
-//! Typical use — build an artifact and upload it as an entry (ADR-0033):
+//! Typical use — build an artifact and upload it as an entry:
 //!
 //! ```text
 //! sha=$(classisctl package pack --out promtail-3.0.0.tar.gz ./promtail)
@@ -30,7 +29,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-/// The commands of `classisctl package` (ADR-0028 clause 15).
+/// The commands of `classisctl package`.
 #[derive(Subcommand)]
 pub enum Command {
     /// Fetch a release of a known agent, verify it against upstream's checksum, and optionally
@@ -43,10 +42,9 @@ pub enum Command {
         #[arg(long, default_value = "package-signing-key.pk8")]
         out: PathBuf,
     },
-    /// Sign an artifact and print the signature (hex) — the value of that Package entry's signature
-    /// (ADR-0033). Or, with --signing-info, sign every entry of a Package's signing file and write
-    /// the signatures into it (ADR-0027). The Client and the Server refuse what it signs
-    /// (ADR-0066).
+    /// Sign an artifact and print the signature (hex) — the value of that Package entry's
+    /// signature. Or, with --signing-info, sign every entry of a Package's signing file and write
+    /// the signatures into it. The Client and the Server refuse what it signs.
     Sign {
         /// The PKCS#8 private key from `keygen`.
         #[arg(long)]
@@ -85,7 +83,7 @@ pub enum Command {
     /// the names already agree; `--program-name` is for when they do not.
     ///
     /// Two of the three containers the Client can open are produced. There is deliberately no
-    /// `zip`: the Client reads one (ADR-0026 clause 66) so that a build published as a zip travels as
+    /// `zip`: the Client reads one so that a build published as a zip travels as
     /// published, which is the opposite of a reason to *write* one here — a zip carries no Unix
     /// modes, and packing an artifact into it would be choosing the one container that cannot say
     /// the program is executable.
@@ -116,7 +114,7 @@ pub enum Command {
     },
 }
 
-/// The package container formats a Client can open (ADR-0026).
+/// The package container formats a Client can open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
     /// A gzip-compressed tar — what `opentelemetry-collector-releases` and most projects publish.
@@ -173,7 +171,7 @@ pub fn run(command: Command) -> Result<(), String> {
             let out = out.unwrap_or(path);
             file.write(&out)?;
             eprintln!(
-                "wrote the signatures to {} — the Client and the Server refuse them (ADR-0066). \
+                "wrote the signatures to {} — the Client and the Server refuse them. \
                  These hashes were signed as the file states them; they are only as right as \
                  your comparison with upstream's checksums or the files.",
                 out.display()
@@ -192,8 +190,7 @@ pub fn run(command: Command) -> Result<(), String> {
             else {
                 return Err("sign needs --agent-type, --version and the artifact".to_string());
             };
-            // Before the key is read: it never signs a version a Client would refuse
-            // (ADR-0043 clause 4).
+            // Before the key is read: it never signs a version a Client would refuse.
             require_semver(&version)?;
             let keypair = load_key(&key)?;
             let bytes = std::fs::read(&artifact)
@@ -216,7 +213,7 @@ pub fn run(command: Command) -> Result<(), String> {
             archive_key,
         } => {
             // Moved into a buffer wiped when it is dropped; what `clap` keeps of the command line
-            // is its own (ADR-0057).
+            // is its own.
             let archive_key = archive_key.map(Zeroizing::new);
             if !program.is_file() {
                 return Err(format!(
@@ -345,8 +342,8 @@ fn pack_7z(
     //
     // Only off Windows, which is 7-Zip's own rule: bit 15 means `FILE_ATTRIBUTE_INTEGRITY_STREAM`
     // there, and the Windows build neither writes nor expects the Unix extension. It costs the
-    // release nothing — each artifact is packed on a runner of its own platform (ADR-0019), so the
-    // Linux ones carry the mode and `client.exe`, which has no use for it, does not.
+    // release nothing — each artifact is packed on a runner of its own platform, so the Linux ones
+    // carry the mode and `client.exe`, which has no use for it, does not.
     #[cfg(unix)]
     {
         entry.has_windows_attributes = true;
@@ -381,10 +378,9 @@ pub(crate) fn sha256_file(path: &Path) -> Result<Vec<u8>, String> {
     Ok(hasher.finalize().to_vec())
 }
 
-/// A new package signing key (ADR-0026): the private key as PKCS#8 DER, and its public half in
+/// A new package signing key: the private key as PKCS#8 DER, and its public half in
 /// hex. `keygen` and `pki init` make it alike. The
-/// private key is wiped when it is dropped; the `ring` document it is copied from is not
-/// (ADR-0057).
+/// private key is wiped when it is dropped; the `ring` document it is copied from is not.
 ///
 /// # Errors
 /// Returns the message to print when no key can be made.
@@ -400,7 +396,7 @@ pub(crate) fn signing_key() -> Result<(Zeroizing<Vec<u8>>, String), String> {
     ))
 }
 
-/// Refuses a Package version that is not SemVer (ADR-0043 clauses 2 and 4), naming it — the
+/// Refuses a Package version that is not SemVer, naming it — the
 /// predicate the Server and the Client ask too, so what is signed here is what they take.
 ///
 /// # Errors
@@ -418,7 +414,7 @@ pub(crate) fn require_semver(version: &str) -> Result<(), String> {
 }
 
 fn load_key(path: &PathBuf) -> Result<Ed25519KeyPair, String> {
-    // Wiped once `ring` holds the key (ADR-0057).
+    // Wiped once `ring` holds the key.
     let pkcs8 = std::fs::read(path)
         .map(Zeroizing::new)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -488,8 +484,7 @@ mod tests {
 
     /// `sign --version 1.19` and a signing file at `1.19` each fail naming the version, before
     /// the key is read: the key named here does not exist, so reading it would fail with another
-    /// message (ADR-0043 clause 4).
-    /// Verifies: ADR-0043
+    /// message.
     #[test]
     fn sign_refuses_a_version_that_is_not_semver_before_reading_the_key() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -564,7 +559,7 @@ mod tests {
         );
     }
 
-    /// Encryption is the whole reason ADR-0026 admits `.7z`: the artifact stays unreadable
+    /// Encryption is the whole reason `.7z` is admitted: the artifact stays unreadable
     /// wherever it is stored, and the key never reaches the Server.
     #[test]
     fn a_packed_7z_opens_with_the_archive_key_and_not_without_it() {
@@ -590,8 +585,8 @@ mod tests {
     }
 
     /// An operator who unpacks a published artifact by hand must get a file that runs — the release
-    /// ships `.tar.gz` (ADR-0019), and `.7z` stays the container an artifact may be encrypted in
-    /// (ADR-0026). Both therefore carry an executable mode of their own — the tar in its header,
+    /// ships `.tar.gz`, and `.7z` stays the container an artifact may be encrypted in.
+    /// Both therefore carry an executable mode of their own — the tar in its header,
     /// the 7z in 7-Zip's Unix-attribute convention — rather than relying on the Client, which sets
     /// the mode itself but only on the path where *it* installs the package.
     #[test]
@@ -708,7 +703,7 @@ mod tests {
         assert!(pack(&source, &artifact, Format::TarGz, None, Some("s3cret")).is_err());
     }
 
-    /// A package delivers exactly one program (ADR-0026), so a directory is refused where the
+    /// A package delivers exactly one program, so a directory is refused where the
     /// operator can still see why — not on every host at rollout time.
     #[test]
     fn packing_something_that_is_not_a_file_is_refused() {

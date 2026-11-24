@@ -1,5 +1,5 @@
 #!/bin/sh
-# rpm `%posttrans` only — dpkg has no equivalent hook and needs none (ADR-0019).
+# rpm `%posttrans` only — dpkg has no equivalent hook and needs none.
 #
 # On an rpm *upgrade*, the ordering is: new files land, new `%post` runs, and only then are the
 # old package's files erased — including the regular `/usr/bin` file an earlier release delivered

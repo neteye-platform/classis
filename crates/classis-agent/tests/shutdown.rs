@@ -1,4 +1,4 @@
-//! Regression test for ADR-0019's graceful shutdown: a service manager stops the Client with
+//! Regression test for the service's graceful shutdown: a service manager stops the Client with
 //! `SIGTERM` (systemd) — the process must exit cleanly (code 0, goodbye path) instead of
 //! dying on the default signal disposition.
 
@@ -9,7 +9,6 @@ mod common;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// Verifies: ADR-0019
 #[test]
 fn sigterm_shuts_the_client_down_cleanly() {
     let dir = tempfile::tempdir().expect("create a tempdir");
@@ -54,10 +53,9 @@ fn sigterm_shuts_the_client_down_cleanly() {
     }
 }
 
-/// The second service is a daemon too: `SIGHUP` leaves it serving (ADR-0019 clause 12), where the
+/// The second service is a daemon too: `SIGHUP` leaves it serving, where the
 /// default disposition would end it and leave every program it started running without it.
 /// `SIGTERM` still stops it, and it removes its socket on the way out.
-/// Verifies: ADR-0059
 #[test]
 fn sighup_leaves_the_agents_service_running() {
     let dir = tempfile::tempdir().expect("create a tempdir");

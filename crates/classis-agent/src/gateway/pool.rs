@@ -1,9 +1,9 @@
-//! The upstream Connection Pool (ADR-0015): *m* WebSocket connections carrying *n* Agents.
+//! The upstream Connection Pool: *m* WebSocket connections carrying *n* Agents.
 //!
 //! Two rules do the work. The pool **grows lazily** to its configured cap — a Gateway in front of
 //! three Agents holds three connections, not ten — and an Agent is **stuck to its connection** by
 //! `instance_uid` for as long as that connection lives and the Gateway carries the Agent: while a
-//! downstream WebSocket that reported for it is open, or while its binding stands (ADR-0058). Its
+//! downstream WebSocket that reported for it is open, or while its binding stands. Its
 //! place goes the moment the Gateway stops carrying it, and its next report is placed anew.
 //! Nothing in the protocol requires the stickiness; it keeps one Agent's `sequence_num` stream and
 //! its `ReportFullState` exchanges on a single socket, which is what makes a fleet debuggable.
@@ -12,8 +12,7 @@
 //! upstream could not carry the Server's pushes to the Agents behind the Gateway.
 //!
 //! Any live connection carries any downstream Agent: every one is opened with this Gateway's own
-//! identity and nothing else, so nothing on it depends on the peer an Agent came through
-//! (ADR-0058).
+//! identity and nothing else, so nothing on it depends on the peer an Agent came through.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,13 +69,13 @@ impl Pool {
 
     /// Forwards one report upstream on its Agent's connection, opening or re-homing as needed.
     ///
-    /// The message is forwarded **unchanged** (ADR-0015): this encodes exactly what arrived.
+    /// The message is forwarded **unchanged**: this encodes exactly what arrived.
     pub async fn forward(&self, uid: InstanceUid, report: &AgentToServer) -> Result<(), String> {
         let frame = opamp::frame::encode_within(report, self.limit)
             .map_err(|e| format!("cannot forward a report of {uid}: {e}"))?;
 
         // Two attempts: the assigned connection may have died between the last send and this one,
-        // and re-homing is exactly what clause 9 of ADR-0015 asks for.
+        // and re-homing on a fresh connection is exactly what that case asks for.
         let outbound = self.connection_for(uid).await?;
         if outbound.send(frame.clone()).await.is_ok() {
             return Ok(());
@@ -108,7 +107,7 @@ impl Pool {
                 }
             }
             // Grow only when every existing connection already carries something, and only to the
-            // cap: the pool costs what it uses (ADR-0015 clause 8).
+            // cap: the pool costs what it uses.
             let live = inner
                 .connections
                 .iter()
@@ -145,7 +144,7 @@ impl Pool {
     /// Opens one upstream connection and starts its reader and writer tasks.
     async fn open(&self, uid: InstanceUid) -> Result<mpsc::Sender<Vec<u8>>, String> {
         // This Gateway's own identity, and no `Authorization`: a downstream peer's is never
-        // forwarded, and nothing is sent in its place (ADR-0015 clause 11, ADR-0021).
+        // forwarded, and nothing is sent in its place.
         let mut upstream = crate::transport::connection(&self.config)?;
         upstream.max_message_size = self.limit;
         let socket = upstream.connect_websocket().await?;
@@ -174,7 +173,7 @@ impl Pool {
                     Ok(_) => continue,
                 };
                 match opamp::frame::decode::<ServerToAgent>(&payload, limit) {
-                    // Routing is by `instance_uid` alone (ADR-0015 clause 13): a message for an Agent
+                    // Routing is by `instance_uid` alone: a message for an Agent
                     // this Gateway has never carried is dropped, never broadcast.
                     Ok(reply) => match InstanceUid::from_wire(&reply.instance_uid) {
                         Some(uid) => registry.deliver(uid, reply).await,
@@ -223,7 +222,7 @@ impl Pool {
         Ok(tx)
     }
 
-    /// Drops an Agent's assignment so the next report re-homes it (ADR-0015 clause 9). Nothing is
+    /// Drops an Agent's assignment so the next report re-homes it. Nothing is
     /// said upstream on its behalf: it never disconnected.
     fn forget_connection_of(&self, uid: InstanceUid) {
         let mut inner = self.inner.lock().expect("pool lock");
@@ -236,7 +235,7 @@ impl Pool {
 
     /// Releases the places of Agents no downstream connection carries any more, so a peer that
     /// keeps coming back under new `instance_uid`s grows nothing here. Nothing is said upstream on
-    /// their behalf (ADR-0015 clause 10). The registry is asked under the pool's lock, so an Agent
+    /// their behalf. The registry is asked under the pool's lock, so an Agent
     /// claimed again in between keeps the place its next report is forwarded on.
     pub fn release(&self, uids: impl IntoIterator<Item = InstanceUid>) {
         let mut inner = self.inner.lock().expect("pool lock");

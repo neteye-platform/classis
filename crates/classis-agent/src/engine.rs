@@ -1,4 +1,4 @@
-//! The Engine: n Agents over one upstream connection (ADR-0015, ADR-0017).
+//! The Engine: n Agents over one upstream connection.
 //!
 //! This is the Server-facing seam of the hexagonal core. The transports consume it — build
 //! reports, hand it every decoded `ServerToAgent`, ask for the goodbyes — and it routes each
@@ -17,7 +17,7 @@ use crate::supervisor::agent::{AgentState, Handled};
 use crate::supervisor::ports::{HighWaterMarks, PluginRegistry, ProcessCommand, ProcessEvent};
 use crate::update::{SelfInstall, SelfUpdate, SelfUpdater};
 
-/// The Engine index of the Client's own Agent (ADR-0018). It is built first, so a Supervisor's
+/// The Engine index of the Client's own Agent. It is built first, so a Supervisor's
 /// index is its block's position plus this.
 pub const SELF_AGENT_INDEX: usize = 0;
 
@@ -25,7 +25,7 @@ pub const SELF_AGENT_INDEX: usize = 0;
 ///
 /// All three names travel together because none answers on its own. The uid is the identity the
 /// protocol keys everything by, the instance name is the only part of it an operator recognises,
-/// and the type says what the thing *is* (ADR-0016) — a series labelled with one and not the others
+/// and the type says what the thing *is* — a series labelled with one and not the others
 /// is either unreadable or ambiguous.
 #[derive(Clone)]
 pub struct SamplingTarget {
@@ -33,7 +33,7 @@ pub struct SamplingTarget {
     pub uid: String,
     /// The operator's name for it.
     pub instance_name: String,
-    /// The Agent *type* it is reported under — `service.name` (ADR-0016). Per Agent rather than on
+    /// The Agent *type* it is reported under — `service.name`. Per Agent rather than on
     /// the Resource: one Client reports its own `supervisor` beside an `otelcol` and an `icinga2`,
     /// so unlike the platform this differs *within* a single export.
     pub service_name: String,
@@ -48,13 +48,13 @@ pub struct EngineAgent {
     pub state: AgentState,
     /// The command side of its Managed-Process Port.
     pub commands: Option<mpsc::Sender<ProcessCommand>>,
-    /// Fires this Supervisor's own shutdown (ADR-0017): its adapter and its Supervisor Endpoint
+    /// Fires this Supervisor's own shutdown: its adapter and its Supervisor Endpoint
     /// listen on the receiving side, so one Supervisor can be stopped — port released, process
     /// down — while the rest of the Client runs on.
     pub stop: Option<watch::Sender<bool>>,
     /// The `[[supervisor]]` block name behind this Agent — what package staging and the
     /// Supervisor-set diff are keyed by, since an Engine index stops naming a block position the
-    /// moment the set changes at runtime (ADR-0017).
+    /// moment the set changes at runtime.
     pub block_name: Option<String>,
 }
 
@@ -68,7 +68,7 @@ struct SupervisedAgent {
     block_name: Option<String>,
     /// A handled reply asked for an immediate report (config outcome, demanded full state).
     owes_report: bool,
-    /// Retired by a Supervisor-set change (ADR-0017): its goodbye is sent, its adapter is gone,
+    /// Retired by a Supervisor-set change: its goodbye is sent, its adapter is gone,
     /// and it is skipped everywhere. The slot stays — the event channel and package routing are
     /// keyed by index, and a shifted index would misdeliver to a live neighbour.
     retired: bool,
@@ -97,39 +97,39 @@ pub struct Engine {
     agents: Vec<SupervisedAgent>,
     /// The shared event channel every adapter reports into, tagged with the Agent's index.
     events: mpsc::Receiver<(usize, ProcessEvent)>,
-    /// The sending side of that channel, kept to start Supervisors at runtime (ADR-0017) — a
+    /// The sending side of that channel, kept to start Supervisors at runtime — a
     /// fresh adapter needs a tagged sender into the same channel.
     event_tx: mpsc::Sender<(usize, ProcessEvent)>,
-    /// The self-Agent's received configuration awaiting the Supervisor-set apply (ADR-0017),
+    /// The self-Agent's received configuration awaiting the Supervisor-set apply,
     /// taken by the transport exactly once.
     pending_self_config: Option<AgentRemoteConfig>,
-    /// A connection-settings offer awaiting the transport's verification (ADR-0014). The offer
+    /// A connection-settings offer awaiting the transport's verification. The offer
     /// arrives per Agent but the settings are connection-scoped, so the Engine keeps exactly one
     /// pending offer — n Agents receiving the same offer verify and switch once.
     pending_connection_offer: Option<ConnectionSettingsOffers>,
-    /// Packages awaiting the transport's download and verification (ADR-0026), each tagged with
+    /// Packages awaiting the transport's download and verification, each tagged with
     /// the owning Agent's index so the verified artifact routes back to the right Supervisor.
     pending_package_downloads: Vec<(usize, PackageDownload)>,
-    /// How the Client updates *itself* (ADR-0018). Unarmed when `[packages] self_update = false`, in
+    /// How the Client updates *itself*. Unarmed when `[packages] self_update = false`, in
     /// which case the self-Agent accepts no packages anyway.
     self_update: SelfUpdate,
-    /// The sampling targets, shared with the own-telemetry sampler (ADR-0016), which runs beside
+    /// The sampling targets, shared with the own-telemetry sampler, which runs beside
     /// a transport that holds this Engine mutably for the whole of a connection.
     sampling: Arc<Mutex<Vec<SamplingTarget>>>,
-    /// The certificate request last queued on this connection (ADR-0021): a new one goes out at
+    /// The certificate request last queued on this connection: a new one goes out at
     /// once, the same one again only with the next report.
     last_csr: Option<Vec<u8>>,
-    /// The high-water marks every Supervisor of this Client shares (ADR-0043 clause 8), kept so a
+    /// The high-water marks every Supervisor of this Client shares, kept so a
     /// Supervisor a set apply adds at runtime is held to the same marks.
     high_water: Option<Arc<dyn HighWaterMarks>>,
     /// The plugins this Client's Supervisors were started with, kept so a Supervisor a set apply
-    /// adds at runtime starts its Managed Process the same way (ADR-0059 clause 3).
+    /// adds at runtime starts its Managed Process the same way.
     plugins: Option<Arc<dyn PluginRegistry>>,
 }
 
 impl Engine {
     /// An Engine over Agents without Managed Processes. The Client always builds its self-Agent
-    /// *and* its Supervisors through [`with_processes`](Self::with_processes) (ADR-0018), so this
+    /// *and* its Supervisors through [`with_processes`](Self::with_processes), so this
     /// is the tests' constructor — the shape it stands for does not occur in production.
     #[cfg(test)]
     #[must_use]
@@ -152,7 +152,7 @@ impl Engine {
 
     /// An Engine over Supervisor-backed Agents: each with the handles of its Port, all sharing
     /// one event channel (senders tagged by the Agent's index here). `event_tx` is the sending
-    /// side of `events`, kept for Supervisors started at runtime (ADR-0017).
+    /// side of `events`, kept for Supervisors started at runtime.
     #[must_use]
     pub fn with_processes(
         agents: Vec<EngineAgent>,
@@ -178,9 +178,9 @@ impl Engine {
         engine
     }
 
-    /// Arms self-update (ADR-0018) with what installs a new version and commits this one if it is
+    /// Arms self-update with what installs a new version and commits this one if it is
     /// itself freshly installed.
-    /// Gives the Engine the high-water marks its Supervisors share (ADR-0043 clause 8).
+    /// Gives the Engine the high-water marks its Supervisors share.
     pub fn set_high_water(&mut self, marks: Arc<dyn HighWaterMarks>) {
         self.high_water = Some(marks);
     }
@@ -191,7 +191,7 @@ impl Engine {
         self.high_water.clone()
     }
 
-    /// Gives the Engine the plugins its Supervisors were started with (ADR-0059 clause 3).
+    /// Gives the Engine the plugins its Supervisors were started with.
     pub fn set_plugins(&mut self, plugins: Arc<dyn PluginRegistry>) {
         self.plugins = Some(plugins);
     }
@@ -206,7 +206,7 @@ impl Engine {
         self.self_update.arm(updater);
     }
 
-    /// Reports a self-update that finished in a previous process (ADR-0018): the install
+    /// Reports a self-update that finished in a previous process: the install
     /// necessarily completes across a restart, so the terminal status is owed by whichever
     /// version came up — the new one saying `Installed`, or the old one saying why it is back.
     /// `result` is the version now running, or why the install failed.
@@ -217,7 +217,7 @@ impl Engine {
         agent.package_applied(hash, result);
     }
 
-    /// Restores previously applied connection settings on every Agent (ADR-0014), so a restarted
+    /// Restores previously applied connection settings on every Agent, so a restarted
     /// Client reports `APPLIED` and is not re-offered what it already runs.
     pub fn adopt_connection_settings(&mut self, hash: &[u8]) {
         for agent in &mut self.agents {
@@ -233,7 +233,7 @@ impl Engine {
         }
     }
 
-    /// What own metrics are sampled from (ADR-0016): every Agent, named as the protocol keys it, as
+    /// What own metrics are sampled from: every Agent, named as the protocol keys it, as
     /// the operator calls it and as its type is reported, paired with the pid to sample for it — this process for the
     /// Client's own Agent, the Managed Process for a Supervisor-backed one, and nothing while that
     /// process is not running.
@@ -265,7 +265,7 @@ impl Engine {
         }
     }
 
-    /// The Client's own Agent's description, for the Resource its telemetry carries (ADR-0016).
+    /// The Client's own Agent's description, for the Resource its telemetry carries.
     pub fn self_description(&self) -> opamp::proto::AgentDescription {
         self.agents
             .iter()
@@ -274,13 +274,13 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    /// Asks the Server for a client certificate when it signs them and this Client needs one
-    /// (ADR-0021). Driven by capability rather than configuration: a Server that declares nothing
+    /// Asks the Server for a client certificate when it signs them and this Client needs one.
+    /// Driven by capability rather than configuration: a Server that declares nothing
     /// is never asked, and one that does hands this host an identity before mutual TLS is switched
     /// on, which is what makes switching it on uneventful.
     ///
     /// The request rides the Client's **own** Agent. The identity belongs to the connection, not to
-    /// any one Agent (n Agents share it, ADR-0015), and the self-Agent is the one every Client has.
+    /// any one Agent (n Agents share it), and the self-Agent is the one every Client has.
     ///
     /// `csr` makes the request — called only when one is to be sent, since it generates a key.
     ///
@@ -305,7 +305,7 @@ impl Engine {
         }
     }
 
-    /// The enrolment report (ADR-0039 clause 11): `csr` alone, on the Client's own Agent — the one
+    /// The enrolment report: `csr` alone, on the Client's own Agent — the one
     /// the identity of the connection belongs to, as [`request_certificate`] rides it. `None`
     /// without such an Agent.
     ///
@@ -320,18 +320,18 @@ impl Engine {
     }
 
     /// The connection-settings offer the transport must verify by actually connecting, taken
-    /// exactly once (ADR-0014).
+    /// exactly once.
     pub fn take_connection_offer(&mut self) -> Option<ConnectionSettingsOffers> {
         self.pending_connection_offer.take()
     }
 
-    /// The packages the transport must download and verify (ADR-0026), each with its Agent's
+    /// The packages the transport must download and verify, each with its Agent's
     /// index — drained so each is dispatched once.
     pub fn take_package_downloads(&mut self) -> Vec<(usize, PackageDownload)> {
         std::mem::take(&mut self.pending_package_downloads)
     }
 
-    /// Records download progress for the Agent whose package is being fetched (ADR-0026), so the
+    /// Records download progress for the Agent whose package is being fetched, so the
     /// next report carries `Downloading` with its details instead of a silent `Installing`.
     pub fn package_downloading(
         &mut self,
@@ -344,11 +344,10 @@ impl Engine {
         }
     }
 
-    /// Hands a downloaded, verified artifact to the owning Agent's Supervisor to apply (ADR-0026),
-    /// or — for the Client's own Agent — installs it as a new version of the Client (ADR-0018).
+    /// Hands a downloaded, verified artifact to the owning Agent's Supervisor to apply,
+    /// or — for the Client's own Agent — installs it as a new version of the Client.
     /// The Supervisor's `PackageApplied` event closes the lifecycle. A missing adapter, or one not
     /// accepting commands, fails the install (reported, not silent).
-    ///
     pub fn apply_package(
         &mut self,
         index: usize,
@@ -359,8 +358,8 @@ impl Engine {
     ) {
         if index == SELF_AGENT_INDEX {
             // Entered rather than passed on: the self-update runs here, in this task, so the
-            // staging and the probe it does become children of the install by being inside it
-            // (ADR-0016). Nothing is awaited under this guard.
+            // staging and the probe it does become children of the install by being inside it.
+            // Nothing is awaited under this guard.
             let _install = span.enter();
             self.apply_self_update(&staged, version, hash);
             return;
@@ -390,13 +389,13 @@ impl Engine {
     }
 
     /// Whether a self-update has moved the `current` pointer and the run must therefore end, so
-    /// the service manager restarts into the new version (ADR-0018).
+    /// the service manager restarts into the new version.
     #[must_use]
     pub fn restart_for_update(&self) -> bool {
         self.self_update.restart_requested()
     }
 
-    /// Installs a verified artifact as a new version of *this Client* (ADR-0018).
+    /// Installs a verified artifact as a new version of *this Client*.
     ///
     /// Unlike a Supervisor's install, the outcome cannot be reported from here on success: this
     /// process is about to stop being the one that runs. Only the failure is terminal now — and it
@@ -423,7 +422,7 @@ impl Engine {
         }
     }
 
-    /// A package download or verification failed (ADR-0026): the owning Agent reports
+    /// A package download or verification failed: the owning Agent reports
     /// `InstallFailed` — a rejected package is a report, not a silence.
     pub fn package_download_failed(&mut self, index: usize, hash: Vec<u8>, error: String) {
         if let Some(agent) = self.agents.get_mut(index) {
@@ -440,7 +439,7 @@ impl Engine {
         }
     }
 
-    /// One Agent's next report, for the plain-HTTP verification probe (ADR-0014): a real
+    /// One Agent's next report, for the plain-HTTP verification probe: a real
     /// exchange needs a real report. Delivered on success; a failed probe leaves a sequence gap
     /// the Baseline's `ReportFullState` recovery heals on the next exchange.
     pub fn probe_report(&mut self) -> Option<AgentToServer> {
@@ -456,7 +455,7 @@ impl Engine {
 
     /// Whether any Agent this Engine runs takes Server-offered packages — a self-update or a managed
     /// process's package. What the startup check uses to decide whether an unconfigured verification
-    /// key is worth warning about (ADR-0026).
+    /// key is worth warning about.
     pub fn installs_packages(&self) -> bool {
         self.agents.iter().any(|a| a.state.accepts_packages())
     }
@@ -506,7 +505,7 @@ impl Engine {
             return Handled::default();
         };
         // n is the number of local Supervisors — small; a linear scan beats a map to maintain.
-        // A retired Agent (ADR-0017) said goodbye; a straggling reply for it is dropped like one
+        // A retired Agent said goodbye; a straggling reply for it is dropped like one
         // for an Agent that never existed.
         let Some(index) = self
             .agents
@@ -517,7 +516,7 @@ impl Engine {
             return Handled::default();
         };
         // The Server answered, so this version connected and is being spoken to — which is what a
-        // freshly installed one has to manage to stop being on probation (ADR-0018).
+        // freshly installed one has to manage to stop being on probation.
         self.self_update.server_answered();
         let agent = &mut self.agents[index];
         let mut handled = agent.state.handle(reply);
@@ -538,7 +537,7 @@ impl Engine {
         // ConfigApplied event closes the APPLYING → APPLIED/FAILED lifecycle. The self-Agent's
         // goes to the Engine's pending slot instead (assigned after `agent`'s borrow ends): its
         // configuration is the Supervisor set, which the transport applies through
-        // [`crate::reconfigure`] (ADR-0017).
+        // [`crate::reconfigure`].
         let mut self_config = None;
         if let Some(config) = agent.state.take_pending_apply() {
             if index == SELF_AGENT_INDEX && !agent.state.is_managed() {
@@ -546,7 +545,7 @@ impl Engine {
             } else {
                 match &agent.commands {
                     Some(commands) => {
-                        // The apply's trace (ADR-0016). It opens where the configuration is handed
+                        // The apply's trace. It opens where the configuration is handed
                         // over and closes in the adapter, once the Managed Process is back up: the
                         // hand-over is the start of the operation, not the whole of it, and the
                         // phases worth timing — the stop, the restart, the health gate — all happen
@@ -594,13 +593,12 @@ impl Engine {
         handled
     }
 
-    /// The self-Agent's received configuration, taken exactly once for the Supervisor-set apply
-    /// (ADR-0017).
+    /// The self-Agent's received configuration, taken exactly once for the Supervisor-set apply.
     pub fn take_self_config(&mut self) -> Option<AgentRemoteConfig> {
         self.pending_self_config.take()
     }
 
-    /// Closes the self-Agent's `APPLYING` → `APPLIED`/`FAILED` lifecycle (ADR-0017): the verdict
+    /// Closes the self-Agent's `APPLYING` → `APPLIED`/`FAILED` lifecycle: the verdict
     /// of the Supervisor-set apply, where a Managed Process's `ConfigApplied` event would stand.
     pub fn self_config_applied(&mut self, hash: Vec<u8>, result: Result<(), String>) {
         let Some(agent) = self.agents.get_mut(SELF_AGENT_INDEX) else {
@@ -611,7 +609,7 @@ impl Engine {
     }
 
     /// Refreshes what the self-Agent reports as its effective configuration — the (redacted)
-    /// text of `supervisor.toml`, which an applied Supervisor set just rewrote (ADR-0017).
+    /// text of `supervisor.toml`, which an applied Supervisor set just rewrote.
     pub fn set_self_effective_config(&mut self, source: String) {
         let Some(agent) = self.agents.get_mut(SELF_AGENT_INDEX) else {
             return;
@@ -634,7 +632,7 @@ impl Engine {
     }
 
     /// The `[[supervisor]]` block name behind the Agent at `index` — `None` for the self-Agent.
-    /// What package staging is keyed by (ADR-0017): an Engine index stops naming a block
+    /// What package staging is keyed by: an Engine index stops naming a block
     /// position once the Agent set has changed at runtime.
     pub fn block_name(&self, index: usize) -> Option<&str> {
         self.agents.get(index)?.block_name.as_deref()
@@ -648,13 +646,13 @@ impl Engine {
     }
 
     /// The sending side of the shared event channel, for starting a Supervisor at runtime
-    /// (ADR-0017) — its Endpoint and adapter each get a tagged sender into it.
+    /// — its Endpoint and adapter each get a tagged sender into it.
     #[must_use]
     pub fn events_handle(&self) -> mpsc::Sender<(usize, ProcessEvent)> {
         self.event_tx.clone()
     }
 
-    /// Adds a freshly started Supervisor's Agent (ADR-0017). It introduces itself with a full
+    /// Adds a freshly started Supervisor's Agent. It introduces itself with a full
     /// snapshot on the next flush — a fresh state's first report is a full one.
     pub fn add_supervisor(&mut self, agent: EngineAgent) {
         let mut agent = SupervisedAgent::live(agent);
@@ -663,14 +661,14 @@ impl Engine {
         self.refresh_sampling();
     }
 
-    /// Retires the Agents whose `[[supervisor]]` blocks left the set (ADR-0017): each one's
+    /// Retires the Agents whose `[[supervisor]]` blocks left the set: each one's
     /// adapter stops the Managed Process within the stop budget, its Endpoint releases the port,
     /// the adapter's exit is awaited, and the goodbyes to send are returned. The slots stay (see
     /// [`SupervisedAgent::retired`]); unnamed Agents run on untouched.
     ///
-    /// A name in `uninstalling` is leaving the set *for good* (ADR-0017): its adapter is told to
+    /// A name in `uninstalling` is leaving the set *for good*: its adapter is told to
     /// uninstall — stop, undo what installing it did, answer — before the caller purges its
-    /// directory (ADR-0017). A name only in `names` merely changed: it is stopped, restarts
+    /// directory. A name only in `names` merely changed: it is stopped, restarts
     /// under its name, and keeps what it installed. The adapter's own stop budget bounds either
     /// path; an uninstall that cannot be delivered falls back to the plain stop.
     pub async fn retire_supervisors(
@@ -751,7 +749,7 @@ impl Engine {
             return;
         };
         // A retired Agent's adapter may still flush its last events (its process going down);
-        // they are nobody's news — the goodbye already went out (ADR-0017).
+        // they are nobody's news — the goodbye already went out.
         if agent.retired {
             return;
         }
@@ -776,7 +774,7 @@ impl Engine {
             ProcessEvent::PackageApplied { hash, result } => {
                 agent.state.package_applied(hash, result);
             }
-            // The adapter's last word before retirement (ADR-0017). The goodbye carries no
+            // The adapter's last word before retirement. The goodbye carries no
             // status, so the outcome is the operator's to read here — an `Err` names what the
             // kind could not undo, which nothing else will ever mention again.
             ProcessEvent::Uninstalled { result } => {
@@ -803,7 +801,7 @@ impl Engine {
         let mut stopping = Vec::new();
         for agent in &mut self.agents {
             // The Supervisor's own shutdown fires alongside the command, so its Endpoint task
-            // winds down with its adapter rather than with this process (ADR-0017).
+            // winds down with its adapter rather than with this process.
             if let Some(stop) = agent.stop.take() {
                 let _ = stop.send(true);
             }
@@ -890,8 +888,7 @@ mod tests {
 
     /// A new certificate request is owed at once, so it never waits for a heartbeat; the same one
     /// re-sent while it waits for an operator rides the next report, so it never answers every
-    /// answer (ADR-0021 clause 21).
-    /// Verifies: ADR-0021
+    /// answer.
     #[test]
     fn a_new_certificate_request_is_owed_at_once_and_a_repeated_one_is_not() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -961,7 +958,7 @@ mod tests {
         assert!(goodbyes.iter().all(|g| g.agent_disconnect.is_some()));
     }
 
-    /// ADR-0017 at the Engine seam: a name in `uninstalling` is told to uninstall — its adapter
+    /// At the Engine seam, a name in `uninstalling` is told to uninstall — its adapter
     /// answers and exits on the command itself — while a name that merely changed is only
     /// stopped, so it keeps what it installed for its restart. Both end retired with a goodbye.
     #[tokio::test]

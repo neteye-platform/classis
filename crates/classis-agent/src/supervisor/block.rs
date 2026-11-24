@@ -1,4 +1,4 @@
-//! How one `[[supervisor]]` block is read (ADR-0017): the plugin its `type` selects, the
+//! How one `[[supervisor]]` block is read: the plugin its `type` selects, the
 //! program it runs, the Agent type it presents and the timings it keeps — the rules the supervision
 //! core applies to every kind alike, apart from the registry that knows the kinds and from
 //! anything that touches the disk.
@@ -16,7 +16,7 @@ pub struct Resolved<'a> {
     pub plugin: &'a dyn Plugin,
     pub settings: toml::Table,
     pub program: Program,
-    /// Where the program sits inside a package tree (ADR-0026); `None` for a single file.
+    /// Where the program sits inside a package tree; `None` for a single file.
     pub program_path: Option<PathBuf>,
     pub service_name: String,
     pub timing: Timing,
@@ -27,7 +27,7 @@ pub struct Resolved<'a> {
 ///
 /// What the core resolves — the program, the Agent type, the Endpoint port and the timings — is
 /// checked here, so a Server-delivered set carrying a value its kind supplies is refused before a
-/// running process is touched (ADR-0017), exactly as a bad plugin setting is. So is a name whose
+/// running process is touched, exactly as a bad plugin setting is. So is a name whose
 /// directory would be one of the Client's own ([`ClientConfig::check_supervisor_dir`]).
 pub fn resolve<'a>(
     config: &ClientConfig,
@@ -50,10 +50,9 @@ pub fn resolve<'a>(
     })
 }
 
-/// Pinning the Supervisor Endpoint's port is a decision only where something connects to it
-/// (ADR-0017).
+/// Pinning the Supervisor Endpoint's port is a decision only where something connects to it.
 ///
-/// The Endpoint itself is bound for every Supervisor and stays that way (ADR-0015) — what is
+/// The Endpoint itself is bound for every Supervisor and stays that way — what is
 /// refused is *naming* its port for a kind whose Managed Process speaks no OpAMP, where the value
 /// would read as configuration and do nothing. `0` is not refused: it is the default written out,
 /// and refusing a no-op teaches nobody anything.
@@ -89,7 +88,7 @@ pub fn find_plugin<'a>(
         })
 }
 
-/// Takes the program key out of the block's settings and resolves it (ADR-0017) — the
+/// Takes the program key out of the block's settings and resolves it — the
 /// path rule belongs to the core, so no plugin can resolve its program differently. Returns the
 /// remaining plugin settings, the resolved program, and where the program sits inside a package
 /// tree, if it does.
@@ -103,7 +102,7 @@ pub fn take_program(
     let named = settings.remove(key);
     let program_name = match (named, plugin.defaults().program) {
         // A wrapped kind knows its program, so writing it is naming a value this Client computes
-        // (ADR-0017 clause 13) — refused with what supplies it now, never quietly overridden.
+        // — refused with what supplies it now, never quietly overridden.
         (Some(_), Some(derived)) => {
             return Err(format!(
                 "supervisor {:?}: `{key}` is no longer a supervisor key for type {:?} — the kind \
@@ -136,8 +135,8 @@ pub fn take_program(
     Ok((settings, program, program_path))
 }
 
-/// Where the program sits inside a package tree (ADR-0026): the block's answer, or the one the kind
-/// knows (ADR-0017). A kind that knows it refuses a block that states it, for the reason
+/// Where the program sits inside a package tree: the block's answer, or the one the kind
+/// knows. A kind that knows it refuses a block that states it, for the reason
 /// [`take_program`] refuses a program name.
 ///
 /// # Errors
@@ -159,7 +158,7 @@ pub fn effective_program_path(
 }
 
 /// What this Supervisor's three timings are, and whether its block was allowed to say anything
-/// about them (ADR-0017).
+/// about them.
 ///
 /// Three layers, outermost first: the fleet's policy in `[supervisors]` and `[updates]`, a wrapped
 /// kind's correction of it, and — only where no kind exists to hold the value — the block. A block
@@ -219,12 +218,12 @@ pub struct Timing {
     pub retain_previous: Duration,
 }
 
-/// The Agent type this Supervisor presents, whatever its Managed Process reports (ADR-0055): the
+/// The Agent type this Supervisor presents, whatever its Managed Process reports: the
 /// kind's, the block's, else the program's file name.
 ///
 /// The file-name fallback is what the operator already wrote in this very block; it is read from
 /// configuration and never parsed out of a program's output, where a name has no grammar to
-/// recognise it by. A kind that states its type refuses a block that restates it (ADR-0017).
+/// recognise it by. A kind that states its type refuses a block that restates it.
 pub fn effective_service_name(
     block: &SupervisorBlock,
     plugin: &dyn Plugin,

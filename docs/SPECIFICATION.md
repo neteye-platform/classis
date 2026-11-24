@@ -2,8 +2,9 @@
 
 > The **specification** of this project: the problem it solves, where it is
 > going, and the vocabulary everyone (humans and agents) must use. This document
-> is the **constitution** — every Architecture Decision Record in [`adr/`](adr/)
-> derives from it and must not contradict it.
+> is the **constitution** — the architecture in
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) derives from it and must not contradict
+> it.
 
 ## Problem
 
@@ -155,7 +156,7 @@ closes the loop and widens only as the protocol and its agents actually allow.
 
 ## Core Concepts & Vocabulary
 
-Use these exact words in code, comments, documentation, and ADRs.
+Use these exact words in code, comments, and documentation.
 
 ### The protocol
 

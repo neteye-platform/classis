@@ -1,4 +1,4 @@
-//! OpAMP WebSocket message framing (ADR-0011, ADR-0013).
+//! OpAMP WebSocket message framing.
 //!
 //! The OpAMP specification defines every WebSocket message as a *header* — a varint-encoded
 //! unsigned 64-bit integer, 1–10 bytes long — followed by the protobuf-encoded message. In this
@@ -27,7 +27,7 @@ pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 << 20; // 64 MiB
 /// The status has a name in every WebSocket stack, so each caller uses its own; the sentence does
 /// not, and it was written out at all three places that close a socket for this reason — the
 /// Server's endpoint, the Client's upstream socket, and the Supervisor Endpoint. One string, so a
-/// peer reading a log sees the same words whichever of the three hung up (ADR-0010).
+/// peer reading a log sees the same words whichever of the three hung up.
 pub const TOO_BIG_CLOSE_REASON: &str = "message exceeds the OpAMP message size limit";
 
 /// The header value this protocol version mandates. A non-zero header is reserved for future

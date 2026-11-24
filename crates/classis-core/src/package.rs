@@ -1,4 +1,4 @@
-//! What a package signature covers (ADR-0026), and how it is verified (ADR-0066).
+//! What a package signature covers, and how it is verified.
 //!
 //! The signature covers not the artifact's bytes alone but which Agent type the artifact is for,
 //! at which version, and its SHA-256 — so a signed artifact cannot be offered as another type's
@@ -27,20 +27,19 @@ pub fn statement(agent_type: &str, version: &str, content_hash: &[u8]) -> Vec<u8
     format!("classis-package-v1\n{agent_type}\n{version}\n{hex}\n").into_bytes()
 }
 
-/// The longest `PackageSignature` read, checked before anything inside it is parsed (ADR-0066
-/// clause 3, Q-2). A Package Signer's certificate is about 340 bytes.
+/// The longest `PackageSignature` read, checked before anything inside it is parsed (Q-2). A
+/// Package Signer's certificate is about 340 bytes.
 pub const MAX_SIGNATURE_LEN: usize = 2048;
 
 /// The length of an Ed25519 signature.
 pub const ED25519_SIGNATURE_LEN: usize = 64;
 
 /// The variable a **debug** build reads one more Package Root from, a DER file, so the
-/// integration tests can sign with a Root of their own. A release build compiles no such read
-/// (ADR-0066 clause 1).
+/// integration tests can sign with a Root of their own. A release build compiles no such read.
 pub const DEBUG_ROOT_ENV: &str = "CLASSIS_DEBUG_PACKAGE_ROOT";
 
 /// `PackageSignature ::= SEQUENCE { version INTEGER (1), signer Certificate, signature OCTET
-/// STRING (SIZE (64)) }`, borrowed from the bytes it was parsed from (ADR-0066 clause 3).
+/// STRING (SIZE (64)) }`, borrowed from the bytes it was parsed from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackageSignature<'a> {
     /// The Package Signer's certificate, the whole DER `Certificate`.
@@ -49,8 +48,7 @@ pub struct PackageSignature<'a> {
     pub signature: &'a [u8; ED25519_SIGNATURE_LEN],
 }
 
-/// Why a package signature was refused, or could not be written, by the step that failed
-/// (ADR-0066 clause 4).
+/// Why a package signature was refused, or could not be written, by the step that failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SignatureError {
@@ -77,7 +75,7 @@ impl fmt::Display for SignatureError {
 
 impl std::error::Error for SignatureError {}
 
-/// The Package Roots a signature is verified up to (ADR-0066 clause 1): DER certificates, a
+/// The Package Roots a signature is verified up to: DER certificates, a
 /// value. Where they come from — compiled in, or a test's own — and how a path to them is
 /// checked is [`chain`]'s.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -180,7 +178,7 @@ fn tlv(input: &[u8], tag: u8) -> Result<Element<'_>, &'static str> {
     })
 }
 
-/// Reads a `PackageSignature` (ADR-0066 clause 3). The length is checked before anything else.
+/// Reads a `PackageSignature`. The length is checked before anything else.
 ///
 /// # Errors
 ///
@@ -226,7 +224,7 @@ fn der_len(len: usize) -> Option<Vec<u8>> {
 }
 
 /// Writes a `PackageSignature` from a Package Signer's DER certificate and its signature — what
-/// the release run's `sign` job writes in hex (ADR-0065 clause 6).
+/// the release run's `sign` job writes in hex.
 ///
 /// ```
 /// use classis_core::package::{encode_signature, parse_signature};
@@ -268,7 +266,6 @@ pub fn encode_signature(
 mod tests {
     use super::*;
 
-    /// Verifies: ADR-0026
     #[test]
     fn the_statement_names_type_version_and_hash() {
         assert_eq!(
@@ -287,7 +284,6 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0066
     #[test]
     fn the_encoder_writes_the_shortest_lengths_and_refuses_what_the_parser_would() {
         assert_eq!(der_len(0x7f), Some(vec![0x7f]));

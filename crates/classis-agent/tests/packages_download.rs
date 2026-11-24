@@ -1,8 +1,8 @@
-//! The artifact download (ADR-0026, ADR-0033): a Server cannot make the Client fill its staging
+//! The artifact download: a Server cannot make the Client fill its staging
 //! filesystem before the content hash — which comes only after the whole stream lands — can reject
 //! the body. The cap is enforced both from an over-large `Content-Length` up front and, for a
 //! chunked response that advertises none, while the bytes stream in. And the download goes to this
-//! Client's own Server origin and nowhere else (ADR-0033 clause 13).
+//! Client's own Server origin and nowhere else.
 
 use std::net::SocketAddr;
 
@@ -20,7 +20,7 @@ use futures_util::stream;
 /// The listener is bound first so the routes can name the address they redirect to: the
 /// cross-origin case needs a second origin on the same process, and `127.0.0.1` versus `[::1]` is
 /// one — one port, a different host in the URL, which is exactly what the origin rule compares.
-/// Both are loopback literals, the one place a download may be plaintext (ADR-0026). The Client's
+/// Both are loopback literals, the one place a download may be plaintext. The Client's
 /// Server origin is `127.0.0.1`.
 async fn spawn() -> SocketAddr {
     // What main() does at startup: without a process provider, reqwest refuses to build a client.
@@ -126,7 +126,6 @@ fn download_with(url: String, headers: &[(&str, &str)]) -> PackageDownload {
 
 /// A body whose `Content-Length` already exceeds the ceiling is refused before a byte is written,
 /// and nothing is left staged.
-/// Verifies: ADR-0026
 #[tokio::test]
 async fn a_body_too_large_by_its_content_length_is_refused() {
     let addr = spawn().await;
@@ -150,7 +149,6 @@ async fn a_body_too_large_by_its_content_length_is_refused() {
 
 /// A chunked body that advertises no length is stopped the moment the stream crosses the ceiling —
 /// the case an attacker would use to dodge the up-front check.
-/// Verifies: ADR-0026
 #[tokio::test]
 async fn a_chunked_body_is_stopped_once_it_crosses_the_ceiling() {
     let addr = spawn().await;
@@ -192,10 +190,9 @@ async fn a_body_within_the_ceiling_streams_through_to_verification() {
     );
 }
 
-/// A redirect that stays on the Server's origin is followed (ADR-0033 clause 13). Reaching the
+/// A redirect that stays on the Server's origin is followed. Reaching the
 /// artifact (and then failing only on the deliberately wrong content hash) proves the redirect was
 /// followed, not refused.
-/// Verifies: ADR-0026, ADR-0033
 #[tokio::test]
 async fn a_download_follows_a_redirect_within_the_servers_origin() {
     let addr = spawn().await;
@@ -216,10 +213,9 @@ async fn a_download_follows_a_redirect_within_the_servers_origin() {
 }
 
 /// The Baseline: *"The Agent SHOULD include the HTTP headers provided in the headers field for the
-/// GET request."* They go to the Server's own origin, the only place a download goes (ADR-0033).
+/// GET request."* They go to the Server's own origin, the only place a download goes.
 /// Reaching the content-hash check (which then fails on the deliberately wrong hash) is what proves
 /// the header travelled; without it the same call fails with `401 Unauthorized`.
-/// Verifies: ADR-0026, ADR-0033
 #[tokio::test]
 async fn a_download_carries_the_headers_the_offer_named() {
     let addr = spawn().await;
@@ -260,10 +256,9 @@ async fn a_download_without_the_headers_is_refused_by_a_guarded_source() {
 }
 
 /// A redirect to another origin is refused before that origin is asked, so neither the offered
-/// header nor anything else reaches it: the download fails naming the origin it pointed at
-/// (ADR-0033 clause 13). The other origin here refuses anything carrying the header, so a leak
+/// header nor anything else reaches it: the download fails naming the origin it pointed at.
+/// The other origin here refuses anything carrying the header, so a leak
 /// would surface as `401` rather than as this refusal.
-/// Verifies: ADR-0026, ADR-0033
 #[tokio::test]
 async fn a_redirect_to_another_origin_is_refused_and_carries_no_header_there() {
     let addr = spawn().await;
@@ -319,7 +314,6 @@ async fn an_offered_header_survives_a_redirect_within_the_same_origin() {
 
 /// A header the offer names that is not a valid HTTP header fails the download loudly rather than
 /// being skipped, and the message names the key without its value.
-/// Verifies: ADR-0026
 #[tokio::test]
 async fn an_unusable_offered_header_fails_the_download_by_name() {
     let addr = spawn().await;
@@ -347,7 +341,6 @@ async fn an_unusable_offered_header_fails_the_download_by_name() {
 /// between the hash check and the installer re-opening it (TOCTOU). It starts deliberately wide here
 /// and must be narrowed; the hardening happens before a byte is written, so even a failing download
 /// leaves it owner-only.
-/// Verifies: ADR-0026
 #[cfg(unix)]
 #[tokio::test]
 async fn the_staging_directory_is_kept_owner_only() {
@@ -403,8 +396,7 @@ async fn counted_source() -> (SocketAddr, std::sync::Arc<std::sync::atomic::Atom
 
 /// An absolute `download_url` on another origin than the Client's own Server is refused before a
 /// request is sent, naming that origin: the check is on the absence of the request, not on the
-/// outcome of the download (ADR-0033 clause 13).
-/// Verifies: ADR-0033
+/// outcome of the download.
 #[tokio::test]
 async fn an_absolute_url_on_another_origin_is_refused_without_a_request() {
     let (elsewhere, hits) = counted_source().await;
@@ -431,8 +423,7 @@ async fn an_absolute_url_on_another_origin_is_refused_without_a_request() {
 }
 
 /// There is no unsigned posture: an offer carrying no signature is refused before a request
-/// reaches the source, naming what is missing (ADR-0026, ADR-0066).
-/// Verifies: ADR-0026, ADR-0018
+/// reaches the source, naming what is missing.
 #[tokio::test]
 async fn an_unsigned_offer_fetches_nothing() {
     let (source, hits) = counted_source().await;
@@ -525,9 +516,7 @@ async fn tls_origin(
 }
 
 /// This Client's certificate goes to its own Server's origin and to no other: the download from it
-/// presents the certificate, and a redirect to another host is refused before that host is reached
-/// (ADR-0033 clause 13).
-/// Verifies: ADR-0021, ADR-0026, ADR-0033
+/// presents the certificate, and a redirect to another host is refused before that host is reached.
 #[tokio::test]
 async fn the_client_certificate_goes_to_the_servers_origin_alone() {
     opamp::tls::install_ring_provider();

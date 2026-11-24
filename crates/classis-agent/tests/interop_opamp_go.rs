@@ -1,4 +1,4 @@
-//! Interoperability against `opamp-go`, the OpAMP reference implementation (ADR-0011).
+//! Interoperability against `opamp-go`, the OpAMP reference implementation.
 //!
 //! The Client and the Server of this project are written from the same reading of the
 //! specification, so a misread MUST is symmetric and the rest of the suite cannot see it. Here
@@ -421,7 +421,6 @@ async fn go_client_takes_an_assigned_identity(scheme: &str) {
     );
 }
 
-// Verifies: ADR-0011
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs a Go toolchain; run with --ignored in the interop job"]
 async fn opamp_go_client_against_our_server_over_websocket() {
@@ -429,7 +428,6 @@ async fn opamp_go_client_against_our_server_over_websocket() {
     go_client_takes_an_assigned_identity("ws").await;
 }
 
-// Verifies: ADR-0011
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs a Go toolchain; run with --ignored in the interop job"]
 async fn opamp_go_client_against_our_server_over_plain_http() {
@@ -631,14 +629,12 @@ fn our_client_against_go_server(scheme: &str) {
     });
 }
 
-// Verifies: ADR-0011
 #[test]
 #[ignore = "needs a Go toolchain; run with --ignored in the interop job"]
 fn our_client_against_opamp_go_server_over_websocket() {
     our_client_against_go_server("ws");
 }
 
-// Verifies: ADR-0011
 #[test]
 #[ignore = "needs a Go toolchain; run with --ignored in the interop job"]
 fn our_client_against_opamp_go_server_over_plain_http() {
@@ -903,7 +899,6 @@ fn our_client_against_go_tls_server(scheme: &str) {
     );
 }
 
-// Verifies: ADR-0011, ADR-0013, ADR-0021
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs a Go toolchain; run with --ignored in the interop job"]
 async fn opamp_go_client_against_our_tls_and_admission() {
@@ -911,7 +906,6 @@ async fn opamp_go_client_against_our_tls_and_admission() {
     go_client_against_our_tls_server("https").await;
 }
 
-// Verifies: ADR-0011, ADR-0013, ADR-0021
 #[test]
 #[ignore = "needs a Go toolchain; run with --ignored in the interop job"]
 fn our_client_against_opamp_go_server_requiring_a_client_certificate() {

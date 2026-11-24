@@ -1,5 +1,5 @@
 //! What a Server-delivered `[[supervisor]]` block may bring, checked against the configuration
-//! in force (ADR-0017 clauses 38, 39 and 54). The rules are the core's; the plugin registry
+//! in force. The rules are the core's; the plugin registry
 //! that names the kinds stays with the composition root, which hands the plugins in.
 
 use crate::config::{ClientConfig, SupervisorBlock};
@@ -27,7 +27,7 @@ pub fn check(
         .map(|existing| &existing.settings);
     if running.remote_config_disabled(&block.name) {
         // A listed Supervisor's block is the operator's whole: repeated as it runs, or added
-        // naming its program and nothing else (ADR-0017 clause 54).
+        // naming its program and nothing else.
         let named = running
             .supervisors
             .iter()
@@ -55,7 +55,7 @@ pub fn check(
 
 /// A delivered block for a Supervisor whose remote configuration is switched off configures
 /// nothing, whatever `delivered_args` and `delivered_env` allow: any key it may change would be a
-/// configuration by another route (ADR-0017 clause 54). With a block of that name running, the
+/// configuration by another route. With a block of that name running, the
 /// delivered one equals it whole; added, it carries `type`, `name` and — where the kind does not
 /// name its own program — the kind's program key, and nothing else.
 fn check_listed_block(
@@ -136,7 +136,7 @@ fn check_listed_block(
 
 /// Variables that steer which code a program loads — the dynamic loader's, `PATH` and Windows'
 /// `PATHEXT` and `COMSPEC`, the hooks and search paths of common runtimes — refused in a delivered
-/// block whatever `delivered_env` allows (ADR-0017 clause 38). Compared without regard to case, as
+/// block whatever `delivered_env` allows. Compared without regard to case, as
 /// Windows compares environment names.
 const LOADING_NAMES: &[&str] = &[
     "PATH",
@@ -306,7 +306,6 @@ mod tests {
     /// On Windows a path under the Supervisors' root is found whatever its case and whichever
     /// slash it uses, inside a path list or after an option; a sibling and a drive's root are not
     /// under it.
-    /// Verifies: ADR-0017
     #[test]
     fn a_windows_path_under_the_root_is_found_without_regard_to_case_or_slash() {
         let root = r"C:\ProgramData\Fleet\supervisors";
@@ -331,7 +330,6 @@ mod tests {
 
     /// A path is under the root only when it starts there: the same directory names further down
     /// another path, or in a URL's path, are not the Supervisors' root.
-    /// Verifies: ADR-0017
     #[test]
     fn a_path_is_under_the_root_only_when_it_starts_there() {
         let root = "/var/lib/fleet/supervisors";

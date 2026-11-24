@@ -1,4 +1,4 @@
-//! The connection settings channel (ADR-0014): a restored outcome, and the transport's verdict on
+//! The connection settings channel: a restored outcome, and the transport's verdict on
 //! an offer reported.
 
 use opamp::proto::{
@@ -8,7 +8,7 @@ use opamp::proto::{
 use super::AgentState;
 
 impl AgentState {
-    /// Restores the outcome of a previously applied connection-settings offer (ADR-0014): the
+    /// Restores the outcome of a previously applied connection-settings offer: the
     /// persisted hash reports `APPLIED`, so a restarted Client is not re-offered what it runs.
     pub fn adopt_connection_settings(&mut self, hash: &[u8]) {
         self.protocol.set_connection_settings_status(
@@ -21,7 +21,7 @@ impl AgentState {
         );
     }
 
-    /// Closes the connection-settings lifecycle the transport verified (ADR-0014): `APPLIED`
+    /// Closes the connection-settings lifecycle the transport verified: `APPLIED`
     /// keeps the hash and the switch follows; `FAILED` keeps the hash too — the Baseline's
     /// gating stops the Server re-offering the exact settings this Agent could not use.
     pub fn connection_settings_outcome(&mut self, hash: &[u8], result: Result<(), &str>) {
@@ -41,7 +41,7 @@ impl AgentState {
     }
 }
 
-/// Whether an offer carries anything this Client can put in force (ADR-0014 clause 4): OpAMP
+/// Whether an offer carries anything this Client can put in force: OpAMP
 /// settings, or a destination for one of the three own-telemetry signals.
 ///
 /// `other_connections` deliberately does not count. `AcceptsOtherConnectionSettings` is undeclared,
@@ -54,7 +54,7 @@ pub(super) fn carries_settings(offers: &ConnectionSettingsOffers) -> bool {
         || offers.own_logs.is_some()
 }
 
-/// A connection-settings status for `hash` (ADR-0014). `error_message` is empty except for
+/// A connection-settings status for `hash`. `error_message` is empty except for
 /// `FAILED`.
 pub(super) fn settings_status(
     hash: Vec<u8>,

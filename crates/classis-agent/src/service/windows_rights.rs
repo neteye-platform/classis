@@ -5,8 +5,7 @@
 //! `CHANGE_CONFIG` handle [`windows_config`](super::windows_config) opens for the recovery actions,
 //! and the `sc config` / `sc description` calls after it. A running process cannot raise its own
 //! token, so a refusal from inside the install is not something the install can do anything about —
-//! ADR-0019 says such an install "must fail with a clear message", and this is where that message
-//! comes from.
+//! Such an install must fail with a clear message, and this is where that message comes from.
 //!
 //! It is a **capability probe, not an identity check**: opening the SCM with
 //! `SC_MANAGER_CREATE_SERVICE` asks the exact question the install turns on — may this process
@@ -71,7 +70,7 @@ const KEEPERS: [(&str, &str); 2] = [("S-1-5-18", "SY"), ("S-1-5-32-544", "BA")];
 #[cfg(any(windows, test))]
 const FULL: u32 = 0x001f_01ff;
 
-/// The Administrators group, by alias: the owner of a system-scope data root (ADR-0019 clause 18).
+/// The Administrators group, by alias: the owner of a system-scope data root.
 #[cfg(any(windows, test))]
 const OWNER: &str = "BA";
 
@@ -110,7 +109,7 @@ fn taken_over(parent: &crate::win32::acl::Dacl, dir: bool) -> crate::win32::acl:
 /// Administrators, the root is cut off ([`cut`]) and every entry keeps only what the root passes
 /// on to it ([`taken_over`]). Each entry is changed through a handle of its own: a link is changed
 /// as itself and never entered, and what the process account `process` owns, with everything
-/// beneath it, is left as it is (ADR-0059 clause 10). An entry that cannot be taken over fails the
+/// beneath it, is left as it is. An entry that cannot be taken over fails the
 /// install instead of staying behind.
 #[cfg(windows)]
 fn take_over(
@@ -243,7 +242,7 @@ pub enum Treatment {
 /// is the platform default, cut when the operator named it — and the state directory and the
 /// Supervisors' root wherever one lies outside every directory already listed. A state directory
 /// outside the data root is always cut: the install has taken it beneath its roots, from the
-/// operator's `--state-dir` or from the registration (ADR-0053 clause 3). A Supervisors' root
+/// operator's `--state-dir` or from the registration. A Supervisors' root
 /// outside both is cut when the install creates it (`exists` says it does not exist yet) and
 /// `ours` says it lies beneath the install's roots, and
 /// left untouched otherwise: `supervisor.toml` is the service account's to rewrite, and a directory
@@ -386,7 +385,6 @@ mod tests {
     /// inherited ones. So the root and every entry is given to the Administrators, the root keeps
     /// nothing but the keepers, and every entry beneath it nothing but what the root passes on —
     /// the result is the same whoever made the directory.
-    /// Verifies: ADR-0019
     #[test]
     fn a_data_root_someone_else_made_is_taken_over_before_it_is_cut_off() {
         assert_eq!(OWNER, "BA", "the Administrators own every entry");
@@ -413,7 +411,6 @@ mod tests {
     /// state directory outside it, existing or not, and a Supervisors' root outside both that the
     /// install creates; such a Supervisors' root that already exists is the operator's and is left
     /// alone. A directory inside a listed one inherits its rights.
-    /// Verifies: ADR-0019
     #[test]
     fn only_the_default_data_root_is_taken_over_and_only_a_created_directory_is_cut() {
         use Treatment::{Cut, TakeOver, Untouched};
@@ -498,11 +495,10 @@ mod tests {
         );
     }
 
-    /// `supervisor.toml` is the service account's to rewrite (ADR-0042 clause 2). A Supervisors'
+    /// `supervisor.toml` is the service account's to rewrite. A Supervisors'
     /// root it places outside every root of the install is never created, cut or handed over by
     /// the install — not even when it does not exist yet — or the account would choose where an
     /// Administrator makes a directory and grants it Modify.
-    /// Verifies: ADR-0053, ADR-0042
     #[test]
     fn a_supervisors_root_outside_the_installs_roots_is_left_untouched() {
         let planned = plan(
@@ -528,7 +524,6 @@ mod tests {
     /// The data root keeps no inherited right — `BUILTIN\Users` read among them — and full control
     /// only for LocalSystem and the Administrators beside its own explicit grants, and what it
     /// holds then inherits that alone, its own explicit grants kept.
-    /// Verifies: ADR-0019, ADR-0053
     #[test]
     fn the_data_root_is_cut_off_from_what_every_local_user_inherits() {
         let inherited = Dacl::parse(
@@ -554,7 +549,6 @@ mod tests {
     /// keepers alone, and a junction, the other name of a hard link and what the process account
     /// owns — this test's own account standing in — are not touched; a root that is a link is
     /// refused. The test runs elevated, as an install does.
-    /// Verifies: ADR-0019, ADR-0059
     #[cfg(windows)]
     #[test]
     fn on_windows_a_restricted_root_keeps_the_keepers_alone_and_enters_no_link() {
@@ -665,7 +659,7 @@ mod tests {
                 "{treatment:?}: inherited"
             );
             // A cut changes nothing explicit beneath the root, as `icacls /inheritance:r` did not;
-            // a take-over resets it away (ADR-0019).
+            // a take-over resets it away.
             let kept = sddl(&sub.join("kept"));
             assert_eq!(
                 kept.contains("(A;;0x1200a9;;;BU)"),
@@ -697,7 +691,7 @@ mod tests {
     }
 
     /// The message *is* the feature: this check exists only so that a refusal says what was
-    /// refused and what to do about it (ADR-0019). It must not offer `--user` as the way out —
+    /// refused and what to do about it. It must not offer `--user` as the way out —
     /// Windows has no user-scope service, so that would send an operator somewhere with no door.
     #[test]
     fn the_refusal_says_what_to_do_about_it() {

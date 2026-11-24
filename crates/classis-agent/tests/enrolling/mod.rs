@@ -57,7 +57,7 @@ impl Ca {
     }
 
     /// A bootstrap certificate and its key like [`issue`](Self::issue), naming the customer and
-    /// the site an approval requires of every bootstrap certificate (ADR-0036 clause 3).
+    /// the site an approval requires of every bootstrap certificate.
     fn issue_bootstrap(&self, dir: &Path, name: &str) {
         let issuer =
             Issuer::from_ca_cert_pem(&self.pem, KeyPair::from_pem(&self.key_pem).expect("ca key"))

@@ -1,5 +1,5 @@
-//! A stub Managed Process for tests (ADR-0017): pure Rust so it behaves identically on Linux and
-//! Windows CI — no shell scripts.
+//! A stub Managed Process for tests: pure Rust so it behaves identically on Linux and Windows CI —
+//! no shell scripts.
 //!
 //! Behaviour, driven entirely by arguments:
 //! - `--version` — print a version line the way real agents do (free text around a SemVer),
@@ -11,7 +11,7 @@
 //!   crash-path tests. Without them the stub sleeps until it is killed.
 //! - `--ignore-hup` (Unix only) — ignore `SIGHUP`, the way a daemon that reloads on it survives
 //!   the signal; without the flag the default disposition terminates the stub. What the reload
-//!   tests (ADR-0017) use for both sides of `reload-or-restart`.
+//!   tests use for both sides of `reload-or-restart`.
 
 use std::time::Duration;
 

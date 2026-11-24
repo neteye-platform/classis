@@ -1,4 +1,4 @@
-//! The floor on the pace of every request body and every WebSocket message (ADR-0013 clause 14).
+//! The floor on the pace of every request body and every WebSocket message.
 //!
 //! Nothing a listener serves has a deadline: a large upload over a slow link and a long-lived
 //! session are both legitimate. What is not is a body or a message that has begun and then stalls
@@ -7,7 +7,7 @@
 //! `408`, a WebSocket message closes its connection with `1008`. A connection with nothing in flight
 //! is left alone.
 //!
-//! A message is judged by its data frames, read as they arrive (ADR-0010 clause 5): a Ping between
+//! A message is judged by its data frames, read as they arrive: a Ping between
 //! two fragments of a message is not progress on it, and a peer that only pings has no message in
 //! flight.
 
@@ -330,7 +330,6 @@ mod tests {
     /// A message is in flight from the first byte of its first data frame until its final frame
     /// has arrived whole, and only its data counts as progress; control frames between its
     /// fragments change neither.
-    /// Verifies: ADR-0010
     #[test]
     fn data_frames_carry_a_message_and_control_frames_do_not() {
         // A masked binary frame without FIN carrying 3 bytes, then a masked Ping with a payload.
@@ -352,7 +351,6 @@ mod tests {
     }
 
     /// A socket that only pings has no message in flight.
-    /// Verifies: ADR-0010
     #[test]
     fn pings_alone_put_no_message_in_flight() {
         let ping = full_ping();

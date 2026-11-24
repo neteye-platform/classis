@@ -1,4 +1,4 @@
-//! A test Package Root and Package Signers, for the tests of every crate (ADR-0066). Compiled
+//! A test Package Root and Package Signers, for the tests of every crate. Compiled
 //! only with the `test-support` feature; nothing here is trusted unless a test passes it in.
 
 use rcgen::{
@@ -22,7 +22,7 @@ pub struct TestSigner {
     pub pkcs8: Vec<u8>,
 }
 
-/// How a test Package Signer deviates from the profile (ADR-0066 clause 2).
+/// How a test Package Signer deviates from the profile.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Deviation {
     /// The profile.

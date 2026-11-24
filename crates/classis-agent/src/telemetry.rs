@@ -1,4 +1,4 @@
-//! The Agent's own telemetry (ADR-0016): OTLP/HTTP to the destinations the Server names.
+//! The Agent's own telemetry: OTLP/HTTP to the destinations the Server names.
 //!
 //! Three capabilities, one mechanism. `ReportsOwnMetrics`, `ReportsOwnTraces`, and `ReportsOwnLogs`
 //! each mean "the Agent can report own <signal> to the destination specified by the Server via
@@ -7,7 +7,7 @@
 //!
 //! What "own" means here is what this Client can honestly observe: its own process, and the
 //! Managed Processes it spawned and holds the pids of. It does **not** reach into a Collector's
-//! internal telemetry the way upstream's supervisor does — ADR-0017 forbids this Client from
+//! internal telemetry the way upstream's supervisor does — this Client is forbidden from
 //! touching a Managed Process's configuration, and the specification's non-goal forbids inventing
 //! an abstraction over it.
 //!
@@ -77,16 +77,15 @@ const SCOPE: &str = "classis-client";
 /// one by one rather than taken as a bag.
 ///
 /// **Why a list and not "everything non-identifying".** That bag also holds `host.ip`, `host.mac`
-/// and whatever the operator wrote under `[attributes]` in `supervisor.toml`. ADR-0016 says out loud
-/// that the Resource is what leaves the host for a destination the *Server* named, so widening this
-/// to the whole bag is a decision about what gets sent somewhere else — naming what describes the
-/// platform is not.
+/// and whatever the operator wrote under `[attributes]` in `supervisor.toml`. The Resource is what
+/// leaves the host for a destination the *Server* named, so widening this to the whole bag is a
+/// decision about what gets sent somewhere else — naming what describes the platform is not.
 ///
 /// - `service.instance.name` is non-identifying only because the Baseline has no key for a human
-///   instance name and identity stays `service.instance.id` (ADR-0016) — that is a statement about
+///   instance name and identity stays `service.instance.id` — that is a statement about
 ///   *identity*, not about what the telemetry is worth carrying. Without it every series at the
 ///   receiving end is a uuid the operator cannot place against the fleet view they searched by.
-/// - `os.type` and `host.arch` are the two halves this project calls a platform (ADR-0026), and
+/// - `os.type` and `host.arch` are the two halves this project calls a platform, and
 ///   `os.description` is the readable form of the first. They sit on the Resource rather than on
 ///   each sample because they are a property of the *host*: this Client samples its own process and
 ///   the Managed Processes it holds the pids of, so every Agent in one export runs on the machine
@@ -98,7 +97,7 @@ const DESCRIPTIVE_ATTRIBUTES: [&str; 4] =
     [SERVICE_INSTANCE_NAME, OS_TYPE, HOST_ARCH, OS_DESCRIPTION];
 
 /// The layer the `tracing` subscriber reserves for the OTLP bridge, so a destination that arrives
-/// at runtime has somewhere to go (ADR-0016).
+/// at runtime has somewhere to go.
 ///
 /// A global, because the subscriber it belongs to is one: `tracing` has exactly one, installed
 /// before anything is configured, and the bridge cannot be added to it afterwards without a slot
@@ -112,12 +111,12 @@ type BridgeLayer = Option<
 static BRIDGE: std::sync::OnceLock<tracing_subscriber::reload::Handle<BridgeLayer, WithSpans>> =
     std::sync::OnceLock::new();
 
-/// The second slot, for the span exporter (ADR-0016). The appender above converts `tracing`
+/// The second slot, for the span exporter. The appender above converts `tracing`
 /// *events* and says so in its own documentation; this is what converts `tracing` *spans*, and
 /// without it the `own_traces` exporter has nothing to export.
 ///
 /// Two slots rather than one, because the two destinations are independent: an offer may name
-/// traces and not logs, or withdraw one and keep the other (ADR-0016).
+/// traces and not logs, or withdraw one and keep the other.
 ///
 /// Public because `main` builds the slot and has to name what it holds — the subscriber is
 /// installed there, long before this module has anything to put in it.
@@ -147,7 +146,7 @@ pub fn hold_log_bridge(handle: tracing_subscriber::reload::Handle<BridgeLayer, W
     let _ = BRIDGE.set(handle);
 }
 
-/// The same, for the span slot (ADR-0016).
+/// The same, for the span slot.
 pub fn hold_span_layer(
     handle: tracing_subscriber::reload::Handle<SpanLayer, tracing_subscriber::Registry>,
 ) {
@@ -171,7 +170,7 @@ pub use crate::span::{failed, succeeded, STATUS_CODE, STATUS_DESCRIPTION};
 /// when nothing is being traced, which is every run with no destination offered.
 ///
 /// Exists so a caller can persist a trace across something a span cannot survive: the self-update's
-/// restart (ADR-0016 clause 20), where the process that stages a version is not the process that
+/// restart, where the process that stages a version is not the process that
 /// commits or rolls back one. The OpenTelemetry types stay here; what leaves this module is two
 /// strings.
 #[must_use]
@@ -234,9 +233,9 @@ pub use crate::engine::SamplingTarget;
 /// arrives from the Server and can change. Applying a new offer means building fresh providers and
 /// shutting these down, which needs a handle on exactly what is running.
 ///
-/// **Interior mutability, deliberately.** The exporters outlive a connection (ADR-0016), so this is
+/// **Interior mutability, deliberately.** The exporters outlive a connection, so this is
 /// owned by the runtime loop — but a destination is put in force from *inside* a transport, where
-/// the offer's acknowledgement is composed (ADR-0014). Both the sampler arm of the runtime's
+/// the offer's acknowledgement is composed. Both the sampler arm of the runtime's
 /// `select!` and the transport future it drives therefore hold this at once, which `&mut self`
 /// cannot express. One `Mutex` gives both a shared borrow and costs nothing else: every method
 /// under the lock is synchronous, so the guard is never held across an `.await` and no deadlock
@@ -293,7 +292,7 @@ impl Telemetry {
     /// Puts the offered destinations in force, replacing whatever was running.
     ///
     /// Returns the destinations it refused, if any, so the caller can report them rather than drop
-    /// them silently — the same honesty the OpAMP settings get (ADR-0021).
+    /// them silently — the same honesty the OpAMP settings get.
     pub fn apply(
         &self,
         settings: &ConnectionSettingsOffers,
@@ -329,7 +328,7 @@ impl Telemetry {
             {
                 Ok(provider) => {
                     opentelemetry::global::set_tracer_provider(provider.clone());
-                    // The spans themselves come from this Client's `tracing` spans (ADR-0016); the
+                    // The spans themselves come from this Client's `tracing` spans; the
                     // global provider above is for anything reaching the OpenTelemetry API
                     // directly, which nothing here does.
                     set_spans(Some(&provider));
@@ -354,7 +353,7 @@ impl Telemetry {
         if this.any() {
             info!("reporting own telemetry to the destinations the Server offered");
         } else if refused.is_empty() {
-            // Only a withdrawal reaches here (ADR-0016): an offer that changes nothing returned
+            // Only a withdrawal reaches here: an offer that changes nothing returned
             // above, and one whose destinations were refused has something in `refused` to report.
             // An operator switching telemetry off from the fleet should see it land on the host.
             info!("the Server withdrew every own-telemetry destination; no longer reporting");
@@ -521,7 +520,7 @@ impl Retired {
 
 /// The destination a field offers, if it offers one.
 ///
-/// An endpoint offered **empty** is a withdrawal (ADR-0016), not a malformed URL: the exporter for
+/// An endpoint offered **empty** is a withdrawal, not a malformed URL: the exporter for
 /// that signal is shut down, nothing is built in its place, and nothing is reported about it. The
 /// Server is saying stop, and stopping is not a failure to be handed back as one.
 fn offered(settings: Option<&TelemetryConnectionSettings>) -> Option<&TelemetryConnectionSettings> {
@@ -536,9 +535,9 @@ fn endpoint_of(settings: Option<&TelemetryConnectionSettings>) -> Option<String>
 ///
 /// The Resource carries the Agent's identifying attributes and the log records carry whatever this
 /// Client logs, so plaintext is refused anywhere but on the host itself: the loopback literals
-/// `127.0.0.1` and `::1` (ADR-0016). A private address is not a private network, and a name is
+/// `127.0.0.1` and `::1`. A private address is not a private network, and a name is
 /// not an address. `tls` and `proxy` are refused for the same reasons they are on the OpAMP
-/// settings (ADR-0014 clause 8).
+/// settings.
 fn check(settings: &TelemetryConnectionSettings, field: &str) -> Result<(), String> {
     let endpoint = &settings.destination_endpoint;
     if endpoint.starts_with("http://") && opamp::endpoint::check_url(endpoint).is_err() {
@@ -560,9 +559,9 @@ fn check(settings: &TelemetryConnectionSettings, field: &str) -> Result<(), Stri
     if settings.proxy.is_some() {
         unhonoured.push("proxy");
     }
-    // An offered certificate *is* honoured (ADR-0016 point 32) — but only its `cert`, paired with
+    // An offered certificate *is* honoured — but only its `cert`, paired with
     // the key this Client already holds. A `private_key` in the offer is a key the Server generated
-    // for us, and ADR-0021's rule is that this Client's private key never leaves its host and is
+    // for us, and the rule is that this Client's private key never leaves its host and is
     // never handed to it: that is the whole point of asking for a certificate through a CSR. Refused
     // by name rather than quietly ignored, so a Server issuing pairs learns why nothing happened.
     if settings
@@ -596,11 +595,11 @@ fn check(settings: &TelemetryConnectionSettings, field: &str) -> Result<(), Stri
 ///
 /// This is not a consequence of supplying our own client: with the `reqwest-client` feature
 /// `opentelemetry-otlp` builds exactly the same asynchronous client when given none, so the fault
-/// comes with the feature ADR-0016 chose and shows only once a destination is actually offered.
-/// ADR-0016's reasoning — *"this Client is a tokio process"* — is true of the process and false of
-/// the thread the export happens on.
+/// comes with the feature itself and shows only once a destination is actually offered. The
+/// reasoning behind choosing it — *"this Client is a tokio process"* — is true of the process and
+/// false of the thread the export happens on.
 ///
-/// The fix keeps the asynchronous client the ADR chose and puts the work where it belongs: every
+/// The fix keeps the asynchronous client and puts the work where it belongs: every
 /// request is `spawn`ed onto the runtime handle captured when the exporter was built, and the
 /// exporter thread merely awaits the join. Awaiting a `JoinHandle` needs no reactor of its own —
 /// it is a waker-driven channel — so the blocking executor on that thread is satisfied while the
@@ -641,10 +640,10 @@ impl std::fmt::Debug for RuntimeBoundClient {
 
 /// The HTTP client the OTLP exporters send through: this Client's TLS trust, plus the client
 /// certificate the offer named, if it named one. Without an offered certificate it presents none —
-/// the fleet identity is for the Server, not for a telemetry destination (ADR-0016) — and it
+/// the fleet identity is for the Server, not for a telemetry destination — and it
 /// follows no redirect, so a destination cannot steer the export to another host or to plaintext.
 ///
-/// The certificate machinery is ADR-0021's, reused as-is (ADR-0016 point 32): the offered `cert` is
+/// The certificate machinery of the CSR enrolment is reused as-is: the offered `cert` is
 /// paired with the key already on disk — the one the CSR was made for — because that key is what
 /// proves the certificate belongs to this host, and it never travels.
 ///
@@ -815,7 +814,6 @@ mod tests {
 
     /// With nothing offered nothing is built — the capability says the Client *can* report, and the
     /// Server's offer is what arms it.
-    /// Verifies: ADR-0016
     #[test]
     fn no_destination_builds_nothing() {
         let telemetry = Telemetry::new();
@@ -830,7 +828,6 @@ mod tests {
 
     /// The Baseline's "MAY refuse" for cleartext, taken — and refused *loudly*, so the Server is
     /// told rather than left believing the telemetry flows.
-    /// Verifies: ADR-0016
     #[test]
     fn a_cleartext_destination_beyond_the_private_network_is_refused() {
         let telemetry = Telemetry::new();
@@ -844,10 +841,9 @@ mod tests {
         assert!(!telemetry.reporting());
     }
 
-    /// The loopback literals are where cleartext is admitted and where it stops (ADR-0016). The
+    /// The loopback literals are where cleartext is admitted and where it stops. The
     /// private ranges, the name `localhost`, and the rest of 127.0.0.0/8 are all refused, and so is
     /// a host *name* whose first labels read like an address.
-    /// Verifies: ADR-0016
     #[test]
     fn cleartext_is_admitted_by_address_and_nowhere_else() {
         for allowed in [
@@ -880,8 +876,7 @@ mod tests {
     }
 
     /// A Collector on the LAN rather than on the host is one hop out, and that hop is a network:
-    /// in cleartext it is refused and reported, and nothing is exported (ADR-0016).
-    /// Verifies: ADR-0016
+    /// in cleartext it is refused and reported, and nothing is exported.
     #[tokio::test]
     async fn a_private_network_destination_is_refused_in_cleartext() {
         opamp::tls::install_ring_provider();
@@ -899,7 +894,6 @@ mod tests {
 
     /// Loopback is the innermost case: a Collector on the same host over plain HTTP is the ordinary
     /// development and sidecar shape, and nothing leaves the machine at all.
-    /// Verifies: ADR-0016
     #[tokio::test]
     async fn a_loopback_destination_is_allowed_in_cleartext() {
         opamp::tls::install_ring_provider();
@@ -914,10 +908,9 @@ mod tests {
         telemetry.shutdown();
     }
 
-    /// A destination offered with an empty endpoint is a withdrawal (ADR-0016 rule 18): the
+    /// A destination offered with an empty endpoint is a withdrawal: the
     /// exporter is shut down and **nothing is refused**. Reporting it back as a malformed URL
     /// would answer "stop" with `FAILED`, which is the one answer the Server cannot act on.
-    /// Verifies: ADR-0016
     #[tokio::test]
     async fn an_empty_endpoint_stops_reporting_and_refuses_nothing() {
         opamp::tls::install_ring_provider();
@@ -944,8 +937,7 @@ mod tests {
     }
 
     /// The same two fields refused on the OpAMP settings are refused here, and for the same
-    /// reasons — named, not dropped in silence (ADR-0021, ADR-0016).
-    /// Verifies: ADR-0016
+    /// reasons — named, not dropped in silence.
     #[test]
     fn offered_tls_settings_are_refused_by_name() {
         let telemetry = Telemetry::new();
@@ -966,11 +958,10 @@ mod tests {
         assert!(!telemetry.reporting());
     }
 
-    /// ADR-0016 point 32: the offered `certificate` is *honoured*, not refused — the ADR-0021
+    /// The offered `certificate` is *honoured*, not refused — the CSR enrolment's
     /// machinery is reused as-is, which means the offered `cert` is paired with the key this Client
     /// already generated for its CSR. With that key present, an offer naming a certificate builds
     /// an exporter that presents it.
-    /// Verifies: ADR-0016
     #[tokio::test]
     async fn an_offered_certificate_is_presented_by_the_exporter() {
         opamp::tls::install_ring_provider();
@@ -1014,7 +1005,6 @@ mod tests {
     /// And an offered certificate with no key to go with it is refused *by name* rather than
     /// dropped: without the CSR key there is nothing to prove possession with, so an exporter that
     /// silently connected without the certificate would be reporting success it did not have.
-    /// Verifies: ADR-0016
     #[test]
     fn an_offered_certificate_without_its_key_is_refused_and_named() {
         opamp::tls::install_ring_provider();
@@ -1043,10 +1033,9 @@ mod tests {
         assert!(!telemetry.reporting());
     }
 
-    /// But a private key *in the offer* is refused by name. ADR-0021's rule is that this Client's
+    /// But a private key *in the offer* is refused by name. The rule is that this Client's
     /// private key never leaves its host and is never handed to it — which is the whole reason the
     /// certificate is obtained through a CSR.
-    /// Verifies: ADR-0016
     #[test]
     fn an_offered_private_key_is_refused_by_name() {
         let telemetry = Telemetry::new();
@@ -1078,7 +1067,6 @@ mod tests {
     /// defaults to 60 s, so an exporter built without an explicit interval reports six times more
     /// slowly than recommended and nothing says so. Sampling and export share the constant, so this
     /// guards both.
-    /// Verifies: ADR-0016
     #[test]
     fn metrics_are_reported_at_the_interval_the_baseline_recommends() {
         assert_eq!(Telemetry::new().sample_interval(), Duration::from_secs(10));
@@ -1087,7 +1075,6 @@ mod tests {
     /// The Resource carries what identifies the Agent, which is what makes one host's several
     /// Agents distinguishable at the receiving end — and the operator's name for it beside them,
     /// which is what makes the result placeable against the fleet view.
-    /// Verifies: ADR-0016
     #[test]
     fn the_resource_carries_the_agents_identifying_attributes() {
         let resource = resource(&description());
@@ -1105,10 +1092,9 @@ mod tests {
     }
 
     /// The platform travels with the telemetry, because a series that cannot be placed on an
-    /// operating system and an architecture (ADR-0026) cannot be read against a fleet whose Agents
+    /// operating system and an architecture cannot be read against a fleet whose Agents
     /// do not all run the same one. It sits on the Resource: every Agent in one export runs on the
     /// host this Resource describes, so per-sample it would be a constant repeated on every point.
-    /// Verifies: ADR-0016
     #[test]
     fn the_resource_carries_the_platform() {
         let mut description = description();
@@ -1129,10 +1115,9 @@ mod tests {
     }
 
     /// And nothing else does. The non-identifying attributes are a bag that also holds the host's
-    /// addresses and whatever the operator tagged this Agent with (ADR-0023) — the Resource is what
+    /// addresses and whatever the operator tagged this Agent with — the Resource is what
     /// leaves the host for a destination the *Server* named, so what goes in it is a named list,
     /// not the bag. This is the test that fails if that list is ever replaced by a filter.
-    /// Verifies: ADR-0016
     #[test]
     fn the_resource_carries_no_other_non_identifying_attribute() {
         let mut description = description();
@@ -1152,7 +1137,6 @@ mod tests {
 
     /// The instance name is non-identifying, so it is reported where an Agent has one and left out
     /// where it does not — an absent attribute says "unknown" where an empty one says nothing true.
-    /// Verifies: ADR-0016
     #[test]
     fn an_agent_without_an_instance_name_reports_none() {
         let mut description = description();
@@ -1166,7 +1150,6 @@ mod tests {
     /// itself — the next interval is a fresh request — so what is worth a test is the one that
     /// does not: a socket accepted and then left silent, which without this holds the exporter
     /// thread for good and takes own telemetry down until the process restarts.
-    /// Verifies: ADR-0016
     #[tokio::test]
     async fn an_export_to_a_destination_that_never_answers_gives_up() {
         opamp::tls::install_ring_provider();
@@ -1228,7 +1211,6 @@ mod tests {
     /// Replacing a destination returns at once even when the old one has gone silent: the flush of
     /// the replaced exporter, which waits out its export timeout, happens off the caller — the
     /// transport that applies the offer — and only `shutdown` on the way out waits for it.
-    /// Verifies: ADR-0016
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replacing_a_silent_destination_does_not_wait_for_its_flush() {
         opamp::tls::install_ring_provider();
@@ -1266,7 +1248,6 @@ mod tests {
 
     /// A destination that refuses the connection costs nothing but the failed exports: sampling
     /// goes on, a new offer is applied, and shutting down ends.
-    /// Verifies: ADR-0016
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_destination_that_refuses_the_connection_stops_nothing() {
         opamp::tls::install_ring_provider();
@@ -1309,7 +1290,6 @@ mod tests {
     /// The exporter's client offers TLS 1.3 and nothing older, so a destination that speaks only
     /// TLS 1.2 cannot complete a handshake with it. Read off the wire: the ClientHello it sends
     /// names TLS 1.3 alone in `supported_versions` and only the TLS 1.3 suites.
-    /// Verifies: ADR-0016
     #[tokio::test]
     async fn the_exporter_client_speaks_tls_1_3_alone() {
         use tokio::io::AsyncReadExt as _;
@@ -1382,14 +1362,13 @@ mod tests {
         );
     }
 
-    /// The whole chain the traces half rests on (ADR-0016): a `tracing` span this Client writes,
+    /// The whole chain the traces half rests on: a `tracing` span this Client writes,
     /// through the layer, the provider and the exporter, to the destination the Server offered.
     ///
     /// Worth an end-to-end test rather than a unit one because every link was already in place
     /// *except* the first, and the failure it guards against is silent: the exporter builds, the
     /// offer is acknowledged, the dashboard stays empty. It asserts the span's name and its
     /// recorded status, which is what makes a trace worth reading.
-    /// Verifies: ADR-0016
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_span_this_client_writes_reaches_the_offered_destination() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -1463,12 +1442,11 @@ mod tests {
         );
     }
 
-    /// ADR-0016 clause 20: an operation that outlives the process it started in stays **one** trace.
+    /// An operation that outlives the process it started in stays **one** trace.
     ///
     /// Asserted through the two functions the self-update uses — the ids it writes into its marker,
     /// and the parent it builds from them afterwards — because what the restart breaks is exactly
     /// the link between those two, and nothing else about it can be tested in one process.
-    /// Verifies: ADR-0016
     #[test]
     fn a_trace_survives_being_written_down_and_picked_up_again() {
         use tracing_subscriber::layer::SubscriberExt as _;
@@ -1497,7 +1475,6 @@ mod tests {
 
     /// And an unusable pair changes nothing: the ids come from a file an older version wrote, and
     /// an update is not worth failing over a trace.
-    /// Verifies: ADR-0016
     #[test]
     fn an_unreadable_trace_reference_is_ignored() {
         use tracing_subscriber::layer::SubscriberExt as _;

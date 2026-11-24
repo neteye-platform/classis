@@ -1,4 +1,4 @@
-//! What a certificate is called (ADR-0028): one rule, so the operator tool and the Server name a
+//! What a certificate is called: one rule, so the operator tool and the Server name a
 //! leaf alike. Each program reads its CA's common name itself; this module only derives from it.
 
 /// The longest common name a certificate may carry (RFC 5280 Appendix A.1).
@@ -11,10 +11,10 @@ pub const MAX_ORGANIZATION: usize = 64;
 /// [`MAX_COMMON_NAME`].
 pub const MAX_PRODUCT: usize = 40;
 
-/// The product a fleet's certificates are named for unless told otherwise (ADR-0028 clause 26).
+/// The product a fleet's certificates are named for unless told otherwise.
 pub const DEFAULT_PRODUCT: &str = "Classis";
 
-/// A leaf's common name from the common name of the CA that signs it (ADR-0028 clause 28): a
+/// A leaf's common name from the common name of the CA that signs it: a
 /// trailing ` CA` becomes ` Certificate`, and without one ` Certificate` is appended.
 #[must_use]
 pub fn leaf_common_name(ca_common_name: &str) -> String {
@@ -22,7 +22,7 @@ pub fn leaf_common_name(ca_common_name: &str) -> String {
     format!("{stem} Certificate")
 }
 
-/// A product name (ADR-0028 clause 26): letters, digits, space, `.` and `-`, 1 to
+/// A product name: letters, digits, space, `.` and `-`, 1 to
 /// [`MAX_PRODUCT`] characters, no leading or trailing space.
 ///
 /// # Errors
@@ -42,7 +42,7 @@ pub fn check_product(product: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// An organization or organizational unit (ADR-0028 clause 27): 1 to [`MAX_ORGANIZATION`]
+/// An organization or organizational unit: 1 to [`MAX_ORGANIZATION`]
 /// characters of UTF-8 without control characters.
 ///
 /// # Errors
@@ -61,7 +61,6 @@ pub fn check_organization(value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    // Verifies: ADR-0028
     #[test]
     fn a_leaf_is_named_for_its_ca_with_ca_turned_into_certificate() {
         assert_eq!(
@@ -77,7 +76,6 @@ mod tests {
         assert!(leaf_common_name(&format!("{longest} Bootstrap CA")).len() <= MAX_COMMON_NAME);
     }
 
-    // Verifies: ADR-0028
     #[test]
     fn a_product_and_an_organization_keep_to_their_grammar() {
         assert!(check_product("Classis Dev").is_ok());

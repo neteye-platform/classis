@@ -34,7 +34,6 @@ fn printed(script: &str) -> Vec<&str> {
 /// startup rule (`ClientConfig::transport`, which `ClientConfig::load` applies) refuses plaintext
 /// off the loopback literals, so a `ws://` or `http://localhost` example would teach a value the
 /// service then refuses. A placeholder host stands in for the operator's Server.
-/// Verifies: ADR-0019
 #[test]
 fn the_post_install_prints_no_endpoint_the_client_refuses_at_startup() {
     let script = post_install();
@@ -62,8 +61,7 @@ fn the_post_install_prints_no_endpoint_the_client_refuses_at_startup() {
 /// to start. The `--endpoint` it does print is the scripted form, with `--fleet-files`, where the
 /// install finds the bootstrap identity it enrols with. The manual alternative names the identity,
 /// `[tls] cert_file` and `key_file`, and nothing the Client does not read; a password it names is
-/// a `bootstrap.p12`'s, never a credential (ADR-0029 clause 13, which restates ADR-0019 clause 37).
-/// Verifies: ADR-0029
+/// a `bootstrap.p12`'s, never a credential.
 #[test]
 fn the_post_install_steps_ask_for_the_client_identity() {
     let script = post_install();
@@ -148,7 +146,6 @@ fn commands(script: &str) -> Vec<String> {
 
 /// The account exists before the first `service install` runs, created as a system account with
 /// no password and no login shell, its home the data root.
-/// Verifies: ADR-0042
 #[test]
 fn the_post_install_creates_the_account_before_it_registers() {
     let commands = commands(&post_install());
@@ -185,7 +182,6 @@ fn the_post_install_creates_the_account_before_it_registers() {
 
 /// `--run-as classis` is passed only where no unit is registered; a re-registration runs
 /// `service install` without it, which keeps the account the unit names.
-/// Verifies: ADR-0042
 #[test]
 fn the_post_install_names_the_account_only_where_no_unit_is_registered() {
     let commands = commands(&post_install());
@@ -210,7 +206,6 @@ fn the_post_install_names_the_account_only_where_no_unit_is_registered() {
 }
 
 /// The account outlives the package: no hook removes it or its group, on removal or on purge.
-/// Verifies: ADR-0042
 #[test]
 fn no_maintainer_script_removes_the_account() {
     for name in ["postinst", "prerm", "postrm", "posttrans"] {
@@ -226,7 +221,6 @@ fn no_maintainer_script_removes_the_account() {
 /// An upgrade — dpkg's `upgrade`, `failed-upgrade` and `deconfigure`, and any rpm count above 0,
 /// which says how many instances stay — falls straight through, or an `apt upgrade` or an
 /// `rpm -U` beside a second instance would leave the Client stopped.
-/// Verifies: ADR-0042
 #[cfg(unix)]
 #[test]
 fn the_pre_removal_acts_only_on_a_real_removal() {
@@ -281,10 +275,9 @@ fn the_pre_removal_acts_only_on_a_real_removal() {
     }
 }
 
-/// A removal runs `service stop`, then `service uninstall` (ADR-0042 clause 3), and stops nothing
+/// A removal runs `service stop`, then `service uninstall`, and stops nothing
 /// by its unit name: the stop takes down the second service too, where a process account is
-/// registered (ADR-0059).
-/// Verifies: ADR-0042, ADR-0059
+/// registered.
 #[test]
 fn the_pre_removal_stops_both_services_before_it_deregisters() {
     let commands = commands(&maintainer_script("prerm"));

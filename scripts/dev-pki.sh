@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# OUT OF DATE (ADR-0064): the Server speaks plain HTTP behind a reverse proxy and authenticates no
+# OUT OF DATE: the Server speaks plain HTTP behind a reverse proxy and authenticates no
 # Agent, so the `server.toml` this writes, with `[tls]`, `[client_ca]` and `[enrolment]`, is
 # refused at startup. Kept until the enrolment reimplementation (NEAG-34) replaces it.
 #
 # Creates the certificates a development Server and Client need, since both refuse to run without
-# them (ADR-0013, ADR-0021), with the operator tool's `classisctl pki init`
-# (ADR-0028) — no openssl. Every certificate of the set says it is a development one:
-# `Classis Dev … CA`, `O=Development` (ADR-0028 clause 30).
+# them, with the operator tool's `classisctl pki init` — no openssl. Every certificate of the set
+# says it is a development one: `Classis Dev … CA`, `O=Development`.
 # Everything lands in one directory, gitignored, and is for a development machine only: the keys
 # are unencrypted and the CAs are throwaway.
 #
@@ -23,8 +22,8 @@
 #                  Clients on other machines reach it; it carries the offer of the fleet's own
 #                  telemetry to a Collector on the loopback commented out
 #
-# The development Client enrols like any other host, with a bootstrap certificate the Server issues
-# (ADR-0028): start the Server, run `scripts/seed_test_configs.sh --enrol`, which issues it,
+# The development Client enrols like any other host, with a bootstrap certificate the Server issues:
+# start the Server, run `scripts/seed_test_configs.sh --enrol`, which issues it,
 # extracts its pair from the bootstrap.p12 into offline/ and approves the request, and start the
 # Client while it waits.
 # Trust the server CA, offline/server-ca.pem, in curl and in the browser.

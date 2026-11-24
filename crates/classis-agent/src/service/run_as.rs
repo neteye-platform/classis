@@ -1,16 +1,16 @@
-//! The account the system service runs as (ADR-0042 clause 2): decided and resolved before
+//! The account the system service runs as: decided and resolved before
 //! anything is written, and the ownership handover after the layout exists.
 //!
 //! `service install --run-as <account>` names the account; without the flag a re-registration
 //! keeps the account its registration names, and a first registration runs as root (Linux) or
 //! `LocalSystem` (Windows). The installation's files — the configuration, the state directory,
-//! and the executable layout, across both roots (ADR-0019 clause 8) — belong to that account
+//! and the executable layout, across both roots — belong to that account
 //! afterwards. *What* the service manager is told is [`manager`](super::manager)'s and
 //! [`windows_config`](super::windows_config)'s business.
 //!
 //! **The decision and the resolution come first** because an install that cannot succeed fails
 //! before it writes: an account that does not exist (Unix), or a Windows account form that would
-//! need a password nobody may pass (ADR-0019), is such an install. On Unix a name is resolved
+//! need a password nobody may pass, is such an install. On Unix a name is resolved
 //! through `id(1)`, POSIX and present on every Linux host; the owner of a data root is
 //! named through `getpwuid_r(3)`, which takes a uid and nothing else.
 //!
@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use super::manager::Registration;
 use super::ServiceLevel;
 
-/// Where the account a registration runs under came from (ADR-0042 clause 2).
+/// Where the account a registration runs under came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// `--run-as`.
@@ -72,7 +72,7 @@ pub struct Decision {
     pub source: Source,
 }
 
-/// Decide the account of a `service install` (ADR-0042 clause 2) and resolve it, before anything is
+/// Decide the account of a `service install` and resolve it, before anything is
 /// written: `--run-as`, else the account `registration` names, else — a registration that names
 /// none, on a data root a non-root account owns — that owner, else root.
 ///
@@ -121,7 +121,7 @@ pub fn decide(
 /// The order on Windows: `--run-as`, else the logon account the SCM holds for the service, where
 /// it holds one other than `LocalSystem`, which a registration that names none runs as. A
 /// re-registration — an upgrade of the MSI among them — keeps the account, and with it what the
-/// process account needs of it (ADR-0059 clause 1).
+/// process account needs of it.
 #[cfg(any(not(unix), test))]
 fn choose_on_windows(
     flag: Option<&str>,
@@ -142,8 +142,8 @@ fn choose_on_windows(
     })
 }
 
-/// The order of ADR-0042 clause 2, on what was found. `owner` names the data root's owner when it
-/// is not root, and is asked only for a registration that names no account.
+/// The order the service account is chosen in, on what was found. `owner` names the data root's
+/// owner when it is not root, and is asked only for a registration that names no account.
 #[cfg(unix)]
 fn choose(
     flag: Option<&str>,
@@ -365,7 +365,7 @@ pub struct RunAs {
 
 impl RunAs {
     /// Validate `account` against the platform's rules and resolve what the handover needs.
-    /// `service` is the service's name, which is the product's (ADR-0019 clause 3) — on Windows the
+    /// `service` is the service's name, which is the product's — on Windows the
     /// one virtual account that may be named is the service's own. `source` and `data_root` go into
     /// the refusal of an account that does not exist.
     ///
@@ -427,7 +427,7 @@ impl RunAs {
     /// failure here), and a path inside one handed over before it in the same call, which that
     /// walk covered without following a link. The handover is idempotent.
     ///
-    /// Where `process` names a process account, its data is left alone (ADR-0059 clause 10): an
+    /// Where `process` names a process account, its data is left alone: an
     /// entry it owns is skipped with everything beneath it, and an entry in its primary group
     /// keeps that group, a directory its mode too, so a re-registration takes from no Managed
     /// Process what it wrote or reads. Without one, everything is re-owned, group included.
@@ -480,7 +480,7 @@ impl RunAs {
 
     /// On Windows a grant on every entry, each set through its own handle: it never enters a link
     /// or a junction, which is granted as itself, and leaves what the process account owns, with
-    /// everything beneath it, as it is (ADR-0059 clause 10).
+    /// everything beneath it, as it is.
     #[cfg(windows)]
     fn own(
         &self,
@@ -527,8 +527,8 @@ impl RunAs {
 
 /// The ACEs the hand-over grants the Client's account `sid` on Windows, for a directory and for a
 /// file: modify, inherited by what a directory holds, and where a process account is registered
-/// `WRITE_DAC` beside it — the Client grants that account its share of what the install laid out
-/// (ADR-0059 clause 6), on directories the install, not the Client, made — and never `WRITE_OWNER`.
+/// `WRITE_DAC` beside it — the Client grants that account its share of what the install laid out,
+/// on directories the install, not the Client, made — and never `WRITE_OWNER`.
 #[cfg(any(windows, test))]
 fn handover_aces(sid: &str, process_account: bool) -> [Vec<String>; 2] {
     use crate::win32::acl::{allow, MODIFY, WRITE_DAC};
@@ -566,7 +566,7 @@ fn id(account: &str, flag: &str) -> Result<u32, Option<String>> {
         .map_err(|e| Some(format!("cannot read what id(1) said: {e}")))
 }
 
-/// The refusal of an account that does not exist (ADR-0042 clause 2): it names the account and,
+/// The refusal of an account that does not exist: it names the account and,
 /// for a kept one, the file it came from, shows the line that creates it, and names the flag that
 /// names another.
 #[cfg(unix)]
@@ -606,10 +606,10 @@ fn missing_account(
 /// What the hand-over left as it was, to be named in a warning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Skipped {
-    /// A regular file with a second hard link (ADR-0042 clause 2).
+    /// A regular file with a second hard link.
     HardLinked(PathBuf),
     /// One of the paths handed over, which the process account owns: left to it with everything
-    /// beneath it (ADR-0059 clause 10).
+    /// beneath it.
     ProcessAccounts(PathBuf),
     /// An entry that could not be opened to be handed over (Windows).
     Unreadable(PathBuf),
@@ -637,19 +637,18 @@ impl Skipped {
     }
 }
 
-/// The account every Managed Process runs under, through the second service (ADR-0059 clause 1):
+/// The account every Managed Process runs under, through the second service:
 /// decided and checked before anything is written, like the Client's own.
 #[derive(Debug, Clone)]
 pub struct ProcessAccount {
     account: String,
     #[cfg(unix)]
     uid: u32,
-    /// The primary group: what the Client shares with the Managed Processes belongs to it
-    /// (ADR-0059 clause 6).
+    /// The primary group: what the Client shares with the Managed Processes belongs to it.
     #[cfg(unix)]
     gid: u32,
     /// Its SID, which the Client accepts as the owner of the second service's pipe, and which the
-    /// Client's shares are granted to (ADR-0059 clauses 4 and 6).
+    /// Client's shares are granted to.
     #[cfg(windows)]
     sid: crate::win32::Sid,
     /// The SID of the Client's account, the one client the second service serves.
@@ -690,7 +689,7 @@ impl ProcessAccount {
     /// Grants the account read and execute on the layout's `versions` directory and what it
     /// holds, and on nothing else of the layout: the second service runs
     /// `current\supervisor.exe` from it, and a root the install took over or cut off grants it
-    /// nothing (ADR-0059 clause 2). A version the self-update stages there later inherits the
+    /// nothing. A version the self-update stages there later inherits the
     /// grant. On Unix the layout is world-readable, as a program's directory is.
     ///
     /// # Errors
@@ -729,7 +728,7 @@ impl ProcessAccount {
     }
 }
 
-/// What the checks of ADR-0059 clause 1 read of an account, as `id(1)` answers for it.
+/// What the process-account checks read of an account, as `id(1)` answers for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ids {
     pub uid: u32,
@@ -747,7 +746,7 @@ pub struct Ids {
     pub primary_of: Vec<(String, u32)>,
 }
 
-/// Decide the process account of a `service install` (ADR-0059 clause 1) and check it against the
+/// Decide the process account of a `service install` and check it against the
 /// Client's account `client`, before anything is written: none where `dropped`
 /// (`--no-process-account`), else `--process-account`, else the account `registration` — the
 /// second service's unit — names, else none, and no second service. `supported` says whether this
@@ -857,7 +856,7 @@ fn windows_sid(account: &str) -> Result<crate::win32::Sid, String> {
 }
 
 /// The SID of the account `former` a registration names, where what it was granted is to be
-/// withdrawn (ADR-0059 clauses 1 and 6): none where there is no former account, where it is named
+/// withdrawn: none where there is no former account, where it is named
 /// as one of `current` — the accounts the registration names now, each with its SID — or resolves
 /// to one of their SIDs, or where it is `LocalSystem`, which keeps full control of every root
 /// anyway. An account named as before is not looked up again.
@@ -893,8 +892,8 @@ pub fn former_sid(
 }
 
 /// Withdraws from the account of SID `former` — a process account dropped or replaced, or a
-/// Client's account replaced — what it was granted in `roots` and what it owns there, on Windows
-/// (ADR-0059 clauses 1, 6 and 10): every ACE that allows it, explicit or inherited, on every entry,
+/// Client's account replaced — what it was granted in `roots` and what it owns there, on Windows:
+/// every ACE that allows it, explicit or inherited, on every entry,
 /// and what it owns given to the Administrators, as Unix withdraws it by a change of owner. Nothing
 /// where `former` is `LocalSystem`, which keeps full control of every root anyway. A root, or a
 /// root within one walked already, is walked once, never through a link and never into one.
@@ -954,7 +953,7 @@ fn refuse_on_windows(account: &str, kept_from: Option<&Path>, reason: &str) -> S
     format!("{named} is refused: {reason}.{drop} {NOTHING}")
 }
 
-/// The checks of ADR-0059 clause 1 on Windows: the process account `account`, of SID `sid`, is one
+/// The process-account checks on Windows: the process account `account`, of SID `sid`, is one
 /// of the passwordless forms — the second service `agents`'s own virtual account, a gMSA,
 /// `LocalService` or `NetworkService` — never `LocalSystem`, and never the Client's account
 /// `client`, of SID `client_sid`, which itself is not `LocalSystem`.
@@ -993,8 +992,8 @@ pub(crate) fn check_windows_process_account(
     windows_account_form(account, agents)
 }
 
-/// The order of ADR-0059 clause 1, on what was found: the flag, else the account the second
-/// service's unit names, with that unit, else none.
+/// The order the process account is chosen in, on what was found: the flag, else the account the
+/// second service's unit names, with that unit, else none.
 fn choose_process_account(
     flag: Option<&str>,
     registration: Option<&Registration>,
@@ -1019,10 +1018,10 @@ fn choose_process_account(
     }
 }
 
-/// How a refusal that a kept process account causes names the way to drop it (ADR-0059 clause 1).
+/// How a refusal that a kept process account causes names the way to drop it.
 const DROP: &str = "--no-process-account, and the Client starts its Managed Processes itself.";
 
-/// The checks of ADR-0059 clause 1 on the process account `account` — `found` as `id(1)` answers
+/// The checks on the process account `account` — `found` as `id(1)` answers
 /// for it, `None` where it does not exist — against the Client's account `client_name` with
 /// `client`. `kept_from` is the unit a kept account came from.
 ///
@@ -1047,7 +1046,7 @@ pub fn check_process_account(
 const NOTHING: &str = "Nothing has been installed or written.";
 
 /// The lines that create `account` with a primary group of its own and make that group one of
-/// `client`'s. The refusals name the shadow utilities (ADR-0067 clause 21): `useradd`, `usermod`,
+/// `client`'s. The refusals name the shadow utilities: `useradd`, `usermod`,
 /// `gpasswd`. The binary runs none of them.
 fn create_line(account: &str, client: &str) -> String {
     format!(
@@ -1110,8 +1109,8 @@ fn refuse_process_account(
              another account, which the Client's does not share. {NOTHING}"
         ));
     }
-    // What the process account's primary group may read is what the Managed Processes may read
-    // (ADR-0059 clause 6): never root's group, and never a group that reaches the Client's files.
+    // What the process account's primary group may read is what the Managed Processes may read:
+    // never root's group, and never a group that reaches the Client's files.
     if found.gid == 0 {
         return Err(format!(
             "{named} has the primary group {} (gid 0), and a process account's group is never \
@@ -1224,7 +1223,7 @@ fn id_text(account: &str, flag: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// The handover walk on Unix: descriptors, never paths below the top (ADR-0042 clause 2, ADR-0054).
+/// The handover walk on Unix: descriptors, never paths below the top.
 #[cfg(unix)]
 mod walk {
     use std::ffi::{CStr, CString, OsStr};
@@ -1243,7 +1242,7 @@ mod walk {
     const DIRECTORY: libc::c_int =
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 
-    /// What the walk leaves to the process account (ADR-0059 clause 10): an entry `uid` owns is
+    /// What the walk leaves to the process account: an entry `uid` owns is
     /// not re-owned and not entered, and an entry in the group `gid` keeps it.
     #[derive(Debug, Clone, Copy)]
     pub(super) struct Kept {
@@ -1398,16 +1397,16 @@ mod walk {
 }
 
 /// Give each of `paths` the owner of `like`, the configuration of an installed Client: what
-/// `service config` creates belongs to the account the service runs as (ADR-0019 clause 13), not
+/// `service config` creates belongs to the account the service runs as, not
 /// to the administrator who ran it. A missing path is skipped.
 ///
 /// Each path is re-owned as what it is and nothing is walked: the state directory belongs to that
 /// account, which could swap a directory for a link while root walked it, so the caller names
-/// exactly the files it wrote. Nor is a link followed on the way (ADR-0054): each path's
+/// exactly the files it wrote. Nor is a link followed on the way: each path's
 /// directory is opened without following a link at its name, and the entry is re-owned through a
 /// handle on it, a link as a link. The data root the administrator named, `data_root`, and the
-/// configuration's own directory are the two directories reached as their paths say (ADR-0054
-/// clause 4); every other is one the account could have swapped. A regular file with a second hard
+/// configuration's own directory are the two directories reached as their paths say; every other is
+/// one the account could have swapped. A regular file with a second hard
 /// link is skipped, as the handover skips one: another name for it may stand anywhere.
 ///
 /// Returns the files skipped for a second hard link.
@@ -1464,7 +1463,7 @@ pub fn match_owner(like: &Path, data_root: &Path, paths: &[&Path]) -> Result<Vec
 }
 
 /// The passwordless Windows account forms — the only ones `--run-as` accepts, because a password
-/// parameter must not exist (ADR-0019: it would stand in the process list and the installer log).
+/// parameter must not exist (it would stand in the process list and the installer log).
 ///
 /// Compiled wherever it is used — the Windows install, and the tests of any platform: the rule is
 /// pure string logic, and testing it must not need a Windows host.
@@ -1503,8 +1502,8 @@ fn windows_account_form(account: &str, service: &str) -> Result<(), String> {
 }
 
 /// The warning an install gives where the process account's rights are granted or withdrawn and
-/// the Supervisors' root lies outside the roots it acts on (ADR-0059 clause 6): that root is the
-/// operator's (ADR-0053 clause 5), left as it is. `None` where it is beneath them, or where no
+/// the Supervisors' root lies outside the roots it acts on: that root is the
+/// operator's, left as it is. `None` where it is beneath them, or where no
 /// process account is named and none was.
 #[must_use]
 pub fn supervisors_root_left(root: &Path, ours: bool, process_account: bool) -> Option<String> {
@@ -1523,8 +1522,7 @@ mod tests {
     use super::*;
 
     /// A Supervisors' root outside the install's roots is named in a warning wherever a process
-    /// account's rights are granted or withdrawn, and only there (ADR-0059 clause 6).
-    /// Verifies: ADR-0059
+    /// account's rights are granted or withdrawn, and only there.
     #[test]
     fn a_supervisors_root_outside_the_roots_is_named_where_a_process_account_is_involved() {
         let root = Path::new("/srv/supervisors");
@@ -1536,8 +1534,7 @@ mod tests {
 
     /// On Windows a re-registration keeps the logon account the SCM holds, as a unit's is kept,
     /// unless `--run-as` names another; `LocalSystem`, the account a registration that names none
-    /// runs as, is no account kept (ADR-0059 clause 1).
-    /// Verifies: ADR-0059
+    /// runs as, is no account kept.
     #[test]
     fn on_windows_a_reregistration_keeps_the_scms_logon_account() {
         let key = PathBuf::from(r"HKLM\SYSTEM\CurrentControlSet\Services\classis");
@@ -1562,9 +1559,8 @@ mod tests {
 
     /// On Windows the hand-over enters no junction or symlink a Managed Process placed in its data
     /// directory, with a process account or without, and leaves what the process account owns as
-    /// it is, with everything beneath it (ADR-0059 clause 10). This test's own account stands in
+    /// it is, with everything beneath it. This test's own account stands in
     /// for the process account, `LocalService` for the Client's.
-    /// Verifies: ADR-0042, ADR-0059
     #[cfg(windows)]
     #[test]
     fn on_windows_the_handover_enters_no_junction_and_leaves_the_process_accounts_own() {
@@ -1689,10 +1685,9 @@ mod tests {
 
     /// On Windows what a former account was granted is withdrawn from it, and what it owns given
     /// to the Administrators: no ACE allows it anything anywhere in the tree — not on what was
-    /// created after the grant, which holds a copy — and it owns nothing (ADR-0059 clauses 1 and
-    /// 6). `LocalService` stands in for the former process account; the test runs elevated, as an
+    /// created after the grant, which holds a copy — and it owns nothing. `LocalService` stands in
+    /// for the former process account; the test runs elevated, as an
     /// install does.
-    /// Verifies: ADR-0059
     #[cfg(windows)]
     #[test]
     fn on_windows_a_former_accounts_grants_are_withdrawn() {
@@ -1779,8 +1774,7 @@ mod tests {
     }
 
     /// On Windows a former account that cannot be resolved fails the install before it has changed
-    /// anything, rather than leaving what it was granted granted (ADR-0059 clause 1).
-    /// Verifies: ADR-0059
+    /// anything, rather than leaving what it was granted granted.
     #[cfg(windows)]
     #[test]
     fn on_windows_a_former_account_that_cannot_be_found_fails_before_any_change() {
@@ -1791,8 +1785,7 @@ mod tests {
 
     /// On Windows the hand-over grants the Client modify, and where a process account is
     /// registered `WRITE_DAC` beside it, so that the Client can grant that account its share
-    /// (ADR-0059 clause 6) of directories the install made — never the owner's right.
-    /// Verifies: ADR-0059
+    /// of directories the install made — never the owner's right.
     #[test]
     fn on_windows_the_handover_lets_the_client_share_with_the_process_account() {
         let sid = "S-1-5-80-1-2-3-4-5";
@@ -1819,8 +1812,7 @@ mod tests {
 
     /// On Windows the process account is one of the passwordless forms — the second service's own
     /// virtual account, a gMSA, `LocalService` or `NetworkService` — never `LocalSystem` and never
-    /// the Client's account, and the Client does not run as `LocalSystem` (ADR-0059 clause 1).
-    /// Verifies: ADR-0059
+    /// the Client's account, and the Client does not run as `LocalSystem`.
     #[test]
     fn on_windows_the_process_account_is_a_passwordless_account_of_its_own() {
         use crate::win32::{known_account_sid, Sid};
@@ -1874,9 +1866,8 @@ mod tests {
         assert!(client_is_system.contains("--run-as"), "{client_is_system}");
     }
 
-    /// ADR-0019: the accepted Windows forms are exactly the passwordless ones, and the refusal
+    /// The accepted Windows forms are exactly the passwordless ones, and the refusal
     /// names them — an operator typing a plain account must learn the forms, not a Win32 error.
-    /// Verifies: ADR-0019
     #[test]
     fn windows_forms_are_the_passwordless_ones() {
         let svc = "supervisor";
@@ -1902,7 +1893,6 @@ mod tests {
         let plain = windows_account_form("bob", svc).expect_err("needs a password");
         assert!(plain.contains("password"), "{plain}");
         assert!(plain.contains(r"NT SERVICE\supervisor"), "{plain}");
-        assert!(!plain.contains("ADR-"), "{plain}");
     }
 
     #[cfg(unix)]
@@ -1938,7 +1928,6 @@ mod tests {
 
     /// The refusal for a missing Unix account is the actionable message installs fail with — and
     /// it must promise that nothing was written, because resolution runs first.
-    /// Verifies: ADR-0019, ADR-0042
     #[cfg(unix)]
     #[test]
     fn a_missing_account_is_refused_with_the_way_out() {
@@ -1964,7 +1953,6 @@ mod tests {
     /// A re-registration without `--run-as` keeps the account the unit names, and says where it
     /// came from — the regression of a plain `service install` on every package upgrade, which
     /// returned a host installed with `--run-as` to root.
-    /// Verifies: ADR-0042
     #[cfg(unix)]
     #[test]
     fn a_reregistration_without_run_as_keeps_the_units_account() {
@@ -1996,7 +1984,6 @@ mod tests {
 
     /// `--run-as root` is how root is chosen, and the unit records it as `User=root`, so the next
     /// re-registration keeps root.
-    /// Verifies: ADR-0042
     #[cfg(unix)]
     #[test]
     fn run_as_root_is_written_as_user_root() {
@@ -2028,7 +2015,6 @@ mod tests {
     /// A unit that names no account, on a data root an account owns, was rewritten by a
     /// re-registration that dropped its account: the install takes the owner, and names the data
     /// root it took it from.
-    /// Verifies: ADR-0042
     #[cfg(unix)]
     #[test]
     fn a_unit_without_an_account_on_an_account_owned_data_root_takes_the_owner() {
@@ -2057,7 +2043,6 @@ mod tests {
 
     /// A unit that names no account, on a data root root owns, is an install that ran as root,
     /// and it stays root.
-    /// Verifies: ADR-0042
     #[cfg(unix)]
     #[test]
     fn a_unit_without_an_account_on_a_root_owned_data_root_stays_root() {
@@ -2079,7 +2064,6 @@ mod tests {
 
     /// Where no unit exists, nothing is kept and the data root is not asked: a first registration
     /// runs as root. The Linux packages name their account themselves.
-    /// Verifies: ADR-0042
     #[cfg(unix)]
     #[test]
     fn no_registration_means_root() {
@@ -2092,7 +2076,6 @@ mod tests {
 
     /// A kept account that has been deleted fails closed, before anything is written: the message
     /// names the account and the unit it came from, and the two ways out.
-    /// Verifies: ADR-0042
     #[cfg(unix)]
     #[test]
     fn a_kept_account_that_no_longer_exists_is_refused_naming_its_source() {
@@ -2143,7 +2126,6 @@ mod tests {
 
     /// `--process-account` names the account; without it a re-registration keeps the one the
     /// second service's unit names, and with neither there is no process account.
-    /// Verifies: ADR-0059
     #[test]
     fn a_process_account_is_named_or_kept_from_the_second_services_unit() {
         let unit = Registration {
@@ -2188,7 +2170,6 @@ mod tests {
 
     /// A process account that exists, is neither root nor the Client's, and whose group the
     /// Client's account is in, is taken.
-    /// Verifies: ADR-0059
     #[test]
     fn a_process_account_in_the_clients_groups_is_taken() {
         check_process_account(
@@ -2203,7 +2184,6 @@ mod tests {
 
     /// Root is never the process account, by name or by uid, and a Client that runs as root has
     /// none: the refusal names `--run-as root` as the way to run everything as root.
-    /// Verifies: ADR-0059
     #[test]
     fn the_process_account_is_never_root_and_the_client_never_is() {
         let root = Ids {
@@ -2229,7 +2209,6 @@ mod tests {
     }
 
     /// The process account is never the Client's own.
-    /// Verifies: ADR-0059
     #[test]
     fn the_process_account_is_never_the_clients() {
         let err = check_process_account(
@@ -2245,7 +2224,6 @@ mod tests {
 
     /// An account that does not exist is refused with the lines that create it and give its group
     /// to the Client's account; a kept one names the unit it came from.
-    /// Verifies: ADR-0059
     #[test]
     fn a_missing_process_account_is_refused_with_the_way_out() {
         let err = check_process_account(
@@ -2275,10 +2253,8 @@ mod tests {
         );
     }
 
-    /// The Client reaches what the process account may read through its primary group (ADR-0059
-    /// clause 6): an account whose group the Client's account is not in is refused, with the line
+    /// The Client reaches what the process account may read through its primary group: an account whose group the Client's account is not in is refused, with the line
     /// that adds it.
-    /// Verifies: ADR-0059
     #[test]
     fn a_process_account_whose_group_the_client_lacks_is_refused() {
         let mut client = client_ids();
@@ -2303,8 +2279,7 @@ mod tests {
 
     /// `--no-process-account` drops a kept process account; a refusal that a kept one causes —
     /// here `--run-as root` beside a registered second service — names that flag, and one an
-    /// install named does not (ADR-0059 clause 1).
-    /// Verifies: ADR-0059
+    /// install named does not.
     #[test]
     fn a_kept_process_account_can_be_dropped_and_its_refusals_say_so() {
         let unit = Registration {
@@ -2351,9 +2326,8 @@ mod tests {
     }
 
     /// The process account's primary group is neither root's nor the Client's own, and the
-    /// account is not in the Client's primary group (ADR-0059 clause 6): what that group may read
+    /// account is not in the Client's primary group: what that group may read
     /// is what every Managed Process may.
-    /// Verifies: ADR-0059
     #[test]
     fn a_process_account_whose_group_reaches_the_clients_files_is_refused() {
         let refused = |agents: Ids, client: Ids| {
@@ -2391,11 +2365,10 @@ mod tests {
         );
     }
 
-    /// The process account's primary group is its own (ADR-0059 clause 6): a member beside the
+    /// The process account's primary group is its own: a member beside the
     /// Client's account, or another account whose primary group it is, would read what every
     /// Managed Process reads, and is refused with the way out. The account itself — a member of
     /// its own group (`usermod -aG`), or another name for its uid — is no other account.
-    /// Verifies: ADR-0059
     #[test]
     fn a_process_account_whose_group_is_shared_with_another_account_is_refused() {
         let refused = |agents: Ids| {
@@ -2455,7 +2428,6 @@ mod tests {
 
     /// The group lookups behind those checks read this host's databases: the test's own primary
     /// group is its own account's primary group, where the password database names the account.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_group_lookups_read_this_hosts_databases() {
@@ -2478,7 +2450,6 @@ mod tests {
 
     /// The members of a group that has some are read, wherever the libc places them in the
     /// buffer: the groups the test runs in.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_members_of_a_group_are_read_wherever_the_libc_places_them() {
@@ -2506,7 +2477,6 @@ mod tests {
     /// another platform for now — a named process account is refused; with none named, nothing
     /// changes. A name no unit can hold is refused here too, before the install writes anything.
     /// Against the accounts of this host: a missing one, and the test's own named as the Client's.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn a_process_account_is_decided_before_anything_is_written() {
@@ -2569,7 +2539,7 @@ mod tests {
     }
 
     /// A tree as a Supervisor's directory stands where a process account is registered: the
-    /// directories clause 6 gives the process account's group — the state directory passed
+    /// directories given to the process account's group — the state directory passed
     /// through, a data directory written — and a configuration entry, all in `group`, beside a
     /// record of the Client's left in the group it was created with. Returns the entries in
     /// `group` with their modes, and the record.
@@ -2598,11 +2568,10 @@ mod tests {
         (meta.mode() & 0o7777, meta.gid())
     }
 
-    /// Where a process account is registered, the hand-over leaves its group where clause 6 put
-    /// it: a directory in the process account's group keeps that group and its mode, and so does
-    /// an entry in it, while the rest is handed over as before. A re-registration — every package
-    /// upgrade — takes from no Managed Process what it reads or writes.
-    /// Verifies: ADR-0059
+    /// Where a process account is registered, the hand-over leaves its group where the registration
+    /// put it: a directory in the process account's group keeps that group and its mode, and so
+    /// does an entry in it, while the rest is handed over as before. A re-registration — every
+    /// package upgrade — takes from no Managed Process what it reads or writes.
     #[cfg(target_os = "linux")]
     #[test]
     fn the_handover_keeps_the_process_accounts_group_and_its_modes() {
@@ -2638,7 +2607,6 @@ mod tests {
     /// group: the hand-over re-owns nothing of what a Managed Process wrote. The test's own
     /// account stands in for the process account, so the top and every entry beneath it are
     /// the process account's.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_handover_skips_what_the_process_account_owns_with_everything_beneath_it() {
@@ -2674,7 +2642,6 @@ mod tests {
     /// A root of the hand-over that the process account owns is left to it, and named in a
     /// warning: the operator who names it as a root means the Client to have it. What the process
     /// account owns beneath a root is its data, and is passed over without a word.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn a_root_the_process_account_owns_is_named_in_a_warning() {
@@ -2700,7 +2667,6 @@ mod tests {
 
     /// Without a process account the hand-over is what it always was: every entry, in whatever
     /// group, is handed to the Client's account and group.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn without_a_process_account_the_handover_re_owns_every_group() {
@@ -2723,7 +2689,6 @@ mod tests {
     }
 
     /// The handover re-owns a tree including a symlink as a link, and skips what is missing.
-    /// Verifies: ADR-0019
     #[cfg(unix)]
     #[test]
     fn the_handover_walks_the_tree_and_skips_what_is_missing() {
@@ -2754,7 +2719,6 @@ mod tests {
 
     /// A directory inside the tree that is a link to one outside it is re-owned as the link; the
     /// walk never reaches what it points to.
-    /// Verifies: ADR-0042, ADR-0054
     #[cfg(unix)]
     #[test]
     fn the_handover_never_follows_a_directory_swapped_for_a_link() {
@@ -2799,7 +2763,6 @@ mod tests {
 
     /// A regular file with a second hard link is left as it is and named: its other name may stand
     /// outside the roots.
-    /// Verifies: ADR-0042, ADR-0054
     #[cfg(unix)]
     #[test]
     fn the_handover_skips_a_file_with_a_second_hard_link() {
@@ -2829,7 +2792,6 @@ mod tests {
 
     /// A directory swapped for a link to one outside the tree, after the walk read its name and
     /// before it opened it, is re-owned as the link; nothing outside is reached.
-    /// Verifies: ADR-0042, ADR-0054
     #[cfg(unix)]
     #[test]
     fn the_handover_never_follows_a_directory_swapped_for_a_link_mid_walk() {
@@ -2877,7 +2839,6 @@ mod tests {
 
     /// An entry swapped for a hard link to a file outside the tree, after the walk read its name
     /// and before it opened it, is skipped and named; the file outside keeps its owner.
-    /// Verifies: ADR-0042, ADR-0054
     #[cfg(unix)]
     #[test]
     fn the_handover_skips_an_entry_swapped_for_a_hard_link_mid_walk() {

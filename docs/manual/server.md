@@ -24,13 +24,11 @@ foreground process — unlike the Client, it does not install itself as a servic
 - [What the Server does not do](#what-the-server-does-not-do)
 
 > **Plain HTTP behind a reverse proxy, and no authentication of Agents in the
-> Server
-> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).**
-> The Server terminates no TLS: both planes speak plain HTTP, on any address,
-> and a reverse proxy in front of it ends TLS. The Server **authenticates no
-> Agent**: the proxy admits them, and the Agent port must be reachable only
-> through it. `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]` and
-> `[agents.auth]` are **refused at startup**, naming the section, and
+> Server .** The Server terminates no TLS: both planes speak plain HTTP, on any
+> address, and a reverse proxy in front of it ends TLS. The Server
+> **authenticates no Agent**: the proxy admits them, and the Agent port must be
+> reachable only through it. `[tls]`, `[rest.tls]`, `[client_ca]`, `[enrolment]`
+> and `[agents.auth]` are **refused at startup**, naming the section, and
 > `server pki` is removed. The sections below on mutual TLS, certificates,
 > enrolment and revocation describe machinery that is **disabled** in this mode
 > — kept until the reimplementation of enrolment replaces it — and are marked
@@ -38,8 +36,8 @@ foreground process — unlike the Client, it does not install itself as a servic
 > Server's ports: the operator's Basic password and every package cross the hop
 > between them in the clear, any peer that reaches the Agent port may claim any
 > identity, and the peer's address is the one the proxy writes in
-> `X-Forwarded-For`
-> ([Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)).
+> `X-Forwarded-For` ([Plain HTTP behind a reverse
+> proxy](#plain-http-behind-a-reverse-proxy)).
 
 ## What the Server does
 
@@ -291,10 +289,8 @@ fleet-admin = "$argon2id$v=19$m=19456,t=2,p=1$…"
 
 #### `[rest.tls]`
 
-Removed
-([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
-The section is refused at startup, naming it: the proxy in front of the Operator
-plane serves the UI's certificate.
+Removed. The section is refused at startup, naming it: the proxy in front of the
+Operator plane serves the UI's certificate.
 
 ### `[blobs]`
 
@@ -490,6 +486,38 @@ enrolment is reimplemented.
 
 Removed, and with it the enrolment window, the bootstrap certificates and the
 pending queue. The section is refused at startup (`[enrolment] is removed`).
+
+### `[packages]`
+
+Optional; absent means no Package Signer is revoked.
+
+```toml
+[packages]
+revoked_signers = [
+  "9f2b…64 lowercase hex digits…",
+]
+```
+
+`revoked_signers` lists the Package Signers this Server refuses, each as the
+SHA-256 of its DER certificate in 64 lowercase hex digits, at most 64. Use it
+when a Package Signer's key may be exposed: a Package Signer is valid for 10
+years and nothing else ends it earlier.
+
+- **The Server refuses a listed signer's signature** with `400` on a write, and
+  at startup it sets aside every stored signature of that signer, with a
+  warning naming the entry. The entry is offered to nobody and its signature
+  stays in the store, as for a signer that has expired.
+- **A change takes effect when the Server restarts.** With several Servers, they
+  differ until the last one has restarted.
+- **A malformed list stops the start**, naming the setting: an item that is not
+  64 lowercase hex digits, one named twice, or more than 64.
+- **Clients are not told.** The list is the Server's alone, so a Package a
+  Client already accepted stays installed. Every version the revoked signer
+  signed stays unoffered until it is signed again by another Package Signer.
+
+`openssl x509 -inform DER -in <certificate> -outform DER | sha256sum` gives the
+fingerprint of a certificate; the release's certificate is
+`packaging/package-signer.der`.
 
 ### `[admission_throttle]`
 
@@ -699,8 +727,7 @@ reads neither: a `server.toml` naming either key stops it at startup.
 
 ## Mutual TLS: proving who is on the connection
 
-> **Disabled.** The Server speaks plain HTTP and authenticates no Agent
-> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> **Disabled.** The Server speaks plain HTTP and authenticates no Agent:
 > `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs
 > until enrolment is reimplemented. It describes the machinery that stays in the
 > code.
@@ -875,8 +902,7 @@ with a bootstrap certificate, or is given a new certificate by an operator.
 
 ## Enrolment: a new host, approved by an operator
 
-> **Disabled.** The Server speaks plain HTTP and authenticates no Agent
-> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> **Disabled.** The Server speaks plain HTTP and authenticates no Agent:
 > `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs
 > until enrolment is reimplemented. It describes the machinery that stays in the
 > code.
@@ -1170,8 +1196,7 @@ what that costs (see
 
 ## Revocation: withdrawing a certificate
 
-> **Disabled.** The Server speaks plain HTTP and authenticates no Agent
-> ([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)):
+> **Disabled.** The Server speaks plain HTTP and authenticates no Agent:
 > `[tls]`, `[client_ca]` and `[enrolment]` are refused, so nothing below runs
 > until enrolment is reimplemented. It describes the machinery that stays in the
 > code.
@@ -1995,12 +2020,10 @@ The Server **authenticates no Agent**: the Agent plane admits every request on
 `/v1/opamp`, over both transports, and on the package download route, with or
 without an `Authorization` header, which it ignores. What admits an Agent — a
 random string it presents, checked by a library — lives in the reverse proxy in
-front of the Server
-([ADR-0064](../adr/0064-the-server-speaks-plain-http-behind-a-reverse-proxy-and-authenticates-no-agent.md)).
-**Any peer that reaches the Agent port is admitted and may claim any identity**:
-an Agent is what the `instance_uid` of its OpAMP message says it is. The port
-must be reachable only through the proxy. A top-level `[auth]` section and
-`[agents.auth]` are refused at startup.
+front of the Server. **Any peer that reaches the Agent port is admitted and may
+claim any identity**: an Agent is what the `instance_uid` of its OpAMP message
+says it is. The port must be reachable only through the proxy. A top-level
+`[auth]` section and `[agents.auth]` are refused at startup.
 
 The Operator plane is the one with a password,
 [`[rest.auth]`](#the-operator-plane-restauth) below. It never reaches an Agent's
@@ -2025,8 +2048,8 @@ $argon2id$v=19$m=19456,t=2,p=1$…
 showing it on a terminal, and prints the hash to paste.
 
 The package download route sits outside `[rest.auth]`: it is on the Agent plane,
-which the Server authenticates no more than the OpAMP endpoint (ADR-0064), and
-its content hash and signature protect what it serves.
+which the Server authenticates no more than the OpAMP endpoint, and its content
+hash and signature protect what it serves.
 
 ### Repeated failures are throttled
 

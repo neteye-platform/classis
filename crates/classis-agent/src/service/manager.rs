@@ -1,10 +1,10 @@
-//! Cross-platform service lifecycle over the `service-manager` crate (ADR-0019).
+//! Cross-platform service lifecycle over the `service-manager` crate.
 //!
 //! `service-manager` targets the platform's native manager (systemd, Windows SCM) behind one
 //! API. This module wraps it in the project's vocabulary. There is **one service per build**
-//! (ADR-0019): it is named after the product, takes no suffix, and nothing has to be looked up to
+//!: it is named after the product, takes no suffix, and nothing has to be looked up to
 //! address it. Where a process account is registered, a second service, `<PRODUCT_NAME>-agents`,
-//! runs beside it under that account (ADR-0059), and every verb acts on both. The installed
+//! runs beside it under that account, and every verb acts on both. The installed
 //! program is the layout's `current` pointer, so a self-update is a pointer switch — never a
 //! re-registration.
 
@@ -22,7 +22,7 @@ use service_manager::{
 use super::{ServiceControl, ServiceLevel, ServiceState};
 use crate::product::{PRODUCT_NAME, PRODUCT_TITLE};
 
-/// Restart after a failure, never after a clean stop (ADR-0019) — with a delay so a Client that
+/// Restart after a failure, never after a clean stop — with a delay so a Client that
 /// fails at startup does not spin, and no retry limit so a host recovers however long it takes.
 const RESTART_POLICY: RestartPolicy = RestartPolicy::OnFailure {
     delay_secs: Some(RESTART_DELAY_SECS),
@@ -32,11 +32,11 @@ const RESTART_POLICY: RestartPolicy = RestartPolicy::OnFailure {
 
 /// Read by [`windows_config`](super::windows_config) so both platforms wait the same before a
 /// restart — and by the service smoke test, which has to outwait it before it may conclude that a
-/// killed service is not coming back (ADR-0010 widens visibility by need).
+/// killed service is not coming back (visibility is widened by need).
 pub const RESTART_DELAY_SECS: u32 = 5;
 
-/// The name the service is registered under — the same on every platform (ADR-0019), and the
-/// **product's** name rather than the program's (ADR-0019 clause 3).
+/// The name the service is registered under — the same on every platform, and the
+/// **product's** name rather than the program's.
 ///
 /// There is no suffix and nothing to look up: one build installs one service, and a second
 /// installation is a second build with its own `PRODUCT_NAME`. The name that identifies an
@@ -48,15 +48,15 @@ pub fn service_name() -> &'static str {
     PRODUCT_NAME
 }
 
-/// The name of the second service, which starts the Managed Processes under the process account
-/// (ADR-0059 clause 2): the product's, with the suffix `-agents`.
+/// The name of the second service, which starts the Managed Processes under the process account:
+/// the product's, with the suffix `-agents`.
 #[must_use]
 pub fn agents_service_name() -> String {
     format!("{PRODUCT_NAME}-agents")
 }
 
 /// The second service's socket, in a directory named after it that only the process account
-/// writes and its group reaches (ADR-0059 clauses 4 and 6). On Windows its named pipe,
+/// writes and its group reaches. On Windows its named pipe,
 /// `\\.\pipe\<PRODUCT_NAME>-agents`, whose own security descriptor admits the Client's account
 /// alone.
 ///
@@ -75,7 +75,7 @@ pub fn agents_socket() -> PathBuf {
 }
 
 /// Refuses a root that is the directory of the second service's socket, or lies in it: that
-/// directory is the process account's (ADR-0059 clause 9), and a root there would be handed to
+/// directory is the process account's, and a root there would be handed to
 /// it, or to the Client beneath what the process account may replace. Named the same, or by
 /// another path to the same directory.
 ///
@@ -123,7 +123,7 @@ fn agents_socket_dir() -> PathBuf {
 /// so a stop ends them through the service rather than through the manager.
 pub const AGENTS_STOP_TIMEOUT_SECS: u32 = 30;
 
-/// The name a human reads where the platform has somewhere to put one (ADR-0019): the Windows
+/// The name a human reads where the platform has somewhere to put one: the Windows
 /// services list. systemd shows the unit name as its `Description`, and has no second name to
 /// give.
 #[must_use]
@@ -137,23 +137,23 @@ pub fn display_name() -> &'static str {
 ///
 /// This column answers "what is this?", so it says what the program does rather than repeating the
 /// display name beside it. Windows is the only platform with somewhere to put it — systemd shows
-/// the unit name as its `Description` (ADR-0019).
+/// the unit name as its `Description`.
 pub const WINDOWS_DESCRIPTION: &str =
     "Places this machine under OpAMP management: connects to a Server, supervises the Agents \
      configured for this host, and updates them and itself from packages the Server offers.";
 
-/// The second service's name in the Windows services list (ADR-0059 clause 2).
+/// The second service's name in the Windows services list.
 #[must_use]
 pub fn agents_display_name() -> String {
     format!("{PRODUCT_TITLE} Managed Processes")
 }
 
-/// What the Windows services list says the second service does (ADR-0059 clause 2).
+/// What the Windows services list says the second service does.
 pub const AGENTS_WINDOWS_DESCRIPTION: &str =
     "Starts, stops and watches the Agents' programs under their own account, on the request of \
      the Classis Client, which reaches it on a named pipe of its own.";
 
-/// The service label, built so that **every backend renders it identically** (ADR-0019).
+/// The service label, built so that **every backend renders it identically**.
 ///
 /// `service-manager` renders a label through two functions that do not agree — `{organization}-`
 /// `{application}` for systemd, `{qualifier}.{organization}.{application}` for the SCM — so any
@@ -196,23 +196,23 @@ pub struct InstallSpec {
     pub level: ServiceLevel,
     /// The program to run: the layout's `current` pointer, never a version directory directly.
     pub program: PathBuf,
-    /// Absolute path of the TOML configuration file (ADR-0010) the unit carries. The unit holds
+    /// Absolute path of the TOML configuration file the unit carries. The unit holds
     /// the *path*, never the configuration itself — one source of truth.
     pub config_path: PathBuf,
     /// Absolute state directory baked into the unit (a service's working directory is `/` or
     /// `System32`; relative paths would be meaningless).
     pub state_dir: PathBuf,
-    /// The account the service runs as (ADR-0042 clause 2) — already resolved by
+    /// The account the service runs as — already resolved by
     /// [`run_as`](super::run_as), so what arrives here exists and needs no password. On Linux a
     /// system registration always names one, `root` included; on Windows `None` leaves the logon
     /// account the SCM holds, `LocalSystem` on a first registration.
     pub run_as: Option<String>,
-    /// The second service, where a process account is registered (ADR-0059); already decided and
+    /// The second service, where a process account is registered; already decided and
     /// checked by [`run_as`](super::run_as).
     pub agents: Option<Agents>,
 }
 
-/// The second service a registration names (ADR-0059 clause 2).
+/// The second service a registration names.
 #[derive(Debug, Clone)]
 pub struct Agents {
     /// The process account it runs under.
@@ -240,13 +240,13 @@ pub struct Agents {
 /// marker is what routes into the Windows SCM dispatcher; it is ignored on Unix.
 ///
 /// Both paths are absolute and both are baked in, which is what makes an upgrade a re-registration
-/// rather than a migration (ADR-0053 clause 2): the program path and the rest of the unit are
+/// rather than a migration: the program path and the rest of the unit are
 /// rewritten from the version that registers, and the configuration, identity and state stay
 /// where they are.
 ///
 /// Where a process account is registered, the line also names the second service's socket and the
 /// process account's uid: that is how the running Client learns that it starts every Managed
-/// Process through the second service, and whom to accept as its peer (ADR-0059 clauses 3, 4).
+/// Process through the second service, and whom to accept as its peer.
 fn service_args(spec: &InstallSpec) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("run"),
@@ -271,8 +271,8 @@ fn service_args(spec: &InstallSpec) -> Vec<OsString> {
     args
 }
 
-/// The second service's command line: `run --agents <socket> --client-uid <uid>` (ADR-0059
-/// clause 2), on Windows `run --agents <pipe> --client-sid <SID>`. It reads neither the
+/// The second service's command line: `run --agents <socket> --client-uid <uid>`, on Windows `run
+/// --agents <pipe> --client-sid <SID>`. It reads neither the
 /// configuration nor the state directory.
 fn agents_args(agents: &Agents) -> Vec<OsString> {
     #[cfg(unix)]
@@ -289,7 +289,7 @@ fn agents_args(agents: &Agents) -> Vec<OsString> {
 }
 
 /// Register the service running `spec.program`, **including** the failure recovery
-/// that makes ADR-0019's restart-on-failure real on every platform. On Windows that is a second
+/// that makes the restart-on-failure real on every platform. On Windows that is a second
 /// step against the SCM, because `service-manager` silently drops the policy there; on systemd the
 /// unit has already written it.
 ///
@@ -302,8 +302,8 @@ pub fn install(spec: &InstallSpec) -> Result<(), String> {
         install_agents(spec, agents)?;
     }
     install_service(spec)?;
-    // What `service-manager` does not do on Windows, done here (see `windows_config`) — since
-    // ADR-0019 that includes the logon account, which its `sc.exe` backend ignores.
+    // What `service-manager` does not do on Windows, done here (see `windows_config`) — that
+    // includes the logon account, which its `sc.exe` backend ignores.
     super::windows_config::configure(
         service_name(),
         display_name(),
@@ -327,15 +327,15 @@ fn install_service(spec: &InstallSpec) -> Result<(), String> {
             label: label(),
             program: spec.program.clone(),
             args: service_args(spec),
-            // The systemd system unit is the Client's own text (ADR-0042 clause 6); the user
+            // The systemd system unit is the Client's own text; the user
             // scope and every other manager keep the crate's rendering.
             contents,
-            // The systemd system unit carries `User=` itself (ADR-0042 clause 2). The Windows
+            // The systemd system unit carries `User=` itself. The Windows
             // backend ignores this field, which is why `install` sets the logon account through
             // `windows_config`.
             username: spec.run_as.clone(),
             working_directory: None,
-            // The Client is file-configured (ADR-0010): the unit carries the config path in the
+            // The Client is file-configured: the unit carries the config path in the
             // arguments above, never settings as environment variables.
             environment: None,
             autostart: true,
@@ -355,7 +355,7 @@ fn install_service(spec: &InstallSpec) -> Result<(), String> {
 /// reconfigured in place, as `sc create` refuses one that exists: its program, arguments and start
 /// type are rewritten and its logon account kept, and what `windows_config` sets follows as on a
 /// first registration. A re-registration — an upgrade among them — so keeps the second service
-/// and the process account it runs under (ADR-0059 clause 1).
+/// and the process account it runs under.
 fn register(level: ServiceLevel, ctx: ServiceInstallCtx) -> Result<(), String> {
     let manager = manager(level)?;
     #[cfg(windows)]
@@ -375,7 +375,7 @@ fn register(level: ServiceLevel, ctx: ServiceInstallCtx) -> Result<(), String> {
     manager.install(ctx).map_err(|e| e.to_string())
 }
 
-/// Registers the second service (ADR-0059 clause 2), which only a host where [`agents_supported`]
+/// Registers the second service, which only a host where [`agents_supported`]
 /// holds gets. The registration first, so an install that may not register a system service is
 /// told so before anything else. On Windows what `service-manager` leaves undone follows, as for
 /// the Client: the recovery actions, the display name, the description and the logon account —
@@ -385,7 +385,7 @@ fn register(level: ServiceLevel, ctx: ServiceInstallCtx) -> Result<(), String> {
 /// The Client's service is not made to depend on it (`sc config depend=`): the SCM starts no
 /// service whose dependency failed to start, and stops none a running one depends on, so a second
 /// service that does not come up would hold the Client down with it (StartService,
-/// `ERROR_SERVICE_DEPENDENCY_FAIL`), where the Client runs without it (ADR-0059 clause 2). The
+/// `ERROR_SERVICE_DEPENDENCY_FAIL`), where the Client runs without it. The
 /// start names the second service first instead ([`started`]).
 fn install_agents(spec: &InstallSpec, agents: &Agents) -> Result<(), String> {
     register(
@@ -404,7 +404,7 @@ fn install_agents(spec: &InstallSpec, agents: &Agents) -> Result<(), String> {
 }
 
 /// What `service-manager` is asked to register for the second service. Under systemd
-/// (`own_unit`) a system unit of the Client's own text (ADR-0059 clause 9); under the SCM what the
+/// (`own_unit`) a system unit of the Client's own text; under the SCM what the
 /// crate renders, the rest set by [`windows_config::configure_agents`](super::windows_config).
 fn agents_install_ctx(
     spec: &InstallSpec,
@@ -428,7 +428,7 @@ fn agents_install_ctx(
     })
 }
 
-/// Whether this host can register the second service (ADR-0059): a system service under systemd
+/// Whether this host can register the second service: a system service under systemd
 /// on Linux, or under the SCM on Windows.
 #[must_use]
 pub fn agents_supported(level: ServiceLevel) -> bool {
@@ -439,7 +439,7 @@ pub fn agents_supported(level: ServiceLevel) -> bool {
 }
 
 /// What `service-manager` is handed as the unit's text: the Client's own systemd **system** unit
-/// (ADR-0042 clause 6) where systemd is the native manager, and nothing — the crate's own
+/// where systemd is the native manager, and nothing — the crate's own
 /// rendering — for the user scope and every other manager.
 fn unit_contents(spec: &InstallSpec, systemd: bool) -> Result<Option<String>, String> {
     if !systemd || spec.level != ServiceLevel::System {
@@ -448,14 +448,14 @@ fn unit_contents(spec: &InstallSpec, systemd: bool) -> Result<Option<String>, St
     systemd_unit(spec, spec.run_as.as_deref().unwrap_or(ROOT)).map(Some)
 }
 
-/// The account that is root, and that decides the unit's directive tier (ADR-0042 clause 7).
+/// The account that is root, and that decides the unit's directive tier.
 const ROOT: &str = "root";
 
-/// What every system unit carries (ADR-0042 clause 7): `/sys/fs/cgroup` becomes read-only. It does
+/// What every system unit carries: `/sys/fs/cgroup` becomes read-only. It does
 /// not imply `NoNewPrivileges=`, and no supported agent writes the cgroup tree itself.
 const EVERY_SYSTEM_UNIT: &[&str] = &["ProtectControlGroups=yes"];
 
-/// What a unit that runs as root carries on top (ADR-0042 clause 7). Root holds `CAP_SYS_ADMIN`,
+/// What a unit that runs as root carries on top. Root holds `CAP_SYS_ADMIN`,
 /// so none of these implies `no_new_privs` there; under any other account each one would, and
 /// `sudo` and every setuid helper a Managed Process uses would stop working.
 const ROOT_UNIT: &[&str] = &[
@@ -464,7 +464,7 @@ const ROOT_UNIT: &[&str] = &[
     "RestrictRealtime=yes",
 ];
 
-/// The systemd system unit the Client registers for `account` (ADR-0042 clauses 6 and 7).
+/// The systemd system unit the Client registers for `account`.
 ///
 /// `ExecStart=` quotes the program and every argument, so any absolute path reaches the program as
 /// it was given. `Restart=` and `RestartSec=` say what [`RESTART_POLICY`] says. `User=` always
@@ -482,7 +482,7 @@ pub fn systemd_unit(spec: &InstallSpec, account: &str) -> Result<String, String>
     let mut unit = String::new();
     let _ = writeln!(unit, "[Unit]");
     let _ = writeln!(unit, "Description={}", service_name());
-    // The second service is started first (ADR-0059 clause 2): `After=` orders both, and `Wants=`
+    // The second service is started first: `After=` orders both, and `Wants=`
     // pulls it in at boot and on every start of the Client. Not `Requires=`: a second service that
     // fails, or is stopped on its own, leaves the Client running — it still reports to the Server,
     // its Supervisors report that their programs do not start, and it reaches the service again
@@ -508,12 +508,12 @@ pub fn systemd_unit(spec: &InstallSpec, account: &str) -> Result<String, String>
     Ok(unit)
 }
 
-/// The second service's systemd system unit (ADR-0059 clause 2): the same program as the Client's,
-/// under the process account, with the directives ADR-0042 clause 7 sets for that account.
+/// The second service's systemd system unit: the same program as the Client's,
+/// under the process account, with the directives every system unit carries.
 ///
 /// `RuntimeDirectory=` is where its socket lives: systemd creates it for the process account at
 /// every start, `0750`, so only that account and its group — the Client's account is in it
-/// (ADR-0059 clause 6) — reach the socket, and removes it at the stop. `TimeoutStopSec=` outlasts
+/// — reach the socket, and removes it at the stop. `TimeoutStopSec=` outlasts
 /// the service's own stop of its programs.
 ///
 /// # Errors
@@ -536,7 +536,7 @@ pub fn agents_unit(spec: &InstallSpec, agents: &Agents) -> Result<String, String
     let _ = writeln!(unit, "RuntimeDirectory={name}");
     let _ = writeln!(unit, "RuntimeDirectoryMode=0750");
     let _ = writeln!(unit, "TimeoutStopSec={AGENTS_STOP_TIMEOUT_SECS}");
-    // Never root (ADR-0059 clause 1), so never the root tier.
+    // Never root, so never the root tier.
     for directive in EVERY_SYSTEM_UNIT {
         let _ = writeln!(unit, "{directive}");
     }
@@ -603,7 +603,7 @@ fn exec_word(word: &std::ffi::OsStr) -> Result<String, String> {
 }
 
 /// A system registration of this service as the Client wrote it: the file, and the account it
-/// names (ADR-0042 clause 2).
+/// names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
     /// The systemd unit.
@@ -612,7 +612,7 @@ pub struct Registration {
     pub account: Option<String>,
 }
 
-/// The registration a re-registration finds (ADR-0042 clause 2): the file the Client wrote —
+/// The registration a re-registration finds: the file the Client wrote —
 /// `/etc/systemd/system/<PRODUCT_NAME>.service` — never a drop-in and never the loaded state of
 /// the service manager. `None` at user scope, where
 /// no account is named; on Windows, where the SCM keeps the logon account itself; and where no
@@ -648,7 +648,7 @@ fn read_registration(
     }
 }
 
-/// The second service's registration as the Client wrote it (ADR-0059 clause 1):
+/// The second service's registration as the Client wrote it:
 /// `/etc/systemd/system/<PRODUCT_NAME>-agents.service` and the account its `User=` names, read as
 /// [`registration`] reads the Client's. `None` wherever no second service can be registered, and
 /// where no file exists.
@@ -706,7 +706,7 @@ fn unit_account(unit: &str) -> Option<String> {
     account
 }
 
-/// The state directory the system registration of this service carries (ADR-0053 clause 3): the
+/// The state directory the system registration of this service carries: the
 /// value after `--state-dir` in the command line the Client wrote — `ExecStart=` of the systemd
 /// unit, the binary path name the SCM holds. Read from
 /// what the Client wrote, never a drop-in and never the manager's loaded state, and only an
@@ -886,7 +886,7 @@ fn command_line_arguments(line: &str) -> Vec<String> {
 
 /// Deregister the service. The install layout and state are never deleted.
 ///
-/// The second service last, as it is stopped last (ADR-0059 clause 2), and stopped first: a
+/// The second service last, as it is stopped last, and stopped first: a
 /// deregistration leaves a running service running, and one that outlived its unit would go on
 /// running the Managed Processes with nothing left to stop it by.
 ///
@@ -923,8 +923,8 @@ fn uninstall_with(
     }
 }
 
-/// Stops and deregisters the second service, where one is registered (ADR-0059 clause 1,
-/// `--no-process-account`). Returns whether there was one.
+/// Stops and deregisters the second service, where one is registered (`--no-process-account`).
+/// Returns whether there was one.
 ///
 /// # Errors
 /// Returns an error if the manager cannot stop or uninstall it.
@@ -999,7 +999,7 @@ fn halt_with(
 }
 
 /// Stops the Client, then the second service, and waits until each has stopped and its process
-/// has ended — the second service's programs with it (ADR-0059 clause 4) — so that nothing runs
+/// has ended — the second service's programs with it — so that nothing runs
 /// under an account whose rights an install is about to change or take away, or a registration it
 /// is about to rewrite. Returns which ran.
 ///
@@ -1022,7 +1022,7 @@ pub fn halt_for_change(level: ServiceLevel) -> Result<Halted, HaltError> {
 
 /// Stops the Client, then the second service, and waits until each has stopped and its process
 /// has ended, up to [`STOPPING`] each, so that nothing runs under an account whose files an
-/// install is about to re-own (ADR-0059 clause 16). Returns which ran: what systemd reports
+/// install is about to re-own. Returns which ran: what systemd reports
 /// active or activating.
 ///
 /// # Errors
@@ -1079,7 +1079,7 @@ pub fn describe_halted(halted: Halted) -> Option<&'static str> {
     }
 }
 
-/// Whether an install changes an account a service runs under (ADR-0059 clause 16): the
+/// Whether an install changes an account a service runs under: the
 /// registration names a process account and the install names another or none, or the Client's
 /// registration names another account than the install — root where it names none. A first
 /// registration changes nothing, and neither does a process account added where none was.
@@ -1117,7 +1117,7 @@ fn systemd_main_pid(show: &str) -> Option<u32> {
     show.trim().parse::<u32>().ok().filter(|pid| *pid != 0)
 }
 
-/// The process the service manager runs as the second service (ADR-0059 clause 4): systemd the
+/// The process the service manager runs as the second service: systemd the
 /// unit's `MainPID`, through its system bus. `None` where it runs none.
 ///
 /// # Errors
@@ -1142,7 +1142,7 @@ pub fn agents_process() -> Result<Option<u32>, String> {
     Ok(systemd_main_pid(&String::from_utf8_lossy(&output.stdout)))
 }
 
-/// The process the service manager runs as the second service (ADR-0059 clause 4): the SCM the
+/// The process the service manager runs as the second service: the SCM the
 /// service's process id (`QueryServiceStatusEx`). `None` where it runs none.
 ///
 /// # Errors
@@ -1473,13 +1473,12 @@ impl NativeService {
 }
 
 /// Whether the Client's registration starts the second service with it: systemd's `Wants=` in the
-/// Client's unit does (ADR-0067 clause 26); the SCM entry names no dependency (ADR-0067 clause 22).
+/// Client's unit does; the SCM entry names no dependency.
 const PULLED_IN: bool = cfg!(target_os = "linux");
 
 /// What `start` starts, in order. Where a second service is registered and the Client's unit wants
 /// it (`Wants=`, `pulled_in`), the Client alone: the manager starts the second service with it.
-/// Where nothing pulls it in — the SCM — the second service first, then the Client (ADR-0059
-/// clause 2). Neither waits for the other: a Client that starts first reaches the second service
+/// Where nothing pulls it in — the SCM — the second service first, then the Client. Neither waits for the other: a Client that starts first reaches the second service
 /// once it is up.
 fn started(agents: bool, pulled_in: bool) -> Vec<ServiceLabel> {
     let mut labels = Vec::new();
@@ -1491,7 +1490,7 @@ fn started(agents: bool, pulled_in: bool) -> Vec<ServiceLabel> {
 }
 
 /// What `stop` stops, in order: the Client, then the second service where one is registered —
-/// `Wants=` pulls it in on a start but takes it down on no stop (ADR-0059 clause 2).
+/// `Wants=` pulls it in on a start but takes it down on no stop.
 fn stopped(agents: bool) -> Vec<ServiceLabel> {
     let mut labels = vec![label()];
     if agents {
@@ -1551,10 +1550,10 @@ impl ServiceControl for NativeService {
 }
 
 /// The default **data** root for a scope: `<base>/<PRODUCT_NAME>`, where `supervisor.toml` and the
-/// state directory live (ADR-0019 clause 7).
+/// state directory live.
 ///
 /// One level named after the product, and no level below it: a second installation is a second
-/// build (ADR-0019 clause 5), so there is nothing for a deeper level to distinguish. `--data-root`
+/// build, so there is nothing for a deeper level to distinguish. `--data-root`
 /// overrides it, `--root` collapses both halves into one directory, and no path is ever fixed.
 ///
 /// # Errors
@@ -1566,8 +1565,8 @@ pub fn default_root(level: ServiceLevel) -> Result<PathBuf, String> {
 /// The default root of the executable layout — `versions/` and the `current` pointer — for a
 /// scope.
 ///
-/// **Linux at system scope is the only place this differs from the data root** (ADR-0019 clause 8,
-/// carrying ADR-0019). A binary staged under `/var/lib` carries the SELinux type `var_lib_t`,
+/// **Linux at system scope is the only place this differs from the data root**.
+/// A binary staged under `/var/lib` carries the SELinux type `var_lib_t`,
 /// which systemd may never execute: the service would register cleanly and then die at its first
 /// start with `status=203/EXEC` on every enforcing host (Fedora, RHEL, SUSE 16). The layout
 /// therefore lives under `/opt`, whose `usr_t` label is an entrypoint type systemd runs
@@ -1576,7 +1575,7 @@ pub fn default_root(level: ServiceLevel) -> Result<PathBuf, String> {
 /// Everywhere else — Windows, and every user scope — layout and data share
 /// [`default_root`]. Windows does not split even under the MSI: `Program Files` holds the
 /// installer's payload and nothing the daemon rewrites, because the self-update means the
-/// service's own account must be able to write `versions/` and `current` (ADR-0019 clause 13).
+/// service's own account must be able to write `versions/` and `current`.
 ///
 /// # Errors
 /// Returns an error if the platform's base directory cannot be determined from the environment.
@@ -1588,7 +1587,7 @@ pub fn default_layout_root(level: ServiceLevel) -> Result<PathBuf, String> {
     default_root(level)
 }
 
-/// `<base>/<PRODUCT_NAME>` — one level, named after the product (ADR-0019 clause 7).
+/// `<base>/<PRODUCT_NAME>` — one level, named after the product.
 fn per_product(base: PathBuf) -> PathBuf {
     base.join(PRODUCT_NAME)
 }
@@ -1620,10 +1619,9 @@ mod tests {
     use super::*;
     use crate::service::layout;
 
-    /// ADR-0019's whole mechanism: a label with no qualifier and no organization renders the
+    /// The whole mechanism of the service name: a label with no qualifier and no organization renders the
     /// same through *both* of the crate's functions, so systemd and the SCM show one name. A dot
     /// anywhere in it would split the label again and undo that.
-    /// Verifies: ADR-0019
     #[test]
     fn every_backend_renders_the_same_name() {
         let label = label();
@@ -1635,10 +1633,9 @@ mod tests {
         );
     }
 
-    /// The service carries the **product's** name and the program carries its own (ADR-0019
-    /// clause 9). They are separate constants holding different strings, and the day someone
+    /// The service carries the **product's** name and the program carries its own. They are
+    /// separate constants holding different strings, and the day someone
     /// derives one from the other, one published package Set stops serving every variant.
-    /// Verifies: ADR-0019
     #[test]
     fn the_service_is_named_after_the_product_not_the_program() {
         assert_eq!(service_name(), PRODUCT_NAME);
@@ -1652,8 +1649,7 @@ mod tests {
     }
 
     /// No suffix, on any platform: one build installs one service, so there is no second one to
-    /// tell apart and nothing for a verb to look up (ADR-0019 clauses 3 and 6).
-    /// Verifies: ADR-0019
+    /// tell apart and nothing for a verb to look up.
     #[test]
     fn the_service_name_carries_no_suffix() {
         assert!(!service_name().contains('-') || service_name() == PRODUCT_NAME);
@@ -1666,8 +1662,7 @@ mod tests {
 
     /// The display name is prose and the service name is a slug; neither is derived from the
     /// other, because no rule that produces `Classis Agent` from `classis` would still
-    /// read correctly for the next variant build (ADR-0019 clause 2).
-    /// Verifies: ADR-0019
+    /// read correctly for the next variant build.
     #[test]
     fn the_names_a_human_reads() {
         assert_eq!(display_name(), PRODUCT_TITLE);
@@ -1690,7 +1685,6 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0019
     #[test]
     fn the_installed_command_line_is_the_marker_plus_absolute_paths() {
         let spec = InstallSpec {
@@ -1704,11 +1698,11 @@ mod tests {
         let args = service_args(&spec);
         assert!(
             !args.contains(&OsString::from("classis")),
-            "the account decides who runs the command, it is never part of it (ADR-0019)"
+            "the account decides who runs the command, it is never part of it"
         );
         assert!(
             !args.contains(&OsString::from("--instance")),
-            "the flag is removed, not hidden (ADR-0019 clause 6)"
+            "the flag is removed, not hidden"
         );
         assert_eq!(args[0], OsString::from("run"));
         assert_eq!(args[1], OsString::from("--service"));
@@ -1720,7 +1714,6 @@ mod tests {
     /// `service-manager` (see `windows_config`), so the two could drift into disagreeing about
     /// how long a failed Client waits before it comes back. They read one constant; this is what
     /// says so.
-    /// Verifies: ADR-0019
     #[test]
     fn both_platforms_restart_after_the_same_delay() {
         match RESTART_POLICY {
@@ -1732,9 +1725,9 @@ mod tests {
                 assert_eq!(delay_secs, Some(RESTART_DELAY_SECS));
                 assert_eq!(max_retries, None, "a host recovers however long it takes");
             }
-            other => panic!("the Client restarts only on failure (ADR-0019), got {other:?}"),
+            other => panic!("the Client restarts only on failure, got {other:?}"),
         }
-        // The systemd system unit is the Client's own text now (ADR-0042 clause 6), so its
+        // The systemd system unit is the Client's own text now, so its
         // restart delay is a third place that reads the constant.
         let unit = systemd_unit(&system_spec("/opt/classis"), "classis").expect("unit");
         assert!(unit.lines().any(|l| l == "Restart=on-failure"), "{unit}");
@@ -1766,7 +1759,6 @@ mod tests {
     /// The unit the Client writes holds what `service-manager` rendered before, in the Client's own
     /// text: the product's name as `Description`, a quoted `ExecStart` with the marker and absolute
     /// paths, the restart policy, the account, and the target.
-    /// Verifies: ADR-0042
     #[test]
     fn the_system_unit_is_the_clients_own_text() {
         let unit = systemd_unit(&system_spec("/opt/classis"), "classis").expect("unit");
@@ -1795,7 +1787,6 @@ mod tests {
     /// systemd splits `ExecStart=` at spaces and expands `%` and `$`, so a root holding any of them
     /// named the wrong program or the wrong file. Quoted and escaped, it reaches the program as it
     /// was given.
-    /// Verifies: ADR-0042
     #[test]
     fn exec_start_survives_spaces_percent_and_dollar() {
         let unit = systemd_unit(&system_spec("/srv/my fleet/100%/$HOME"), "classis").expect("unit");
@@ -1820,7 +1811,6 @@ mod tests {
 
     /// Under an account, the unit sets nothing that implies `no_new_privs`, because that would
     /// break `sudo` and every setuid helper the agents use; it carries `ProtectControlGroups=`.
-    /// Verifies: ADR-0042
     #[test]
     fn an_account_unit_sets_nothing_that_implies_no_new_privs() {
         let unit = systemd_unit(&system_spec("/opt/classis"), "classis").expect("unit");
@@ -1853,7 +1843,6 @@ mod tests {
 
     /// Under root the three directives that would imply `no_new_privs` for an account imply
     /// nothing, and the unit carries them.
-    /// Verifies: ADR-0042
     #[test]
     fn a_root_unit_carries_the_root_tier() {
         let unit = systemd_unit(&system_spec("/opt/classis"), "root").expect("unit");
@@ -1874,7 +1863,6 @@ mod tests {
     /// No unit, under any account, carries a directive that takes from a supported agent what it
     /// needs: writing the system for a package install, `/home` for a log receiver, a socket under
     /// `/tmp`, or root's capabilities.
-    /// Verifies: ADR-0042
     #[test]
     fn no_unit_carries_what_breaks_a_supported_agent() {
         for account in ["root", "classis"] {
@@ -1900,7 +1888,6 @@ mod tests {
 
     /// The Client writes the systemd **system** unit only; the user scope and every other manager
     /// keep `service-manager`'s rendering.
-    /// Verifies: ADR-0042
     #[test]
     fn a_user_unit_is_left_to_service_manager() {
         let mut spec = system_spec("/opt/classis");
@@ -1951,7 +1938,6 @@ mod tests {
     /// The second service is the product's name with `-agents`, one token that every backend
     /// renders alike, and its socket lives in a directory named after it: the runtime directory
     /// under systemd.
-    /// Verifies: ADR-0059
     #[test]
     fn the_second_service_is_named_after_the_product() {
         assert_eq!(agents_service_name(), format!("{PRODUCT_NAME}-agents"));
@@ -1967,7 +1953,6 @@ mod tests {
 
     /// Under systemd the second service's registration is the unit the Client writes, handed to
     /// `service-manager` as its text.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_second_services_registration_is_the_unit_the_client_writes() {
@@ -1982,8 +1967,7 @@ mod tests {
     /// `\\.\pipe\<PRODUCT_NAME>-agents`: its command line names the pipe and the SID of the
     /// Client's account it serves, the Client's names the pipe and the process account's SID, and
     /// both are registered through the same `service-manager` call as on the other platforms,
-    /// the logon account set afterwards (ADR-0059 clauses 2 and 8).
-    /// Verifies: ADR-0059
+    /// the logon account set afterwards.
     #[cfg(windows)]
     #[test]
     fn on_windows_both_command_lines_name_the_pipe_and_a_sid() {
@@ -2024,8 +2008,7 @@ mod tests {
     }
 
     /// The Client's command line names the socket and the process account's uid where a process
-    /// account is registered (ADR-0059 clause 8).
-    /// Verifies: ADR-0059
+    /// account is registered.
     #[cfg(unix)]
     #[test]
     fn the_clients_command_line_names_the_second_service() {
@@ -2051,10 +2034,9 @@ mod tests {
 
     /// The second service runs the same program under the process account, as `run --agents`
     /// serving the Client's uid, with its socket in a runtime directory only the account and its
-    /// group reach, and the directives ADR-0042 clause 7 gives a unit that is not root.
+    /// group reach, and the directives a unit that is not root carries.
     /// Not on Windows, which registers no second service: the socket is a Unix path, and a Windows
     /// build joins it with its own separator.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_second_services_unit_runs_the_program_under_the_process_account() {
@@ -2101,7 +2083,6 @@ mod tests {
 
     /// A re-registration keeps the process account the second service's unit names: what the
     /// Client writes there, it reads back.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_second_services_account_is_read_back_from_its_unit() {
@@ -2111,7 +2092,6 @@ mod tests {
 
     /// systemd waits longer for the second service to stop than the service gives its programs,
     /// so a stop ends them through the service.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_second_service_stops_before_systemd_kills_it() {
@@ -2196,9 +2176,7 @@ mod tests {
     }
 
     /// Where a stop asks first — under the SCM — a service that does not run or is stopping
-    /// already is not stopped again, and one still starting is stopped once it has started
-    /// (ADR-0059 clause 2).
-    /// Verifies: ADR-0059
+    /// already is not stopped again, and one still starting is stopped once it has started.
     #[test]
     fn a_stop_passes_over_a_service_that_does_not_run() {
         let client = label().to_string();
@@ -2238,9 +2216,7 @@ mod tests {
 
     /// What a stop for a change stopped is started again in the order `start` starts it — the
     /// second service first where nothing pulls it in — and where only the second service ran,
-    /// that one alone, while it is registered still; what did not run stays stopped (ADR-0059
-    /// clause 2).
-    /// Verifies: ADR-0059
+    /// that one alone, while it is registered still; what did not run stays stopped.
     #[test]
     fn a_resume_starts_what_ran_in_the_order_start_starts_it() {
         let both = Halted {
@@ -2266,8 +2242,7 @@ mod tests {
     /// An install changes an account where the registration names a process account and the install
     /// names another or none, or where the Client's registration names another account than the
     /// install, root standing in where it names none; a first registration and a process account
-    /// added where none was change nothing (ADR-0059 clause 16).
-    /// Verifies: ADR-0059
+    /// added where none was change nothing.
     #[test]
     fn an_account_change_is_a_former_account_named_no_more() {
         let named = |account: Option<&str>| Registration {
@@ -2320,9 +2295,7 @@ mod tests {
         assert!(account_changes(Some(&fleet), None, None, None));
     }
 
-    /// What ran, for a stop for a change, is what systemd reports active or activating (ADR-0059
-    /// clause 16).
-    /// Verifies: ADR-0059
+    /// What ran, for a stop for a change, is what systemd reports active or activating.
     #[test]
     fn what_ran_is_what_the_manager_reports_running() {
         assert_eq!(systemd_activity("active"), Activity::Running);
@@ -2335,8 +2308,7 @@ mod tests {
     }
 
     /// The second service's process is the one systemd names its unit's `MainPID`; `0`, or no
-    /// such value, is none (ADR-0059 clause 4).
-    /// Verifies: ADR-0059
+    /// such value, is none.
     #[test]
     fn the_second_services_process_is_the_one_the_manager_names() {
         assert_eq!(systemd_main_pid("4242\n"), Some(4242));
@@ -2346,9 +2318,7 @@ mod tests {
     }
 
     /// A stop for a change that cannot stop the second service starts the Client again where it
-    /// stopped it, and fails: it leaves both as it found them, and the install changes nothing
-    /// (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// stopped it, and fails: it leaves both as it found them, and the install changes nothing.
     #[test]
     fn a_halt_that_fails_changes_nothing() {
         let mut started = Vec::new();
@@ -2411,9 +2381,7 @@ mod tests {
     }
 
     /// A deregistration of the Client that fails still removes the second service, and both
-    /// errors are reported: no second service stays registered behind a Client that could not be
-    /// (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// errors are reported: no second service stays registered behind a Client that could not be.
     #[test]
     fn an_uninstall_removes_the_second_service_when_the_clients_fails() {
         struct Refusing;
@@ -2473,8 +2441,7 @@ mod tests {
     }
 
     /// A stop for a deregistration tries both services whatever became of the other, and starts
-    /// neither again: they are going (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// neither again: they are going.
     #[test]
     fn a_halt_for_removal_tries_both_and_restarts_none() {
         let mut tried = Vec::new();
@@ -2493,9 +2460,7 @@ mod tests {
 
     /// A resume passes over only a service that runs; it starts one that is stopped, and waits on
     /// one still starting or stopping until it has settled — starting it once it has stopped — or,
-    /// where it does not settle in time, fails, so that what is to run again stays recorded
-    /// (ADR-0059 clauses 1 and 2).
-    /// Verifies: ADR-0059
+    /// where it does not settle in time, fails, so that what is to run again stays recorded.
     #[test]
     fn a_resume_passes_over_only_what_runs_and_waits_on_what_is_pending() {
         let both = [agents_label(), label()];
@@ -2556,8 +2521,7 @@ mod tests {
     /// `start` starts the Client alone where its unit wants the second service, and the second
     /// service first where nothing does — the SCM — and `stop` stops the Client and then the
     /// second service where one is registered — the second even when the Client's stop failed,
-    /// which `stop` still reports (ADR-0059 clause 2).
-    /// Verifies: ADR-0059
+    /// which `stop` still reports.
     #[test]
     fn start_starts_the_client_and_stop_stops_both() {
         let client = label().to_string();
@@ -2594,7 +2558,6 @@ mod tests {
 
     /// No root is the socket's directory or lies in it: named as it is, by a path through a link,
     /// or beneath it. A root beside it, or one it lies in, is the operator's choice.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn no_root_is_the_sockets_directory() {
@@ -2622,7 +2585,6 @@ mod tests {
     /// after it, and its command line names the socket and the process account's uid; the CLI
     /// takes both lines as written.
     /// Not on Windows, for the reason the second service's own unit is not.
-    /// Verifies: ADR-0059
     #[cfg(unix)]
     #[test]
     fn the_clients_unit_names_the_second_service() {
@@ -2669,7 +2631,6 @@ mod tests {
 
     /// A re-registration reads the account from the unit the Client wrote: the last `User=` in
     /// `[Service]`, as systemd reads it.
-    /// Verifies: ADR-0042
     #[test]
     fn the_units_account_is_its_last_service_user() {
         let unit = "[Unit]\nDescription=classis\n\n[Service]\nExecStart=/x\nUser=telegraf\n\
@@ -2695,7 +2656,6 @@ mod tests {
     /// The state directory a systemd unit carries is read back from `ExecStart=` exactly as
     /// [`systemd_unit`] wrote it, whatever characters its path holds — and from an unquoted line as
     /// `service-manager`'s own rendering writes one.
-    /// Verifies: ADR-0053
     #[test]
     fn a_units_state_directory_is_read_back_from_its_exec_start() {
         let mut spec = system_spec("/opt/classis");
@@ -2721,7 +2681,6 @@ mod tests {
 
     /// The registered state directory is the absolute path after `--state-dir`; a registration
     /// naming none, or a relative one, offers none.
-    /// Verifies: ADR-0053
     #[test]
     fn only_an_absolute_state_dir_after_the_flag_is_registered() {
         let absolute = std::env::temp_dir().join("state");
@@ -2743,7 +2702,6 @@ mod tests {
 
     /// A registration on disk is read back to the state directory the Client wrote into it, and a
     /// host with no registration offers none.
-    /// Verifies: ADR-0053
     #[cfg(unix)]
     #[test]
     fn a_registration_on_disk_offers_the_state_directory_it_was_written_with() {
@@ -2765,7 +2723,6 @@ mod tests {
     /// The state directory the SCM's binary path name carries is read with the C runtime's
     /// splitting rules, by which `service-manager` quotes it: a path with spaces, a trailing
     /// backslash and an embedded quote come back as written.
-    /// Verifies: ADR-0053
     #[test]
     fn a_windows_command_lines_state_directory_is_split_as_the_runtime_splits_it() {
         let line = r#"C:\ProgramData\classis\current\supervisor.exe run --service --config "C:\Program Files\x\supervisor.toml" --state-dir "D:\fleet state\\""#;
@@ -2788,8 +2745,7 @@ mod tests {
     }
 
     /// One level under the platform's base, named after the product — no `client` level asserting
-    /// a name the file contradicts, and no level holding the constant `default` (ADR-0019).
-    /// Verifies: ADR-0019
+    /// a name the file contradicts, and no level holding the constant `default`.
     #[cfg(target_os = "linux")]
     #[test]
     fn the_default_root_is_one_level_named_after_the_product() {
@@ -2807,12 +2763,11 @@ mod tests {
         );
     }
 
-    /// ADR-0019 clause 8: a system service's binary must not live under
+    /// A system service's binary must not live under
     /// `/var/lib` — SELinux's `var_lib_t` is no entrypoint type, and the service would fail its
     /// first start with `status=203/EXEC` on every enforcing host. The executable layout defaults
     /// to `/opt`; the data root stays under `/var/lib`, so an upgrade re-registers and moves no
     /// state. User scope has no such constraint and keeps one root for both.
-    /// Verifies: ADR-0019
     #[cfg(target_os = "linux")]
     #[test]
     fn the_linux_system_layout_executes_from_opt() {
@@ -2830,10 +2785,9 @@ mod tests {
         );
     }
 
-    /// Linux at system scope is the *only* split (ADR-0019 clause 8). Windows keeps one root
+    /// Linux at system scope is the *only* split. Windows keeps one root
     /// however it was installed, because a layout the daemon rewrites cannot live in the tree the
-    /// installer owns — see clause 12 and the `--run-as` hand-over.
-    /// Verifies: ADR-0019
+    /// installer owns — see the `--run-as` hand-over.
     #[cfg(windows)]
     #[test]
     fn no_other_platform_splits() {
