@@ -22,8 +22,8 @@ true.
  operator ── REST / bundled UI ──▶ Operator plane :4321 ─┐
                                                          │  Server (Linux)
  Client ──── OpAMP, mTLS ──────────────▶ Agent plane :4320 ─┘   │
-   │  ▲                                                          └─▶ data_dir: fleet state,
-   │  └── Gateway (a Client) ◀── OpAMP, mTLS ── other Clients        register,
+   │                                                             └─▶ data_dir: fleet state,
+   │                                                                 register,
    │                                                                 artifacts by SHA-256
    ├── Supervisor Endpoint (loopback) ◀── a Collector's opampextension
    ├── Managed Processes: Collector, any command — where a process account is registered, under
@@ -37,16 +37,15 @@ true.
   guarded by `[rest.auth]` beyond the loopback; the bundled UI uses the same
   API.
 - **Clients** reach the Agent plane over OpAMP — WebSocket or plain HTTP —
-  admitted by the client certificate in the TLS 1.3 handshake alone. A Client in
-  Gateway Mode carries other Clients' Agents over its own upstream connections
-  and refuses what the Server revoked.
+  admitted by the client certificate in the TLS 1.3 handshake alone. Gateway
+  Mode is removed: every Client connects to the Server directly.
 - **Managed Processes** run on the Client's host under a Supervisor each; a
   Collector reports through its own `opampextension` to the Supervisor Endpoint,
   which admits only the process its Supervisor started.
 - **Package downloads** come from the Server alone: every artifact is uploaded
-  to it, and a Client fetches only from its own Server's origin, or from its
-  Gateway. What arrives is checked against its hash and its signature, made by a
-  Package Signer that a Package Root compiled into the Client issued.
+  to it, and a Client fetches only from its own Server's origin. What arrives is
+  checked against its hash and its signature, made by a Package Signer that a
+  Package Root compiled into the Client issued.
 - **The service manager** starts the Client and restarts it after a self-update.
   Where a process account is registered, it also runs the second service, which
   starts the Managed Processes under that account.
@@ -155,13 +154,18 @@ module has no role.
   package download with the same certificate. Two core modules hold the state
   behind it: `enrolment`, the operator-opened window and the queue of requests
   an operator approves through `api`, and `throttle`, the per-address back-off
-  after repeated failures, which both planes use. `revocation` holds the
-  register of issued certificates, the revocation list and the Hosts — each with
-  the subject values of its certificate, its Gateway mark and the Agents bound
-  to it — behind the `LedgerStore` port. `agent_rate` holds the token buckets
-  that bound how often an admitted host, an Agent behind a marked Gateway, and
-  the Gateway as a whole are heard; `transport` takes a token for each message
-  before the handler does anything else and for each download in the guard.
+  after repeated failures, which both planes use.
+  `revocation` holds the register of issued certificates, the revocation list
+  and the Hosts — each with the subject values of its certificate, its Gateway
+  mark and the Agents bound to it — behind the `LedgerStore` port.
+  The Gateway mark outlives the Client's Gateway Mode, which is gone:
+  it is part of the certificate model, and goes with it; until then a marked
+  host still speaks for any Agent, and its rate and fleet-view placement still
+  follow the mark.
+  `agent_rate` holds the token buckets that bound how often an admitted host, an
+  Agent behind a marked Gateway, and the Gateway as a whole are heard;
+  `transport` takes a token for each message before the handler does anything
+  else and for each download in the guard.
 - **Security decisions** — each admission and refusal, enrolment, issuance,
   revocation, operator act and package outcome is a `tracing` event on the
   Server's log, which goes to standard error; its `event` field names it
@@ -230,21 +234,10 @@ module has no role.
 - **Client connection** — `tls` decides which CA and which identity are in
   force, and `transport` describes the upstream `Connection` from
   `supervisor.toml` and runs the Engine over it. The settings verification in
-  `connection`, the Gateway's upstream pool and its downstream listener, and the
-  Supervisor Endpoint use the same `opamp` building blocks. The Gateway's
-  `revocations` keeps the list it fetches from its Server and refuses what that
-  list names. The Gateway's `cache` sees every offer `registry` hands down,
-  fetches each artifact offered on the Server's route once into the state
-  directory, and serves it on the downstream download route to the hosts it was
-  offered to. Which host the Gateway takes to speak for an `instance_uid` is
-  decided in the core module `gateway::policy`; the cache holds the bindings and
-  keeps them across restarts in the journal `gateway::store` reads and writes
-  beside the artifacts; while that journal cannot be read the Gateway carries no
-  downstream Agent. With a bootstrap CA the Gateway tells an enrolling peer from
-  a member and relays its one plain-HTTP enrolment request without a binding.
+  `connection` and the Supervisor Endpoint use the same `opamp` building blocks.
 - **Client engine** — `engine` routes the Server's replies to the Agents over
-  one connection. The transports, the Gateway, telemetry and the service runtime
-  are adapters around it.
+  one connection.
+  The transports, telemetry and the service runtime are adapters around it.
 - **Client service** — `service::manager` registers, starts, stops and
   deregisters the Client's service and, where a process account is named, the
   second service `<PRODUCT_NAME>-agents` beside it, and writes both systemd
@@ -302,31 +295,31 @@ Selector and releases it, together with the Configurations the Deployment holds.
 The Agent is offered the package with its entry's signature; the Client
 downloads it from its own Server's origin and nowhere else, and `api` serves it
 only when `fleet` finds it offered to an Agent the certificate's host speaks
-for, by the test `packages` shares with the offer; behind a Gateway the Client
-downloads it from the Gateway's cache, which `gateway` fetched once from the
-Server. The Client checks hash and signature in `packages`, and the Supervisor
-swaps the program, keeps the previous one for its grace period and rolls back if
-the new one does not stay up. The Client's own package goes through `update`
-instead: a version directory beside the running one, a self-check, the `current`
-pointer moved, and a restart on probation that commits or rolls back.
+for, by the test `packages` shares with the offer. The Client checks hash and
+signature in `packages`, and the Supervisor swaps the program, keeps the
+previous one for its grace period and rolls back if the new one does not stay
+up. The Client's own package goes through `update` instead: a version directory
+beside the running one, a self-check, the `current` pointer moved, and a restart
+on probation that commits or rolls back.
 
 **A host joins and stays.** The Server issues bootstrap certificates on an
 operator's request: `bootstrap` checks the subject and the life, records what
 was issued, and asks its `BootstrapSigner` port — the bootstrap CA with its key
 in `ca` — to make the key, sign, and seal both into the PKCS#12 file it keeps,
-the key's only way out. A fresh host presents a bootstrap certificate while an
-operator has the enrolment window open — to the Server, or to a Gateway that
-relays its request — and proves it in its CSR; the request is filed under the
-certificate it proves and waits until an operator approves it, and the
-certificate it gets names a new host and carries the subject values `tls` read
-from the bootstrap certificate and `ca` checked again, never the CSR's; every
-renewal carries the predecessor's. The questionnaire of `service install
---interactive` and `service config` does this before the service is registered:
-`service::enrol` runs the Client's own Agent over the ordinary `transport` with
-the bootstrap pair until the issued certificate is in the state directory. From
-then on the Client renews at two thirds of the certificate's life, proving with
-the old key which certificate it renews. A revocation closes the sessions it
-concerns at once and follows every renewal.
+the key's only way out.
+A fresh host presents a bootstrap certificate while an operator has the
+enrolment window open to the Server, and proves it in its CSR;
+the request is filed under the certificate it proves and waits until an operator
+approves it, and the certificate it gets names a new host and carries the
+subject values `tls` read from the bootstrap certificate and `ca` checked again,
+never the CSR's; every renewal carries the predecessor's.
+The questionnaire of `service install --interactive` and `service config` does
+this before the service is registered: `service::enrol` runs the Client's own
+Agent over the ordinary `transport` with the bootstrap pair until the issued
+certificate is in the state directory.
+From then on the Client renews at two thirds of the certificate's life, proving
+with the old key which certificate it renews. A revocation closes the sessions
+it concerns at once and follows every renewal.
 
 **A Supervisor starts its program.** Without a process account the runner starts
 the Managed Process, its version probe and a package's preflight as the Client.
@@ -403,11 +396,9 @@ that alters one edits its line here ([`AGENTS.md`
 
 ### Client
 
-- One program, `supervisor`, with two composable modes: Supervisor Mode, whose
-  compiled-in kinds each own one directory and run only a program installed
-  there, and Gateway Mode, which admits other Clients by certificate over mutual
-  TLS 1.3 and passes a package only to the host it was offered to. A Gateway's
-  bindings outlast its restart and end with their host's certificate.
+- One program, `supervisor`, whose compiled-in kinds each own one directory and
+  run only a program installed there. Every Client connects to the Server
+  directly: there is no Gateway Mode.
 - An Agent's type is its Supervisor's; a Managed Process states only its own
   `service.*` attributes. Each Agent sends its own telemetry over OTLP/HTTP to
   the destinations the Server names.

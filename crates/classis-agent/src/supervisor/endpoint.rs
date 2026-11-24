@@ -7,7 +7,7 @@
 //! Supervisor's. It is not a Server in the specification's sense — it manages no fleet, holds
 //! no configuration, and serves exactly one local process; for a Foreign Agent nothing ever
 //! connects, and that is the whole of the handling. The communication itself is
-//! `opamp::server`'s, the same endpoint the Server and the Gateway sit on.
+//! `opamp::server`'s, the same endpoint the Server sits on.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

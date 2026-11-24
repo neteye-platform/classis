@@ -40,9 +40,8 @@ pub(crate) struct Upstream<'a> {
 /// Whether this Client enrols over plain HTTP: it holds no certificate the
 /// Server issued, it presents one — the bootstrap certificate, or one an operator provisioned,
 /// which it cannot tell apart — and its endpoint is `https://` or `http://`. It then sends one
-/// report, its certificate signing request and nothing else, which is what a Gateway relays for an
-/// enrolling peer and all a Server reads on an enrolment connection. Over WebSocket it enrols as
-/// before.
+/// report, its certificate signing request and nothing else, which is all a Server reads on an
+/// enrolment connection. Over WebSocket it enrols as before.
 fn enrols_over_http(config: &ClientConfig) -> bool {
     !config.is_enrolled()
         && (config.bootstrap_identity.is_some() || config.client_identity().is_some())
@@ -55,7 +54,8 @@ impl Upstream<'_> {
     }
 
     /// The enrolment report, while this Client enrols over plain HTTP: the request in flight, or a
-    /// new one — whatever the Server has declared, since behind a Gateway nothing else reaches it.
+    /// new one — whatever the Server has declared, since on an enrolment connection nothing else
+    /// reaches it.
     fn enrolment(&mut self) -> Option<Vec<AgentToServer>> {
         if !self.enrolling() {
             return None;
@@ -122,7 +122,7 @@ impl Session for Upstream<'_> {
     }
 
     fn exchange_failed(&mut self) {
-        // A refusal is judged again: a Gateway marked since, or a window opened, may take it now.
+        // A refusal is judged again: a window opened since may take it now.
         self.enrolment_refused = false;
         self.engine.force_full_all();
     }

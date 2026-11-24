@@ -32,7 +32,6 @@ jobs:
           - csr_sign
           - archive_tree
           - pkcs12
-          - revocation_list
           - supervisor_set
           - archive_member
           - renewal_proof

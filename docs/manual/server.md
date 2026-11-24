@@ -795,8 +795,7 @@ A request is exactly one PEM block labelled `CERTIFICATE REQUEST`, with nothing
 but whitespace around it. Anything else — text before or after the block, a
 second block, another label — is answered with the protocol's `BadRequest` error
 response naming that rule, as is a request that does not parse or one arriving
-at a Server with no `[client_ca]`. A Gateway forwards no enrolment request that
-breaks the rule.
+at a Server with no `[client_ca]`.
 
 ### The first certificate on a host
 
@@ -811,26 +810,15 @@ of two ways:
    approves its request — see
    [Enrolment](#enrolment-a-new-host-approved-by-an-operator).
 
-**Behind a Gateway, the Gateway's handshake admits the Agents it carries.**
-Mutual TLS is per hop: the Gateway checks the Agents connecting to it against
-the client CA and the Server's revocation list, and presents its own certificate
-to the Server. It forwards no `Authorization` header. A Gateway that names the
-bootstrap CA's certificate as `[gateway.tls] bootstrap_ca_file` relays the
-enrolment request of a host behind it (see
-[Enrolment through a Gateway](#enrolment-through-a-gateway)).
-
 **A certificate names its host.** The Server puts `urn:classis:host:<id>`
 into every certificate it signs: a host is minted when an operator approves an
 enrolment, a certificate an operator provisioned is given one on its first
 renewal, and every renewal keeps it — the Client proves with its current key
-which certificate it renews, through a Gateway too. An Agent belongs to the host
-that first reported it, until it is forgotten or that host's last certificate
-has ended: a connection with another host's certificate that reports for it is
-given an `instance_uid` of its own instead. A host holds at most three valid
-certificates. A Gateway carries other hosts' Agents, so mark it once its
-certificate names a host. **A Gateway admits nobody until its host is marked:**
-only a marked host is handed the revocation list a Gateway refuses by (see
-[Revocation](#revocation-withdrawing-a-certificate)):
+which certificate it renews. An Agent belongs to the host that first reported
+it, until it is forgotten or that host's last certificate has ended: a
+connection with another host's certificate that reports for it is given an
+`instance_uid` of its own instead. A host holds at most three valid
+certificates:
 
 ```console
 $ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/hosts
@@ -838,33 +826,30 @@ $ curl --cacert ca.pem https://127.0.0.1:4321/api/v1/hosts
   "subject":{"country":"","state":"","locality":"","organization":"","organizational_unit":"","organization_identifier":""},
   "approved_ms":1760000000000,
   "agents":[{"instance_uid":"0192…","client":true,"client_agent":"0192…","machine":"",…},…]}]
-$ curl --cacert ca.pem -X PUT -H 'Content-Type: application/json' -d '{"gateway": true}' \
-       https://127.0.0.1:4321/api/v1/hosts/0192…/gateway
 ```
 
-A Gateway's certificate speaks for any Agent; behind it, fleet membership is all
-the Server proves, and the Gateway's certificate may fetch the artifact offered
-to any Agent. A third-party client that sends no renewal proof renews the
-certificate it presents, but not through a Gateway: there the certificate
-presented is the Gateway's, and a request with neither a renewal proof nor a
-bootstrap proof is refused, naming both. A third-party client behind a Gateway
-gets its next certificate by enrolling directly or from the operator. A request
-with a bootstrap proof over a member's certificate whose host is not marked as a
-Gateway is refused too, since a member does not enrol, unless the proof names
-the certificate the connection presents: a Client on a certificate an operator
-provisioned cannot tell it from a bootstrap certificate, and that request renews
-it.
+**The Gateway mark is left over from the removed Gateway Mode.** No Client runs
+as a Gateway any more, but the Server still keeps a host's `gateway`
+mark (`PUT /api/v1/hosts/<host>/gateway`) until its certificate model is
+removed. Leave it unset: a marked host's certificate speaks for any Agent, may
+fetch the artifact offered to any Agent, and renews only with a renewal proof.
+A third-party client that sends no renewal proof renews the certificate it
+presents. A request with a bootstrap proof over a member's certificate whose
+host is not marked is refused, since a member does not enrol, unless the proof
+names the certificate the connection presents: a Client on a certificate an
+operator provisioned cannot tell it from a bootstrap certificate, and that
+request renews it.
 
 ### Hosts
 
 A **Host** is what a client certificate of this Server names: one Client
-installation that connects directly, a Gateway included. The Server writes it
-when an operator approves its enrolment, with the time of the approval and the
-subject values of the certificate it was issued — country (`C`), state (`ST`),
-locality (`L`), organization (`O`), organizational unit (`OU`) and organization
-identifier. A host certificate the Server issues carries the values of the
-bootstrap certificate the host enrolled with, and every renewal carries them on
-unchanged (see
+installation that connects directly. The Server writes it when an operator
+approves its enrolment, with the time of the approval and the subject values of
+the certificate it was issued — country (`C`), state (`ST`), locality (`L`),
+organization (`O`), organizational unit (`OU`) and organization identifier. A
+host certificate the Server issues carries the values of the bootstrap
+certificate the host enrolled with, and every renewal carries them on unchanged
+(see
 [Bootstrap certificates](#bootstrap-certificates-issued-by-the-server)); a
 Host's values change only when it enrols again. A certificate an operator
 provisioned with a host id makes its Host at its first report, with the values
@@ -1160,40 +1145,6 @@ The bootstrap certificate stays in the host's `supervisor.toml`, unused once the
 issued pair is stored. Approve only what you can match to a host you are setting
 up.
 
-### Enrolment through a Gateway
-
-A host that reaches the Server only through a Gateway enrols through it, once
-the Gateway names the public certificate of `bootstrap_ca_file` as
-`[gateway.tls] bootstrap_ca_file` (see
-[Enrolment through a Gateway](client.md#enrolment-through-a-gateway) for the
-Gateway's side). The Gateway relays the host's request over its own certificate,
-so a request through a Gateway is a certificate signing request with a bootstrap
-proof over the certificate of a host marked as a Gateway. The Gateway relays it
-only when its proof embeds the very certificate the host presented to the
-Gateway, so a host spends no other bootstrap certificate's share or tokens; a
-proof that embeds the Gateway's own certificate, byte for byte, is the Gateway's
-own request and no enrolment. The Server checks the proof itself, against the
-bootstrap CA of `[enrolment]` and the revocation list, and decides the request
-as any enrolment: it is answered `Unavailable` without an open window, counts
-against the queue and its bootstrap certificate's share, and waits for your
-approval, which mints a host of its own and never the Gateway's. A proof whose
-certificate the bootstrap CA did not issue directly, is no client-authentication
-leaf as the handshake requires one (`clientAuth` where it names an extended key
-usage, not a CA), is not valid now, or is revoked, is answered `BadRequest` and
-never queued.
-
-The pending request names the Gateway's host in place of a peer address —
-`"gateway":"0192…"` in `GET /api/v1/enrolments`, _via Gateway_ in the
-**Enrolments** tab, and `gateway` in every log event of it:
-`enrolment.queued`, `enrolment.refused`, `enrolment.approved` and
-`enrolment.rejected`. The host collects its certificate in its next request
-after the approval, and then reports through the Gateway as a member. The Server
-does not tell a Gateway whether a window is open, so a holder of a bootstrap
-certificate reaches the Server through a Gateway that trusts the bootstrap CA
-outside a window too; it is answered `Unavailable`, and the rate limit bounds
-what that costs (see
-[How often a member may be heard](#how-often-a-member-may-be-heard)).
-
 ## Revocation: withdrawing a certificate
 
 > **Disabled.** The Server speaks plain HTTP and authenticates no Agent:
@@ -1228,12 +1179,10 @@ last of those renewals has expired. `GET /api/v1/bootstrap-certificates` lists
 the serial of every bootstrap certificate the Server issued; colons, case and
 leading zeros do not matter. A serial is at most 20 octets, 40 hex digits, as
 RFC 5280 allows; a longer one is answered `400`, and a certificate with one is
-not admitted. A renewal descends from the certificate its renewal proof names,
-through a Gateway too; a client that sends no proof renews from the certificate
-its connection presented. Behind a Gateway that would be the Gateway's
-certificate, with the Gateway's powers, so such a request is refused there:
-through a Gateway only a renewal with a proof is signed. A revoked certificate's
-proof renews nothing.
+not admitted. A renewal descends from the certificate its renewal proof names;
+a client that sends no proof renews from the certificate its connection
+presented, except over the certificate of a host marked as a Gateway, where only
+a renewal with a proof is signed. A revoked certificate's proof renews nothing.
 
 ```console
 $ curl --cacert ca.pem -X POST -H 'Content-Type: application/json' \
@@ -1265,17 +1214,6 @@ with `1008` and the reason `certificate expired`. A Client renews at two thirds
 of the life and reconnects with the new certificate, so a healthy fleet never
 sees this.
 
-Behind a Gateway the Server sees the Gateway's certificate, not the Agent's, so
-the Gateway refuses for it. Every host marked as a Gateway fetches the revoked
-certificates of the client CA from `GET /v1/gateway/revocations` on the Agent
-plane every 30 seconds, renewals already resolved, and refuses a downstream peer
-whose certificate is on it with `401`, closing its sessions with `1008` and the
-reason `revoked`. A revocation therefore reaches a gatewayed Agent within about
-30 seconds. A Gateway that has held no list younger than 300 seconds — its
-Server unreachable, or its host not marked — answers every downstream peer `503`
-and closes their sessions with the reason `revocation list stale`. Revoking the
-Gateway's own certificate ends every Agent it carries.
-
 ## Security decisions in the log
 
 The Server keeps no audit record and writes nothing for one. Every security
@@ -1283,8 +1221,7 @@ decision it takes is one structured event on its log, which goes to standard
 error with everything else it logs ([Running it](#running-it)): each admission
 and refusal on the Agent plane, each refused or throttled operator sign-in, each
 enrolment request, approval and rejection, each certificate issued, each
-revocation and the session it ended, each request for the Gateways' revocation
-list from a host not marked as a Gateway, each download a host may not fetch,
+revocation and the session it ended, each download a host may not fetch,
 each operator act — every `POST`, `PUT`, `PATCH` and `DELETE` on the REST API,
 once it has run, with its method, path and status but not the operator's name —
 each package an Agent reports installed or failed, and each of the Server's own
@@ -1306,8 +1243,7 @@ likes stays out of the default `info`:
 - **`debug`** — a refusal or a throttle of a peer that was not admitted, on the
   Agent plane, on the download route and at an operator sign-in; a message or a
   download over a host's rate (`agent_rate.throttled`); a download a host may
-  not fetch; a member refused the Gateways' revocation list; an enrolment
-  request refused, directly or through a Gateway, or asked again while it waits;
+  not fetch; an enrolment request refused, or asked again while it waits;
   and each admitted request (`admission.admitted`): a plain-HTTP poll, a
   download, or a WebSocket upgrade before its session starts. Set
   `RUST_LOG=info,classis_server=debug` while you investigate.
@@ -1818,19 +1754,6 @@ things: its host's certificate names no host (provision it with
 reports another Agent type than the Package was built for, or a later rollout
 changed what it is offered.
 
-A Client behind a Gateway receives uploaded artifacts through the Gateway. Its
-offer names the path on this route, which it resolves against its own endpoint,
-the Gateway. The Gateway fetches each such artifact from this Server once, with
-its own certificate, as soon as it relays an offer of it, and serves it on the
-same path only to the hosts whose Agents it relayed that offer to. So the
-Gateway's host must be marked as a Gateway, and each artifact costs this Server
-one download, counted against the Gateway's aggregate bucket and recorded under
-the Gateway's host, however many Agents behind it install it. A Client that asks
-while the Gateway is still fetching is answered `503` with `Retry-After: 30` and
-asks again. Every artifact is offered as a path, which a Client behind a Gateway
-resolves against the Gateway. How the Gateway holds what it fetches is in
-[the Client's manual](client.md#the-package-cache).
-
 ## The REST API
 
 The OpenAPI document at `/api/v1/openapi.json` is the contract; `/api/v1/docs`
@@ -2203,8 +2126,8 @@ share — a NetworkPolicy that lets only the proxy reach the Server's ports.
   Server's ports closed to everything but the proxy.
 - **Outbound connections stay TLS 1.3**: to PostgreSQL and to S3.
 
-An Agent or Gateway that still presents a client certificate is not refused for
-it: the certificate is not read.
+An Agent that still presents a client certificate is not refused for it: the
+certificate is not read.
 
 ### Bounds on every listener
 

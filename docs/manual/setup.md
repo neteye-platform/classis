@@ -476,14 +476,6 @@ restart:
 curl --cacert server-ca.pem -X DELETE https://127.0.0.1:4321/api/v1/enrolment/window
 ```
 
-**A host behind a Gateway enrols through it** once the Gateway trusts the
-bootstrap CA: copy the Server's `bootstrap-ca.pem` — the certificate, never its
-key — to the Gateway and name it as `[gateway.tls] bootstrap_ca_file`. Point the
-host at the Gateway with an `https://` endpoint. Its request then waits in the
-**Enrolments** tab like any other, naming the Gateway's host where a direct one
-names its address, and the window, the queue and your approval apply as above.
-See [Enrolment through a Gateway](client.md#enrolment-through-a-gateway).
-
 ## 6. Living with the certificates
 
 **Host certificates renew themselves.** At two thirds of its life the Client
@@ -525,8 +517,8 @@ A bootstrap certificate is revoked the same way, with `"authority": "bootstrap"`
 and its serial, or with **Revoke** in its row on the **Enrolments** tab.
 `GET /api/v1/bootstrap-certificates` and that tab list every valid one the
 Server issued, with its serial, subject and end, and whether it is revoked. See
-[Revocation](server.md#revocation-withdrawing-a-certificate) for Gateways and
-for lifting a revocation.
+[Revocation](server.md#revocation-withdrawing-a-certificate) for lifting a
+revocation.
 
 **The server certificate is yours to renew**, from the offline directory:
 
@@ -537,9 +529,7 @@ classisctl pki server-cert --offline-dir fleet-offline --name fleet.example.com 
 It writes `server.pem` and `server-key.pem` into a new directory. Replace the
 Server's two files and restart it; the Clients reconnect on their own. They
 trust the server CA, not one particular certificate, so nothing changes on the
-hosts. `server-cert` also makes a **Gateway's** certificate: give it the
-Gateway's names and use the pair as its `[gateway.tls] cert_file` and
-`key_file`.
+hosts.
 
 ### The UI's own certificate
 

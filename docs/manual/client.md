@@ -24,7 +24,6 @@ to run it, where it puts things, and every configuration key.
 **Configure it:**
 
 - [Configuration reference](#configuration-reference)
-- [Gateway Mode: carrying other Clients](#gateway-mode-carrying-other-clients)
 - [Supervisors: putting a process under management](#supervisors-putting-a-process-under-management)
 - [Path placeholders](#path-placeholders)
 
@@ -88,13 +87,7 @@ thing you target with a Selector is not "a host" but an Agent on it.
 The multiplexing is possible because **`instance_uid` is the only routing key**.
 Nothing on either end is keyed to a connection, which means a connection can
 drop and reappear, or an Agent can move between connections, without anything
-having to be re-established. It is also what makes Gateway Mode work at all: a
-Gateway forwards messages it does not interpret, over a pool of upstream
-connections it grows lazily, each Agent sticky to one of them.
-
-The two modes — supervising local processes, and carrying other Clients' traffic
-— are independent and compose freely. One binary does both, or either, or
-neither.
+having to be re-established.
 
 ### The Client is its own Agent
 
@@ -298,7 +291,7 @@ Knowing the edges is half of knowing the design.
   operations this project already has a vocabulary for, and their status is the
   standard's, not one of ours.
 - **It does not keep state keyed to a connection**, which is what makes
-  reconnection and gateways uneventful.
+  reconnection uneventful.
 - **It does not silently accept a configuration it does not understand** — an
   unknown key stops the start.
 
@@ -1466,7 +1459,7 @@ key fails startup rather than being ignored, with one exception: a leftover
 | `heartbeat_interval_secs` | `30`                              | Heartbeat interval on WebSocket. `0` disables heartbeats and undeclares the capability; on plain HTTP every poll already is the periodic report.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `max_message_size_bytes`  | `67108864` (64 MiB)               | The largest OpAMP message sent or accepted, in either direction — including on the Supervisor Endpoint. A message past it is never sent, and an oversized one from the Server is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `state_dir`               | `"client-state"`                  | Where the Client persists its own Agent's identity, its remote configuration, and any Server-offered connection settings. A self-update artifact is streamed here first, so it needs room for one agent binary.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `supervisor_dir`          | `<state_dir>/supervisors`         | Where the per-Supervisor directories live. Set it when the programs must not live where the state does — `/var/lib` is often mounted `noexec`, and sized for state rather than for a few hundred megabytes of Collector. Where it is the state directory itself, a Supervisor named after what the Client keeps there — `instance-uid`, `config`, `packages`, `logs`, `gateway-packages`, `supervisors` — is refused at startup and in a set the Server offers, and no Supervisor's directory may be the state directory or hold it. Outside the data root, the layout root and the state directory, `service install` creates and hands over nothing for it: create it yourself, writable by the service's account only. |
+| `supervisor_dir`          | `<state_dir>/supervisors`         | Where the per-Supervisor directories live. Set it when the programs must not live where the state does — `/var/lib` is often mounted `noexec`, and sized for state rather than for a few hundred megabytes of Collector. Where it is the state directory itself, a Supervisor named after what the Client keeps there — `instance-uid`, `config`, `packages`, `logs`, `supervisors` — is refused at startup and in a set the Server offers, and no Supervisor's directory may be the state directory or hold it. Outside the data root, the layout root and the state directory, `service install` creates and hands over nothing for it: create it yourself, writable by the service's account only.                     |
 
 > **Moving `supervisor_dir` on a running host leaves the old tree behind**,
 > `instance-uid` included, so every Supervisor re-registers as a **new** Agent
@@ -1604,9 +1597,7 @@ throttle. The issued certificate is renewed the same way once it is two thirds
 through its validity, with no operator involved. The private key is written
 `0600`; on Windows the state directory's ACL is what protects it. Over an
 `https://` endpoint the enrolling Client sends its request alone, before the
-Server's first answer, and re-sends it at every poll. A host behind a Gateway
-enrols through it over `https://` (see
-[Enrolment through a Gateway](#enrolment-through-a-gateway)).
+Server's first answer, and re-sends it at every poll.
 
 ### A leftover `[auth]`
 
@@ -1655,7 +1646,7 @@ endpoint may only be on the loopback) — and nowhere else. Every artifact is
 uploaded to the Server, so there is no other source to allow.
 
 - **A path is resolved against that origin.** It is what the Server offers for
-  every artifact, and what a Gateway relays.
+  every artifact.
 - **An absolute URL is accepted only when its origin is that origin.** Any other
   is refused without a byte fetched and reported `InstallFailed`, naming its
   origin.
@@ -1666,13 +1657,11 @@ uploaded to the Server, so there is no other source to allow.
 - **The client certificate is presented there**, which is the only place a
   download goes.
 - **A `429` or `503` with `Retry-After` from the Server's own origin is waited
-  out**. That origin answers so when its rate limit is reached, or — for a
-  Client behind a Gateway — while the Gateway is still fetching the artifact.
-  Each wait is the `Retry-After`, at least 1 and at most 60 seconds, and the
-  asking stops 30 minutes after the download's first request; the status stays
-  `Downloading` meanwhile, and a shutdown ends it. Past that, or for such an
-  answer from any other host, the download fails and is reported
-  `InstallFailed`.
+  out**. That origin answers so when its rate limit is reached. Each wait is
+  the `Retry-After`, at least 1 and at most 60 seconds, and the asking stops 30
+  minutes after the download's first request; the status stays `Downloading`
+  meanwhile, and a shutdown ends it. Past that, or for such an answer from any
+  other host, the download fails and is reported `InstallFailed`.
 
 Every download is TLS 1.3, on this Client's trust: `[tls] ca_file` when it is
 set, the system's trust store otherwise.
@@ -1686,246 +1675,6 @@ A `[self_update]` section, which earlier releases wrote, fails startup with a
 message naming `[packages] self_update` as its replacement. Replace it by hand
 before such a host takes this release: `enabled = false` becomes
 `self_update = false`, and `package` has no replacement.
-
-## Gateway Mode: carrying other Clients
-
-A Client can stand at a network boundary and carry other Clients' Agents
-upstream over a small pool of connections — for a segmented network the Server
-cannot reach into, or simply for a fleet too large to give every Agent its own
-connection. The Gateway admits Agents, so it serves them over mutual TLS 1.3
-only, and `[gateway.tls]` with its `client_ca_file` is required:
-
-```toml
-[gateway]
-listen = "0.0.0.0:4320"
-upstream_connections = 10          # a cap, not a count
-package_cache_bytes = 10737418240  # the package cache's bound, 10 GiB
-[gateway.tls]
-cert_file = "gateway.pem"          # what this Gateway presents to its Agents
-key_file = "gateway-key.pem"
-client_ca_file = "client-ca.pem"   # the CA every downstream Agent's certificate chains to
-# bootstrap_ca_file = "bootstrap-ca.pem"  # optional: relays enrolments, see below
-```
-
-A Gateway without `[gateway.tls]`, or without `client_ca_file`, is refused at
-startup, on a loopback `listen` too. There is no plaintext Gateway. The
-downstream handshake requires a client certificate that chains to
-`client_ca_file`, or to `bootstrap_ca_file` where it is set, so a peer without
-one never reaches OpAMP.
-
-Point the Clients behind it at this address instead of the Server's, as a
-`wss://` or `https://` endpoint. Each of them still needs its client
-certificate. Nothing else about them changes: the Server tells Agents apart by
-`instance_uid`, never by the connection that carried them, so an Agent behind a
-Gateway is as manageable as one in front of it. Both transports are served
-downstream, so a polling Client works as well as a WebSocket one.
-
-![An Agent talking to the Server through a Gateway: the Gateway fetches the revocation list, checks each report's binding, forwards it unchanged under its own certificate, routes replies and pushes back by instance_uid, and serves packages from its cache](../images/communication-gateway.png)
-
-**Each Agent belongs to the host that first reported it.** An Agent's
-`instance_uid` is bound to the host of the certificate of the first report for
-it — the host the certificate names (`urn:classis:host:<id>`), or, for a
-certificate an operator made without one, the host the Server will give it at
-its first renewal, so its Agents stay bound across that renewal. A report for an
-`instance_uid` bound to another host is not forwarded: over WebSocket it is
-dropped, over plain HTTP it is answered `403`, and the log says so, the first
-five per host and minute one by one, the rest counted into one line. So one host
-behind a Gateway cannot take over another host's Agent, receive its
-configuration or its certificate, or speak in its name. The binding outlasts a
-restart of the Gateway: it is written to the Gateway's directory before the
-report that made it is forwarded (see
-[What a Gateway keeps on disk](#what-a-gateway-keeps-on-disk)). A host binds at
-most `max_carried_agents` `instance_uid`s, and the Gateway at most 1 000 000;
-past either, a report for a new one takes the place of that host's own least
-recently reported Agent that has neither a connection nor an offer — never
-another host's — and when it has none, the report is not forwarded and the log
-says so.
-
-**A binding ends with its host's certificate.** The Gateway keeps, per host, the
-latest `notAfter` among the certificates the host reported under. Once that has
-passed by the Gateway's clock, or the revocation list the Gateway fetches names
-that certificate, every binding of the host ends, with its connection and its
-offer, and the log names the host and how many went; the Gateway checks at
-start, whenever it takes a new list, and once an hour. A report under an expired
-certificate binds nothing. A host that keeps renewing keeps its Agents. So an
-Agent moved to a new host behind the same Gateway is refused there until the old
-host's certificate expires; to free it at once, revoke the old host's
-certificate, which ends every binding that host holds. A certificate renewed
-through a Gateway is renewed with a renewal proof, which this Client always
-sends; the Server refuses a request without one there.
-
-### Enrolment through a Gateway
-
-A host that reaches the Server only through a Gateway enrols through it. Give
-the Gateway the public certificate of the Server's bootstrap CA, the file
-`[enrolment] bootstrap_ca_file` names on the Server, and never its key:
-
-```toml
-[gateway.tls]
-bootstrap_ca_file = "bootstrap-ca.pem"
-```
-
-A CA that is in both `client_ca_file` and `bootstrap_ca_file` fails startup
-naming both keys. A peer whose certificate chains to the bootstrap CA alone is
-an **enrolling peer**, and the Gateway relays one thing for it: a plain-HTTP
-report carrying its certificate signing request with the bootstrap proof (see
-[Enrolment](#enrolment-the-first-certificate)) and nothing a member reports, no
-description, health, configuration status, package statuses or
-connection-settings status. The proof must embed, byte for byte, the certificate
-the peer presented in the handshake: a request whose proof names another
-certificate is answered `403` and logged, so one bootstrap certificate's holder
-spends no other's share at the Server. Anything else is answered `403` and
-logged too, a WebSocket upgrade included, with a message that an enrolment
-through a Gateway is a plain-HTTP exchange. The Gateway does not check the
-proof's signature; the Server does, and decides the request as any enrolment: in
-an open window, against the queue and its bootstrap certificate's share, and by
-an operator's approval, which mints a host of its own. Outside a window the
-request is answered `Unavailable`, which the Client waits out. The request binds
-nothing at the Gateway: its exchange is its route for its one reply, and it is
-offered nothing and served no download. So once its certificate arrives, the
-host reports through the Gateway as a member under its own `instance_uid`. The
-enrolling Client polls, so it collects its certificate at its next request after
-the approval.
-
-Point an enrolling host behind a Gateway at an `https://` endpoint. The Client
-enrols over plain HTTP whenever its endpoint is `https://` and it holds no
-certificate the Server issued: it then sends its request alone until the
-certificate arrives. Over `wss://` it enrols as before, which reaches a Server
-directly but not through a Gateway. Switch it to `wss://` once it is enrolled,
-if it should hear the Server's pushes at once. An enrolment through a Gateway
-behind another Gateway is not relayed.
-
-`upstream_connections` is a **ceiling**. Connections are opened as Agents
-appear, so a Gateway in front of three Agents holds three, and each Agent stays
-on its connection while that lives. Any connection carries any Agent: every one
-presents this Gateway's own certificate upstream, so nothing the Gateway sends
-depends on which downstream peer an Agent came through.
-
-This mode composes with `[[supervisor]]` blocks: one host may supervise its own
-processes _and_ gateway for others.
-
-### The package cache
-
-A Gateway delivers the packages the Server hosts to the Agents behind it, so
-that one artifact crosses the Gateway's upstream link once instead of once per
-Agent:
-
-- **What it fetches.** When the Gateway relays a package offer whose
-  `download_url` is a path on the Server's download route — what the Server
-  offers for every artifact — it fetches that artifact once, before any Agent
-  asks, with this Client's own certificate. A request for it while that fetch
-  runs is answered `503` with `Retry-After: 30`, which the Client behind the
-  Gateway waits out (see
-  [Where a download may come from](#where-a-download-may-come-from)). At most
-  four fetches run at a time, and a fetch that falls below 64 KiB/s on average
-  after its first minute is cut. The Server serves a Gateway's certificate only
-  once the operator has marked its host as a Gateway; until then the fetch is
-  refused and the log says so. Each fetch costs one request of the Gateway's
-  rate at the Server; a `429` from it is waited out, and the fetch gives its
-  slot back while it waits. A fetch that fails — refused, interrupted, or bytes
-  that do not match — is not repeated by the Agents' requests, which are
-  answered `404`, nor by the same offer relayed again; the Gateway fetches it
-  again when the artifact newly appears in an Agent's offer.
-- **What it does not fetch.** An offer with an absolute URL, which only a
-  foreign Server would send, is left alone: the Client's own origin is the
-  Gateway, and it refuses a download from any other.
-- **What it holds.** Only bytes whose SHA-256 is the one the offer names: a
-  download is staged, hashed as it arrives and renamed into place only when it
-  matches. The Agent behind it still checks the hash and the signature itself
-  before it installs anything.
-- **Who receives it.** The Gateway serves the download route on its own `listen`
-  address, behind the same handshake and revocation list as its OpAMP endpoint.
-  A downstream Client is served an artifact only when the Gateway relayed an
-  offer of it to an Agent carried over a connection whose certificate names the
-  same host (`urn:classis:host:<id>`) as the requesting certificate. An
-  Agent's `instance_uid` belongs to the host of the first report for it, as
-  above; an offer relayed for it over another host's connection is not recorded,
-  and the log says so. An offer relayed over a certificate that names no host
-  serves nobody and is not fetched. Everything else is answered `404`, the same
-  answer whatever the reason, and logged with the host, the certificate's serial
-  and the path — the first five per host and minute one by one, the rest counted
-  into one line.
-- **Where, and how much.** `<state_dir>/gateway-packages`, owner-only, emptied
-  of artifacts when the Gateway starts. `[gateway] package_cache_bytes` (default
-  `10737418240`, 10 GiB; `0` fails startup) bounds what it holds and what it is
-  fetching: before a fetch writes a byte it reserves the artifact's size. To
-  make room it deletes artifacts no current offer names first, then the least
-  recently used. An offered artifact deleted this way is fetched again by the
-  next request for it, once per relayed offer. An artifact larger than
-  `package_cache_bytes` or `max_artifact_size_bytes` is not stored and not
-  delivered through the Gateway: the log names it, and the Agent behind the
-  Gateway reports its download as failed. Raise `package_cache_bytes` before
-  rolling out such an artifact behind a Gateway.
-
-The offers the cache serves are kept in memory. After the Gateway restarts, an
-Agent whose install is still under way re-draws its offer when it reconnects.
-One that already reported a failed install and retries is answered `404` until
-the Server offers it another version; rolling out the same version again does
-not re-send the offer.
-
-### What a Gateway keeps on disk
-
-Beside the artifacts of its package cache, a Gateway keeps the bindings of the
-Agents behind it in `<state_dir>/gateway-packages/bindings`: each `instance_uid`
-with its host, each host's certificate end, and the order in which the bindings
-were last reported. The file is a journal: a new binding is appended and synced
-before the report that made it is forwarded, a removal is appended, the order of
-reports at most once a minute and at shutdown, and the whole file is rewritten
-when the Gateway starts and whenever it has grown to twice the bindings and
-hosts it holds. It is at most 512 MiB, `0600` and owned by the Client's account
-on Linux and macOS, and lies under the state directory's restricted ACL on
-Windows. The offers are kept in memory only (see above).
-
-**When the file cannot be read, the Gateway carries no Agent.** At start the
-Gateway refuses a file that is a link, is no regular file, on Linux and macOS is
-not `0600` or not owned by the Client's account, is larger than 512 MiB, names a
-format or version this Client does not read, or holds a line it cannot parse
-before its last, and one it cannot rewrite at start, as on a full disk; a last
-line cut off without its newline, as a crash leaves it, is dropped. While it
-refuses the file, the Gateway answers every WebSocket upgrade, every plain-HTTP
-report and every download from the Clients behind it `503`, and still relays an
-enrolling peer's one request. It does not change a file it cannot read — one it
-could read but not rewrite may already have been replaced by a copy of the same
-bindings — and it logs why at start and once an hour. The Client's own
-connection and its Supervisors go on. To recover, look at why the file was
-refused, then remove it and restart the Client: the Gateway starts with no
-binding, and each Agent behind it is bound again by the next report for it — by
-whichever host sends that report first, which is what the file was protecting. A
-missing file is an empty one.
-
-### What a Gateway does not do
-
-- **It makes no authentication decision of its own.** A downstream peer is
-  admitted by its handshake against `client_ca_file`, which must be the fleet's
-  client CA, never a bootstrap CA, or against `bootstrap_ca_file` as an
-  enrolling peer. The Gateway forwards no `Authorization` header: one a
-  downstream peer sends is ignored, never refused, and nothing is sent upstream
-  in its place. The one admission refusal it makes beyond its handshake is the
-  Server's: it fetches the revoked certificates every 30 seconds and refuses a
-  peer whose certificate is on that list with `401`. Until it has a list younger
-  than 300 seconds — at startup, while its Server is away, or while the operator
-  has not marked its host as a Gateway — it answers every peer `503`.
-- **It never speaks for an Agent.** If a downstream Client disappears without
-  sending `agent_disconnect`, the Gateway forwards nothing — inventing that
-  message would tell the Server the Agent said something it did not. What makes
-  such an Agent visible instead is the Server's staleness flag: the connection
-  stays up, because it is the Gateway's, and the row reads **Connected +
-  Stale**. It needs a heartbeat configured on the Agent to work, since staleness
-  only applies to Agents that promised to report periodically.
-- **It does not carry a downstream client certificate upstream.** Mutual TLS is
-  per hop: `[gateway.tls]` verifies the Agents connecting here, and the identity
-  presented to the Server is this Client's own, from the top-level `[tls]` or
-  issued through the CSR flow.
-- **It does not vouch for an enrolment.** It relays an enrolling peer's request,
-  with the proof in it, once that proof names the certificate the peer
-  presented, and the Server checks the proof and decides; a revoked bootstrap
-  certificate is refused by the Server. Without `bootstrap_ca_file` its
-  handshake refuses every bootstrap certificate.
-
-The upstream endpoint must be `wss://`, or `ws://` to `127.0.0.1` or `::1`. A
-polling connection cannot carry the Server's pushes to the Agents behind a
-Gateway, and the configuration refuses it at startup rather than leaving you to
-notice that configuration changes never arrive.
 
 ## Supervisors: putting a process under management
 
@@ -2720,13 +2469,8 @@ name the key. The ones you are most likely to meet:
 | an unknown key                                             | Every key is checked; a typo is refused rather than ignored.                                                                                                    |
 | `[tls] cert_file and key_file are required`                | Give the Client its certificate and key: one the client CA issued, or a bootstrap certificate to [enrol](#enrolment-the-first-certificate) with.                |
 | an endpoint refused as plaintext                           | `ws://` and `http://` are accepted only to `127.0.0.1` or `::1`. Use `wss://` or `https://`, and set `[tls] ca_file` for a private CA.                          |
-| `[gateway.tls] is required`, or its `client_ca_file`       | A Gateway serves its Agents over mutual TLS only; give it `cert_file`, `key_file` and `client_ca_file`.                                                         |
+| an unknown field `gateway`                                 | Gateway Mode was removed. Delete the `[gateway]` section; point the Clients it carried at the Server directly.                                                  |
 | `[packages] allowed_sources is removed`                    | The key no longer exists: a Client downloads only from its own Server's origin. Delete it.                                                                      |
-
-**Every Client behind a Gateway is answered `503`.** Either the Gateway holds no
-current revocation list, or it cannot read the file of its bindings; its log
-says which, the second at start and once an hour. See
-[What a Gateway keeps on disk](#what-a-gateway-keeps-on-disk).
 
 **A Foreign Agent runs but never gets new configuration.** Its command line is
 pointing somewhere the Client does not write. Use `${config_dir}` (see

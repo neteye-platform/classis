@@ -23,7 +23,7 @@ default = []
 
 [dependencies]
 clap.workspace = true
-# The Client is an Agent upstream and a server for the Gateway and the Supervisor Endpoint.
+# The Client is an Agent upstream and a server for the Supervisor Endpoint.
 opamp = { workspace = true, features = ["client", "server"] }
 classis-core.workspace = true
 # Service lifecycle and the content hash in the install layout's manifest.
@@ -51,8 +51,8 @@ base64.workspace = true
 ring.workspace = true
 rcgen.workspace = true
 time.workspace = true
-# `verify`: a Gateway with a bootstrap CA tells a member from an enrolling peer by whether a CA of
-# its client CA file signed the certificate, as the Server does.
+# `verify` served Gateway Mode alone, which is gone; the feature goes with the certificate
+# cleanup, which owns this crate's PKI dependencies.
 x509-parser = { workspace = true, features = ["verify"] }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
@@ -65,9 +65,9 @@ async-trait.workspace = true
 # `network` on top of the workspace's `system`: the interface enumeration behind `host.ip` and
 # `host.mac`.
 sysinfo = { workspace = true, features = ["network"] }
-# The downstream OpAMP endpoint of Gateway Mode is `opamp::server`'s, an axum router;
-# its WebSocket upgrade is `opamp`'s own. The HTTP engine under it — hyper, tower,
-# http-body — is already linked through reqwest; this adds the routing layer.
+# The Supervisor Endpoint is `opamp::server`'s, an axum router; its WebSocket upgrade is
+# `opamp`'s own. The HTTP engine under it — hyper, tower, http-body — is already linked
+# through reqwest; this adds the routing layer.
 axum.workspace = true
 # A package artifact may be a `.tar.gz` or a `.7z`; the Agent unpacks it, and opens an
 # encrypted `.7z` with the key from `[packages] archive_key`.
@@ -164,8 +164,8 @@ tempfile = "3"
 # A test reads the process account back from a plist as `service-manager` writes it,
 # through the crate it writes with.
 plist = "1"
-# A test holds a TLS connection open mid-headers on the Gateway (H18), below what a client library
-# would let it do.
+# Served the Gateway's TLS test alone, which went with Gateway Mode; the dependency goes
+# with the certificate cleanup, which owns this crate's PKI dependencies.
 rustls.workspace = true
 # Tests build the `.7z` fixtures they then open; the daemon itself only ever decompresses. The
 # encoder rides here alone, since `pack` lives in its own crate — a dev-dependency

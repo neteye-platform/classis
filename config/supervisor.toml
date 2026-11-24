@@ -75,40 +75,6 @@ state_dir = "client-state"
 # [attributes]
 # env = "prod"
 
-# Optional Gateway Mode: this Client stands at a network boundary, accepts OpAMP from
-# other Clients, and folds them onto a small pool of upstream connections. It composes with the
-# [[supervisor]] blocks below — a host may supervise its own processes and gateway for others.
-#
-# upstream_connections is a CAP, not a count: connections are opened as Agents appear, so a Gateway
-# in front of three Agents holds three. Each Agent sticks to its connection while that lives.
-#
-# The Gateway makes no authentication decisions of its own — a downstream peer is admitted by its
-# handshake against client_ca_file, and the Gateway refuses only a certificate the Server revoked
-# and a package download the Server did not offer to the requesting host through it.
-# It forwards no Authorization header upstream. It admits nobody until the
-# operator marks its host as a Gateway on the Server (PUT /api/v1/hosts/<host>/gateway). Mutual
-# TLS is per hop: [gateway.tls] verifies the Agents connecting to *this* Client, while the identity
-# presented to the Server is the one in [tls] below. The endpoint above must be
-# ws:// or wss://, since a polling connection cannot carry the Server's pushes to the Agents behind
-# a Gateway.
-#
-# The Gateway fetches each package the Server hosts once, when it relays an offer of it, and serves
-# it on its listen address only to the hosts whose Agents it relayed that offer to. It
-# holds them under <state_dir>/gateway-packages, bounded by package_cache_bytes; an artifact larger
-# than that is not delivered through the Gateway.
-# [gateway]
-# listen = "0.0.0.0:4320"
-# upstream_connections = 10
-# package_cache_bytes = 10737418240  # 10 GiB, the default; 0 fails startup
-# [gateway.tls]
-# cert_file = "gateway.pem"
-# key_file = "gateway-key.pem"
-# client_ca_file = "client-ca.pem"   # the fleet's client CA — never a bootstrap CA: downstream
-#                                    # Agents travel upstream as members
-# bootstrap_ca_file = "bootstrap-ca.pem"  # optional: the public certificate of the Server's
-#                                         # [enrolment] bootstrap_ca_file, never its key; relays a
-#                                         # plain-HTTP enrolment request of a host behind it
-
 # TLS toward the Server. ca_file trusts a private CA; cert_file and key_file are this Client's
 # identity, and the Client refuses to start without one — the Server asks for it in the
 # handshake and admits by it alone. The Client sends no credential; a leftover [auth] section from

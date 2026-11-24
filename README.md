@@ -11,8 +11,7 @@
 API-first **Server** that manages a fleet over the protocol and exposes an
 OpenAPI-described REST API for any UI or portal, and a **Client** that
 supervises many managed processes at once — OpenTelemetry Collectors and,
-through plugins, foreign agents that do not speak OpAMP — and that can equally
-run as a **gateway** multiplexing other clients upstream. The work is driven by
+through plugins, foreign agents that do not speak OpAMP. The work is driven by
 a written **specification** ([`docs/SPECIFICATION.md`](docs/SPECIFICATION.md))
 and an **architecture overview**
 ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)) that lists its key decisions.
@@ -59,13 +58,10 @@ Collectors **and** agents that were never built to speak OpAMP:
   and change what it runs; the Server ships only a rudimentary UI of its own and
   is built to be integrated into an existing portal.
 - **Client** — one process, installed as a native operating-system service on
-  Linux, macOS, and Windows and able to update its own binary in place. It has
-  two **modes**, independent of each other and combinable on the same host:
+  Linux, macOS, and Windows and able to update its own binary in place.
   **Supervisor Mode** runs **many supervisors at once**, each managing one
   process, applying the configuration it is sent and reporting health and
-  effective configuration back; **Gateway Mode** accepts other clients' OpAMP
-  connections and folds them onto a small pool of upstream ones, so a fleet can
-  grow past one connection per agent. Every supervisor also exposes a
+  effective configuration back. Every supervisor also exposes a
   **Supervisor Endpoint** on loopback — not a mode of its own, but part of what
   a supervisor is — because the Collector's `opampextension` is a _client only_
   and needs something to connect to; a Collector carrying it reports through
@@ -94,35 +90,33 @@ The picture keeps the shape of the
 [OpAMP reference architecture](https://opentelemetry.io/docs/specs/opamp/) — a
 supervisor owning a Collector, exchanging OpAMP with a backend — and extends it
 with what makes Classis different: an **API-first Server** on two listeners,
-whose contract is an OpenAPI REST API, a single **Client** whose two modes
-compose freely, **Supervisors** whose compiled-in kinds each know their agent
-behind a hexagonal core — each exposing a **Supervisor Endpoint** for a
-Collector that speaks the protocol itself — and a **Connection Pool** that
-carries many Agents over few connections, every one of them admitted by a client
-certificate.
+whose contract is an OpenAPI REST API, a single **Client**, and **Supervisors**
+whose compiled-in kinds each know their agent behind a hexagonal core — each
+exposing a **Supervisor Endpoint** for a Collector that speaks the protocol
+itself — every connection admitted by a client certificate.
 
 ![The Server with its Operator and Agent planes, the Client with Supervisor Mode and Gateway Mode, and the agents, Collectors and downstream Clients they serve](docs/images/architecture.png)
 
 _The image carries its [Excalidraw](https://excalidraw.com) scene: open the PNG
-there to edit it, and export it again with "Embed scene" switched on._
+there to edit it, and export it again with "Embed scene" switched on. It still
+draws Gateway Mode, which is gone; the next redraw drops it._
 
 On the wire the Server sees only **Agents**, told apart by `instance_uid` and
 never by the connection that carried them — so whether an Agent is a Supervisor
-running a Collector or a Foreign Agent, a Collector reporting through its own
-`opampextension`, or a Client several hops away behind a Gateway is invisible to
-it. Every connection to the **Agent plane** is TLS 1.3 with a client
-certificate, which the Server's client CA issues once an operator approves a
-host's enrolment and renews by itself afterwards; the **Operator plane**, where
-the REST API and the UI live, is a listener of its own and stays on the loopback
-unless it is published behind a password. The Supervisor Endpoint is bound to
-loopback and admits only the process its Supervisor started, by a token. A
-Supervisor's **kind** is the authority on its agent: `collector` serves every
-Collector, with or without the extension; `command` runs any other program and
-observes it from the outside. Adding a new kind of managed process means writing
-another kind against the same ports — the core does not change. The terms used
-here (Server, Client, Agent, Client Modes, Supervisor Endpoint, Connection Pool,
-Foreign Agent, Plugin, Port, Selector, Package, Deployment, …) are defined in
-[`docs/SPECIFICATION.md`](docs/SPECIFICATION.md).
+running a Collector or a Foreign Agent, or a Collector reporting through its own
+`opampextension`, is invisible to it. Every connection to the **Agent plane** is
+TLS 1.3 with a client certificate, which the Server's client CA issues once an
+operator approves a host's enrolment and renews by itself afterwards; the
+**Operator plane**, where the REST API and the UI live, is a listener of its own
+and stays on the loopback unless it is published behind a password. The
+Supervisor Endpoint is bound to loopback and admits only the process its
+Supervisor started, by a token. A Supervisor's **kind** is the authority on its
+agent: `collector` serves every Collector, with or without the extension;
+`command` runs any other program and observes it from the outside. Adding a new
+kind of managed process means writing another kind against the same ports — the
+core does not change. The terms used here (Server, Client, Agent, Client Modes,
+Supervisor Endpoint, Foreign Agent, Plugin, Port, Selector, Package, Deployment,
+…) are defined in [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md).
 
 ## Prerequisites
 
@@ -149,12 +143,12 @@ Foreign Agent, Plugin, Port, Selector, Package, Deployment, …) are defined in
 The toolchain is **Rust stable**, provided by the Dev Container; the code is one
 Cargo workspace with seven crates — `opamp` (the OpAMP communication layer,
 publishable on its own, with an Agent's client and a server endpoint with their
-TLS and listener behind the `client` and `server` features), `classis-core`
-(what both ends share beyond the protocol), `classis-server` (the Server),
-`classis-agent` (the Client, in all its modes), `classis-tools` (the operator
-command-line tools), `oauth-token` (the client-credentials grant and bearer
-parsing), and `oauth-registration` (dynamic registration). This section is the
-single source for
+TLS and listener behind the `client` and `server` features),
+`classis-core` (what both ends share beyond the protocol), `classis-server` (the
+Server), `classis-agent` (the Client), `classis-tools` (the
+operator command-line tools), `oauth-token` (the client-credentials
+grant and bearer parsing), and `oauth-registration` (dynamic
+registration). This section is the single source for
 build/test/run commands — both humans and agents rely on it (AGENTS.md links
 here).
 

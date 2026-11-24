@@ -84,13 +84,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "revocation_list"
-path = "fuzz_targets/revocation_list.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "supervisor_set"
 path = "fuzz_targets/supervisor_set.rs"
 test = false

@@ -1,15 +1,15 @@
 //! The OpAMP endpoint's protocol shell — what any server-side of this protocol must do with a
 //! request body, framework-free.
 //!
-//! There are two OpAMP server endpoints in this project: the Server's, and the Client's own when it
-//! runs as a Gateway — downstream, a Gateway *is* an OpAMP server.
-//! Both accept the same path, the same media
-//! type and the same bodies, and both were written separately. The Baseline's gzip MUST, and with
-//! it the rule that the size limit applies *after* decompression, ended up in exactly one of them.
+//! There are two OpAMP server endpoints in this project: the Server's, and the Client's own
+//! Supervisor Endpoint, which a Managed Process connects to. Both accept the same path, the same
+//! media type and the same bodies, and both were written separately. The Baseline's gzip MUST, and
+//! with it the rule that the size limit applies *after* decompression, ended up in exactly one of
+//! them.
 //!
 //! This module takes `&str` and `&[u8]` and returns owned bytes on purpose. It pulls in no HTTP
 //! stack, so both axum handlers can call it, and [`BodyError`] names the fault rather than the
-//! status code — the Server answers `413`/`415`, and a Gateway is a hop whose status codes are its
+//! status code — the Server answers `413`/`415`, and the Supervisor Endpoint's status codes are its
 //! own business.
 
 use std::io::Read as _;
