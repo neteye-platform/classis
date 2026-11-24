@@ -58,6 +58,28 @@ pub trait Session {
 
     /// The last messages, one `agent_disconnect` per Agent.
     fn goodbyes(&mut self) -> Vec<AgentToServer>;
+
+    /// The server refused a connection or an exchange with `401`, and `challenges` are the values
+    /// of its `WWW-Authenticate` headers, as sent: the crate reads none of them, since what a
+    /// challenge means is the credential scheme's, which an application knows and this wire layer
+    /// does not.
+    ///
+    /// `true` ends the run with [`Ended::Unauthorized`], so the application can replace its
+    /// credential and build a new [`Connection`]; the connection is dropped without goodbyes, as
+    /// the server would not take them. `false` keeps the driver's own behaviour for a refusal:
+    /// back off and try again on a WebSocket, a lost exchange on plain HTTP. The default ends the
+    /// run, so a refusal reaches the caller.
+    fn unauthorized(&mut self, challenges: &[String]) -> bool {
+        let _ = challenges;
+        true
+    }
+}
+
+/// The values of every `WWW-Authenticate` header of a refusal, as text.
+fn challenges<'a>(values: impl Iterator<Item = &'a [u8]>) -> Vec<String> {
+    values
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .collect()
 }
 
 /// What the connection does after [`Session::after_reply`].
@@ -82,6 +104,14 @@ pub enum Ended {
     Reconnect,
     /// The session asked to end; the goodbyes are sent.
     End,
+    /// The server refused the client with `401`, and [`Session::unauthorized`] asked to end the run
+    /// on it. The values of the refusal's `WWW-Authenticate` headers come with it, so the
+    /// application can read the challenge, replace its credential, and run again on a new
+    /// [`Connection`]: the headers of a connection are fixed when it is built.
+    Unauthorized {
+        /// What the refusal's `WWW-Authenticate` headers said, one entry per header.
+        challenges: Vec<String>,
+    },
 }
 
 /// How a driver puts reports on the wire, for a job that reports while it runs — a download

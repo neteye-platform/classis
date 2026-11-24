@@ -15,6 +15,9 @@ path = "src/main.rs"
 [dependencies]
 opamp = { workspace = true, features = ["server"] }
 classis-core.workspace = true
+# `secret::generate` and `secret::hash`: the one generator of the enrolment key's secret, and of
+# what a client keeps hashes of.
+oauth-token.workspace = true
 # Streaming a stored package artifact into the response body — the same workspace
 # dependency the Client already builds on, promoted from dev-only.
 futures-util.workspace = true

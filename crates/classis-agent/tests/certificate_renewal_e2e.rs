@@ -114,7 +114,7 @@ async fn a_client_renews_each_certificate_before_it_expires() {
         state_dir.display().to_string()
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path())).expect("write");
+    std::fs::write(&config_path, toml + &common::client_certificate(dir.path())).expect("write");
     // The Client's own account of what it did, for the failure message: without it a Client that
     // never connects leaves nothing to read but the count.
     let log_path = dir.path().join("client.log");

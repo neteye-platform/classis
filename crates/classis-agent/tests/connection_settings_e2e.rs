@@ -44,8 +44,7 @@ async fn spawn_armed_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile:
             .expect("open the configuration store")
             .with_connection_offer(Some(ConnectionOffer::from_config(&offer_config))),
     );
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = common::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -78,8 +77,11 @@ async fn an_offer_is_verified_persisted_and_reported_applied() {
         state_dir = state_dir.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(
+        &config_path,
+        toml + &common::client_identity(dir.path(), &state_dir),
+    )
+    .expect("write supervisor.toml");
 
     let client = spawn_client(&config_path);
 

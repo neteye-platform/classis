@@ -93,8 +93,7 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = common::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -133,7 +132,7 @@ async fn a_collector_extensions_own_report_reaches_the_fleet_as_its_supervisors_
             program = program,
             port = port,
             marker = marker.to_string_lossy(),
-            identity = common::client_identity(dir.path()),
+            identity = common::client_identity(dir.path(), &state_dir),
         ),
     )
     .expect("write supervisor.toml");

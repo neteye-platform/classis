@@ -19,6 +19,7 @@ pub mod config;
 pub mod config_file;
 pub mod config_init;
 pub mod connection;
+pub mod credentials;
 pub mod csr;
 pub mod engine;
 pub mod host;

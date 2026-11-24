@@ -134,6 +134,12 @@ impl Session for Upstream<'_> {
     fn goodbyes(&mut self) -> Vec<AgentToServer> {
         self.engine.disconnect_messages()
     }
+
+    /// The Client sends no credential upstream, so it has none to replace: a
+    /// `401` is met as before, with a back-off on a WebSocket and a lost exchange on plain HTTP.
+    fn unauthorized(&mut self, _: &[String]) -> bool {
+        false
+    }
 }
 
 /// Sends what the Engine owes now, unless the sink leaves owed reports to its loop.
@@ -487,6 +493,9 @@ pub async fn run(
             Ended::Reconnect => RunOutcome::Reconfigured,
             // The only end the Client asks for is the self-update restart.
             Ended::End => RunOutcome::RestartForUpdate,
+            Ended::Unauthorized { .. } => {
+                unreachable!("the session never ends a run on a 401")
+            }
         },
     )
 }

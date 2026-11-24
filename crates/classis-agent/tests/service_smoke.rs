@@ -219,7 +219,7 @@ fn the_installed_service_starts_comes_back_from_a_crash_and_stays_down_after_a_s
         &config,
         format!(
             "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n{}",
-            common::client_identity(dir.path())
+            common::client_certificate(dir.path())
         ),
     )
     .expect("write supervisor.toml");
@@ -437,7 +437,7 @@ fn a_reregistration_keeps_the_account_and_the_service_keeps_its_privileges() {
         &config,
         format!(
             "endpoint = \"ws://{addr}/v1/opamp\"\nname = \"{AGENT_NAME}\"\nheartbeat_interval_secs = 1\n{}",
-            common::client_identity(dir.path())
+            common::client_certificate(dir.path())
         ),
     )
     .expect("write supervisor.toml");
@@ -663,7 +663,7 @@ fn a_managed_process_runs_under_the_process_account_and_reaches_only_what_it_run
     let result = out.join("result");
 
     // The Client's key where it is protected: in the state directory, owner-only.
-    common::client_identity(dir.path());
+    common::client_certificate(dir.path());
     let key = state.join("client-key.pem");
     let cert = state.join("client.pem");
     std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
@@ -921,7 +921,7 @@ fn a_managed_process_in_the_second_services_place_is_refused() {
     let result = out.join("result");
     let heard = out.join("impostor.log");
 
-    common::client_identity(dir.path());
+    common::client_certificate(dir.path());
     let key = state.join("client-key.pem");
     let cert = state.join("client.pem");
     std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
@@ -1233,7 +1233,7 @@ fn on_windows_a_managed_process_runs_under_the_process_account_and_reaches_only_
     grant_modify(&out, "*S-1-1-0");
     let result = out.join("result");
 
-    common::client_identity(dir.path());
+    common::client_certificate(dir.path());
     let key = state.join("client-key.pem");
     let cert = state.join("client.pem");
     std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");
@@ -1610,7 +1610,7 @@ fn on_windows_a_pipe_the_scm_names_no_process_for_is_refused() {
             .unwrap_or(0)
     };
 
-    common::client_identity(dir.path());
+    common::client_certificate(dir.path());
     let key = state.join("client-key.pem");
     let cert = state.join("client.pem");
     std::fs::rename(dir.path().join("test-client-key.pem"), &key).expect("place the key");

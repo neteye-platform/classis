@@ -111,6 +111,11 @@ pub struct ClientConfig {
     /// from the `--process-uid` its registration names, never by the file.
     #[serde(skip)]
     pub process_account_group: Option<crate::supervisor::ports::ProcessAccountGroup>,
+    /// What `enrol` writes into `state.json`: the token every upstream request
+    /// carries and the credentials that replace it. Never set by the file; nothing sets it until
+    /// the authentication cutover, so it is `None` on every Client.
+    #[serde(skip)]
+    pub credentials: Option<crate::credentials::Credentials>,
     /// The largest OpAMP message the Client accepts or sends, on either transport and in either
     /// direction — the Supervisor Endpoint included. The Baseline requires the limit, recommends
     /// this default, and asks that it be configurable.
@@ -830,6 +835,7 @@ impl Default for ClientConfig {
             state_dir_as_written: default_state_dir(),
             bootstrap_identity: None,
             process_account_group: None,
+            credentials: None,
             max_message_size_bytes: default_max_message_size(),
             max_artifact_size_bytes: default_max_artifact_size(),
             supervisors: Vec::new(),

@@ -20,7 +20,7 @@ fn sigterm_shuts_the_client_down_cleanly() {
         format!(
             "endpoint = \"http://127.0.0.1:9\"\nstate_dir = \"{}\"\n{}",
             dir.path().join("state").display(),
-            common::client_identity(dir.path())
+            common::client_identity(dir.path(), &dir.path().join("state"))
         ),
     )
     .expect("write the config");

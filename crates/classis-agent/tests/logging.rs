@@ -27,7 +27,7 @@ fn spawn(dir: &Path, args: &[&str]) -> Child {
         format!(
             "endpoint = \"ws://127.0.0.1:1/v1/opamp\"\nstate_dir = {:?}\n{}",
             dir.join("state").to_string_lossy(),
-            common::client_identity(dir)
+            common::client_identity(dir, &dir.join("state"))
         ),
     )
     .expect("write config");

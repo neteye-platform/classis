@@ -120,8 +120,7 @@ async fn spawn_server(store: PackageStore) -> (std::net::SocketAddr, Arc<AppStat
     );
     // The configuration directory only has to outlive the Server, which outlives the test.
     std::mem::forget(dir);
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let app = common::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -491,7 +490,7 @@ async fn the_client_installs_a_version_of_itself_and_reports_it_installed() {
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path()),
+        config_toml(addr, &state_dir) + &common::client_identity(dir.path(), &state_dir),
     )
     .expect("write config");
 
@@ -625,7 +624,7 @@ async fn managed_processes_stop_cleanly_on_the_self_update_restart() {
             state = state_dir.to_string_lossy(),
             stub = stub,
             marker = marker.to_string_lossy(),
-        ) + &common::client_identity(dir.path()),
+        ) + &common::client_identity(dir.path(), &state_dir),
     )
     .expect("write config");
 
@@ -722,7 +721,7 @@ async fn a_set_at_the_running_version_reaches_nobody() {
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path()),
+        config_toml(addr, &state_dir) + &common::client_identity(dir.path(), &state_dir),
     )
     .expect("write config");
 
@@ -808,7 +807,7 @@ async fn a_self_update_whose_signature_does_not_verify_is_refused_and_the_client
     let config = dir.path().join("supervisor.toml");
     std::fs::write(
         &config,
-        config_toml(addr, &state_dir) + &common::client_identity(dir.path()),
+        config_toml(addr, &state_dir) + &common::client_identity(dir.path(), &state_dir),
     )
     .expect("write config");
 

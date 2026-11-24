@@ -98,6 +98,9 @@ product — no Server or Client code depends on them:
   Configurations, labels, packages and Deployments, the Agent plane and the
   Operator plane.
 - **`classis-agent`** — the Client in all its modes, the program `supervisor`.
+  Its `credentials` value type, a host's bearer token and the secret that
+  replaces it, is prepared but unused: the Client still authenticates by its
+  client certificate.
 - **`classis-tools`** — the operator tool, the one program `classisctl`: its
   `package` commands fetch, pack, hash and sign package artifacts — or sign a
   Package's signing file — its `pki` commands make the fleet's certificates.
@@ -126,22 +129,31 @@ module has no role.
   `LedgerStore` in `revocation`. The filesystem adapters are in `fs`, which also
   opens the data directory and refuses anything its layout does not name. With
   `[database] store = "postgres"` every port but the blob port has its
-  PostgreSQL adapter in `postgres` instead (`postgres::agents`, `configs`,
-  `deployments`, `packages`, `ledger`, `bootstrap`, `enrolment`), each call one
-  transaction; `postgres` holds the connection they share — TLS 1.3 on _ring_, a
-  pool on a `bridge` runtime of its own, the advisory lock that keeps one Server
-  per database — and applies the schema embedded in `postgres::schema` as
-  numbered migrations; `postgres::import` is `server migrate-to-postgres`, which
-  copies a `data_dir` into the database offline. The core's constructors take
-  the ports — `AppState::with_stores`, `PackageStore::with_backend`,
-  `PackageOffering::with_deployments`, `BootstrapCertificates::open`,
-  `Enrolment::open_on` — and `lib.rs` chooses the adapters by `[database]` in
-  `Records`, which `AppState::on`, `PackageStore::open_on`,
-  `PackageOffering::on` and `BootstrapCertificates::on` take, and wires the
-  filesystem adapters in `AppState::new`, `PackageStore::open`,
-  `PackageOffering::new` and `BootstrapCertificates::on_disk`. `migrate` is the
-  one module that reads the layout of an older Server, for `server migrate`, and
-  nothing in the running Server calls it.
+  PostgreSQL adapter in `postgres` instead
+  (`postgres::agents`, `configs`, `deployments`, `packages`, `ledger`,
+  `bootstrap`, `enrolment`), each call one transaction; `postgres` holds the
+  connection they share — TLS 1.3 on _ring_, a pool on a `bridge` runtime of its
+  own, the advisory lock that keeps one Server per database — and applies the
+  schema embedded in `postgres::schema` as numbered migrations;
+  `postgres::import` is `server migrate-to-postgres`, which copies a `data_dir`
+  into the database offline. The
+  core's constructors take the ports — `AppState::with_stores`,
+  `PackageStore::with_backend`, `PackageOffering::with_deployments`,
+  `BootstrapCertificates::open`, `Enrolment::open_on` — and `lib.rs` chooses the
+  adapters by `[database]` in `Records`, which `AppState::on`,
+  `PackageStore::open_on`, `PackageOffering::on` and `BootstrapCertificates::on`
+  take, and wires the filesystem adapters in `AppState::new`,
+  `PackageStore::open`, `PackageOffering::new` and
+  `BootstrapCertificates::on_disk`. `migrate` is the one module that reads the
+  layout of an older Server, for `server migrate`, and nothing in the running
+  Server calls it. The ports of the bearer-token enrolment are in place but
+  unused:
+  `SpaceStore` in `space_store` under the `Spaces` service in `spaces`,
+  `ClientStore` in `client_store`, their adapters in `fs::spaces`,
+  `fs::clients`, `postgres::spaces` and `postgres::clients`, and the `spaces`
+  and `clients` tables in the first migration. `Records` hands out neither
+  port, the data directory's layout names neither directory, and admission is
+  still by client certificate.
 - **Server listeners** — `tls` reads the `[tls]`, `[rest.tls]` and `[enrolment]`
   files into the material each plane serves with — the Agent plane requiring a
   client certificate in the handshake, the Operator plane asking for none and
