@@ -588,8 +588,8 @@ impl PackageStore {
                                 package = %set.id,
                                 platform = %entry.platform.tag(),
                                 "the stored signature does not verify, so the entry is offered to \
-                                 nobody — {why}; it stays in the store, and the release's .sig \
-                                 replaces it"
+                                 nobody — {why}; it stays in the store until a signature that \
+                                 verifies replaces it"
                             );
                             Signature::Withheld(bytes)
                         }

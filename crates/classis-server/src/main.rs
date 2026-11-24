@@ -399,14 +399,11 @@ async fn main() {
         roots = roots.len(),
         "checking package signatures up to the compiled-in Package Roots"
     );
-    // The configuration check refuses a malformed list at load, so this is the same list.
-    let revoked = match config.packages.revoked_signers() {
-        Ok(revoked) => revoked,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    // The configuration check parsed this list at load and refused a malformed one, so it parses here.
+    let revoked = config
+        .packages
+        .revoked_signers()
+        .expect("the configuration check already parsed [packages] revoked_signers at load");
     if !revoked.is_empty() {
         warn!(
             revoked = revoked.len(),

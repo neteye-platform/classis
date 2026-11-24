@@ -19,7 +19,7 @@ its tag exists.
   Server and every Client verify up to the Package Roots compiled into them,
   with nothing to configure. Upload each archive with the signature its `.sig`
   holds; the release notes give the commands.
-- **The Server can refuse a Package Signer**
+- **The Server can refuse a Package Signer.**
   `[packages] revoked_signers` in `server.toml` lists signers by the SHA-256 of
   their certificate. The Server refuses their signatures on upload and offers
   nobody the entries they signed, until another signer signs them again.
