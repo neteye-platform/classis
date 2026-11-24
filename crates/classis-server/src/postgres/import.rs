@@ -19,14 +19,13 @@ use opamp::uid::InstanceUid;
 use super::{client, schema, sql, Database, IMPORT_TIMEOUT};
 use crate::agent_store::{AgentStore as _, PersistedAgent};
 use crate::blobs::BlobStore as _;
-use crate::bootstrap::{BootstrapStore as _, Entry as BootstrapEntry};
+use crate::client_store::{ClientRecord, ClientStore as _};
 use crate::config::PostgresConfig;
 use crate::configs::{ConfigBackend as _, Configuration};
 use crate::deployments::{Deployment, DeploymentBackend as _};
-use crate::enrolment::{EnrolmentStore as _, Persisted};
 use crate::fs;
 use crate::packages::{Package, PackageBackend as _};
-use crate::revocation::{Ledger, LedgerStore as _};
+use crate::space_store::{SpaceRecord, SpaceStore as _};
 
 /// What the copy carried, one line per kind, for the operator to read.
 #[derive(Debug, Default)]
@@ -40,28 +39,20 @@ struct Records {
     deployments: Vec<Deployment>,
     packages: Vec<Package>,
     agents: HashMap<InstanceUid, PersistedAgent>,
-    ledger: Ledger,
-    bootstrap: Vec<(BootstrapEntry, Option<Vec<u8>>)>,
-    enrolment: Option<Persisted>,
+    spaces: Vec<SpaceRecord>,
+    clients: Vec<ClientRecord>,
 }
 
 impl Records {
     /// Reads every record under `root` through the filesystem adapters, as a Server's startup does.
     fn read(root: &Path) -> Result<Self, String> {
-        let bootstrap_store = fs::FsBootstrapStore::open(root)?;
-        let mut bootstrap = Vec::new();
-        for entry in bootstrap_store.load()? {
-            let file = bootstrap_store.p12(&entry.id)?;
-            bootstrap.push((entry, file));
-        }
         Ok(Records {
             configurations: fs::FsConfigBackend::open(root)?.load()?,
             deployments: fs::FsDeploymentBackend::open(root)?.load()?,
             packages: fs::FsPackageBackend::open(root)?.load()?,
             agents: fs::FsAgentStore::open(root)?.load()?,
-            ledger: fs::FsLedgerStore::open(root)?.load()?,
-            bootstrap,
-            enrolment: fs::FsEnrolmentStore::open(root).load()?,
+            spaces: fs::FsSpaceStore::open(root)?.load()?,
+            clients: fs::FsClientStore::open(root)?.load()?,
         })
     }
 
@@ -71,11 +62,6 @@ impl Records {
             .iter()
             .map(|config| config.retained.len())
             .sum();
-        let p12 = self
-            .bootstrap
-            .iter()
-            .filter(|(_, file)| file.is_some())
-            .count();
         vec![
             format!(
                 "{} configurations with {revisions} retained revisions",
@@ -84,22 +70,8 @@ impl Records {
             format!("{} deployments", self.deployments.len()),
             format!("{} packages", self.packages.len()),
             format!("{} agents", self.agents.len()),
-            format!("{} hosts", self.ledger.hosts.len()),
-            format!("{} certificates in the register", self.ledger.issued.len()),
-            format!("{} revocations", self.ledger.revocations.len()),
-            format!(
-                "{} bootstrap certificates, {p12} with a PKCS#12 file",
-                self.bootstrap.len()
-            ),
-            format!(
-                "the enrolment window and {} pending requests",
-                self.enrolment.as_ref().map_or(0, |persisted| {
-                    serde_json::to_value(persisted)
-                        .ok()
-                        .and_then(|value| value.get("requests")?.as_array().map(Vec::len))
-                        .unwrap_or(0)
-                })
-            ),
+            format!("{} spaces", self.spaces.len()),
+            format!("{} clients", self.clients.len()),
         ]
     }
 
@@ -117,25 +89,15 @@ impl Records {
         for (uid, record) in &self.agents {
             super::agents::write(client, uid, record).await?;
         }
-        for issued in &self.ledger.issued {
-            super::ledger::write_issued(client, issued).await?;
+        for space in &self.spaces {
+            if !super::spaces::write(client, space).await? {
+                return Err(format!("space {:?} was written twice", space.name));
+            }
         }
-        let revocations: Vec<(i32, crate::revocation::Revocation)> = self
-            .ledger
-            .revocations
-            .into_iter()
-            .enumerate()
-            .map(|(position, entry)| (i32::try_from(position).expect("the list is bounded"), entry))
-            .collect();
-        super::ledger::write_revocations(client, &revocations).await?;
-        for (host, entry) in &self.ledger.hosts {
-            super::ledger::write_host(client, host, entry).await?;
-        }
-        for (entry, file) in &self.bootstrap {
-            super::bootstrap::write(client, entry, file.as_deref()).await?;
-        }
-        if let Some(enrolment) = &self.enrolment {
-            super::enrolment::write(client, enrolment).await?;
+        for record in &self.clients {
+            if !super::clients::write(client, record).await? {
+                return Err(format!("client {:?} was written twice", record.client_id));
+            }
         }
         Ok(())
     }
@@ -351,7 +313,6 @@ mod tests {
 
     use super::*;
     use crate::postgres::testing::TestDatabase;
-    use crate::revocation::{CertId, Facts, Host, Issued, Revocation, Revoked, SubjectValues};
 
     /// Every path under `root` with its mode and, for a file, its bytes: what "unchanged" is
     /// checked against — a directory created or removed, a mode changed, a file removed or
@@ -391,11 +352,10 @@ mod tests {
     }
 
     /// What a Server's startup would repair in `root`, and the copy must leave as it is: a
-    /// directory of the layout missing, a temporary file a crash left beside a record and at the
-    /// root, and a directory whose mode is not the Server's.
+    /// temporary file a crash left beside a record and at the root, and a directory whose mode is
+    /// not the Server's.
     fn unrepaired(root: &Path) {
-        std::fs::remove_dir_all(root.join(fs::HOSTS)).expect("no hosts/");
-        std::fs::write(root.join("revocations.json.tmp"), "[").expect("leftover");
+        std::fs::write(root.join("agents.json.tmp"), "[").expect("leftover");
         let agent = fs::json_files(&root.join(fs::AGENTS)).expect("agents")[0]
             .1
             .clone();
@@ -471,64 +431,30 @@ mod tests {
             .expect("open")
             .put(&InstanceUid::default(), &agent)
             .expect("agent");
-        let ledger = fs::FsLedgerStore::open(root).expect("open");
-        let issued = Issued {
-            facts: Facts {
-                id: CertId::new(b"ca", "0a"),
-                issuer_name: "CN=ca".into(),
-                subject: "CN=edge-01".into(),
-                key_fingerprint: "k".into(),
-                not_after_ms: 9,
-                host: Some("0192f0c4-host".into()),
-                subject_values: SubjectValues::default(),
-            },
-            instance_uid: "00".into(),
-            predecessor: None,
-            issued_ms: 1,
-        };
-        ledger.put_issued(&issued).expect("issued");
-        ledger
-            .save_revocations(&[Revocation {
-                id: "r1".into(),
-                revoked: Revoked::Certificate {
-                    authority: "client".into(),
-                    issuers: vec![issued.facts.id.issuer.clone()],
-                    serial: "0b".into(),
-                },
-                revoked_ms: 2,
-            }])
-            .expect("revocations");
-        ledger
-            .save_hosts(&BTreeMap::from([(
-                "0192f0c4-host".to_string(),
-                Host {
-                    instance_uids: BTreeSet::from(["00".to_string()]),
-                    ..Host::default()
-                },
-            )]))
-            .expect("hosts");
-        fs::FsBootstrapStore::open(root)
-            .expect("open")
-            .put_with_p12(
-                &BootstrapEntry {
-                    id: CertId::new(b"bootstrap", "b1"),
-                    serial: "b1".into(),
-                    subject: "CN=fleet bootstrap".into(),
-                    key_fingerprint: "00".into(),
-                    issued_ms: 1,
-                    not_after_ms: 2,
-                    ca_key: "ab".into(),
-                    p12: true,
-                },
-                b"the PKCS#12 file",
-            )
-            .expect("bootstrap");
-        fs::FsEnrolmentStore::open(root)
-            .save(
-                &serde_json::from_value(serde_json::json!({"window_until_ms": 99, "requests": []}))
-                    .expect("window"),
-            )
-            .expect("enrolment");
+        let spaces = fs::FsSpaceStore::open(root).expect("open");
+        for (name, seed) in [("Prod_EU", 'p'), ("lab", 'l')] {
+            assert!(spaces
+                .create(&crate::space_store::tests::space(name, seed))
+                .expect("space"));
+        }
+        let clients = fs::FsClientStore::open(root).expect("open");
+        let mut enrolled = crate::client_store::tests::client(
+            "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8091",
+            "Prod_EU",
+            3,
+        );
+        enrolled.token = Some(crate::client_store::ActiveToken {
+            hash: [9; 32],
+            expires_at: Some(u64::MAX),
+        });
+        assert!(clients.insert(&enrolled).expect("client"));
+        assert!(clients
+            .insert(&crate::client_store::tests::client(
+                "0192f0c4-7b1e-7d2a-9c3b-4a5d6e7f8092",
+                "lab",
+                4
+            ))
+            .expect("client"));
     }
 
     /// The copy over a fixture `data_dir` carries every record into the database and the blobs
@@ -542,7 +468,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (old, new) = (dir.path().join("old"), dir.path().join("new"));
         fixture(&old);
-        std::fs::remove_dir_all(old.join(fs::HOSTS)).expect("no hosts/");
         // Read before the old data_dir is made unrepaired: the adapters would repair it.
         let expected = Records::read(&old).expect("read");
         unrepaired(&old);
@@ -561,6 +486,9 @@ mod tests {
             report.lines.iter().any(|line| line == "1 agents"),
             "{report:?}"
         );
+        for line in ["2 spaces", "2 clients"] {
+            assert!(report.lines.iter().any(|l| l == line), "{report:?}");
+        }
         assert_eq!(snapshot(&old), before, "the old data_dir is unchanged");
 
         let database = test.open();
@@ -574,22 +502,17 @@ mod tests {
             expected.deployments
         );
         assert!(records.agents().expect("a").load().expect("load") == expected.agents);
+        assert_eq!(expected.spaces.len(), 2);
         assert_eq!(
-            records.ledger().expect("l").load().expect("load"),
-            expected.ledger
+            records.spaces().expect("s").load().expect("load"),
+            expected.spaces,
+            "every Space, its whole key included"
         );
-        let bootstrap = records.bootstrap().expect("b");
-        let entries = bootstrap.load().expect("load");
+        assert_eq!(expected.clients.len(), 2);
         assert_eq!(
-            entries
-                .iter()
-                .map(|entry| (entry.clone(), bootstrap.p12(&entry.id).expect("p12")))
-                .collect::<Vec<_>>(),
-            expected.bootstrap
-        );
-        assert_eq!(
-            records.enrolment().load().expect("load"),
-            expected.enrolment
+            records.clients().expect("c").load().expect("load"),
+            expected.clients,
+            "every client, its hashes and its token's expiry included"
         );
         let packages = records.packages().expect("p").load().expect("load");
         // Every Package whole: its identity and each entry's platform, hash, size and signature.
@@ -627,7 +550,7 @@ mod tests {
         .expect("every entry finds its blob in the new data_dir");
         assert!(!state_packages.is_empty());
 
-        drop((records, state_packages, bootstrap));
+        drop((records, state_packages));
 
         // The lock goes with its session, which the server notices once the connection closes.
         let again = dir.path().join("again");
@@ -699,7 +622,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = dir.path().join("old");
         fixture(&old);
-        test.sql("CREATE TYPE enrolment_requests AS (id text)");
+        test.sql("CREATE TYPE agent_assignment_configurations AS (id text)");
         let new = dir.path().join("new");
         let err = run_in(&old, &new, &test.config(), true, Some(&test.schema))
             .expect_err("the last table cannot be created");

@@ -19,6 +19,7 @@ to run it, where it puts things, and every configuration key.
 
 - [Running it](#running-it)
 - [Running it as an OS service](#running-it-as-an-os-service)
+- [Enrolling the host](#enrolling-the-host)
 - [On-disk layout](#on-disk-layout)
 
 **Configure it:**
@@ -64,9 +65,8 @@ to run it, where it puts things, and every configuration key.
 - **Updates its own binary** from a signed package while it consents, which it
   does by default, staging the new version beside the running one and asking the
   service manager for a restart.
-- **Accepts Server-offered connection settings**: a heartbeat interval, an
-  endpoint, or a newly issued client certificate, which it verifies by
-  connecting before it switches.
+- **Accepts Server-offered connection settings**: a heartbeat interval or an
+  endpoint, which it verifies by connecting before it switches.
 
 ## How it is built
 
@@ -127,8 +127,10 @@ type: if both columns of the fleet view said the same word, the distinction they
 exist to draw would be invisible on exactly the hosts nobody has named yet.
 
 Under this the identity proper is `instance_uid`, which the Agent asserts
-itself. Admission to the fleet is a trust boundary at the endpoint, not a
-per-Agent authorization — an Agent that gets in is believed about who it is.
+itself. Admission to the fleet is by the access token the host holds, one for
+all of its Agents ([Enrolling the host](#enrolling-the-host)); behind it an
+Agent is believed about who it is, except that the Server refuses a report for
+an `instance_uid` it has recorded under another host.
 
 ### The service points at a pointer
 
@@ -163,7 +165,7 @@ the file says is what runs.
 
 But the file is not entirely yours. The Server may send the `[[supervisor]]`
 blocks, and when it does the Client rewrites that part of the file and leaves
-the rest alone. Your endpoint, your client identity, your logging stay yours.
+the rest alone. Your endpoint, your trust, your logging stay yours.
 
 Three guards make that safe to have. The whole offer is **validated before
 anything is written** — if one block is bad, nothing changes and the Client
@@ -263,11 +265,12 @@ service manager whose job that is. In full:
 [Updating the Client itself](#updating-the-client-itself).
 
 **Connectivity.** The URL scheme picks the transport, and every connection off
-the host is TLS 1.3. The Client proves membership with one thing: a client
-certificate, whose private key never leaves the host, presented in every TLS
-handshake. It sends no credential. The Server can move the fleet to a new
-endpoint and renews the certificate before it expires, and the Client proves an
-offered setting by connecting with it before it switches. In full:
+the host is TLS 1.3. The Client proves membership with one thing: the access
+token it got when it enrolled, sent as `Authorization: Bearer` on every OpAMP
+exchange and every package download. It asks for a new token only when the
+Server says the one it holds is invalid. The Server can move the fleet to a new
+endpoint, and the Client proves an offered setting by connecting with it before
+it switches. In full: [Enrolling the host](#enrolling-the-host) and
 [Connecting to the Server](#connecting-to-the-server).
 
 ### What the Client will not do
@@ -295,11 +298,12 @@ Knowing the edges is half of knowing the design.
 - **It does not silently accept a configuration it does not understand** — an
   unknown key stops the start.
 
-On the last point, a related one worth knowing: a Client that cannot find its
-configuration file does not carry on with the defaults. The defaults hold no
-client certificate, so it refuses to start and names `[tls] cert_file` and
-`key_file`. Coming up anyway would mean dialling a development endpoint and
-managing nothing, which is the failure hardest to notice.
+On the last point, a related one worth knowing: a Client that holds no
+`state.json` does not carry on, whether or not it finds its configuration file.
+It refuses to start, as a service or in the foreground, and names `enrol`. A
+host that is not enrolled has nothing to present to the Server, and a Client
+that came up anyway would manage nothing, which is the failure hardest to
+notice. See [Enrolling the host](#enrolling-the-host).
 
 ## Running it
 
@@ -309,10 +313,10 @@ supervisor run --config /etc/opamp/supervisor.toml # the same thing, said explic
 classis --version
 ```
 
-| Global flag         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--config <path>`   | The TOML configuration file. Defaults to `supervisor.toml`. A missing file means the defaults, which hold no client certificate, so `run` refuses to start. `service install` is the one place where "not given" means something else: there the file is `supervisor.toml` inside the data root, because a path resolved against this shell's working directory is not one the service manager shares. |
-| `--state-dir <dir>` | Overrides the configuration file's `state_dir`. `service install` bakes this into the unit, so an installed service never depends on a relative path, and every later `service install` keeps the state directory the unit names unless this flag names another. It is how to place the state directory outside the data root and the layout root.                                                     |
+| Global flag         | Meaning                                                                                                                                                                                                                                                                                                                                            |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--config <path>`   | The TOML configuration file. Defaults to `supervisor.toml`. A missing file means the defaults. `service install` is the one place where "not given" means something else: there the file is `supervisor.toml` inside the data root, because a path resolved against this shell's working directory is not one the service manager shares.          |
+| `--state-dir <dir>` | Overrides the configuration file's `state_dir`. `service install` bakes this into the unit, so an installed service never depends on a relative path, and every later `service install` keeps the state directory the unit names unless this flag names another. It is how to place the state directory outside the data root and the layout root. |
 
 There are no environment-variable fallbacks for configuration — the flags say
 only where the file is and which instance is meant. Logging goes to stderr and
@@ -335,13 +339,18 @@ classis service stop
 classis service uninstall      # deregisters; never deletes the install layout or state
 ```
 
+An install registers the service and starts nothing, and does not let it start
+at boot: a host that is not enrolled runs nothing. `classis enrol` starts it
+([Enrolling the host](#enrolling-the-host)); `service start` is for a host that
+is enrolled already and was stopped.
+
 | Flag                          | Applies to                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--user`                      | every `service` action              | Target the current user's service manager instead of the system one. Useful in development; the default is a system service that starts at boot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `--root <dir>`                | `service install`, `service config` | The layout root: `versions/` and the `current` pointer. Given alone it also takes the data — `supervisor.toml` and `state/` — so everything lands under the one directory you named, whose file labeling is then yours to manage. Without it the defaults apply per platform and scope, and on Linux system installs they are two directories: `/opt/classis` for the layout, `/var/lib/classis` for the data, because SELinux never lets systemd start a binary labeled for `/var/lib`. macOS uses `/Library/Application Support/classis`, Windows `%ProgramData%\classis`, and user scope the user's own data directory — one directory each. No path is ever fixed. See [On-disk layout](#on-disk-layout). |
 | `--data-root <dir>`           | `service install`, `service config` | The data root — `supervisor.toml` and `state/` — when it is to differ from the layout root. A packaged install, the MSI included, passes neither flag and takes the platform defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--interactive`               | `service install`                   | Ask for the settings a fresh host cannot guess, write or edit the configuration file, and enrol a host that holds no certificate yet, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--endpoint <url>`            | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no siblings for the CA file or the client identity: it takes them from [beside the program](#files-beside-the-program), or they are files the operator names in the file.                                                                                                                                                                                                                   |
+| `--interactive`               | `service install`                   | Ask for the settings a fresh host cannot guess, and write or edit the configuration file, before registering the service. See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--endpoint <url>`            | `service install`                   | Write the configuration file with this endpoint instead of asking for it — the same file, from an answer given rather than typed at a prompt. Mutually exclusive with `--interactive`, and it keeps an existing file untouched. `ws://` and `http://` are refused unless the host is `127.0.0.1` or `::1`. It has no sibling for the CA file: it takes it from [beside the program](#files-beside-the-program), or it is a key the operator writes in the file.                                                                                                                                                                                                                                               |
 | `--run-as <account>`          | `service install`                   | Run the service as this account, and hand its files over to it. Without it, a re-registration keeps the account the existing registration names. `--run-as root` chooses root. See [Running it under its own account](#running-it-under-its-own-account). System scope only — a `--user` service already runs as its user.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--process-account <account>` | `service install`                   | Run every Managed Process under this account, through a second service that runs under it. Without it, a re-registration keeps the account the second service's registration names. See [Managed Processes under a process account](#managed-processes-under-a-process-account). System scope only.                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `--no-process-account`        | `service install`                   | Stop and deregister the second service; the Client starts its Managed Processes itself again. Mutually exclusive with `--process-account`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -477,8 +486,9 @@ with `--run-as` instead.
 ### Managed Processes under a process account
 
 Without a process account, every Managed Process runs as the Client's account
-and can read what the Client can: its private key `client-key.pem`, every other
-Supervisor's `config/`, and the program it runs, which it can also rewrite. A
+and can read what the Client can: its `state.json`, which holds the client
+secret and the access token, every other Supervisor's `config/`, and the
+program it runs, which it can also rewrite. A
 **process account** separates them.
 `service install --process-account <account>` registers a **second service**,
 `classis-agents`, that runs under that account and starts, signals and stops
@@ -495,8 +505,8 @@ service manager ─┬─ classis         Client, its own account   (supervisor 
 
 What the separation gives and what it does not:
 
-- A Managed Process, and anything it starts, cannot read the Client's key,
-  certificates, package state, logs or environment, nor write the program it
+- A Managed Process, and anything it starts, cannot read the Client's
+  `state.json`, package state, logs or environment, nor write the program it
   runs. A command a Configuration makes it run — a Telegraf `inputs.exec`, an
   Icinga `CheckCommand` — runs as the process account.
 - All Managed Processes share the one process account, so they still read one
@@ -630,13 +640,13 @@ at its start does not listen: it exits with
 At its next start the Client lays out what it keeps for the process account's
 group; everything else under `state_dir`, its logs among them, stays its own:
 
-| Path                                                                                          | Owner : group                    | Mode                            |
-| --------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------- |
-| `state_dir`, the Supervisors' root, each Supervisor's directory                               | Client : process account's group | `0710`                          |
-| the Client's key, certificates, `remote-config.pb`, `instance-uid`, package state and staging | Client                           | `0600` / `0700`                 |
-| `program/` and its files, the preflight's staging                                             | Client : process account's group | `0750`, no group or other write |
-| `config/` and its files                                                                       | Client : process account's group | `0750` / `0640`                 |
-| a kind's data directories                                                                     | Client : process account's group | `2770`                          |
+| Path                                                                        | Owner : group                    | Mode                            |
+| --------------------------------------------------------------------------- | -------------------------------- | ------------------------------- |
+| `state_dir`, the Supervisors' root, each Supervisor's directory             | Client : process account's group | `0710`                          |
+| `state.json`, `remote-config.pb`, `instance-uid`, package state and staging | Client                           | `0600` / `0700`                 |
+| `program/` and its files, the preflight's staging                           | Client : process account's group | `0750`, no group or other write |
+| `config/` and its files                                                     | Client : process account's group | `0750` / `0640`                 |
+| a kind's data directories                                                   | Client : process account's group | `2770`                          |
 
 A re-registration leaves what the process account owns, and what is in its
 group, as it is. A member of a `.tar.gz` package never lands writable by group
@@ -837,77 +847,52 @@ registrations from one decision.
 fleet's files, under the names the operator tools give them — or, with
 `--fleet-files <dir>`, in that directory instead, never in both:
 
-| File                                    | What the install does with it                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `server-ca.pem`                         | offers it as the CA certificate of the Server; without `--interactive`, copies it beside `supervisor.toml` and names it in `[tls] ca_file`                                                                                                                                                                                                                                        |
-| `bootstrap.pem` and `bootstrap-key.pem` | offers them as the bootstrap pair; without `--interactive`, enrols with them and waits for an operator's approval. Both or neither: one alone is named in a warning and ignored                                                                                                                                                                                                   |
-| `bootstrap.p12`                         | the bootstrap certificate and its key in one file under a password, as the Server hands it out; offered as the bootstrap certificate, and the password is asked with input hidden. Without `--interactive`, it enrols with it under the password `--bootstrap-password-file` reads. Lying beside `bootstrap.pem` or `bootstrap-key.pem`, neither identity is used, with a warning |
+| File            | What the install does with it                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `server-ca.pem` | offers it as the CA certificate of the Server; with `--endpoint`, copies it beside `supervisor.toml` and names it in `[tls] ca_file` |
 
-So a host is set up by copying the program and these files into one
+So a host is set up by copying the program and this file into one
 directory and running, from there:
 
 ```console
 $ cd /root/fleet-files && sudo ./classis service install --endpoint wss://fleet.example.com:4320/v1/opamp
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml for wss://fleet.example.com:4320/v1/opamp
-enrolling with /root/fleet-files/bootstrap.pem and /root/fleet-files/bootstrap-key.pem from beside the program
-enrolling with wss://fleet.example.com:4320/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
-INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-enrolled: the issued certificate is in /var/lib/classis/state
 installed classis
+  …
+enrol this host, which starts the service: supervisor enrol <base-url> <key>
 ```
 
 A value the configuration file already holds wins over a file beside the
 program, and an existing configuration is never overwritten. The CA is taken
-only for a `wss://` or `https://` endpoint, and the
-bootstrap pair only while the host holds no certificate the Server issued. An
-install run from a directory that holds a bootstrap pair waits for the approval;
-Ctrl-C stops it and registers nothing. The files stay where they are: remove the
-bootstrap pair once the host is enrolled. `service config` runs the installed
-copy of the program and does not look.
+only for a `wss://` or `https://` endpoint. The files stay where they are.
+`service config` runs the installed copy of the program and does not look.
 
-**A `bootstrap.p12` needs its password.** `--bootstrap-password-file <path>`
-names a file whose first line is the password; it is read once and left as it
-is, and the password is never written and never sent — it only opens the file on
-this host. There is no way to give it on the command line or in the environment,
-where other processes could read it. The install opens the file before it writes
-anything, so a missing flag, a password that does not open the file, or the flag
-with no `bootstrap.p12` to open stops it with nothing changed:
-
-```console
-$ sudo ./classis service install --endpoint wss://fleet.example.com:4320/v1/opamp \
-    --bootstrap-password-file /root/fleet-files/bootstrap.pass
-…
-enrolling with /root/fleet-files/bootstrap.p12
-```
-
-The key it decrypts is held in memory for the enrolment and never written to
-disk; what the host keeps is the key it makes for its own certificate.
+The install registers the service and starts nothing: the host is not enrolled
+yet, and a Client without `state.json` refuses to run. The line it ends with
+names the next step, which is [Enrolling the host](#enrolling-the-host). At user
+scope (`--user`) the line says to start the service yourself after `enrol`, with
+`supervisor service start --user`.
 
 ### The questionnaire: `--interactive` and `service config`
 
 A release artifact is the bare binary, so a freshly downloaded Client has no
-`supervisor.toml` to edit. Without one it still installs, but the service
-refuses to start: the defaults hold no client certificate. `--interactive` is
-the way past that. It needs the Server reachable and its
-[enrolment window](setup.md#5-enrol-the-client) open, because it enrols the host
-before it registers the service:
+`supervisor.toml` to edit, and without one it would dial the development
+default, `ws://127.0.0.1:4320/v1/opamp`. `--interactive` asks for the few
+settings a fresh host cannot guess and writes the file before it registers the
+service. It needs a terminal, and it does not contact the Server:
 
 ```console
 $ classis service install --interactive        # root / Administrator
 No configuration at /var/lib/classis/supervisor.toml — answering these writes it (everything else keeps its default).
-Server OpAMP endpoint [wss://127.0.0.1:4320/v1/opamp]: wss://fleet.example.com/v1/opamp
+Server OpAMP endpoint [ws://127.0.0.1:4320/v1/opamp]: wss://fleet.example.com/v1/opamp
 This Agent's name (service.instance.name) [Supervisor Agent]: host-01
 CA certificate of the Server — the CA that signed its certificate (PEM path): /etc/opamp/ca.pem
-Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path): /etc/opamp/bootstrap.pem
-Private key of the bootstrap certificate (PEM path): /etc/opamp/bootstrap-key.pem
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
-enrolling with wss://fleet.example.com/v1/opamp: an operator approves this host's request by the key fingerprint logged below (Ctrl-C stops waiting)
-INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-enrolled: the issued certificate is in /var/lib/classis/state
 installed classis
-…
+  …
+enrol this host, which starts the service: supervisor enrol <base-url> <key>
 ```
 
 `service config` asks the same questions of an installed Client and registers
@@ -920,7 +905,6 @@ Editing /var/lib/classis/supervisor.toml — Enter keeps the value shown (everyt
 Server OpAMP endpoint [wss://fleet.example.com/v1/opamp]:
 This Agent's name (service.instance.name) [host-01]: web-01
 CA certificate of the Server — the CA that signed its certificate (PEM path) [/var/lib/classis/server-ca.pem]:
-enrolled: this Client holds a certificate the Server issued
 copied /var/lib/classis/server-ca.pem
 wrote /var/lib/classis/supervisor.toml
 restart the service to apply: supervisor service stop && supervisor service start
@@ -935,27 +919,15 @@ error names it.
 What the questionnaire asks about is only what has no useful default on a fresh
 host:
 
-- **the endpoint**, suggesting `wss://127.0.0.1:4320/v1/opamp`. A `ws://` or
+- **the endpoint**, suggesting `ws://127.0.0.1:4320/v1/opamp`. A `ws://` or
   `http://` endpoint is refused unless its host is `127.0.0.1` or `::1`, and the
   question is asked again;
 - **the Agent's name**;
-- **the CA certificate of the Server**, the CA that signed its certificate,
-  whenever the endpoint is `wss://` or `https://` ([`[tls]`](#tls)). It is
-  copied beside `supervisor.toml` as `server-ca.pem`, owner-only, and the file
-  names the copy; the original can be removed afterwards;
-- **the bootstrap certificate and its private key, only while the host is not
-  enrolled** — while its state directory holds no `client-cert.pem` and
-  `client-key.pem`. They are neither copied nor written into the file: the
-  questionnaire [enrols](#enrolment-the-first-certificate) with them where they
-  lie, logs the request's key fingerprint and waits until an operator approves
-  it, then stores the issued certificate in the state directory. Ctrl-C stops
-  the wait; the file stays written, nothing is registered, and running the
-  questionnaire again asks again and resumes the same request, printing its
-  fingerprint. A request an operator rejected stays rejected: the Server's
-  refusal is logged and the wait goes on, so stop it, delete
-  `client-key.pending.pem` and `client-csr.pending.pem` from the state
-  directory, and run the questionnaire again for a fresh request. A path that
-  names no readable file, here or for the CA, is asked for again.
+- **the CA certificate of the Server**, the CA that signed the certificate the
+  reverse proxy in front of it presents, whenever the endpoint is `wss://` or
+  `https://` ([`[tls]`](#tls)). It is copied beside `supervisor.toml` as
+  `server-ca.pem`, owner-only, and the file names the copy; the original can be
+  removed afterwards. A path that names no readable file is asked for again.
 
 The questionnaire asks for no package key: every package is verified up to the
 Package Roots compiled into the Client. A new file is written with
@@ -965,14 +937,14 @@ A new file gets everything else as commented defaults. An existing file is
 edited in place: only the keys asked about change, and every other key, every
 comment, the `[[supervisor]]` blocks and the self-update consent stay as you
 wrote them. No question asks for a credential, and the questionnaire writes no
-`[auth]` section; on Unix the file is mode `0600` and keeps its owner.
+`[auth]` section; on Unix the file is mode `0600` and keeps its owner. Enrolling
+is a step of its own, after the install.
 
 Four rules worth knowing before you script around it:
 
 - **Interactivity is never assumed.** Without the flag, `install` asks nothing
   and never touches an existing file. It prints a warning when the path it is
-  about to bake into the unit holds no file, or a file without a client
-  certificate.
+  about to bake into the unit holds no file.
 - **Defaults are what is there.** Re-running `--interactive` or `service config`
   on a configured host offers every answer typed into the first one, or edited
   since, and keeps whatever it does not ask about.
@@ -991,15 +963,14 @@ Where there is an answer but no terminal — a provisioning run, an MSI dialog, 
 ```console
 $ classis service install --endpoint wss://fleet.example.com/v1/opamp
 wrote /var/lib/classis/supervisor.toml for wss://fleet.example.com/v1/opamp
-warning: /var/lib/classis/supervisor.toml: [tls] cert_file and key_file are required — … The service is registered, and refuses to start until this is set (or re-run with --interactive).
 installed classis
-…
+  …
+enrol this host, which starts the service: supervisor enrol <base-url> <key>
 ```
 
-It writes only the endpoint; everything else keeps its default. The service is
-registered, and it refuses to start until you add the client certificate and its
-key ([`[tls]`](#tls)) to the file. All four rules above hold unchanged — in
-particular, an existing file is kept.
+It writes only the endpoint, and the CA found beside the program; everything
+else keeps its default. All four rules above hold
+unchanged — in particular, an existing file is kept.
 
 ### Installing from a native package
 
@@ -1016,19 +987,19 @@ sudo apt install ./supervisor_1.2.3_linux_amd64.deb
 sudo dnf install ./supervisor_1.2.3_linux_amd64.rpm
 ```
 
-**The service is registered and left stopped.** That is deliberate: a Client
-with no configuration holds no client certificate, and it is refused at startup.
-Two steps remain:
+**The service is registered and left stopped, and does not start at boot.** That
+is deliberate: the host has no configuration and is not enrolled, and a Client
+without `state.json` refuses to run. Two steps remain:
 
 ```sh
 sudo classis service install --interactive
-sudo systemctl start classis
+sudo classis enrol https://<server> <key>
 ```
 
-The first asks for the endpoint, the client certificate and its key.
-`--endpoint` alone writes a
-file the Client refuses until you add the certificate and its key. An upgrade of
-a host whose service was running restarts it on the delivered binary.
+The first asks for the endpoint and the Server's CA. The second enrols the host
+with its Space's key, and then starts the service and lets it start at boot
+([Enrolling the host](#enrolling-the-host)). An upgrade of a host whose service
+was running restarts it on the delivered binary.
 
 **The `.deb` and the `.rpm` run the service under the system account
 `classis`.** The post-install creates it where it is missing — no password,
@@ -1044,24 +1015,20 @@ an account cannot do and how to grant it.
 
 **Without a terminal**, as configuration management installs a host, the package
 is installed first and the host enrolled in a step after it — the package's own
-install never enrols, so `apt` and `dnf` never wait for an approval. Put the
-fleet's files in a directory and name it:
+install never enrols. Put the fleet's files in a directory and name it:
 
 ```console
 $ sudo dnf install -y ./supervisor_1.2.3_linux_amd64.rpm
 $ sudo classis service install --endpoint wss://fleet.example.com:4320/v1/opamp \
-    --fleet-files /root/fleet --bootstrap-password-file /root/fleet/bootstrap.pass
-$ sudo systemctl start classis
+    --fleet-files /root/fleet
+$ sudo classis enrol https://fleet.example.com:4320 cle1_lab_…
 ```
 
-The second step waits for an operator's approval, as every enrolment does; run
-it as a task that may wait, such as an asynchronous task in Ansible, while the
-enrolment window is open. Remove the directory afterwards. With a PEM pair in
-it, `--bootstrap-password-file` is left out.
+The last step starts the service. Remove the directory afterwards.
 
 On Windows the `.msi` asks for the installation folder, the endpoint, and the
 self-update consent. The endpoint field is prefilled with
-`wss://127.0.0.1:4320/v1/opamp` in the interactive install only. The folder
+`ws://127.0.0.1:4320/v1/opamp` in the interactive install only. The folder
 holds only the delivered program; `service install` puts the layout,
 `supervisor.toml` and the state under `%ProgramData%\classis`. The same file
 installs unattended with the same answers, which is how Intune, Group Policy and
@@ -1073,11 +1040,11 @@ C:\> msiexec /i supervisor_1.2.3_windows_amd64.msi /qn ^
        ENDPOINT="wss://fleet.example.com/v1/opamp"
 ```
 
-A silent install that names no `ENDPOINT` writes no configuration. The MSI asks
-for no client identity, because the certificate and its key are files you put on
-the host, and it starts no service. Name them as `cert_file` and `key_file`
-under `[tls]` in `%ProgramData%\classis\supervisor.toml`, then start the
-service.
+A silent install that names no `ENDPOINT` writes no configuration. The MSI
+registers the service but neither starts it nor lets it start at boot, and it
+asks for nothing that enrols the host: run `classis enrol <base-url> <key>` from
+an elevated prompt, which enrols the host and starts the service
+([Enrolling the host](#enrolling-the-host)).
 
 Two things to know about living with a packaged install:
 
@@ -1092,9 +1059,11 @@ Two things to know about living with a packaged install:
   staged version.** `versions/` and the `current` pointer go with the package;
   the state directory and `supervisor.toml` stay, for the same reason an install
   never overwrites a configuration: it holds what you wrote, and the host's
-  identity. `apt purge` deletes those too — the instance directory whole. A
-  reinstall after a plain remove keeps the host's identity and configuration and
-  stages its own binary fresh.
+  enrolment and identity. `apt purge` deletes those too — the instance directory
+  whole. A reinstall after a plain remove keeps the host's enrolment, identity
+  and configuration and stages its own binary fresh; it registers the service
+  without starting it, and `classis service start` starts it, since `enrol`
+  refuses a host that still holds its `state.json`.
 
 macOS has no native installer; there, unpack the `.tar.gz` and run
 `service install` yourself.
@@ -1170,9 +1139,9 @@ directory itself, where no Supervisor can be named `logs`.
 
 This is a different thing from the Client's own telemetry (`ReportsOwnLogs`),
 which ships log records to a destination the **Server** offers. That needs a
-Server it can already reach — which is exactly what a bad `supervisor.toml`, an
-unusable certificate, or a refused endpoint does not give it. The file on disk
-is what explains those.
+Server it can already reach — which is exactly what a bad `supervisor.toml`, a
+host that is not enrolled, or a refused endpoint does not give it. The file on
+disk is what explains those.
 
 The Windows services list has a **Description** column beside that name, and it
 is a separate field that nothing fills on its own — a service can carry a
@@ -1214,6 +1183,160 @@ at `sc create` had already staged a version directory and pointed `current` at
 it, leaving half an install behind. `uninstall`, `start`, and `stop` write
 nothing beforehand and simply report the manager's own refusal.
 
+## Enrolling the host
+
+A host belongs to exactly one **Space** of its Server, and it joins by enrolling
+with that Space's **enrolment key**, `cle1_<space>_<secret>`. The key names the
+Space, so no command takes the Space a second time. It is reusable and admits
+the host at once: no operator approves a request. Treat it as a secret. This
+build of the Server has no operator command that creates a Space or shows or
+rotates its key, so this page takes the key as given: you have it from whoever
+runs the Server.
+
+A Client without a `state.json` runs nothing. Installing it registers the
+service but neither starts it nor lets it start at boot; `enrol` is what
+writes `state.json`, and it starts the service.
+
+```console
+$ sudo classis enrol https://fleet.example.com:4320 cle1_lab_…
+enrolled in the space lab as 0193a6f0-…
+  state file: /var/lib/classis/state/state.json
+  the service is started, and starts at boot
+```
+
+`enrol` takes the Server's base URL and the key, and nothing else. The base URL
+is `https://`, or `http://` to `127.0.0.1` or `::1` alone, with no credentials,
+query or fragment; a path in front of the routes, as a reverse proxy may add
+one, is kept. `/v1/enrol` and `/v1/token` are resolved against it. The Client's
+OpAMP connection goes on dialling the `endpoint` of `supervisor.toml`, which
+`enrol` does not touch. In order:
+
+1. It reads the configuration the way a run does, and takes its trust from
+   `[tls] ca_file` ([`[tls]`](#tls)). `--config` and `--state-dir` say which
+   file and which state directory; without them, where a system service is
+   registered, it takes the configuration and the state directory that
+   registration names.
+2. It refuses a host that holds a `state.json` already, before it asks the
+   Server anything: the host is enrolled, and
+   [`revoke`](#taking-the-host-out-revoke) ends that first.
+3. It registers the host with the key as its bearer credential (RFC 7591, at
+   `/v1/enrol`). The Server answers with the host's **Device ID**, its
+   `client_id`, and a client secret, and names the Space the key belongs to.
+   With those it asks `/v1/token` for its first access token (the client
+   credentials grant, the secret sent as HTTP Basic). A refusal by the Server,
+   at either step, writes nothing.
+4. It writes `state.json` once.
+5. Where a system service is registered for that state directory, it hands
+   `state.json` to the account the service runs as, lets the service start at
+   boot, and starts it. Where none is, it says so, and `supervisor run` runs
+   the Client in the foreground. A service at user scope names no state
+   directory `enrol` could match it on: start it yourself afterwards, with
+   `supervisor service start --user`. If a step after the file is written
+   fails, the message says that the host is enrolled and what is left to do.
+
+### `state.json`
+
+The file lives in the state directory, owner-only (mode `0600` on Unix), and is
+never written through a link:
+
+| Field           | Holds                                                            |
+| --------------- | ---------------------------------------------------------------- |
+| `endpoint`      | the base URL given to `enrol`                                    |
+| `space`         | the Space, as the Server returned it                             |
+| `device_id`     | the host's Device ID, the `client_id` the Server gave it         |
+| `client_secret` | what replaces the access token without losing the Device ID      |
+| `access_token`  | the host's credential, which every request to the Server carries |
+
+Only `access_token` ever changes, and only as
+[Renewal](#when-the-token-is-replaced) describes. The Client never formats
+either secret into its log. A copy of this file lets whoever holds it act as the
+host until a new token is issued, so back it up and move it as you would a
+private key.
+
+### What the Client sends
+
+- **On every OpAMP exchange, on both transports**, the header
+  `Authorization: Bearer <access_token>`: on the WebSocket upgrade, on every
+  plain-HTTP request, and on the connection that verifies an offered setting.
+- **On every package download** from the Server's own origin
+  ([Where a download may come from](#where-a-download-may-come-from)).
+- **On its own telemetry**, only to a destination that has the Server's own
+  origin ([Its own telemetry](#its-own-telemetry)). The token never reaches
+  another collector.
+- **Nothing in a URL, and no TLS client certificate.**
+
+Every Agent on the host, the Client's own and each Supervisor's, speaks under
+this one token. The Server derives the host from it, so a host never states an
+identity of its own.
+
+### When the token is replaced
+
+The Client keeps no expiry and never renews ahead of time. It asks for a new
+token in one case: a `401` whose Bearer challenge says `error="invalid_token"` —
+on an OpAMP connection or on a package download. It then asks `/v1/token` with
+its client credentials, rewrites `access_token` in `state.json` and nothing else
+in it (the file is replaced whole, by a rename, and keeps its owner and mode),
+and goes on:
+
+```text
+WARN the Server refused the access token (invalid_token); requesting a new one
+INFO a new access token is in force
+```
+
+A new token ends the one before it, so the Server closes the WebSocket sessions
+the old token admitted, with close code 1008, and the Client reconnects with the
+new one. Any other `401` — no credential, a malformed request, an unknown
+client — asks for no new token: the Client logs `admission failed` and retries
+with its usual backoff. If the Server refuses the client credentials too, the
+Client logs `cannot get a new access token` and tries again after a backoff.
+
+### Starting without an enrolment
+
+A Client that finds no `state.json` — as a service or in the foreground —
+refuses to start, logs `the Client does not start`, and names the command:
+
+```text
+this host is not enrolled: /var/lib/classis/state/state.json does not exist, and the Client runs nothing without it. Enrol it with `supervisor enrol <base-url> <key>`
+```
+
+A `state.json` that is not the file `enrol` writes is refused the same way, by
+name and without quoting what it holds.
+
+### Taking the host out: `revoke`
+
+```console
+$ sudo classis service stop
+$ sudo classis revoke
+Revoke this host? Everything in /var/lib/classis/state is deleted: its enrolment, its Agents' identities and its logs. The Server is not told, and a host enrolled again is a new one. [y/N]
+```
+
+`revoke` is local: it never contacts the Server. It acts on the same state
+directory `enrol` found, in this order:
+
+1. It refuses while the service runs: stop it first with `service stop`, so that
+   nothing writes to the directory while it is deleted. `--force` does not
+   override this.
+2. It asks for a confirmation, which needs a terminal on stdin; `--force` skips
+   it, and without a terminal and without `--force` it changes nothing.
+3. It keeps the registered service from starting at boot again.
+4. It deletes everything in the state directory, `state.json` first: the
+   Agents' identities, the connection settings, the high-water marks, the logs,
+   the Supervisors' directories. `--keep-cache` spares `config/` and
+   `packages/`, which a re-enrolled host would only download again; it is an
+   exception taken out of the default, so whatever the Client keeps there in
+   future is deleted under the flag too. A `supervisor_dir` or a `[logging] dir`
+   placed outside the state directory is not touched.
+
+```text
+revoked: everything in /var/lib/classis/state is deleted
+  the service will not start at boot until this host is enrolled again
+```
+
+The Server is not told, so it still holds what it recorded for the host. Enrol
+again, and the host has a new Device ID and its Agents new `instance_uid`s: the
+Server sees new Agents, not the old ones come back. `supervisor.toml` is not in
+the state directory and stays.
+
 ## On-disk layout
 
 Where a managed host keeps things: the program, its configuration, its state,
@@ -1237,9 +1360,9 @@ Two roots, and everything hangs off them:
 The split is worth reading twice, because it is the rule the rest of this page
 follows. The **layout root holds what a package can put back**: program files,
 one directory per version, and a pointer at the live one. The **data root holds
-what nothing can put back**: the identity this host reports to the Server, its
-client certificate and key, the configuration an operator wrote, and the
-configuration the fleet sent.
+what nothing can put back**: the enrolment that makes this host a member of the
+fleet, the identity it reports to the Server, the configuration an operator
+wrote, and the configuration the fleet sent.
 
 Directories are named after the **product**; the file inside is the **program**.
 They are not the same name and are not meant to be — two products built from
@@ -1317,6 +1440,7 @@ on Windows, where junctions need no special privilege.
   supervisor.toml           the file you edit
   server-ca.pem             the copy of the answered CA, if the questionnaire wrote the file
   state/
+    state.json              the host's enrolment: where it enrolled, its Device ID and credentials
     instance-uid            this host's identity to the Server
     remote-config.pb        the last configuration it received
     connection-settings.pb  Server-offered settings, if any
@@ -1327,10 +1451,13 @@ on Windows, where junctions need no special privilege.
     supervisors/            one directory per Agent — see below
 ```
 
-`instance-uid` is the file that matters most. It is what makes this host _the
-same_ Agent across restarts and upgrades; delete it and the Server sees a host
-it has never met, while the old row lingers. Nothing regenerates it, which is
-why the data root survives an uninstall.
+`state.json` and `instance-uid` are the files that matter most. `state.json` is
+what the host presents to the Server; without it the Client runs nothing, and
+only `enrol` makes another, with a new Device ID ([Enrolling the
+host](#enrolling-the-host)). `instance-uid` is what makes this host _the same_
+Agent across restarts and upgrades; delete it and the Server sees a host it has
+never met, while the old row lingers. Nothing regenerates either, which is why
+the data root survives an uninstall.
 
 The state directory is the one `--state-dir` names, else the one the existing
 service registration names, so an upgrade never moves it. A first install takes
@@ -1427,8 +1554,10 @@ completes it (see [Uninstalling](#uninstalling)).
 
 The pattern is the same everywhere: **removing the program is not removing the
 host from the fleet.** A reinstall over a surviving data root comes back as the
-same Agent, with the same identity and the same client certificate, and the
-Agents it supervises come back as themselves too.
+same Agent, with the same identity and the same enrolment, and the Agents it
+supervises come back as themselves too. What ends the enrolment is
+[`revoke`](#taking-the-host-out-revoke), which deletes what the state directory
+holds.
 
 This is also why the data root is not under `Program Files` on Windows or under
 `/opt` on Linux: an uninstall clears those, and a host's identity and the
@@ -1444,22 +1573,23 @@ the intervals in `supervisor.toml`. Delete it to revert to what the file says.
 
 The full annotated example is
 [`config/supervisor.toml`](../../config/supervisor.toml). Every key is shown
-below with its default. A client certificate in [`[tls]`](#tls) is required, and
-the Client refuses to start without one; every other key is optional. An unknown
-key fails startup rather than being ignored, with one exception: a leftover
-[`[auth]`](#a-leftover-auth) is ignored with a notice.
+below with its default. Every key is optional. What the host is to its Server —
+its Space, its Device ID, its credentials — is not in this file but in
+`state.json`, which `enrol` writes ([Enrolling the host](#enrolling-the-host)).
+An unknown key fails startup rather than being ignored, with one exception: a
+leftover [`[auth]`](#a-leftover-auth) is ignored with a notice.
 
 ### Top level
 
-| Key                       | Default                           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `endpoint`                | `"wss://127.0.0.1:4320/v1/opamp"` | The Server's OpAMP endpoint. The scheme selects the transport: `wss://` for WebSocket, `https://` for polling, both TLS 1.3. `ws://` and `http://` are accepted only when the host is the IP literal `127.0.0.1` or `::1`; to any other host, the name `localhost` included, the Client refuses to start.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `name`                    | `"Supervisor Agent"`              | The Agent's `service.instance.name` — your name for _this_ Client, shown in the fleet view and matchable by a Selector. Its `service.name` is the constant type `supervisor`, the same on every host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `poll_interval_secs`      | `30`                              | How often the plain-HTTP transport polls. Ignored on WebSocket.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `heartbeat_interval_secs` | `30`                              | Heartbeat interval on WebSocket. `0` disables heartbeats and undeclares the capability; on plain HTTP every poll already is the periodic report.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `max_message_size_bytes`  | `67108864` (64 MiB)               | The largest OpAMP message sent or accepted, in either direction — including on the Supervisor Endpoint. A message past it is never sent, and an oversized one from the Server is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `state_dir`               | `"client-state"`                  | Where the Client persists its own Agent's identity, its remote configuration, and any Server-offered connection settings. A self-update artifact is streamed here first, so it needs room for one agent binary.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `supervisor_dir`          | `<state_dir>/supervisors`         | Where the per-Supervisor directories live. Set it when the programs must not live where the state does — `/var/lib` is often mounted `noexec`, and sized for state rather than for a few hundred megabytes of Collector. Where it is the state directory itself, a Supervisor named after what the Client keeps there — `instance-uid`, `config`, `packages`, `logs`, `supervisors` — is refused at startup and in a set the Server offers, and no Supervisor's directory may be the state directory or hold it. Outside the data root, the layout root and the state directory, `service install` creates and hands over nothing for it: create it yourself, writable by the service's account only.                     |
+| Key                       | Default                           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint`                | `"ws://127.0.0.1:4320/v1/opamp"`  | The Server's OpAMP endpoint. The scheme selects the transport: `wss://` for WebSocket, `https://` for polling, both TLS 1.3. `ws://` and `http://` are accepted only when the host is the IP literal `127.0.0.1` or `::1`; to any other host, the name `localhost` included, the Client refuses to start.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `name`                    | `"Supervisor Agent"`              | The Agent's `service.instance.name` — your name for _this_ Client, shown in the fleet view and matchable by a Selector. Its `service.name` is the constant type `supervisor`, the same on every host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `poll_interval_secs`      | `30`                              | How often the plain-HTTP transport polls. Ignored on WebSocket.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `heartbeat_interval_secs` | `30`                              | Heartbeat interval on WebSocket. `0` disables heartbeats and undeclares the capability; on plain HTTP every poll already is the periodic report.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `max_message_size_bytes`  | `67108864` (64 MiB)               | The largest OpAMP message sent or accepted, in either direction — including on the Supervisor Endpoint. A message past it is never sent, and an oversized one from the Server is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `state_dir`               | `"client-state"`                  | Where the Client persists the host's enrolment (`state.json`), its own Agent's identity, its remote configuration, and any Server-offered connection settings. A self-update artifact is streamed here first, so it needs room for one agent binary.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `supervisor_dir`          | `<state_dir>/supervisors`         | Where the per-Supervisor directories live. Set it when the programs must not live where the state does — `/var/lib` is often mounted `noexec`, and sized for state rather than for a few hundred megabytes of Collector. Where it is the state directory itself, a Supervisor named after what the Client keeps there — `instance-uid`, `config`, `packages`, `logs`, `supervisors` — is refused at startup and in a set the Server offers, and no Supervisor's directory may be the state directory or hold it. Outside the data root, the layout root and the state directory, `service install` creates and hands over nothing for it: create it yourself, writable by the service's account only. |
 
 > **Moving `supervisor_dir` on a running host leaves the old tree behind**,
 > `instance-uid` included, so every Supervisor re-registers as a **new** Agent
@@ -1540,84 +1670,37 @@ is where the protocol puts it. Leave it out and nothing is reported.
 ```toml
 [tls]
 ca_file = "ca.pem"             # trust: replaces the built-in roots
-cert_file = "client.pem"       # identity: what this Client presents
-key_file = "client-key.pem"
 ```
 
-`ca_file` is the trust override for `wss://`/`https://` endpoints whose
-certificate comes from a private CA, and it replaces the default trust. Without
+`ca_file` is the trust override for `wss://`/`https://` endpoints — the reverse
+proxy in front of the Server — whose certificate comes from a private CA, and it
+replaces the default trust. Without
 it the Client trusts the built-in web PKI roots on `wss://` and the system's
 trust store on `https://`. Trust is this file's, never a Server's instruction.
+`enrol`, the OpAMP connection, every download and the Client's own telemetry
+all use it.
 
-`cert_file` and `key_file` are this Client's own certificate, and they go
-together or not at all. The Server asks for a client certificate in every TLS
-handshake, so the Client refuses to start without one. The pair written here is
-the identity an operator provisions: a certificate the client CA issued, or the
-**bootstrap certificate** a fresh host enrols with. A certificate the Server
-issued outranks it: the Client stores that pair in its state directory as
-`client-cert.pem` and `client-key.pem` and prefers it, the same precedence
-persisted connection settings have over `supervisor.toml`. Deleting the stored
-pair reverts to what is written here. The Client presents its certificate on
-both transports, to its Server's own origin and to no other host.
-
-#### Enrolment: the first certificate
-
-A fresh host is given a bootstrap certificate and its key, as two PEM files or
-as one `bootstrap.p12` under a password. The Server issues them on an operator's
-request (see
-[the Server](server.md#bootstrap-certificates-issued-by-the-server)), from the
-CA it names in `[enrolment] bootstrap_ca_file`. The
-[questionnaire](#the-questionnaire---interactive-and-service-config) enrols with
-the pair where it lies before the service is registered, and copies neither
-file; a file written by hand names the pair as `cert_file` and `key_file`, and
-the service enrols when it starts. Enrolment runs the same either way:
-
-1. An operator opens the Server's enrolment window (see
-   [the Server](server.md#enrolment-a-new-host-approved-by-an-operator)).
-2. The Client connects with the bootstrap certificate. It generates a key, which
-   never leaves the host, and sends a certificate signing request for it as soon
-   as the Server's first answer says it signs certificates. The request proves
-   the bootstrap certificate with a signature made with its key, and the Server
-   files it under that certificate.
-3. The Client logs the SHA-256 fingerprint of that key:
-
-   ```text
-   INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-   ```
-
-4. The operator finds the pending request whose `id` is that fingerprint and
-   approves it.
-5. The certificate arrives through the ordinary offer flow. The Client proves it
-   by connecting, stores it, and uses it from then on.
-
-Until the request is answered, the Client keeps its pending key and re-sends the
-same request. A closed window is answered `503`, which the Client retries with
-its usual backoff and which does not count toward the Server's admission
-throttle. The issued certificate is renewed the same way once it is two thirds
-through its validity, with no operator involved. The private key is written
-`0600`; on Windows the state directory's ACL is what protects it. Over an
-`https://` endpoint the enrolling Client sends its request alone, before the
-Server's first answer, and re-sends it at every poll.
+The Client presents no TLS certificate. What admits it is the access token it
+holds in `state.json` ([Enrolling the host](#enrolling-the-host)), and nothing
+in this file says who it is. A `cert_file` or `key_file` left in `[tls]` by a
+release that admitted hosts by certificate is an unknown key, refused at startup
+like any other: delete them.
 
 ### A leftover `[auth]`
 
-The Client has no credential to configure: the Server admits it by its client
-certificate alone, and it sends no `Authorization` header on either transport,
-on the verification of an offered setting, or to anything else upstream. A
-`supervisor.toml` may still hold an `[auth]` section. The Client ignores it,
-whatever keys it holds, sends nothing from it, and says so once at startup:
+The Client has no credential to configure: what it presents to the Server is
+the access token in `state.json`, which `enrol` writes, and it reads none from
+this file. A `supervisor.toml` written for an earlier release may still hold an
+`[auth]` section. The Client ignores it, whatever keys it holds, sends nothing
+from it, and says so once at startup:
 
 ```text
-WARN [auth] is ignored: the Server admits this Client by its client certificate alone, and nothing from the section is sent — it can be deleted from the file config=/var/lib/classis/supervisor.toml
+WARN [auth] is ignored: this Client reads no credential from the file, and nothing from the section is sent — it can be deleted from the file config=/var/lib/classis/supervisor.toml
 ```
 
 It is not refused, because a Client the Server updates starts with the file it
 already has and nobody at the host. Its values stay masked in the effective
 configuration the Client reports. Delete the section when convenient.
-
-The Server is upgraded before its Clients: a Server that demands a credential
-answers this Client `401`, because it sends none. See
-[Upgrading to admission by certificate alone](server.md#upgrading-to-admission-by-certificate-alone).
 
 ### `[packages]`
 
@@ -1627,10 +1710,10 @@ self_update = true
 archive_key = "the key an encrypted .7z was packed with"
 ```
 
-| Key                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `self_update`      | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. See [Updating the Client itself](#updating-the-client-itself).                                                                                                                                                                                      |
-| `archive_key`      | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                                                                                                                                                                                                               |
+| Key           | Meaning                                                                                                                                                                                                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `self_update` | Consent for the Server to replace this Client's own binary. `true` by default, and an absent key or `[packages]` section is the consent; `false` withdraws it, and the Supervisors keep taking their packages. See [Updating the Client itself](#updating-the-client-itself). |
+| `archive_key` | Opens an encrypted `.7z` artifact. One secret for the fleet — a single archive serves every Agent. The Server never learns this key; the artifact stays encrypted wherever it is stored and is opened only on the host that runs it.                                          |
 
 Note what is _not_ here: which artifact a Supervisor receives is the Server's
 decision, expressed as the Deployment that holds the package, never a key in
@@ -1654,14 +1737,19 @@ uploaded to the Server, so there is no other source to allow.
   origin. A hop that leaves it fails the download, naming the origin it pointed
   at.
 - **The offer's headers, if any, go only to that origin**, and are never logged.
-- **The client certificate is presented there**, which is the only place a
-  download goes.
+- **The access token is presented there**, which is the only place a download
+  goes: every request to that origin carries `Authorization: Bearer`, and a
+  header the offer names `Authorization` is dropped, so nothing offered
+  replaces it. A `401` whose Bearer challenge says `error="invalid_token"` asks
+  for a new token ([Enrolling the host](#enrolling-the-host)), and the download
+  goes once more with it.
 - **A `429` or `503` with `Retry-After` from the Server's own origin is waited
-  out**. That origin answers so when its rate limit is reached. Each wait is
-  the `Retry-After`, at least 1 and at most 60 seconds, and the asking stops 30
-  minutes after the download's first request; the status stays `Downloading`
-  meanwhile, and a shutdown ends it. Past that, or for such an answer from any
-  other host, the download fails and is reported `InstallFailed`.
+  out**. That origin answers so when its rate limit is reached.
+  Each wait is the `Retry-After`, at least 1 and at most 60 seconds, and the
+  asking stops 30 minutes after the download's first request; the status stays
+  `Downloading` meanwhile, and a shutdown ends it. Past that, or for such an
+  answer from any other host, the download fails and is reported
+  `InstallFailed`.
 
 Every download is TLS 1.3, on this Client's trust: `[tls] ca_file` when it is
 set, the system's trust store otherwise.
@@ -1702,7 +1790,7 @@ carries `[[supervisor]]` blocks in its body, and a Client its Deployment
 releases it to applies them as its new set:
 
 - **Only the blocks are read.** Every other top-level key in the offered
-  document is ignored — the endpoint, the client identity, the state directory
+  document is ignored — the endpoint, the trust, the state directory
   stay the host's, and can never arrive over the wire. You may roll out a full
   `supervisor.toml`-shaped document; exactly its supervisor half takes effect. A
   duplicate `name` fails the offer, as it would fail the file.
@@ -2400,22 +2488,24 @@ IP literal `127.0.0.1` or `::1`. A host name is never the loopback, `localhost`
 included, and a private address is not either. Any other plaintext endpoint
 fails at startup with a message naming it.
 
-**One proof on every connection**. The Client presents its client certificate in
-the TLS handshake, on both transports, and the Server admits it on that alone.
-It sends no `Authorization` header. A `401` after the handshake means the Server
-refused the certificate — revoked, or a bootstrap certificate where an issued
-one is needed; it is logged as `admission failed` and retried with the usual
-backoff, so fixing it on either side needs no restart. A `429` means the Server
-is throttling this host's address after repeated failed admissions; fix the
-certificate, and the back-off ends by itself.
+**One credential on every connection**. The Client sends the access token of
+its `state.json` as `Authorization: Bearer`, on both transports and on every
+package download, and the Server admits it on that alone
+([Enrolling the host](#enrolling-the-host)). A `401` whose challenge says
+`error="invalid_token"` — the token was replaced, expired or never was one —
+makes the Client ask for a new token and reconnect. Any other `401` is logged as
+`admission failed` and retried with the usual backoff, so fixing it on either
+side needs no restart. A `429` means the Server is throttling this host's
+address after repeated refused attempts; fix the cause, and the back-off ends by
+itself.
 
 **Reconnecting.** A dropped connection is retried with capped exponential
 backoff, and the Client honours the Server's `UNAVAILABLE` retry hints.
 
 **Server-offered connection settings**. When the Server offers a new heartbeat
-interval, endpoint, or certificate, the Client **verifies the offer by actually
-connecting with it**, persists it, and only then switches — across transports if
-the offered endpoint demands it. An offer that moves the Client to a `ws://` or
+interval or endpoint, the Client **verifies the offer by actually connecting
+with it**, persists it, and only then switches — across transports if the
+offered endpoint demands it. An offer that moves the Client to a `ws://` or
 `http://` endpoint is refused without connecting, on `127.0.0.1` and `::1` too,
 and the offer is reported `FAILED` naming it: on plaintext no certificate proves
 the Server. A plaintext endpoint on the loopback is one you write into
@@ -2423,15 +2513,14 @@ the Server. A plaintext endpoint on the loopback is one you write into
 `supervisor.toml` does not name is not applied at startup; the Client connects
 to the configured endpoint and logs a warning naming both. A failed verification
 leaves the current settings in force and is reported as such, so a bad offer
-cannot strand the fleet. An offered `certificate` is how an issued client
-certificate arrives. The `tls`, `proxy` and `headers` fields are not honoured:
-the Client applies everything else and reports the offer `FAILED`, naming the
-dropped fields, offered headers by their keys and never their values. Trust
-stays the operator's file, never a Server's instruction, and an offered header
-would be a value the Server plants on every connection with no reader on the
-Agent plane. An `Authorization` header persisted in `connection-settings.pb` is
-dropped when the file is loaded, with one log line naming the header keys, and
-the file is rewritten without it. See
+cannot strand the fleet. The `tls`, `proxy` and `headers` fields are not
+honoured: the Client applies everything else and reports the offer `FAILED`,
+naming the dropped fields, offered headers by their keys and never their values.
+Trust stays the operator's file, never a Server's instruction, and an offered
+header would be a value the Server plants on every connection with no reader on
+the Agent plane. An `Authorization` header persisted in `connection-settings.pb`
+is dropped when the file is loaded, with one log line naming the header keys,
+and the file is rewritten without it. See
 [`docs/CONFORMANCE.md`](../CONFORMANCE.md).
 
 ## Its own telemetry
@@ -2450,6 +2539,10 @@ Client builds no exporter and sends nothing.
 - **How:** OTLP over HTTP. A destination is `https://`, in TLS 1.3, or `http://`
   to `127.0.0.1` or `::1` alone; anything else is refused, and the offer is
   reported `FAILED` naming why.
+- **Credentials:** the headers the Server offers with a destination are sent as
+  offered. A destination that has the Server's own origin carries the host's
+  access token as its `Authorization` instead, and no other destination ever
+  receives it.
 - **When the destination is down:** the Client runs on. Exports leave on threads
   of their own, their queues drop rather than block, and each export gives up
   after 5 seconds. Nothing about a destination is checked by connecting to it,
@@ -2467,10 +2560,28 @@ name the key. The ones you are most likely to meet:
 | `accepts_packages` / `package` in a `[[supervisor]]` block | Both keys were removed. Delete them; every Agent consents to packages, and the Server's Deployment decides which artifact.                                      |
 | a program that is not a bare file name                     | `binary`/`command` name a file in the Supervisor's own `program/` directory, never a path. See [How a block names its program](#how-a-block-names-its-program). |
 | an unknown key                                             | Every key is checked; a typo is refused rather than ignored.                                                                                                    |
-| `[tls] cert_file and key_file are required`                | Give the Client its certificate and key: one the client CA issued, or a bootstrap certificate to [enrol](#enrolment-the-first-certificate) with.                |
+| `this host is not enrolled`                                | The state directory holds no `state.json`. Enrol the host with `enrol <base-url> <key>` ([Enrolling the host](#enrolling-the-host)).                            |
 | an endpoint refused as plaintext                           | `ws://` and `http://` are accepted only to `127.0.0.1` or `::1`. Use `wss://` or `https://`, and set `[tls] ca_file` for a private CA.                          |
-| an unknown field `gateway`                                 | Gateway Mode was removed. Delete the `[gateway]` section; point the Clients it carried at the Server directly.                                                  |
+| an unknown key `cert_file` or `key_file` under `[tls]`     | The Client presents no certificate any more. Delete both; `[tls]` keeps `ca_file` alone.                                                                        |
 | `[packages] allowed_sources is removed`                    | The key no longer exists: a Client downloads only from its own Server's origin. Delete it.                                                                      |
+
+**`enrol` says the host is enrolled already.** The state directory holds a
+`state.json`, and `enrol` never replaces one. `revoke` deletes it, with the rest
+of the state directory ([Taking the host out](#taking-the-host-out-revoke)), and
+the host can enrol again.
+
+**`enrol` is refused by the Server.** The Server did not accept the key, or the
+token request that follows: an unknown key, or one the Server has replaced since
+it was handed out, is refused. Nothing is written to the state directory. Ask
+for the Space's current key and run `enrol` again.
+
+**The Client logs `admission failed`, and no new token comes.** The Client asks
+for a new token only after a `401` whose Bearer challenge says
+`error="invalid_token"`. Any other `401` is retried with backoff and asks for
+nothing — a request with no credential, or in a scheme the Server does not
+take, is answered `401` without an error code. Read the Server's log: at the
+`debug` level each refusal names the check that refused it, and never the
+credential.
 
 **A Foreign Agent runs but never gets new configuration.** Its command line is
 pointing somewhere the Client does not write. Use `${config_dir}` (see

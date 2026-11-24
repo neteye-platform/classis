@@ -5,7 +5,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod agent_auth;
 pub mod agent_rate;
 pub mod agent_store;
 pub mod api;
@@ -13,6 +12,7 @@ pub mod blobs;
 pub mod bootstrap;
 pub mod bridge;
 pub mod ca;
+pub mod certificate_enrolment;
 pub mod client_store;
 pub mod clock;
 pub mod config;
@@ -32,7 +32,6 @@ pub mod s3;
 pub mod space_store;
 pub mod spaces;
 pub mod throttle;
-pub mod tls;
 pub mod transport;
 
 use std::sync::Arc;
@@ -41,7 +40,10 @@ use axum::Router;
 
 use deployments::DeploymentStore;
 use fleet::{AppState, PackageOffering};
-use fs::{FsAgentStore, FsBlobStore, FsConfigBackend, FsDeploymentBackend, FsPackageBackend};
+use fs::{
+    FsAgentStore, FsBlobStore, FsClientStore, FsConfigBackend, FsDeploymentBackend,
+    FsPackageBackend, FsSpaceStore,
+};
 
 /// Where the Server keeps its records: files under `data_dir`, or one
 /// PostgreSQL database. The composition root asks it for each port's adapter, so the rest of the
@@ -121,38 +123,26 @@ impl Records {
         })
     }
 
-    /// The bootstrap certificates the Server issued.
+    /// The Spaces and their enrolment keys; [`spaces::Spaces`] is the
+    /// service over them.
     ///
     /// # Errors
-    /// As [`agents`](Self::agents).
-    pub fn bootstrap(&self) -> Result<Box<dyn bootstrap::BootstrapStore>, String> {
+    /// As [`agents`](Self::agents), and when a Space's file does not parse.
+    pub fn spaces(&self) -> Result<Box<dyn space_store::SpaceStore>, String> {
         Ok(match self {
-            Records::Files(dir) => Box::new(fs::FsBootstrapStore::open(dir)?),
-            Records::Postgres(db) => {
-                Box::new(postgres::bootstrap::PgBootstrapStore::new(db.clone()))
-            }
+            Records::Files(dir) => Box::new(FsSpaceStore::open(dir)?),
+            Records::Postgres(db) => Box::new(postgres::spaces::PgSpaceStore::new(db.clone())),
         })
     }
 
-    /// The enrolment window and its queue.
-    #[must_use]
-    pub fn enrolment(&self) -> Box<dyn enrolment::EnrolmentStore> {
-        match self {
-            Records::Files(dir) => Box::new(fs::FsEnrolmentStore::open(dir)),
-            Records::Postgres(db) => {
-                Box::new(postgres::enrolment::PgEnrolmentStore::new(db.clone()))
-            }
-        }
-    }
-
-    /// The register, the revocation list and the Hosts.
+    /// The OAuth clients, their secret hashes and their active tokens.
     ///
     /// # Errors
-    /// As [`agents`](Self::agents).
-    pub fn ledger(&self) -> Result<Box<dyn revocation::LedgerStore>, String> {
+    /// As [`agents`](Self::agents), and when a client's file does not parse.
+    pub fn clients(&self) -> Result<Box<dyn client_store::ClientStore>, String> {
         Ok(match self {
-            Records::Files(dir) => Box::new(fs::FsLedgerStore::open(dir)?),
-            Records::Postgres(db) => Box::new(postgres::ledger::PgLedgerStore::new(db.clone())),
+            Records::Files(dir) => Box::new(FsClientStore::open(dir)?),
+            Records::Postgres(db) => Box::new(postgres::clients::PgClientStore::new(db.clone())),
         })
     }
 }
@@ -274,53 +264,64 @@ impl PackageOffering {
     }
 }
 
-/// The default wiring of the bootstrap record to its filesystem adapter.
-impl bootstrap::BootstrapCertificates {
-    /// Opens the record in the data directory `data_dir`, one file per certificate under
-    /// `bootstrap/`, forgetting what has ended.
-    ///
-    /// # Errors
-    /// Returns an error when the directory cannot be opened or a file in it cannot be read.
-    pub fn on_disk(
-        signer: Option<Box<dyn bootstrap::BootstrapSigner>>,
-        data_dir: &std::path::Path,
-        clock: Arc<dyn fleet::Clock>,
-    ) -> Result<Self, String> {
-        Self::open(
-            signer,
-            Box::new(fs::FsBootstrapStore::open(data_dir)?),
-            clock,
-        )
-    }
-
-    /// Opens the record in `records`, forgetting what has ended.
-    ///
-    /// # Errors
-    /// Returns an error when the store cannot be opened or read.
-    pub fn on(
-        signer: Option<Box<dyn bootstrap::BootstrapSigner>>,
-        records: &Records,
-        clock: Arc<dyn fleet::Clock>,
-    ) -> Result<Self, String> {
-        Self::open(signer, records.bootstrap()?, clock)
-    }
-}
-
-/// The **Agent plane**: the OpAMP endpoint, guarded by Admission, and the
-/// package download route beside it — behind the same handshake, and reached only with a
-/// certificate of the fleet.
+/// The **Agent plane**: the OpAMP endpoint and the package download route beside it,
+/// the routes that enrol a host and issue its token, and the bearer admission that guards the first
+/// two, with the back-off round all of them.
 ///
 /// The download lives here rather than with the rest of `/api/v1` because the split between the
 /// two planes is by *audience*, not by path: this route is the one an Agent calls, and its
 /// `download_url` is resolved against the Agent's own endpoint.
-pub fn agent_app(state: Arc<AppState>, admission: transport::Admission) -> Router {
-    let guard = admission
-        .download_guard()
-        .with_agent_rate(state.agent_rate().cloned());
-    transport::router(state.clone(), admission).merge(transport::guard_download(
-        api::download_router(state),
-        guard,
-    ))
+///
+/// The plane never fails open: it is built from an [`Enrolment`](enrolment::Enrolment) or not at
+/// all, and every request to the OpAMP endpoint or the download route is admitted by its Bearer
+/// credential.
+pub fn agent_app(state: Arc<AppState>, enrolment: Arc<enrolment::Enrolment>) -> Router {
+    // `/v1/enrol` and `/v1/token` authenticate by what they carry (a key, a client secret), so
+    // they are not behind bearer admission; the back-off round all of them counts the refusals.
+    let routes = transport::admit(agent_routes(state), enrolment.clone())
+        .route(
+            enrolment::ENROL_PATH,
+            oauth_registration::server::endpoint(enrolment.clone(), enrolment::REALM)
+                .expect("the realm is a valid header value"),
+        )
+        .route(
+            enrolment::TOKEN_PATH,
+            oauth_token::server::endpoint(enrolment.clone(), enrolment.lifetime()),
+        );
+    transport::back_off(routes, enrolment.throttle().clone())
+}
+
+/// What bearer admission guards: the OpAMP endpoint and the package download.
+fn agent_routes(state: Arc<AppState>) -> Router {
+    let downloads = transport::limit_downloads(
+        api::download_router(state.clone()),
+        state.agent_rate().cloned(),
+    );
+    transport::router(state).merge(downloads)
+}
+
+/// **For tests only.** The Agent plane without admission: it serves anyone, enrols no one and
+/// answers no `/v1/token`, and no request arrives as any host — what the plane did before
+/// admission existed, for the tests that are not about admission.
+///
+/// It exists only under the `test-support` feature, which `classis-server` enables for its own
+/// tests alone, through a dev-dependency on itself: a build of the Server binary does not contain
+/// it.
+#[cfg(feature = "test-support")]
+pub fn agent_app_open_for_tests(state: Arc<AppState>) -> Router {
+    agent_routes(state)
+}
+
+/// **For tests only.** [`agent_app_open_for_tests`] with every request arriving as `host` — or as
+/// admitted without one, for `None` — what admission hands the handlers once a token names a host,
+/// for the tests that are about what the plane does by the host and not by how it was admitted.
+/// Under the same feature, and absent from the Server binary alike.
+#[cfg(feature = "test-support")]
+pub fn agent_app_admitted_as_for_tests(state: Arc<AppState>, host: Option<&str>) -> Router {
+    let proofs = transport::Proofs {
+        host: host.map(str::to_string),
+    };
+    agent_routes(state).layer(axum::Extension(proofs))
 }
 
 /// The **Operator plane**: the REST API, its OpenAPI document and docs page, and the

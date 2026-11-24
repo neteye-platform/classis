@@ -115,6 +115,22 @@ pub enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Enrol this host with the Server: register with the Space's key, get a token, and write
+    /// `state.json` in the state directory. Starts the registered service, and lets it start at
+    /// boot.
+    ///
+    /// The key names the Space (`cle1_<space>_<secret>`), and nothing else does: no command takes
+    /// a Space a second time. A host that holds a `state.json` is refused.
+    Enrol(EnrolArgs),
+    /// Take this host out of the fleet, locally: delete everything in the state directory,
+    /// `state.json` with it, and what the configuration keeps for the host outside it — the
+    /// directories of its configured Supervisors in a `supervisor_dir`, and the Client's own log
+    /// files in an absolute `[logging] dir`. Other directories there are left. The Server is not
+    /// contacted.
+    ///
+    /// Refused while the service runs. Asks for a confirmation, which `--force` skips, and keeps
+    /// the service from starting at boot again.
+    Revoke(RevokeArgs),
     /// Prove that this executable is a Classis Client and say which version.
     ///
     /// Run as a child process on a freshly staged binary before the `current` pointer moves to
@@ -125,6 +141,38 @@ pub enum Command {
     /// it is a machine-to-machine handshake and not an operator command.
     #[command(hide = true)]
     SelfCheck,
+}
+
+/// Arguments for `enrol`: the Server's base URL and the Space's enrolment key.
+#[derive(Debug, clap::Args)]
+pub struct EnrolArgs {
+    /// The Server's base URL, against which `/v1/enrol` and `/v1/token` are resolved: `https://`,
+    /// or `http://` to 127.0.0.1 or ::1 alone.
+    #[arg(value_name = "BASE_URL")]
+    pub base_url: String,
+    /// The enrolment key of the Space this host joins: `cle1_<space>_<secret>`.
+    #[arg(value_name = "KEY", value_parser = secret_value)]
+    pub key: zeroize::Zeroizing<String>,
+}
+
+/// A secret on the command line, held in a buffer wiped when it is dropped.
+fn secret_value(text: &str) -> Result<zeroize::Zeroizing<String>, String> {
+    if text.is_empty() {
+        return Err("it is empty".to_string());
+    }
+    Ok(zeroize::Zeroizing::new(text.to_string()))
+}
+
+/// Arguments for `revoke`.
+#[derive(Debug, clap::Args)]
+pub struct RevokeArgs {
+    /// Delete without asking for a confirmation.
+    #[arg(long)]
+    pub force: bool,
+    /// Spare `config/` and `packages/` in the state directory, which a host enrolled again would
+    /// only download again. Everything else in it is deleted.
+    #[arg(long)]
+    pub keep_cache: bool,
 }
 
 /// Arguments for `run`.
@@ -269,7 +317,7 @@ pub enum ServiceAction {
     /// install.
     Install(InstallArgs),
     /// Ask the questionnaire of `install --interactive` again, offering what the configuration
-    /// holds as the defaults, and enrol with the Server if this Client holds no certificate yet.
+    /// holds as the defaults.
     ///
     /// Registers nothing. Restart the service afterwards to apply what changed.
     Config(ConfigArgs),
@@ -305,8 +353,8 @@ pub struct InstallArgs {
     /// that is given and the platform default otherwise.
     #[arg(long)]
     pub data_root: Option<PathBuf>,
-    /// Ask for the settings a fresh host cannot guess, write the configuration file, and enrol
-    /// this host with the Server if it holds no certificate yet, before registering the service.
+    /// Ask for the settings a fresh host cannot guess and write the configuration file, before
+    /// registering the service.
     ///
     /// Off by default, because `install` is the command a provisioning run invokes and it must
     /// never block on a question. An existing file is edited in place, each question offering what
@@ -320,9 +368,7 @@ pub struct InstallArgs {
     /// the MSI's endpoint dialog and a `.deb`/`.rpm` post-install both have an answer and no
     /// terminal. An existing file is kept, never overwritten.
     ///
-    /// Only the endpoint. The client identity comes from an enrolment, with the bootstrap identity
-    /// beside the program or in `--fleet-files`; or name a bootstrap certificate and its key in the
-    /// file afterwards as `[tls] cert_file` and `key_file`, or run `service config`.
+    /// Only the endpoint; `service config` asks for the rest.
     #[arg(long, value_name = "URL", conflicts_with = "interactive")]
     pub endpoint: Option<String>,
     /// Withdraw the Client's consent to be updated by the Server, in the configuration this
@@ -339,21 +385,12 @@ pub struct InstallArgs {
     #[arg(long, conflicts_with = "interactive")]
     pub no_self_update: bool,
     /// Look for the fleet's files in this directory instead of beside the program:
-    /// `server-ca.pem` and the bootstrap identity — `bootstrap.pem` with
-    /// `bootstrap-key.pem`, or `bootstrap.p12`.
+    /// `server-ca.pem`.
     ///
     /// What a host installed from a `.deb` or `.rpm` needs: its program lies where nobody puts
     /// these files. The install never looks in both places.
     #[arg(long, value_name = "DIR")]
     pub fleet_files: Option<PathBuf>,
-    /// Read the password of a `bootstrap.p12` from the first line of this file, instead of asking
-    /// for it.
-    ///
-    /// Required when an install without `--interactive` enrols with a `bootstrap.p12`. The file is
-    /// read once and left as it is; the password is never written anywhere and never sent. There
-    /// is no way to give it on the command line or in the environment.
-    #[arg(long, value_name = "PATH")]
-    pub bootstrap_password_file: Option<PathBuf>,
     /// Run the service as this account, and hand this installation's files — both roots — over
     /// to it.
     ///
@@ -1076,6 +1113,59 @@ mod tests {
         assert_eq!(cli.state_dir, Some(PathBuf::from("/var/lib/x")));
         // Absent by default: the configuration file's value applies.
         assert_eq!(parse(&["client"]).state_dir, None);
+    }
+
+    /// `enrol` takes the base URL and the key, and nothing else: the Space is in the key, so no
+    /// flag states it a second time.
+    #[test]
+    fn enrol_takes_a_base_url_and_a_key_and_no_space() {
+        let cli = parse(&[
+            "client",
+            "enrol",
+            "https://fleet.example",
+            "cle1_lab_secret",
+        ]);
+        match cli.command {
+            Some(Command::Enrol(args)) => {
+                assert_eq!(args.base_url, "https://fleet.example");
+                assert_eq!(args.key.as_str(), "cle1_lab_secret");
+            }
+            other => panic!("expected `enrol`, parsed {other:?}"),
+        }
+        for refused in [
+            &["client", "enrol", "https://fleet.example"][..],
+            &[
+                "client",
+                "enrol",
+                "--space",
+                "lab",
+                "https://f.example",
+                "cle1_x",
+            ],
+            &["client", "enrol", "https://f.example", "cle1_x", "extra"],
+            &["client", "enrol", "https://f.example", ""],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+        let shown = format!(
+            "{:?}",
+            parse(&["client", "enrol", "https://f.example", "cle1_lab_s3cret"])
+        );
+        assert!(!shown.contains("s3cret"), "{shown}");
+    }
+
+    /// `revoke` takes `--force` and `--keep-cache` and neither by default.
+    #[test]
+    fn revoke_takes_force_and_keep_cache() {
+        let flags = |args: &[&str]| match parse(args).command {
+            Some(Command::Revoke(revoke)) => (revoke.force, revoke.keep_cache),
+            other => panic!("expected `revoke`, parsed {other:?}"),
+        };
+        assert_eq!(flags(&["client", "revoke"]), (false, false));
+        assert_eq!(
+            flags(&["client", "revoke", "--force", "--keep-cache"]),
+            (true, true)
+        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub const SCHEMA_TABLE: &str = "fleet_schema";
 
 /// Every table the migrations create, so that a database holding any of them is recognised as one
 /// the Server already wrote ([`super::Database::server_tables`]).
-pub const TABLES: [&str; 16] = [
+pub const TABLES: [&str; 10] = [
     "configurations",
     "configuration_revisions",
     "deployments",
@@ -36,12 +36,6 @@ pub const TABLES: [&str; 16] = [
     "package_entries",
     "agents",
     "agent_assignment_configurations",
-    "hosts",
-    "certificates",
-    "revocations",
-    "bootstrap_certificates",
-    "enrolment_window",
-    "enrolment_requests",
     "spaces",
     "clients",
     // Not tables of the records, but the Server's all the same.
@@ -56,13 +50,13 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
 }];
 
 /// The first schema: one table per kind of record, the parts of a record that are many in tables
-/// of their own. A Space's enrolment key is kept whole in `spaces.key`; a client keeps only the
-/// hashes of its secret and of its one active token, the token's unique, so admission is an index
-/// lookup. Unsigned integers are kept as `bigint` with their bits unchanged, so every value
-/// round-trips.
+/// of their own. A Space's enrolment key is kept whole in
+/// `spaces.key`; a client keeps only the hashes of its secret and of its one
+/// active token, the token's unique, so admission is an index lookup.
+/// Unsigned integers are kept as `bigint` with their bits unchanged, so every value round-trips.
 ///
-/// PostgreSQL's `text` and `jsonb` refuse a NUL character, which a file keeps. Text an Agent or a
-/// CSR chose — an Agent's effective configuration, a certificate's subject — is kept as `bytea`,
+/// PostgreSQL's `text` and `jsonb` refuse a NUL character, which a file keeps. Text an Agent
+/// chose — an Agent's effective configuration — is kept as `bytea`,
 /// its UTF-8 bytes unchanged, and every JSON document as `json`, which keeps a `\u0000` escape
 /// where `jsonb` refuses it (the Server never queries inside one). Either way the same bytes
 /// round-trip as with the filesystem store, and one Agent's report can never fail the writes of
@@ -130,57 +124,6 @@ CREATE TABLE agent_assignment_configurations (
     configuration text NOT NULL,
     revision text NOT NULL,
     PRIMARY KEY (instance_uid, configuration)
-);
-CREATE TABLE hosts (
-    host text PRIMARY KEY,
-    gateway boolean NOT NULL,
-    instance_uids text[] NOT NULL,
-    subject json NOT NULL,
-    approved_ms bigint,
-    valid_until_ms bigint
-);
-CREATE TABLE certificates (
-    issuer text NOT NULL,
-    serial text NOT NULL,
-    issuer_name text NOT NULL,
-    subject bytea NOT NULL,
-    key_fingerprint text NOT NULL,
-    not_after_ms bigint NOT NULL,
-    host text,
-    subject_values json NOT NULL,
-    instance_uid text NOT NULL,
-    predecessor_issuer text,
-    predecessor_serial text,
-    issued_ms bigint NOT NULL,
-    PRIMARY KEY (issuer, serial)
-);
-CREATE TABLE revocations (
-    id text PRIMARY KEY,
-    position integer NOT NULL,
-    revoked json NOT NULL,
-    revoked_ms bigint NOT NULL
-);
-CREATE TABLE bootstrap_certificates (
-    issuer text NOT NULL,
-    id_serial text NOT NULL,
-    serial text NOT NULL,
-    subject text NOT NULL,
-    key_fingerprint text NOT NULL,
-    issued_ms bigint NOT NULL,
-    not_after_ms bigint NOT NULL,
-    ca_key text NOT NULL,
-    p12 boolean NOT NULL,
-    p12_file bytea,
-    PRIMARY KEY (issuer, id_serial)
-);
-CREATE TABLE enrolment_window (
-    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-    until_ms bigint
-);
-CREATE TABLE enrolment_requests (
-    id text PRIMARY KEY,
-    position integer NOT NULL,
-    request json NOT NULL
 );
 CREATE TABLE spaces (
     name text PRIMARY KEY,

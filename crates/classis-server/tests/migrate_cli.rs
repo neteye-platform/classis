@@ -23,16 +23,14 @@ fn migrate(config_dir: &std::path::Path, data_dir: &std::path::Path) -> std::pro
 fn migrate_writes_a_new_data_directory_once_and_says_so() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_dir = dir.path().join("fleet-configs");
-    std::fs::create_dir_all(config_dir.join("revocation")).expect("dir");
-    std::fs::write(config_dir.join("revocation/revocations.json"), "[]").expect("list");
+    std::fs::create_dir_all(&config_dir).expect("dir");
     let data_dir = dir.path().join("fleet-data");
 
     let out = migrate(&config_dir, &data_dir);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{out:?}");
-    assert!(stdout.contains("carried: the revocation list"), "{stdout}");
     assert!(stdout.contains("set data_dir to it"), "{stdout}");
-    assert!(data_dir.join("revocations.json").is_file());
+    assert!(data_dir.join("agents").is_dir());
 
     let again = migrate(&config_dir, &data_dir);
     assert_eq!(again.status.code(), Some(1));

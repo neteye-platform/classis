@@ -63,25 +63,6 @@ impl Storage {
         Storage::open(dir, None, false)
     }
 
-    /// The Client's state directory as an enrolment opens it, which does not know whether a
-    /// process account is registered: one a Client with a process account laid out — `0710`,
-    /// passed through by that account's group — is kept so, with the group it has, and anything
-    /// else is narrowed to the Client alone as [`Storage::new`] does. A running Client's Managed
-    /// Processes keep reaching their directories while `service config` enrols, and the next
-    /// start lays the directory out as its registration says either way.
-    pub fn enrolling(dir: PathBuf) -> io::Result<Self> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if let Ok(meta) = std::fs::symlink_metadata(&dir) {
-                if meta.is_dir() && meta.mode() & 0o7777 == 0o710 {
-                    return Storage::client(dir, Some(ProcessAccountGroup(meta.gid())));
-                }
-            }
-        }
-        Storage::new(dir)
-    }
-
     /// The Client's own storage in the state directory: passed through by the process account's
     /// group on the way to the Supervisors' directories, and nothing in it shared.
     pub fn client(dir: PathBuf, group: Option<ProcessAccountGroup>) -> io::Result<Self> {
@@ -1948,29 +1929,6 @@ mod tests {
         assert_eq!(mode_and_group(&nested.join("state")), (0o660, group.0));
         assert_eq!(mode_and_group(&data.join("twice")).0, 0o600);
         assert_eq!(mode_and_group(&outside).0, 0o600);
-    }
-
-    /// An enrolment keeps a state directory a Client with a process account laid out as it is —
-    /// `0710`, in the process account's group — and writes its records `0600`; any other state
-    /// directory it narrows to the Client alone, as before.
-    #[cfg(unix)]
-    #[test]
-    fn an_enrolment_keeps_a_shared_state_directory_shared() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let group = own_group();
-        let shared = dir.path().join("shared");
-        Storage::client(shared.clone(), Some(group)).expect("laid out with a process account");
-        let enrolling = Storage::enrolling(shared.clone()).expect("enrolling");
-        enrolling
-            .save_uid(&InstanceUid::default())
-            .expect("the identity");
-        assert_eq!(mode_and_group(&shared), (0o710, group.0));
-        assert_eq!(mode_and_group(&shared.join(UID_FILE)).0, 0o600);
-
-        let private = dir.path().join("private");
-        std::fs::create_dir(&private).expect("mkdir at the umask");
-        Storage::enrolling(private.clone()).expect("enrolling");
-        assert_eq!(mode_and_group(&private).0, 0o700);
     }
 
     /// A hard link in `config/` to one of the Client's records — placed while the Managed Process

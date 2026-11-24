@@ -1,31 +1,25 @@
 #!/usr/bin/env bash
 #
-# OUT OF DATE: the Server speaks plain HTTP behind a reverse proxy and authenticates no
-# Agent, so the `server.toml` this writes, with `[tls]`, `[client_ca]` and `[enrolment]`, is
-# refused at startup. Kept until the enrolment reimplementation (NEAG-34) replaces it.
+# The Server speaks plain HTTP, and the `supervisor.toml` this writes dials it on the loopback in
+# plain HTTP; the certificates are for a reverse proxy in front of the Server, which a Client on
+# another machine reaches over TLS.
 #
-# Creates the certificates a development Server and Client need, since both refuse to run without
-# them, with the operator tool's `classisctl pki init` — no openssl. Every certificate of the set
-# says it is a development one: `Classis Dev … CA`, `O=Development`.
+# Creates the certificates a development proxy and Client need, since the Client refuses to run
+# without them, with the operator tool's `classisctl pki init` — no openssl. Every
+# certificate of the set says it is a development one: `Classis Dev … CA`, `O=Development`.
 # Everything lands in one directory, gitignored, and is for a development machine only: the keys
 # are unencrypted and the CAs are throwaway.
 #
-#   server/        what the Server host needs: its certificate, the client CA and the bootstrap CA
-#                  with their keys, and server.toml.fragment naming them
+#   server/        what the reverse proxy in front of the Server needs: its certificate and key
 #   offline/       what stays with the operator: the server CA with its key, the package signing
 #                  key (package-signing-key.pk8, its public half in package-signing-key.pub), and
-#                  supervisor.toml.fragment naming where the Client keeps the bootstrap pair
-#                  extracted from the bootstrap.p12 the Server issues
+#                  supervisor.toml.fragment naming the server CA
 #   server.toml / supervisor.toml
 #                  a Server and a Client configuration that use the set, every other key at its
 #                  default but one: server.toml serves the Agent plane on every interface, so
 #                  Clients on other machines reach it; it carries the offer of the fleet's own
 #                  telemetry to a Collector on the loopback commented out
 #
-# The development Client enrols like any other host, with a bootstrap certificate the Server issues:
-# start the Server, run `scripts/seed_test_configs.sh --enrol`, which issues it,
-# extracts its pair from the bootstrap.p12 into offline/ and approves the request, and start the
-# Client while it waits.
 # Trust the server CA, offline/server-ca.pem, in curl and in the browser.
 #
 # Usage:
@@ -53,8 +47,6 @@ OUT="$(cd "$OUT" && pwd)"  # the configurations name the set by absolute path
   echo '# The Agent plane on every interface, for Clients on other machines (see config/server.toml).'
   echo 'listen = "0.0.0.0:4320"'
   echo
-  cat "$OUT/server/server.toml.fragment"
-  echo
   echo '# The fleet'"'"'s own telemetry, to a Collector on the loopback (see config/server.toml).'
   echo '# [telemetry_offer]'
   echo '# metrics_endpoint = "http://127.0.0.1:4318/v1/metrics"'
@@ -62,7 +54,7 @@ OUT="$(cd "$OUT" && pwd)"  # the configurations name the set by absolute path
   echo '# logs_endpoint = "http://127.0.0.1:4318/v1/logs"'
 } >"$OUT/server.toml"
 {
-  echo 'endpoint = "wss://127.0.0.1:4320/v1/opamp"'
+  echo 'endpoint = "ws://127.0.0.1:4320/v1/opamp"'
   echo
   cat "$OUT/offline/supervisor.toml.fragment"
 } >"$OUT/supervisor.toml"
@@ -72,6 +64,11 @@ cat <<EOF
 Created in $OUT, with a server.toml and a supervisor.toml that use the set:
 
   cargo run -p classis-server -- --config $OUT/server.toml
-  scripts/seed_test_configs.sh --enrol     # issues the bootstrap certificate, approves the enrolment
-  cargo run -p classis-agent -- --config $OUT/supervisor.toml   # while --enrol waits
+
+A Client refuses to start until its host is enrolled with a Space's key. No command
+of the Server creates a Space yet. With a key, and the Server running, enrol the host
+before the first run, with the Server's base URL (the https:// form of the endpoint above):
+
+  cargo run -p classis-agent -- --config $OUT/supervisor.toml enrol <base-url> <key>
+  cargo run -p classis-agent -- --config $OUT/supervisor.toml
 EOF

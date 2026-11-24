@@ -4,7 +4,11 @@
 //! plain-HTTP transport, a WebSocket upgrade is the other — exactly the detection the Baseline
 //! describes. The communication is `opamp::server`'s, shared with the Supervisor Endpoint; what is
 //! the Server's is the [`Fleet`] handler, which hands every decoded report to the same
-//! [`AppState::process`], so transport is carriage, never semantics.
+//! [`AppState::process_for_host`], so transport is carriage, never semantics.
+//!
+//! Admission is a layer round the endpoint and the download route:
+//! [`admit`] reads the Bearer credential and hands what it proves on as [`Proofs`], and
+//! [`back_off`] round the whole Agent plane counts its refusals per peer address.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -15,7 +19,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use opamp::proto::{AgentToServer, ServerToAgent};
-use opamp::server::listen::PeerCertificate;
 use opamp::server::{
     Closing, Handler, Outbound, Rejection, Reply, RequestInfo, Settings, Unreadable,
 };
@@ -23,394 +26,202 @@ use opamp::uid::InstanceUid;
 use tokio::sync::watch;
 use tracing::{debug, info};
 
-use crate::agent_auth::{Admitted, AgentAuthenticator, Refusal};
 use crate::agent_rate::{AgentRate, Subject};
-use crate::enrolment::{Enrolment, Requester, Submitted};
-use crate::fleet::{bad_request, bounded, unavailable, AppState, ConnId, Transport};
-use crate::revocation::{CertId, Presented, Revocations};
+use crate::enrolment::{Enrolment, SessionWatch, ENROL_PATH, TOKEN_PATH};
+use crate::fleet::{bad_request, unavailable, AppState, ConnId, Transport};
 use crate::throttle::Throttle;
-use crate::tls::{Issuers, Peer};
 
 /// The endpoint path the Baseline names as the default, and the protobuf media type it requires —
-/// both from the shared crate, because the Supervisor Endpoint serves the same endpoint.
+/// both from the shared crate, because the Supervisor Endpoint serves the same protocol.
 pub use opamp::endpoint::{OPAMP_PATH, PROTOBUF_CONTENT_TYPE};
 
-/// What a peer must prove to reach `/v1/opamp`: a client certificate the
-/// handshake verified, not revoked — the whole of admission. No `Authorization` header is read; one
-/// that is sent is ignored, never refused, and no refusal carries a `WWW-Authenticate` challenge. A
-/// certificate from the bootstrap CA admits an enrolling host, and only while an operator holds the
-/// enrolment window open. Repeated failures from one peer address are throttled.
-#[derive(Default)]
-pub struct Admission {
-    /// The connection must have carried a certificate. The certificate itself is already verified
-    /// — rustls refuses one it cannot chain — so this is a presence check, never a second
-    /// verification.
-    require_client_certificate: bool,
-    issuers: Issuers,
-    enrolment: Option<Arc<Enrolment>>,
-    throttle: Option<Arc<Throttle>>,
-    revocations: Option<Arc<Revocations>>,
-    /// What admits a peer when the Server sits behind a proxy that terminates TLS: the
-    /// authenticator of the Agent plane, which today admits every request. When set, no
-    /// certificate is read.
-    authenticator: Option<Arc<dyn AgentAuthenticator>>,
-}
-
-/// What admitted a connection: the certificate, with when it expires. A
-/// WebSocket session ends when it is revoked, or when it expires.
+/// What admitted a connection: the host it arrived over, when one did — the `client_id` of the
+/// client holding the token it presented. A request without one is counted by
+/// its peer address.
 #[derive(Clone, Debug, Default)]
 pub struct Proofs {
-    pub certificate: Option<(CertId, u64)>,
-    /// The certificate itself (DER), which a bootstrap proof naming it must embed byte for byte.
-    pub der: Option<Arc<[u8]>>,
-    /// The host the certificate was issued to, when it names one.
     pub host: Option<String>,
-    /// The certificate's subject values, which a Host made at its first report carries.
-    pub subject_values: crate::revocation::SubjectValues,
 }
 
 impl Proofs {
-    fn revoked(&self, revocations: &Revocations) -> bool {
-        self.certificate
-            .as_ref()
-            .is_some_and(|(id, _)| revocations.is_certificate_revoked(id))
-    }
-
-    /// Who a member's messages and downloads are counted for: the host its
-    /// certificate names, else the certificate, else — with no certificate at all — the peer.
+    /// Who a connection's messages are counted for: the host it arrived over,
+    /// else the peer.
     fn subject(&self, peer: Option<IpAddr>) -> Subject {
-        match (&self.host, &self.certificate) {
-            (Some(host), _) => Subject::Host(host.clone()),
-            (None, Some((id, _))) => Subject::Certificate(id.clone()),
-            (None, None) => Subject::peer(peer),
+        match &self.host {
+            Some(host) => Subject::Host(host.clone()),
+            None => Subject::peer(peer),
         }
-    }
-
-    /// The serial of the certificate that admitted the connection, if one did.
-    pub(crate) fn serial(&self) -> Option<&str> {
-        self.certificate.as_ref().map(|(id, _)| id.serial.as_str())
-    }
-
-    /// The role of the CA that issued that certificate — `client` or `bootstrap` — when it is one
-    /// of this Server's.
-    pub(crate) fn authority(&self, revocations: Option<&Arc<Revocations>>) -> Option<String> {
-        let (id, _) = self.certificate.as_ref()?;
-        revocations?
-            .authority_of(&id.issuer)
-            .map(|authority| authority.role.clone())
-    }
-}
-
-/// An `instance_uid` as hex for a log line, or `None` when it is not one: what a peer sent in its
-/// place is not written out.
-fn logged_uid(uid: &[u8]) -> Option<String> {
-    InstanceUid::from_wire(uid).map(|_| hex::encode(uid))
-}
-
-/// Whether `subject` is a host marked as a Gateway, read at each message.
-fn is_gateway(subject: &Subject, revocations: Option<&Arc<Revocations>>) -> bool {
-    match (subject, revocations) {
-        (Subject::Host(host), Some(revocations)) => revocations.is_gateway(host),
-        _ => false,
     }
 }
 
 /// What a message past the limit is answered.
 const THROTTLED: &str = "too many messages arrive from this sender — retry later";
 
-impl Admission {
-    /// No proof required — what a test that is not about admission serves with. A Server never
-    /// does: its configuration requires the client CA.
-    pub fn open() -> Self {
-        Admission::default()
-    }
-
-    pub fn new(require_client_certificate: bool) -> Self {
-        Admission {
-            require_client_certificate,
-            ..Admission::default()
-        }
-    }
-
-    /// Tells a member's certificate from an enrolling host's, and admits the latter only while
-    /// `enrolment`'s window is open.
-    #[must_use]
-    pub fn with_enrolment(mut self, issuers: Issuers, enrolment: Option<Arc<Enrolment>>) -> Self {
-        self.issuers = issuers;
-        self.enrolment = enrolment;
-        self
-    }
-
-    /// Throttles repeated failures from one peer address.
-    #[must_use]
-    pub fn with_throttle(mut self, throttle: Arc<Throttle>) -> Self {
-        self.throttle = Some(throttle);
-        self
-    }
-
-    /// `client` or `bootstrap` for a certificate one of this Server's CAs issued.
-    fn issuers_role(&self, issuer: &str) -> Option<String> {
-        self.revocations
-            .as_ref()
-            .and_then(|revocations| revocations.authority_of(issuer))
-            .map(|authority| authority.role.clone())
-    }
-
-    /// Refuses a revoked certificate.
-    #[must_use]
-    pub fn with_revocations(mut self, revocations: Option<Arc<Revocations>>) -> Self {
-        self.revocations = revocations;
-        self
-    }
-
-    /// Admits by `authenticator`, in place of a client certificate: the Server speaks
-    /// plain HTTP behind a proxy, so no certificate reaches it. With
-    /// [`AdmitEveryone`](crate::agent_auth::AdmitEveryone) it admits every request, and the
-    /// authentication is the proxy's.
-    #[must_use]
-    pub fn with_authenticator(mut self, authenticator: Arc<dyn AgentAuthenticator>) -> Self {
-        self.authenticator = Some(authenticator);
-        self
-    }
-
-    fn required(&self) -> bool {
-        self.require_client_certificate
-            || self.throttle.is_some()
-            || self.revocations.is_some()
-            || self.authenticator.is_some()
-    }
+pub fn router(state: Arc<AppState>) -> Router {
+    // The limits the Baseline requires of the Server, on both transports and in both directions.
+    let settings = Settings::new(state.max_message_size());
+    opamp::server::router(Arc::new(Fleet(state)), settings)
 }
 
-/// What an admitted request is, as the rest of the Server reads a proof: a member of the fleet
-/// with no certificate, speaking for the host the authenticator named, if it named one. With no
-/// host the identity is the `instance_uid` of the OpAMP message, as for any request that carries
-/// no proof, and no session ends on its own: nothing here expires or can be revoked.
-fn admitted_proofs(admitted: Admitted) -> Proofs {
-    Proofs {
-        certificate: None,
-        der: None,
-        host: admitted.host,
-        subject_values: crate::revocation::SubjectValues::default(),
-    }
+/// Admits every request of `router` by its Bearer credential: every plain-HTTP
+/// exchange and every download, and a WebSocket session once, at its upgrade. What the token
+/// proves — the host — reaches the handlers as [`Proofs`].
+pub fn admit(router: Router, enrolment: Arc<Enrolment>) -> Router {
+    router.layer(middleware::from_fn_with_state(enrolment, admit_request))
 }
 
-/// `401` for a request the authenticator refused, saying nothing of why.
-fn refused() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        "the OpAMP endpoint refuses this request",
-    )
-        .into_response()
-}
-
-/// Milliseconds since the Unix epoch, on the host's clock.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
-/// Whether a certificate whose `not_after` is `not_after_ms` has expired: from that instant on it
-/// admits nothing, as it ends a WebSocket session then.
-fn expired(not_after_ms: u64) -> bool {
-    not_after_ms <= now_ms()
-}
-
-/// `401` without a challenge: the Agent plane admits by certificate, which no header can supply.
-fn unauthorized(text: &'static str) -> Response {
-    (StatusCode::UNAUTHORIZED, text).into_response()
-}
-
-/// What the package download route asks of a peer: the same handshake as
-/// `/v1/opamp`, and a certificate from the client CA — a bootstrap certificate is not enough.
-#[derive(Clone, Default)]
-pub struct DownloadGuard {
-    require_client_certificate: bool,
-    issuers: Issuers,
-    throttle: Option<Arc<Throttle>>,
-    revocations: Option<Arc<Revocations>>,
-    agent_rate: Option<Arc<AgentRate>>,
-    authenticator: Option<Arc<dyn AgentAuthenticator>>,
-}
-
-impl Admission {
-    /// The download route's share of these rules.
-    #[must_use]
-    pub fn download_guard(&self) -> DownloadGuard {
-        DownloadGuard {
-            require_client_certificate: self.require_client_certificate,
-            issuers: self.issuers.clone(),
-            throttle: self.throttle.clone(),
-            revocations: self.revocations.clone(),
-            agent_rate: None,
-            authenticator: self.authenticator.clone(),
-        }
-    }
-}
-
-impl DownloadGuard {
-    /// Counts every admitted download against the sender's rate.
-    #[must_use]
-    pub fn with_agent_rate(mut self, agent_rate: Option<Arc<AgentRate>>) -> Self {
-        self.agent_rate = agent_rate;
-        self
-    }
-}
-
-/// Wraps the download route in its guard.
-pub fn guard_download(router: Router, guard: DownloadGuard) -> Router {
-    if !guard.require_client_certificate
-        && guard.throttle.is_none()
-        && guard.agent_rate.is_none()
-        && guard.authenticator.is_none()
-    {
-        return router;
-    }
-    router.layer(middleware::from_fn_with_state(
-        Arc::new(guard),
-        admit_download,
-    ))
-}
-
-async fn admit_download(
-    State(guard): State<Arc<DownloadGuard>>,
+async fn admit_request(
+    State(enrolment): State<Arc<Enrolment>>,
     mut request: Request,
     next: Next,
 ) -> Response {
     let peer = peer_ip(&request);
-    // Logged at `debug`: a peer that was not admitted repeats a refusal at will.
-    let path = request.uri().path().to_string();
-    let path = bounded(&path);
-    if let (Some(throttle), Some(ip)) = (&guard.throttle, peer) {
-        if let Some(wait) = throttle.retry_after(ip) {
+    let websocket = request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    match enrolment
+        .admit(request.headers(), request.uri(), websocket)
+        .await
+    {
+        Ok(admitted) => {
+            // At `debug`: a plain-HTTP poll comes every few seconds, and a request that asks for
+            // an upgrade is not yet a session — the endpoint may refuse it. A session is logged
+            // once it is accepted (`session.started`).
             debug!(
-                event = "download.throttled",
+                event = "admission.admitted",
                 peer = peer.map(tracing::field::display),
-                path,
-                "refused a download: the address is in back-off"
+                transport = if websocket { "websocket" } else { "http" },
+                client = %admitted.client_id,
+                "admitted a request"
             );
-            return throttled(wait);
+            request.extensions_mut().insert(Proofs {
+                host: Some(admitted.client_id),
+            });
+            if let Some(watch) = admitted.watch {
+                request.extensions_mut().insert(watch);
+            }
+            next.run(request).await
         }
-    }
-    // Behind a proxy that terminates TLS the authenticator is the proof, and no
-    // certificate is read.
-    let admitted = guard
-        .authenticator
-        .as_ref()
-        .map(|authenticator| authenticator.authenticate(request.headers()));
-    if let Some(Err(Refusal { check })) = &admitted {
-        if let (Some(throttle), Some(peer)) = (&guard.throttle, peer) {
-            throttle.failed(peer);
-        }
-        debug!(
-            event = "download.refused",
-            peer = peer.map(tracing::field::display),
-            path,
-            check = *check,
-            "refused a download: the authenticator refused it"
-        );
-        return refused();
-    }
-    let certificate = request
-        .extensions()
-        .get::<PeerCertificate>()
-        .and_then(|peer| peer.0.as_ref());
-    let facts = certificate.and_then(|cert| crate::ca::facts(cert.as_ref()).ok());
-    let member = match certificate {
-        Some(cert) => {
-            guard.issuers.classify(cert.as_ref()) == Peer::Member
-                && !facts
-                    .as_ref()
-                    .is_some_and(|facts| expired(facts.not_after_ms))
-                && !guard.revocations.as_ref().is_some_and(|revocations| {
-                    facts
-                        .as_ref()
-                        .is_none_or(|facts| revocations.is_certificate_revoked(&facts.id))
-                })
-        }
-        None => !guard.require_client_certificate,
-    };
-    let admitted = admitted.and_then(Result::ok);
-    let member = member || admitted.is_some();
-    if !member {
-        if let (Some(throttle), Some(peer)) = (&guard.throttle, peer) {
-            throttle.failed(peer);
-        }
-        debug!(
-            event = "download.refused",
-            peer = peer.map(tracing::field::display),
-            path,
-            "refused a download: no certificate of the fleet"
-        );
-        return unauthorized("the package download requires a certificate of the fleet");
-    }
-    // What the certificate proves, read once: counted here, and handed to the route, which serves
-    // only what is offered to an Agent of the host it names.
-    let proofs = match admitted {
-        Some(admitted) => Some(admitted_proofs(admitted)),
-        None => certificate.map(|cert| Proofs {
-            der: Some(Arc::from(cert.as_ref())),
-            host: facts.as_ref().and_then(|facts| facts.host.clone()),
-            subject_values: facts
-                .as_ref()
-                .map(|facts| facts.subject_values.clone())
-                .unwrap_or_default(),
-            certificate: facts.map(|facts| (facts.id, facts.not_after_ms)),
-        }),
-    };
-    if let Some(agent_rate) = &guard.agent_rate {
-        let proofs = proofs.clone().unwrap_or_default();
-        let subject = proofs.subject(peer);
-        let gateway = is_gateway(&subject, guard.revocations.as_ref());
-        // A download names no Agent, so through a Gateway it counts in the aggregate alone. Over
-        // the limit is no failure: the failure throttle is not fed.
-        if let Err(bucket) = agent_rate.admit(&subject, gateway, None) {
+        Err(refused) => {
+            // At `debug`: a peer that was not admitted repeats a refusal at will. Which check
+            // refused, never the presented value.
             debug!(
-                event = "agent_rate.throttled",
-                route = "download",
+                event = "admission.refused",
                 peer = peer.map(tracing::field::display),
-                bucket = bucket.as_str(),
-                host = proofs.host.as_deref(),
-                serial = proofs.serial(),
-                authority = proofs.authority(guard.revocations.as_ref()),
-                "a download past the rate limit"
+                check = refused.check(),
+                "refused admission"
             );
-            return over_rate();
+            refused.into_response()
         }
     }
-    debug!(
-        event = "download.admitted",
-        peer = peer.map(tracing::field::display),
-        path,
-        "admitted a download"
-    );
-    if let Some(proofs) = proofs {
-        request.extensions_mut().insert(proofs);
+}
+
+/// The per-peer back-off of the Agent plane round `router`: a peer in back-off
+/// is answered `429` before anything else is checked, and every refused authentication — a `401`,
+/// or a Bearer `400 invalid_request` — counts as a failure of the peer's address. A refusal that
+/// comes after authentication, such as `invalid_client_metadata`, counts for nothing, and a success
+/// clears nothing.
+pub fn back_off(router: Router, throttle: Arc<Throttle>) -> Router {
+    router.layer(middleware::from_fn_with_state(throttle, count_refusals))
+}
+
+async fn count_refusals(
+    State(throttle): State<Arc<Throttle>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let peer = peer_ip(&request);
+    if let Some(wait) = peer.and_then(|peer| throttle.retry_after(peer)) {
+        debug!(
+            event = "admission.throttled",
+            peer = peer.map(tracing::field::display),
+            "refused: the address is in back-off"
+        );
+        return throttled(wait);
+    }
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+    let status = response.status();
+    // At `debug`: a peer repeats a refused request at will.
+    if status.is_client_error() {
+        if path == ENROL_PATH {
+            debug!(
+                event = "enrolment.refused",
+                peer = peer.map(tracing::field::display),
+                status = status.as_u16(),
+                "refused an enrolment request"
+            );
+        } else if path == TOKEN_PATH {
+            debug!(
+                event = "token.refused",
+                peer = peer.map(tracing::field::display),
+                status = status.as_u16(),
+                "refused a token request"
+            );
+        }
+    }
+    let authentication_refused = status == StatusCode::UNAUTHORIZED
+        || (status == StatusCode::BAD_REQUEST
+            && response.headers().contains_key(header::WWW_AUTHENTICATE));
+    if let (true, Some(peer)) = (authentication_refused, peer) {
+        throttle.failed(peer);
+    }
+    response
+}
+
+/// Counts every download against the sender's rate; without a limit the
+/// route is served as it is.
+pub fn limit_downloads(router: Router, agent_rate: Option<Arc<AgentRate>>) -> Router {
+    match agent_rate {
+        Some(agent_rate) => router.layer(middleware::from_fn_with_state(agent_rate, rate_download)),
+        None => router,
+    }
+}
+
+async fn rate_download(
+    State(agent_rate): State<Arc<AgentRate>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let peer = peer_ip(&request);
+    let proofs = request.extensions().get::<Proofs>().cloned();
+    let subject = proofs.clone().unwrap_or_default().subject(peer);
+    if !agent_rate.admit(&subject) {
+        debug!(
+            event = "agent_rate.throttled",
+            route = "download",
+            peer = peer.map(tracing::field::display),
+            host = proofs.and_then(|proofs| proofs.host),
+            "a download past the rate limit"
+        );
+        return over_rate();
     }
     next.run(request).await
 }
 
-pub fn router(state: Arc<AppState>, admission: Admission) -> Router {
-    // The limits the Baseline requires of the Server, on both transports and in both directions.
-    let settings = Settings::new(state.max_message_size());
-    let fleet = Fleet(state, admission.issuers.clone());
-    let mut router = opamp::server::router(Arc::new(fleet), settings);
-    if admission.required() {
-        // The outermost layer: every plain-HTTP POST and the upgrade GET — checked before the
-        // WebSocket upgrade completes — answers 401 without a certificate that admits.
-        router = router.layer(middleware::from_fn_with_state(Arc::new(admission), admit));
-    }
-    router
+/// The answer to a download past the sender's rate: `429`, retry in 30 s.
+fn over_rate() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(
+            header::RETRY_AFTER,
+            crate::fleet::RETRY_AFTER.as_secs().to_string(),
+        )],
+        "too many requests from this sender — retry later",
+    )
+        .into_response()
 }
 
 /// The peer's address: the left-most valid address of `X-Forwarded-For` when the request has the
 /// header, else the address of the connection the listener put into the request.
 ///
-/// The header is trusted from any source: the Server is reached through a
-/// reverse proxy, which is the one peer on its connections, and it counts failed attempts per
-/// address. Whoever can reach the port can write the header, and so name any address — and so
-/// keep a failure count from ever filling for them.
-pub fn peer_ip(request: &Request) -> Option<std::net::IpAddr> {
+/// The header is trusted from any source: the Server is reached through a reverse proxy, which is
+/// the one peer on its connections, and it counts failed attempts per address. Whoever can reach
+/// the port can write the header, and so name any address — and so keep a failure count from ever
+/// filling for them.
+pub fn peer_ip(request: &Request) -> Option<IpAddr> {
     forwarded_for(request.headers()).or_else(|| {
         request
             .extensions()
@@ -453,19 +264,6 @@ pub fn busy() -> Response {
         .into_response()
 }
 
-/// The answer to a download past the sender's rate: `429`, retry in 30 s.
-fn over_rate() -> Response {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        [(
-            header::RETRY_AFTER,
-            crate::fleet::RETRY_AFTER.as_secs().to_string(),
-        )],
-        "too many requests from this sender — retry later",
-    )
-        .into_response()
-}
-
 /// The answer to a peer in back-off: `429` with the seconds it still has to wait.
 pub fn throttled(retry_after: u64) -> Response {
     (
@@ -476,347 +274,69 @@ pub fn throttled(retry_after: u64) -> Response {
         .into_response()
 }
 
-async fn admit(
-    State(admission): State<Arc<Admission>>,
-    mut request: Request,
-    next: Next,
-) -> Response {
-    // What this gate proves is *fleet membership* and the host, not which Agent is speaking:
-    // `instance_uid` stays self-asserted behind the certificate. Admission
-    // is the trust boundary; the host is the only bound between admitted Agents. An
-    // `Authorization` header is not read here or anywhere behind it.
-    let peer = peer_ip(&request);
-    // Every refusal is logged at `debug`: a peer that was not admitted repeats it at will.
-    if let (Some(throttle), Some(ip)) = (&admission.throttle, peer) {
-        if let Some(wait) = throttle.retry_after(ip) {
-            debug!(
-                event = "admission.throttled",
-                peer = peer.map(tracing::field::display),
-                "refused: the address is in back-off"
-            );
-            return throttled(wait);
-        }
-    }
-    let refuse = |check: &str, response: Response| {
-        if let (Some(throttle), Some(peer)) = (&admission.throttle, peer) {
-            throttle.failed(peer);
-        }
-        debug!(
-            event = "admission.refused",
-            peer = peer.map(tracing::field::display),
-            check,
-            "refused admission"
-        );
-        response
-    };
-    let websocket = request
-        .headers()
-        .get(header::UPGRADE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
-    // Behind a proxy that terminates TLS the authenticator is the proof, and the only one:
-    // no certificate is read, no revocation consulted.
-    if let Some(authenticator) = &admission.authenticator {
-        return match authenticator.authenticate(request.headers()) {
-            Ok(admitted) => {
-                debug!(
-                    event = "admission.admitted",
-                    peer = peer.map(tracing::field::display),
-                    transport = if websocket { "websocket" } else { "http" },
-                    admitted_as = "member",
-                    host = admitted.host.as_deref().map(bounded),
-                    "admitted a request"
-                );
-                request.extensions_mut().insert(Peer::Member);
-                request.extensions_mut().insert(admitted_proofs(admitted));
-                next.run(request).await
-            }
-            Err(Refusal { check }) => refuse(check, refused()),
-        };
-    }
-    let certificate = request
-        .extensions()
-        .get::<PeerCertificate>()
-        .and_then(|peer| peer.0.clone());
-    if admission.require_client_certificate && certificate.is_none() {
-        return refuse(
-            "certificate",
-            (
-                StatusCode::UNAUTHORIZED,
-                "the OpAMP endpoint requires a client certificate",
-            )
-                .into_response(),
-        );
-    }
-    let presented = match certificate
-        .as_ref()
-        .map(|cert| crate::ca::facts(cert.as_ref()))
-    {
-        None => None,
-        Some(Ok(facts)) => Some(facts),
-        // The handshake verified it, so it parses; one that does not is not admitted.
-        Some(Err(_)) => {
-            return refuse(
-                "certificate",
-                unauthorized("the OpAMP endpoint requires a certificate of the fleet"),
-            )
-        }
-    };
-    // The handshake checked the certificate's validity once per connection; a kept-alive one
-    // outlives it, so each request is checked again.
-    if presented
-        .as_ref()
-        .is_some_and(|facts| expired(facts.not_after_ms))
-    {
-        return refuse(
-            "expired",
-            unauthorized("the OpAMP endpoint requires a certificate of the fleet"),
-        );
-    }
-    if let Some(revocations) = &admission.revocations {
-        let proofs = Proofs {
-            der: None,
-            certificate: presented
-                .as_ref()
-                .map(|facts| (facts.id.clone(), facts.not_after_ms)),
-            host: None,
-            subject_values: crate::revocation::SubjectValues::default(),
-        };
-        // That the certificate was revoked is not said.
-        if proofs.revoked(revocations) {
-            debug!(
-                event = "admission.revoked_proof",
-                peer = peer.map(tracing::field::display),
-                serial = proofs.serial(),
-                authority = proofs.authority(Some(revocations)),
-                "refused: a revoked certificate"
-            );
-            return refuse(
-                "revoked",
-                unauthorized("the OpAMP endpoint requires a certificate of the fleet"),
-            );
-        }
-    }
-    let classified = certificate
-        .as_ref()
-        .map(|cert| admission.issuers.classify(cert.as_ref()))
-        .unwrap_or(Peer::Member);
-    if let Peer::Enrolling { .. } = &classified {
-        // A bootstrap certificate opens nothing outside an enrolment window.
-        // The handshake proved the certificate, so this is no guess and counts as no failure:
-        // hosts that wait for an operator must not throttle the members behind the same address.
-        if !admission.enrolment.as_ref().is_some_and(|e| e.is_open()) {
-            debug!(
-                event = "admission.refused",
-                peer = peer.map(tracing::field::display),
-                check = "enrolment_window",
-                "refused: a bootstrap certificate outside an enrolment window"
-            );
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no enrolment window is open",
-            )
-                .into_response();
-        }
-    }
-    let serial = presented.as_ref().map(|facts| facts.id.serial.as_str());
-    let admitted_as = match &classified {
-        Peer::Member => "member",
-        Peer::Enrolling { .. } => "enrolling",
-    };
-    let authority = presented
-        .as_ref()
-        .and_then(|facts| admission.issuers_role(&facts.id.issuer));
-    // At `debug`: a plain-HTTP poll comes every few seconds, and a request that asks for an upgrade
-    // is not yet a session — the endpoint may refuse it. A session is logged once it is accepted
-    // (`session.started`).
-    debug!(
-        event = "admission.admitted",
-        peer = peer.map(tracing::field::display),
-        transport = if websocket { "websocket" } else { "http" },
-        admitted_as,
-        authority,
-        serial,
-        "admitted a request"
-    );
-    request.extensions_mut().insert(classified);
-    request.extensions_mut().insert(Proofs {
-        der: certificate.map(|cert| Arc::from(cert.as_ref())),
-        host: presented.as_ref().and_then(|facts| facts.host.clone()),
-        subject_values: presented
-            .as_ref()
-            .map(|facts| facts.subject_values.clone())
-            .unwrap_or_default(),
-        certificate: presented.map(|facts| (facts.id, facts.not_after_ms)),
-    });
-    next.run(request).await
-}
-
 /// The Server's handler behind the endpoint: every report goes to the fleet, and a WebSocket is
-/// also sent what the fleet wants its Agents to have when that changes. The CAs of the Agent plane
-/// tell which bootstrap certificates an enrolment request through a Gateway may prove.
-struct Fleet(Arc<AppState>, Issuers);
+/// also sent what the fleet wants its Agents to have when that changes.
+struct Fleet(Arc<AppState>);
 
 /// One connection as the fleet sees it.
 struct Carrier {
     transport: Transport,
-    /// Set on an enrolment connection: the bootstrap certificate it carried,
-    /// where from, and the key its request asks to be certified, once it has sent one.
-    enrolling: Option<Enrolling>,
     /// This connection's identity — what the duplicate detection tells connections apart by. Plain
     /// HTTP is stateless polling, so there is none to pass.
     conn: Option<ConnId>,
-    /// The Agents this socket carried, any number of them told apart by `instance_uid` alone,
-    /// so all of them are marked unreachable when it goes.
+    /// The Agents this socket carried, any number of them told apart by `instance_uid` alone, so
+    /// all of them are marked unreachable when it goes.
     seen: Vec<InstanceUid>,
-    /// What admitted the connection: re-checked before a CSR is signed, and the presented
-    /// certificate is the predecessor of one it renews.
-    proofs: Proofs,
+    /// The host the connection arrived over, when one is named.
+    host: Option<String>,
     /// Where the connection comes from.
     peer: Option<IpAddr>,
     /// Who its messages are counted for.
     subject: Subject,
-    /// Why the session was ended, once its [`Guard`] has ended it.
+    /// Why the session was ended, once its [`Session`] has ended it.
     ended: Arc<Mutex<Option<&'static str>>>,
 }
 
-/// What an enrolling connection carried, and what it has asked for.
-struct Enrolling {
-    requester: Requester,
-    request: Arc<Mutex<Option<crate::enrolment::Request>>>,
-    instance_uid: Arc<Mutex<Vec<u8>>>,
-}
+/// Why a session ends when the token it was admitted with is replaced.
+const TOKEN_REPLACED: &str = "token replaced";
 
-/// What a connection is sent without asking. A member hears of every change to the fleet's
-/// desired state — the "within seconds" of the control loop. An enrolling host hears of its own
-/// request's decision, and its connection ends when the window closes or the request is rejected.
-enum Pushes {
-    Desired(watch::Receiver<u64>),
-    Enrolment {
-        changes: watch::Receiver<u64>,
-        enrolment: Arc<Enrolment>,
-        request: Arc<Mutex<Option<crate::enrolment::Request>>>,
-    },
-}
-
-/// A WebSocket session's outbound side, and what ends it: a revocation of what admitted it, or the
-/// expiry of its certificate.
+/// A WebSocket session's outbound side: it hears of every change to the fleet's desired state —
+/// the "within seconds" of the control loop — and ends when the token it was admitted with is
+/// replaced. It does not end when that token merely expires.
 struct Session {
-    pushes: Pushes,
-    guard: Option<Guard>,
-}
-
-struct Guard {
-    revocations: Arc<Revocations>,
     changes: watch::Receiver<u64>,
-    proofs: Proofs,
-    expires: Option<tokio::time::Instant>,
+    token: Option<SessionWatch>,
+    client: Option<String>,
     ended: Arc<Mutex<Option<&'static str>>>,
 }
 
-impl Guard {
-    fn new(
-        revocations: Arc<Revocations>,
-        proofs: Proofs,
-        ended: Arc<Mutex<Option<&'static str>>>,
-    ) -> Self {
-        let expires = proofs.certificate.as_ref().map(|(_, not_after_ms)| {
-            tokio::time::Instant::now()
-                + std::time::Duration::from_millis(not_after_ms.saturating_sub(now_ms()))
-        });
-        let mut changes = revocations.subscribe();
-        // A revocation that landed between admission and here is checked at once.
-        changes.mark_changed();
-        Guard {
-            changes,
-            revocations,
-            proofs,
-            expires,
-            ended,
-        }
-    }
-
-    /// Waits until the session must end, and says why.
-    async fn tripped(&mut self) -> &'static str {
-        let Guard {
-            revocations,
-            changes,
-            proofs,
-            expires,
-            ..
-        } = self;
-        let expiry = async {
-            match expires {
-                Some(at) => tokio::time::sleep_until(*at).await,
-                None => std::future::pending().await,
-            }
-        };
-        tokio::pin!(expiry);
-        loop {
-            tokio::select! {
-                () = &mut expiry => return "certificate expired",
-                changed = changes.changed() => {
-                    if changed.is_err() {
-                        // The list is gone with the Server; only the expiry is left to wait for.
-                        (&mut expiry).await;
-                        return "certificate expired";
-                    }
-                    if proofs.revoked(revocations) {
-                        return "revoked";
-                    }
-                }
-            }
-        }
-    }
-}
+/// One occasion to push.
+struct Push;
 
 impl Outbound for Session {
     type Item = Push;
 
     async fn next(&mut self) -> Option<Push> {
-        let Session { pushes, guard } = self;
-        let Some(guard) = guard else {
-            return pushes.next().await;
+        let Session {
+            changes,
+            token,
+            client,
+            ended,
+        } = self;
+        let Some(token) = token else {
+            return changes.changed().await.ok().map(|()| Push);
         };
-        let ended = guard.ended.clone();
-        let serial = guard.proofs.serial().map(str::to_string);
-        let authority = guard.proofs.authority(Some(&guard.revocations));
         tokio::select! {
-            item = pushes.next() => item,
-            reason = guard.tripped() => {
-                info!(event = "session.ended", reason, serial, authority, "ending a session");
-                *ended.lock().expect("ended lock") = Some(reason);
+            changed = changes.changed() => changed.ok().map(|()| Push),
+            () = token.replaced() => {
+                info!(
+                    event = "session.ended",
+                    reason = TOKEN_REPLACED,
+                    client = client.as_deref(),
+                    "ending a session"
+                );
+                *ended.lock().expect("ended lock") = Some(TOKEN_REPLACED);
                 None
-            }
-        }
-    }
-}
-
-/// One occasion to push.
-enum Push {
-    Desired,
-    Enrolment,
-}
-
-impl Pushes {
-    async fn next(&mut self) -> Option<Push> {
-        match self {
-            Pushes::Desired(changes) => changes.changed().await.ok().map(|()| Push::Desired),
-            Pushes::Enrolment {
-                changes,
-                enrolment,
-                request,
-            } => {
-                changes.changed().await.ok()?;
-                let key = request
-                    .lock()
-                    .expect("request lock")
-                    .as_ref()
-                    .map(|r| r.key_fingerprint.clone());
-                if !enrolment.is_open() || key.is_some_and(|key| enrolment.is_rejected(&key)) {
-                    return None;
-                }
-                Some(Push::Enrolment)
             }
         }
     }
@@ -835,14 +355,6 @@ impl Handler for Fleet {
             .get::<Proofs>()
             .cloned()
             .unwrap_or_default();
-        let ended = Arc::new(Mutex::new(None));
-        let session = |pushes: Pushes| Session {
-            pushes,
-            guard: self
-                .0
-                .revocations()
-                .map(|revocations| Guard::new(revocations.clone(), proofs.clone(), ended.clone())),
-        };
         let websocket = request.transport == opamp::server::Transport::WebSocket;
         let peer = request.peer.map(|peer| peer.ip());
         if websocket {
@@ -851,69 +363,21 @@ impl Handler for Fleet {
             info!(
                 event = "session.started",
                 peer = peer.map(tracing::field::display),
-                admitted_as = match request.extensions.get::<Peer>() {
-                    Some(Peer::Enrolling { .. }) => "enrolling",
-                    _ => "member",
-                },
-                authority = proofs.authority(self.0.revocations()),
-                serial = proofs.serial(),
+                client = proofs.host.as_deref(),
                 "a WebSocket session starts"
             );
         }
-        if let (
-            Some(Peer::Enrolling {
-                subject,
-                carried,
-                fingerprint,
-                id,
-            }),
-            Some(enrolment),
-        ) = (request.extensions.get::<Peer>(), self.0.enrolment())
-        {
-            let enrolling = Enrolling {
-                requester: Requester {
-                    bootstrap_subject: subject.clone(),
-                    carried: (**carried).clone(),
-                    bootstrap_fingerprint: fingerprint.clone(),
-                    bootstrap: id.clone(),
-                    peer: request.peer.map(|peer| peer.ip()),
-                    gateway: None,
-                },
-                request: Arc::new(Mutex::new(None)),
-                instance_uid: Arc::new(Mutex::new(Vec::new())),
-            };
-            let outbound = websocket.then(|| {
-                session(Pushes::Enrolment {
-                    changes: enrolment.subscribe(),
-                    enrolment: enrolment.clone(),
-                    request: enrolling.request.clone(),
-                })
-            });
-            return Ok((
-                Carrier {
-                    transport: if websocket {
-                        Transport::WebSocket
-                    } else {
-                        Transport::Http
-                    },
-                    enrolling: Some(enrolling),
-                    conn: None,
-                    seen: Vec::new(),
-                    proofs: proofs.clone(),
-                    peer,
-                    // A bootstrap certificate may be the whole fleet's, so an enrolling host is
-                    // counted by its address.
-                    subject: Subject::peer(peer),
-                    ended,
-                },
-                outbound,
-            ));
-        }
+        let ended = Arc::new(Mutex::new(None));
         let (transport, conn, outbound) = if websocket {
             (
                 Transport::WebSocket,
                 Some(self.0.connection_id()),
-                Some(session(Pushes::Desired(self.0.subscribe()))),
+                Some(Session {
+                    changes: self.0.subscribe(),
+                    token: request.extensions.get::<SessionWatch>().cloned(),
+                    client: proofs.host.clone(),
+                    ended: ended.clone(),
+                }),
             )
         } else {
             (Transport::Http, None, None)
@@ -921,11 +385,10 @@ impl Handler for Fleet {
         Ok((
             Carrier {
                 transport,
-                enrolling: None,
                 conn,
                 seen: Vec::new(),
                 subject: proofs.subject(peer),
-                proofs,
+                host: proofs.host,
                 peer,
                 ended,
             },
@@ -934,52 +397,15 @@ impl Handler for Fleet {
     }
 
     async fn on_message(&self, carrier: &mut Carrier, report: AgentToServer) -> Reply {
-        // An enrolment request through a Gateway; counted in the Gateway's
-        // enrolment aggregate and, once checked, by the bootstrap certificate it names.
-        let through_gateway = self.enrolment_through_gateway(carrier, &report);
-        // Before anything else: enrolment, the CSR, and the fleet lock.
-        if self.over_rate(
-            carrier,
-            Some(&report.instance_uid),
-            through_gateway.as_ref(),
-        ) {
+        if self.over_rate(carrier, Some(&report.instance_uid)) {
             return Reply::Send(unavailable(&report.instance_uid, THROTTLED));
         }
-        if let Some(enrolling) = &carrier.enrolling {
-            return Reply::Send(self.enrol(enrolling, &report));
-        }
-        if through_gateway.is_some() {
-            return Reply::Send(self.enrol_through_gateway(carrier, &report));
-        }
-        let csr = report
-            .connection_settings_request
-            .as_ref()
-            .and_then(|request| request.opamp.as_ref())
-            .is_some_and(|opamp| opamp.certificate_request.is_some());
-        if csr {
-            if let Some(revocations) = self.0.revocations() {
-                // A session whose proof was revoked a moment ago is not handed a certificate
-                // before its guard closes it.
-                if carrier.proofs.revoked(revocations) {
-                    return Reply::Send(bad_request("this connection is no longer admitted"));
-                }
-            }
-        }
-        // The connection's own certificate, whatever the message claims to be: behind a Gateway
-        // that is the Gateway's, which renews nothing without a renewal proof.
-        let presented = carrier
-            .proofs
-            .certificate
-            .as_ref()
-            .map(|(id, not_after_ms)| Presented {
-                id: id.clone(),
-                host: carrier.proofs.host.clone(),
-                subject_values: carrier.proofs.subject_values.clone(),
-                not_after_ms: *not_after_ms,
-            });
-        let outcome =
-            self.0
-                .process_presented(report, carrier.transport, carrier.conn, presented.as_ref());
+        let outcome = self.0.process_for_host(
+            report,
+            carrier.transport,
+            carrier.conn,
+            carrier.host.as_deref(),
+        );
         if let (Some(uid), Some(_)) = (outcome.uid, carrier.conn) {
             if outcome.disconnected {
                 carrier.seen.retain(|s| s != &uid);
@@ -990,23 +416,7 @@ impl Handler for Fleet {
         Reply::Send(outcome.reply)
     }
 
-    fn on_outbound(&self, carrier: &mut Carrier, push: Push) -> Vec<ServerToAgent> {
-        if let (Push::Enrolment, Some(enrolling)) = (push, &carrier.enrolling) {
-            // A decision reached while the host waits: an approval is handed over at once.
-            let Some(request) = enrolling.request.lock().expect("request lock").clone() else {
-                return Vec::new();
-            };
-            let Some(enrolment) = self.0.enrolment() else {
-                return Vec::new();
-            };
-            let uid = enrolling.instance_uid.lock().expect("uid lock").clone();
-            // Read, never filed: a request withdrawn meanwhile stays out of the queue, which only
-            // an enrolment message, checked against the revocations, enters.
-            return match enrolment.answer(&request.key_fingerprint) {
-                Some(Submitted::Issued(cert)) => vec![self.0.enrolment_answer(&uid, Some(cert))],
-                _ => Vec::new(),
-            };
-        }
+    fn on_outbound(&self, carrier: &mut Carrier, _push: Push) -> Vec<ServerToAgent> {
         let mut messages = Vec::new();
         for uid in &carrier.seen {
             // A queued restart goes first, as its own message — the Baseline's command message is
@@ -1025,7 +435,7 @@ impl Handler for Fleet {
 
     fn on_unreadable(&self, carrier: &mut Carrier, _error: &Unreadable) -> Reply {
         // It names no Agent, so its reply reaches none.
-        if self.over_rate(carrier, None, None) {
+        if self.over_rate(carrier, None) {
             return Reply::Send(unavailable(&[], THROTTLED));
         }
         Reply::Send(bad_request(match carrier.transport {
@@ -1040,7 +450,6 @@ impl Handler for Fleet {
     }
 
     /// The connection is gone; every Agent it carried is unreachable until it reports again.
-    /// An enrolling host was never one of the fleet's Agents, so there is nothing to mark.
     fn on_closed(&self, carrier: Carrier) {
         if let Some(conn) = carrier.conn {
             self.0.mark_disconnected(&carrier.seen, conn);
@@ -1048,44 +457,15 @@ impl Handler for Fleet {
     }
 }
 
-/// An enrolment request through a Gateway, as the throttle keys it.
-enum Relayed {
-    /// Its proof embeds a certificate a bootstrap CA of `[enrolment]` issued: its own bucket.
-    Checked(CertId),
-    /// Its proof embeds no such certificate, or does not parse: the enrolment aggregate alone, and
-    /// refused.
-    Unchecked,
-}
-
 impl Fleet {
-    /// Takes the message's token — for an enrolment request through a Gateway, from the
-    /// Gateway's enrolment aggregate and the bucket of the bootstrap certificate it names, once
-    /// checked — and logs a message past the limit.
-    fn over_rate(
-        &self,
-        carrier: &Carrier,
-        instance_uid: Option<&[u8]>,
-        enrolment: Option<&Relayed>,
-    ) -> bool {
+    /// Takes the message's token and logs a message past the limit.
+    fn over_rate(&self, carrier: &Carrier, instance_uid: Option<&[u8]>) -> bool {
         let Some(agent_rate) = self.0.agent_rate() else {
             return false;
         };
-        let revocations = self.0.revocations();
-        let gateway = is_gateway(&carrier.subject, revocations);
-        let taken = match enrolment {
-            Some(relayed) => agent_rate.admit_enrolment(
-                &carrier.subject,
-                gateway,
-                match relayed {
-                    Relayed::Checked(bootstrap) => Some(bootstrap),
-                    Relayed::Unchecked => None,
-                },
-            ),
-            None => agent_rate.admit(&carrier.subject, gateway, instance_uid),
-        };
-        let Err(bucket) = taken else {
+        if agent_rate.admit(&carrier.subject) {
             return false;
-        };
+        }
         let uid = instance_uid
             .filter(|uid| InstanceUid::from_wire(uid).is_some())
             .map(hex::encode);
@@ -1093,339 +473,11 @@ impl Fleet {
             event = "agent_rate.throttled",
             route = "opamp",
             peer = carrier.peer.map(tracing::field::display),
-            bucket = bucket.as_str(),
-            host = carrier.proofs.host.as_deref(),
-            serial = carrier.proofs.serial(),
-            authority = carrier.proofs.authority(revocations),
+            host = carrier.host.as_deref(),
             instance_uid = uid,
             transport = carrier.transport.as_str(),
             "a message past the rate limit"
         );
         true
-    }
-
-    /// One message on an enrolment connection. Nothing in it is read but the
-    /// certificate signing request: no Agent record is created and nothing is offered but the
-    /// issued certificate.
-    fn enrol(&self, enrolling: &Enrolling, report: &AgentToServer) -> ServerToAgent {
-        // At `debug`: the enrolling host repeats a refused request at will.
-        let refuse = |e: &str| {
-            debug!(
-                event = "enrolment.refused",
-                peer = enrolling.requester.peer.map(tracing::field::display),
-                bootstrap_serial = %enrolling.requester.bootstrap.serial,
-                instance_uid = logged_uid(&report.instance_uid),
-                error = %e,
-                "refused an enrolment request"
-            );
-            bad_request(e)
-        };
-        let Some(enrolment) = self.0.enrolment() else {
-            return refuse("this Server does not enrol");
-        };
-        // A session whose bootstrap certificate was revoked a moment ago neither queues a request
-        // nor collects a certificate before its guard closes it.
-        if self.0.revocations().is_some_and(|revocations| {
-            revocations.is_certificate_revoked(&enrolling.requester.bootstrap)
-        }) {
-            return refuse("this connection is no longer admitted");
-        }
-        *enrolling.instance_uid.lock().expect("uid lock") = report.instance_uid.clone();
-        let Some(csr) = report
-            .connection_settings_request
-            .as_ref()
-            .and_then(|request| request.opamp.as_ref())
-            .and_then(|opamp| opamp.certificate_request.as_ref())
-        else {
-            // The capabilities say a request may be sent; nothing else is answered.
-            return self.0.enrolment_answer(&report.instance_uid, None);
-        };
-        // A request claiming another identity never reaches the queue, nor does one
-        // proving another bootstrap certificate than the handshake's.
-        let request = match String::from_utf8(csr.csr.clone())
-            .map_err(|_| "the certificate signing request is not PEM".to_string())
-            .and_then(|pem| {
-                crate::ca::check_claims(&pem, &report.instance_uid)?;
-                proves_the_handshake(&pem, &enrolling.requester)?;
-                crate::ca::enrolment_request(&pem, &report.instance_uid)
-            }) {
-            Ok(request) => request,
-            Err(e) => return refuse(&e),
-        };
-        *enrolling.request.lock().expect("request lock") = Some(request.clone());
-        self.file(
-            enrolment,
-            request,
-            &enrolling.requester,
-            &report.instance_uid,
-        )
-    }
-
-    /// Whether a message is an enrolment request through a Gateway: a CSR
-    /// carrying a bootstrap proof over the certificate of a host marked as a Gateway, unless the
-    /// proof names that certificate itself — then it is the Gateway's own CSR, which `renews`
-    /// decides; it names that certificate only when it embeds it byte for byte. Its certificate is
-    /// checked as cheaply as the throttle allows before it keys a bucket: it parses, and
-    /// it is one a bootstrap CA of `[enrolment]` issued as the handshake checks one — its issuer,
-    /// that CA's signature over it, `CA:FALSE`, its validity, and the `clientAuth` extended key
-    /// usage where it names any ([`Issuers::bootstrap_issued`]). The proof itself is checked by
-    /// [`enrol_through_gateway`].
-    ///
-    /// [`enrol_through_gateway`]: Self::enrol_through_gateway
-    /// [`Issuers::bootstrap_issued`]: crate::tls::Issuers::bootstrap_issued
-    fn enrolment_through_gateway(
-        &self,
-        carrier: &Carrier,
-        report: &AgentToServer,
-    ) -> Option<Relayed> {
-        if carrier.enrolling.is_some() || !is_gateway(&carrier.subject, self.0.revocations()) {
-            return None;
-        }
-        let csr = report
-            .connection_settings_request
-            .as_ref()?
-            .opamp
-            .as_ref()?
-            .certificate_request
-            .as_ref()?;
-        // A request that is not one PEM block is refused where any CSR is.
-        let pem = std::str::from_utf8(&csr.csr).ok()?;
-        classis_core::csr::der(pem.as_bytes()).ok()?;
-        let der = match crate::ca::bootstrap_proof_certificate(pem) {
-            Ok(None) => return None,
-            Ok(Some(der)) => der,
-            Err(_) => return Some(Relayed::Unchecked),
-        };
-        // The very certificate presented, byte for byte: an issuer and serial alone are anyone's
-        // to copy into a certificate of their own.
-        if carrier.proofs.der.as_deref() == Some(der.as_slice()) {
-            return None;
-        }
-        Some(match self.1.bootstrap_issued(&der) {
-            Ok(Peer::Enrolling { id, .. }) => Relayed::Checked(id),
-            _ => Relayed::Unchecked,
-        })
-    }
-
-    /// An enrolment request through a Gateway: decided as any enrolment. The
-    /// proof is checked — a bootstrap certificate of `[enrolment]`, valid, not revoked, its key
-    /// having signed the request's — and the request is filed under the
-    /// certificate it proves, naming the Gateway's host in place of a peer address. Nothing in the
-    /// message is read but the certificate signing request, and no Agent record is made. Every
-    /// answer is addressed to the message's `instance_uid`, by which the Gateway routes it back.
-    fn enrol_through_gateway(&self, carrier: &Carrier, report: &AgentToServer) -> ServerToAgent {
-        let uid = &report.instance_uid;
-        let gateway = carrier.proofs.host.clone();
-        let refuse = |e: &str| {
-            // At `debug`: a Gateway relays a refused request as often as its hosts send it.
-            debug!(
-                event = "enrolment.refused",
-                gateway = gateway.as_deref(),
-                instance_uid = logged_uid(uid),
-                error = %e,
-                "refused an enrolment request through a Gateway"
-            );
-            let mut reply = bad_request(e);
-            reply.instance_uid.clone_from(uid);
-            reply
-        };
-        let Some(enrolment) = self.0.enrolment() else {
-            return refuse("this Server does not enrol");
-        };
-        if self
-            .0
-            .revocations()
-            .is_some_and(|revocations| carrier.proofs.revoked(revocations))
-        {
-            return refuse("this connection is no longer admitted");
-        }
-        let Some(csr) = report
-            .connection_settings_request
-            .as_ref()
-            .and_then(|request| request.opamp.as_ref())
-            .and_then(|opamp| opamp.certificate_request.as_ref())
-        else {
-            return refuse("the message carries no certificate signing request");
-        };
-        let filed = String::from_utf8(csr.csr.clone())
-            .map_err(|_| "the certificate signing request is not PEM".to_string())
-            .and_then(|pem| {
-                crate::ca::check_claims(&pem, uid)?;
-                let der = crate::ca::bootstrap_proof(&pem)?
-                    .ok_or_else(|| "the bootstrap proof does not parse".to_string())?;
-                let Peer::Enrolling {
-                    subject,
-                    carried,
-                    fingerprint,
-                    id,
-                } = self
-                    .1
-                    .bootstrap_issued(&der)
-                    .map_err(|why| format!("the bootstrap proof does not hold: {why}"))?
-                else {
-                    return Err("the bootstrap proof does not hold".to_string());
-                };
-                if self
-                    .0
-                    .revocations()
-                    .is_some_and(|revocations| revocations.is_certificate_revoked(&id))
-                {
-                    return Err(
-                        "the bootstrap proof does not hold: its certificate is revoked".to_string(),
-                    );
-                }
-                let requester = Requester {
-                    bootstrap_subject: subject,
-                    carried: *carried,
-                    bootstrap_fingerprint: fingerprint,
-                    bootstrap: id,
-                    peer: None,
-                    gateway: gateway.clone(),
-                };
-                Ok((crate::ca::enrolment_request(&pem, uid)?, requester))
-            });
-        match filed {
-            Ok((request, requester)) => self.file(enrolment, request, &requester, uid),
-            Err(e) => refuse(&e),
-        }
-    }
-
-    /// Takes in an enrolment request, or answers it once it has been decided: what both an
-    /// enrolment connection and a Gateway's relay are answered.
-    fn file(
-        &self,
-        enrolment: &Enrolment,
-        request: crate::enrolment::Request,
-        requester: &Requester,
-        instance_uid: &[u8],
-    ) -> ServerToAgent {
-        let key = request.key_fingerprint.clone();
-        let subject = request.subject.clone();
-        let answer = match enrolment.submit(request, requester.clone()) {
-            Submitted::Waiting { new } => {
-                // A new request at `info`; the same one asked again — every few seconds while it
-                // waits — at `debug`.
-                if new {
-                    info!(
-                        event = "enrolment.queued",
-                        key = %key,
-                        peer = requester.peer.map(tracing::field::display),
-                        gateway = requester.gateway.as_deref(),
-                        subject = bounded(&subject),
-                        bootstrap_subject = %requester.bootstrap_subject,
-                        instance_uid = logged_uid(instance_uid),
-                        "an enrolment request waits for an operator"
-                    );
-                } else {
-                    debug!(event = "enrolment.queued", key = %key, "an enrolment request still waits for an operator");
-                }
-                self.0.enrolment_answer(instance_uid, None)
-            }
-            Submitted::Issued(cert) => {
-                info!(key = %key, "handed an enrolling host its certificate");
-                self.0.enrolment_answer(instance_uid, Some(cert))
-            }
-            Submitted::Rejected => bad_request("an operator rejected this enrolment request"),
-            Submitted::Full => {
-                unavailable(instance_uid, "the enrolment queue is full — retry later")
-            }
-            Submitted::OverShare { first } => {
-                // Logged once per certificate and window: a host re-sending its
-                // refused request does not flood the log.
-                if first {
-                    info!(
-                        event = "enrolment.refused",
-                        reason = "bootstrap_share",
-                        peer = requester.peer.map(tracing::field::display),
-                        gateway = requester.gateway.as_deref(),
-                        bootstrap_serial = %requester.bootstrap.serial,
-                        bootstrap_subject = %requester.bootstrap_subject,
-                        "refused an enrolment request: its bootstrap certificate holds its share \
-                         of the queue"
-                    );
-                }
-                unavailable(
-                    instance_uid,
-                    "this bootstrap certificate holds its share of the enrolment queue — retry \
-                     later",
-                )
-            }
-            Submitted::Closed => unavailable(instance_uid, "no enrolment window is open"),
-        };
-        // Addressed to the message, so a Gateway routes even a refusal back.
-        ServerToAgent {
-            instance_uid: instance_uid.to_vec(),
-            ..answer
-        }
-    }
-}
-
-/// Whether a request on an enrolment connection proves the certificate of its handshake: a
-/// bootstrap proof there must name that certificate, and hold; a request without one
-/// proves the handshake's certificate alone.
-///
-/// # Errors
-/// Returns the `BadRequest` text for a proof that does not hold or names another certificate.
-fn proves_the_handshake(csr_pem: &str, handshake: &Requester) -> Result<(), String> {
-    use sha2::{Digest as _, Sha256};
-    match crate::ca::bootstrap_proof(csr_pem)? {
-        Some(der) if hex::encode(Sha256::digest(&der)) != handshake.bootstrap_fingerprint => Err(
-            "the bootstrap proof names another certificate than the one this connection presented"
-                .to_string(),
-        ),
-        _ => Ok(()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A push to an enrolling connection only reads its request's decision: a request that is no
-    /// longer in the queue — withdrawn when its bootstrap certificate was revoked — is not filed
-    /// again behind the revocation check an enrolment message passes.
-    #[test]
-    fn a_push_never_files_a_request_again() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let enrolment = Arc::new(Enrolment::new(Arc::new(crate::clock::SystemClock)));
-        enrolment.open(600).expect("open");
-        let state = Arc::new(
-            AppState::new(dir.path().join("configs"))
-                .expect("state")
-                .with_enrolment(Some(enrolment.clone())),
-        );
-        let fleet = Fleet(state, Issuers::default());
-        let request = crate::enrolment::Request {
-            csr_pem: "csr".to_string(),
-            subject: "CN=edge-01".to_string(),
-            key_fingerprint: "k1".to_string(),
-            instance_uid: vec![7; 16],
-        };
-        let requester = crate::enrolment::tests::requester();
-        assert!(matches!(
-            enrolment.submit(request.clone(), requester.clone()),
-            Submitted::Waiting { new: true }
-        ));
-        // Revoked: the waiting request is withdrawn.
-        assert_eq!(enrolment.withdraw(&|_| true), 1);
-        let mut carrier = Carrier {
-            transport: Transport::WebSocket,
-            enrolling: Some(Enrolling {
-                requester,
-                request: Arc::new(Mutex::new(Some(request))),
-                instance_uid: Arc::new(Mutex::new(vec![7; 16])),
-            }),
-            conn: None,
-            seen: Vec::new(),
-            proofs: Proofs::default(),
-            peer: None,
-            subject: Subject::peer(None),
-            ended: Arc::new(Mutex::new(None)),
-        };
-        assert!(fleet.on_outbound(&mut carrier, Push::Enrolment).is_empty());
-        assert!(
-            enrolment.pending().is_empty(),
-            "the push filed the withdrawn request again"
-        );
     }
 }

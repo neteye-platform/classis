@@ -6,17 +6,104 @@ use std::path::Path;
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub const SPACE: &str = "lab";
 
+/// The host of the `state.json` [`write_state_json`] writes, and the host [`app`] admits every
+/// request as.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub const DEVICE_ID: &str = "0193a6f0-0000-7000-8000-000000000000";
+
+/// What admits the hosts of a test to the Server under test: a real
+/// [`Enrolment`](classis_server::enrolment::Enrolment) over a Space of its own, behind the Agent
+/// plane exactly as the binary builds it. A test serves its Agent plane through [`app`](Self::app),
+/// and gives the Client a `state.json` with a token this Server issued through
+/// [`enrol`](Self::enrol) — the real `enrol`, over the loopback in plaintext.
+#[derive(Clone)]
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub struct Admission {
+    pub enrolment: std::sync::Arc<classis_server::enrolment::Enrolment>,
+    /// The Space's enrolment key.
+    pub key: String,
+}
+
+/// No service is registered for a test's state directory, whatever the machine has.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub struct NoService;
+
+impl classis_agent::enrolment::ServiceHost for NoService {
+    fn registered(&self, _: &Path) -> Result<Option<classis_agent::enrolment::Installed>, String> {
+        Ok(None)
+    }
+}
+
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+impl Admission {
+    /// An Enrolment over a data directory made under `dir`, with the Space [`SPACE`] and tokens
+    /// that never expire.
+    pub fn new(dir: &Path) -> Admission {
+        opamp::tls::install_ring_provider();
+        let data = dir.join("admission");
+        classis_server::fs::open_data_dir(&data, true).expect("the data directory");
+        let records = classis_server::Records::Files(data);
+        let clock = std::sync::Arc::new(classis_server::clock::SystemClock);
+        // No back-off: a test of a refusal is not to be answered with a wait.
+        let limits = classis_server::throttle::Limits {
+            max_failures: u32::MAX,
+            ..classis_server::throttle::Limits::default()
+        };
+        let enrolment = classis_server::enrolment::Enrolment::on(
+            &records,
+            oauth_token::server::Lifetime::Never,
+            clock.clone(),
+            std::sync::Arc::new(classis_server::throttle::Throttle::new(limits, clock)),
+        )
+        .expect("the enrolment");
+        let key = enrolment
+            .spaces()
+            .create(SPACE)
+            .expect("a space")
+            .to_string();
+        Admission {
+            enrolment: std::sync::Arc::new(enrolment),
+            key,
+        }
+    }
+
+    /// The Agent plane over `state`, admitting by this Enrolment alone.
+    pub fn app(&self, state: std::sync::Arc<classis_server::fleet::AppState>) -> axum::Router {
+        classis_server::agent_app(state, self.enrolment.clone())
+    }
+
+    /// Enrols a host at the Agent plane on `addr`, through the real `enrol`: `state.json` is
+    /// written in `state_dir`.
+    pub async fn enrol(
+        &self,
+        addr: std::net::SocketAddr,
+        state_dir: &Path,
+    ) -> classis_agent::enrolment::Enrolled {
+        classis_agent::enrolment::enrol(
+            &format!("http://{addr}"),
+            &self.key,
+            state_dir,
+            opamp::client::ClientTls::default(),
+            &NoService,
+        )
+        .await
+        .expect("enrol the host")
+    }
+}
+
 /// The Agent plane over `state`, as these tests serve it to a Client whose admission is not what
-/// they test: today the plane with an open admission, which checks nothing.
+/// they test: every request arrives as [`DEVICE_ID`], the host of the `state.json` that
+/// [`client_identity`] writes, and no token is checked. A test about admission serves the plane
+/// through [`Admission::app`] instead. The certificate cleanup moves these tests to it as well.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub fn app(state: std::sync::Arc<classis_server::fleet::AppState>) -> axum::Router {
-    classis_server::agent_app(state, classis_server::transport::Admission::open())
+    classis_server::agent_app_admitted_as_for_tests(state, Some(DEVICE_ID))
 }
 
 /// What a host needs to start against these tests' Servers, for a Client whose state directory is
-/// `state_dir`: the [`client_certificate`] in `dir`, whose `[tls]` table is returned to be appended
-/// at the end of a `supervisor.toml`, and a `state.json` in `state_dir` from [`write_state_json`].
-/// The Client of today reads only the certificate.
+/// `state_dir`: a `state.json` in `state_dir` from [`write_state_json`], which the Client starts
+/// with, and the [`client_certificate`] in `dir`, whose `[tls]` table is returned to be appended
+/// at the end of a `supervisor.toml` and which the Client ignores.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub fn client_identity(dir: &Path, state_dir: &Path) -> String {
     let tls = client_certificate(dir);
@@ -32,7 +119,7 @@ pub fn write_state_json(state_dir: &Path, base_url: &str) {
     let state = serde_json::json!({
         "endpoint": base_url,
         "space": SPACE,
-        "device_id": "0193a6f0-0000-7000-8000-000000000000",
+        "device_id": DEVICE_ID,
         "client_secret": "a-client-secret-nobody-issued",
         "access_token": "a-token-nobody-issued",
     });
@@ -46,9 +133,8 @@ pub fn write_state_json(state_dir: &Path, base_url: &str) {
 /// Writes a throwaway self-signed client certificate and key into `dir` and returns the `[tls]`
 /// table that names them, to be appended at the end of a `supervisor.toml`.
 ///
-/// The Client refuses to start without a client certificate. The test Servers serve
-/// plaintext with an open admission and do not check it, so the files only have to exist and
-/// parse.
+/// A file of the certificate era: the Client still parses `[tls] cert_file` and `key_file` and
+/// ignores both, and presents no certificate. Kept until the certificate cleanup.
 #[allow(dead_code)] // each integration-test binary uses a different subset of this support
 pub fn client_certificate(dir: &Path) -> String {
     let key = rcgen::KeyPair::generate().expect("generate a key");

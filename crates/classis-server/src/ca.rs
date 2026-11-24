@@ -8,7 +8,7 @@
 //!
 //! Nothing here decides *who* may enrol. A CSR from an Agent holding a certificate of the client
 //! CA is a renewal and is signed at once; a CSR on an enrolment connection waits until an operator
-//! approves it ([`crate::enrolment`]).
+//! approves it ([`crate::certificate_enrolment`]).
 
 use rcgen::{
     CertificateSigningRequestParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
@@ -391,6 +391,7 @@ pub(crate) fn subject_values(name: &x509_parser::x509::X509Name<'_>) -> SubjectV
 ///
 /// # Errors
 /// Returns why the subject cannot be carried, naming the attribute.
+#[cfg(test)]
 pub(crate) fn carried_subject(
     name: &x509_parser::x509::X509Name<'_>,
 ) -> Result<SubjectValues, String> {
@@ -624,7 +625,7 @@ fn not_after(validity_days: u32) -> Result<time::OffsetDateTime, String> {
 pub fn enrolment_request(
     csr_pem: &str,
     instance_uid: &[u8],
-) -> Result<crate::enrolment::Request, String> {
+) -> Result<crate::certificate_enrolment::Request, String> {
     use rcgen::PublicKeyData as _;
     use sha2::{Digest, Sha256};
     let (_, request) = read(csr_pem)?;
@@ -636,7 +637,7 @@ pub fn enrolment_request(
         Some(value) => format!("CN={}", dn_text(value)),
         None => String::new(),
     };
-    Ok(crate::enrolment::Request {
+    Ok(crate::certificate_enrolment::Request {
         csr_pem: csr_pem.to_string(),
         subject,
         key_fingerprint: hex::encode(Sha256::digest(request.public_key.der_bytes())),
@@ -673,7 +674,7 @@ fn dn_text(value: &rcgen::DnValue) -> String {
     }
 }
 
-impl crate::fleet::CertificateSigner for ClientCa {
+impl crate::certificate_enrolment::CertificateSigner for ClientCa {
     fn sign(&self, csr_pem: &str, host: &str, subject: &SubjectValues) -> Result<Signed, String> {
         ClientCa::sign(self, csr_pem, host, subject)
     }
@@ -1504,7 +1505,8 @@ mod tests {
         crate::config::EnrolmentConfig {
             bootstrap_ca_file: dir.join("bootstrap-ca.pem"),
             bootstrap_ca_key_file: Some(dir.join("bootstrap-ca-key.pem")),
-            max_pending_per_bootstrap: crate::enrolment::DEFAULT_MAX_PENDING_PER_BOOTSTRAP,
+            max_pending_per_bootstrap:
+                crate::certificate_enrolment::DEFAULT_MAX_PENDING_PER_BOOTSTRAP,
         }
     }
 

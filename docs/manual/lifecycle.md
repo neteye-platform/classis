@@ -6,163 +6,103 @@
 This page follows one managed host through its whole life, from the first file
 you copy to it to the updates it takes years later. It says what happens at each
 stage, who acts, and where, and links to the page that holds the detail. It
-assumes a running Server with enrolment configured;
+assumes a running Server and the enrolment key of a Space;
 [Setting up a fleet](setup.md) gets you there.
 
-Everything here can be done in the Server's UI, and everything the UI does is a
-call to the REST API, so a script can do the same. The API calls are on the
-pages this one links to.
+The Server's UI shows the fleet and releases its updates, and everything the UI
+does is a call to the REST API, so a script can do the same. The API calls are
+on the pages this one links to.
 
 - [At a glance](#at-a-glance)
-- [1. Issue a bootstrap certificate](#1-issue-a-bootstrap-certificate)
-- [2. Install the Client](#2-install-the-client)
-- [3. Enrol the host](#3-enrol-the-host)
-- [4. Certificates renew themselves](#4-certificates-renew-themselves)
-- [5. Updates](#5-updates)
-- [6. Taking a host out](#6-taking-a-host-out)
+- [1. Install the Client](#1-install-the-client)
+- [2. Enrol the host](#2-enrol-the-host)
+- [3. Updates](#3-updates)
+- [4. Taking a host out](#4-taking-a-host-out)
 
 ## At a glance
 
-| Stage                    | Who acts                              | Where                                 | What happens                                                                                                           |
-| ------------------------ | ------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 1. Bootstrap certificate | you, once per customer, site or batch | **Enrolments** tab                    | The Server issues a short-lived certificate that lets a new host ask to join, and nothing more.                        |
-| 2. Installation          | you, on the host                      | the host                              | The Client is installed as a service and told the Server's address, the server CA and the bootstrap certificate.       |
-| 3. Enrolment             | the host asks, you approve            | **Enrolments** tab                    | The host makes its own key and asks for a certificate. You approve it, and the Server signs it.                        |
-| 4. Renewal               | nobody                                | —                                     | The host replaces its certificate on its own, long before it ends.                                                     |
-| 5. Updates               | you release, the host installs        | **Packages** and **Deployments** tabs | A signed Package reaches the hosts of a channel. Each host verifies it, installs it, and rolls back what will not run. |
-| 6. Removal               | you                                   | REST API                              | Revoking the host's certificate shuts it out at once.                                                                  |
+| Stage           | Who acts                       | Where                                 | What happens                                                                                                                |
+| --------------- | ------------------------------ | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 1. Installation | you, on the host               | the host                              | The Client is installed as a service and told the Server's address and the server CA. It is registered, and starts nothing. |
+| 2. Enrolment    | you, on the host, once         | the host                              | `enrol` registers the host with its Space's key, gets its token, writes `state.json` and starts the service.                |
+| 3. Updates      | you release, the host installs | **Packages** and **Deployments** tabs | A signed Package reaches the hosts of a channel. Each host verifies it, installs it, and rolls back what will not run.      |
+| 4. Removal      | you, on the host               | the host                              | `revoke` deletes the host's state, `state.json` with it. The Server is not told.                                            |
 
-## 1. Issue a bootstrap certificate
+## 1. Install the Client
 
-A new host has no certificate of the fleet yet, so it cannot connect as a
-member. It gets a **bootstrap certificate** instead: one that lets it into the
-enrolment queue and nowhere else. The Server issues it on your request.
+Each host needs the server CA, best kept in a directory such as `/etc/opamp/`:
 
-In the UI, open the **Enrolments** tab and go to **Bootstrap certificates**:
-
-1. Fill in what the hosts' certificates are to carry: the **country** (C, chosen
-   from a list), the **state** (ST), the **locality** (L), the **customer** (O),
-   the **site** (OU) and a **customer number** (organizationIdentifier). The
-   customer and the site are required, so every host names both and a Selector
-   on them reaches it; the others are optional. The approver sees them on every
-   request this certificate carries, every host certificate issued from it
-   carries them, and its Agents carry them as `fleet.host.*` for Selectors to
-   match. They grant nothing. A value stays until a host enrols again, so name
-   only what is stable.
-2. Set how many **days** it is valid: 10 by default, 90 at most. Choose the time
-   it takes to set the hosts up.
-3. Type a **password**, twice; it is required. The certificate and its key come
-   as one file, `bootstrap.p12`, encrypted under that password.
-4. Press **Issue**. The new certificate appears in the list with its serial and
-   end.
-5. In its row, press **Save bootstrap.p12**.
-
-**The file stays available.** The Server keeps `bootstrap.p12` and offers it in
-every later visit to the page, until the certificate ends or is revoked; the
-private key never leaves the Server in any other form. It does not keep the
-password: hand that to whoever installs the hosts by another way than the file,
-a phone call rather than the same mail. A host that needs the pair as PEM takes
-it out of the file with `classisctl pki p12-extract` ([`pki`](tools.md#pki)).
-
-One pair may go to every host of that customer or site. It opens nothing on its
-own: a host that holds it can ask for a certificate only while the enrolment
-window is open, and gets one only when you approve it. To withdraw a pair early,
-press **Revoke** in its row. A revoked certificate stays in the list until it
-ends; **Delete** in its row removes it sooner, and it stays revoked.
-
-Details:
-[Bootstrap certificates, issued by the Server](server.md#bootstrap-certificates-issued-by-the-server).
-
-## 2. Install the Client
-
-Each host needs the server CA and the bootstrap certificate, best kept in one
-directory such as `/etc/opamp/`:
-
-| File                | From                                              | Notes                                                                               |
-| ------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `server-ca.pem`     | the offline directory `pki init` made             | The Client trusts this CA, and only it.                                             |
-| `bootstrap.p12`     | step 1                                            | Or the two files below. The install asks for its password, or reads it from a file. |
-| `bootstrap.pem`     | `classisctl pki p12-extract` from `bootstrap.p12` |                                                                                     |
-| `bootstrap-key.pem` | `classisctl pki p12-extract` from `bootstrap.p12` | Readable by root only.                                                              |
+| File            | From                                  | Notes                                                                                                                                       |
+| --------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server-ca.pem` | the offline directory `pki init` made | The CA of the certificate the reverse proxy in front of the Server presents. The Client trusts it, and only it. Not needed for a public CA. |
 
 Install the Client from the release's `.deb`, `.rpm` or `.msi`. The package
-registers the service and leaves it stopped. Then configure it in one of two
-ways:
+registers the service and leaves it stopped, and does not let it start at boot:
+a host runs nothing until it is enrolled. Then configure it in one of two ways:
 
-- **Interactively**, once you have
-  [opened the enrolment window](#3-enrol-the-host):
-  `sudo classis service install --interactive` asks for the Server's address,
-  the host's name and the three files, writes the configuration, and enrols the
-  host on the spot. It waits for your approval and
-  shows the key fingerprint to approve. On Windows, run it in an elevated shell.
+- **Interactively**: `sudo classis service install --interactive` asks for the
+  Server's address and the host's name, and the server CA where the proxy's
+  certificate needs it, and writes the configuration. On Windows, run it in an
+  elevated shell.
 - **From a script**, which suits configuration management: after the package,
   run
-  `sudo classis service install --endpoint <address> --fleet-files /etc/opamp`,
-  adding `--bootstrap-password-file <file>` for a `bootstrap.p12`. It enrols the
-  host and waits for your approval, then `systemctl start classis`. The
-  package's own install never waits.
-- **With a file**: write `supervisor.toml` naming the server CA and the PEM
-  pair, then start the service. It enrols when it starts. A `bootstrap.p12`
-  cannot be named there.
+  `sudo classis service install --endpoint <address> --fleet-files /etc/opamp`.
+  The package's own install never asks anything.
+- **With a file**: write `supervisor.toml` naming the server CA.
 
-The bootstrap certificate is used only for this first request. Once the host
-holds its own certificate, the bootstrap files, and a password file, can be
-removed.
-
-Details:
+The configuration holds no credential. Details:
 [Configure and install a Client](setup.md#4-configure-and-install-a-client) and
 [Installing from a native package](client.md#installing-from-a-native-package).
 
-## 3. Enrol the host
+## 2. Enrol the host
 
-Enrolment turns a host with a bootstrap certificate into a member of the fleet.
-It needs an open window and your approval, and the host's private key never
-leaves the host.
+Enrolment turns an installed host into a member of the fleet. It needs the
+enrolment key of the Space the host is to join, and no operator approves it: a
+valid key enrols the host at once. The key stands in no file on the host; give
+it to the command.
 
-1. **Open the window.** In the **Enrolments** tab, choose how long (15 minutes,
-   1 hour or 4 hours) and press **Open window**. Outside the window, the Server
-   turns every bootstrap certificate away.
-2. **The host asks.** It connects with the bootstrap certificate, makes a key of
-   its own, and sends a certificate request. It logs the key's fingerprint:
+```console
+$ sudo classis enrol https://fleet.example.com:4320 cle1_lab_…
+enrolled in the space lab as 0193a6f0-…
+  state file: /var/lib/classis/state/state.json
+  the service is started, and starts at boot
+```
 
-   ```console
-   $ journalctl -u classis | grep key_fingerprint
-   INFO certificate request generated; an enrolling host waits for an operator's approval key_fingerprint=3f9a…
-   ```
+What happens, in order:
 
-3. **The request waits in the queue.** The **Enrolments** tab lists it with its
-   arrival time, the address it came from, the key fingerprint, and the
-   bootstrap certificate it carries: customer, site, serial and end. A
-   certificate the Server did not issue is marked _not issued here_.
-4. **Check two things, then approve.** The key fingerprint must match the one
-   the host logged, and the bootstrap certificate must be the one you gave that
-   host. Press **Approve**. Press **Reject** for a request you do not recognise.
-5. **The host becomes a member.** The Server signs its request with the client
-   CA. The host stores the certificate in its state directory, reconnects with
-   it, and appears on the **Agents** tab within seconds.
-6. **Close the window** with **Close window** when you are done. It also closes
-   when its time runs out, and when the Server restarts.
+1. **The host registers.** It sends the key to the Server's `/v1/enrol` as the
+   initial access token of an OAuth 2.0 dynamic client registration (RFC 7591)
+   and receives a `client_id`, its **Device ID**, and a `client_secret`. The key
+   names the Space, so no command takes it a second time.
+2. **The host asks for its token.** It sends its client credentials to
+   `/v1/token` (client credentials grant, RFC 6749 §4.4) and receives an opaque
+   access token. A new token replaces the one before it.
+3. **The host keeps what it has.** It writes `state.json` in its state
+   directory, owner-only: the Server's base URL, the Space, the Device ID, the
+   client secret and the token. Nothing else in the file changes afterwards but
+   the token.
+4. **The service starts.** Where the service is registered, `enrol` hands
+   `state.json` to the account the service runs as, lets the service start at
+   boot, and starts it. The host appears on the **Agents** tab as connected
+   within seconds.
 
-![A host enrolling directly: the operator opens the window, the host sends the same request with its bootstrap proof until the operator approves it, and the certificate arrives in a connection settings offer](../images/enrolment-direct.png)
+From then on every OpAMP exchange and every package download carries the token
+as `Authorization: Bearer`. The Client keeps no clock for it and renews nothing
+ahead of time: it asks for a new token only when the Server answers `401` with
+`invalid_token`, because the token expired (`token_lifetime_secs` on the Server;
+0, the default, is for ever) or was replaced. Replacing a token ends the
+WebSocket sessions admitted with the old one.
 
-Details: [Enrol the Client](setup.md#5-enrol-the-client) and
-[Enrolment: the first certificate](client.md#enrolment-the-first-certificate).
+`enrol` is refused on a host that holds a `state.json`. A host without one runs
+nothing.
 
-## 4. Certificates renew themselves
+This build has no operator command that makes a Space, shows its key or rotates
+it; [Setting up a fleet](setup.md#5-enrol-the-client) says so where the key is
+needed.
 
-A host certificate lives 30 days by default. Two thirds of the way through its
-life, the Client makes a new key, asks for a new certificate with the one it
-holds, and switches once it has connected with the new one. No window and no
-approval is needed.
+Details: [Enrol the Client](setup.md#5-enrol-the-client).
 
-![A direct renewal: the Client sends a request with a renewal proof over its current connection, the Server signs it at once for the same host, and the Client switches once it has connected with the new certificate](../images/renewal-direct.png)
-
-A host that stays offline longer than its certificate lives cannot renew. It has
-to enrol again, as
-[Living with the certificates](setup.md#6-living-with-the-certificates)
-describes.
-
-## 5. Updates
+## 3. Updates
 
 A Client updates two kinds of software in the same way: the agents it
 supervises, and itself.
@@ -248,12 +188,20 @@ its version, set `self_update = false` under `[packages]`.
 
 Details: [Updating the Client itself](client.md#updating-the-client-itself).
 
-## 6. Taking a host out
+## 4. Taking a host out
 
-Revoke the host's certificate by its serial. The Server closes its sessions at
-once and refuses it from then on, including any renewal. The certificates are
-listed under `GET /api/v1/certificates`: revoke the one the host enrolled with,
-and the revocation reaches every renewal of it.
+Run `revoke` on the host, after stopping its service:
 
-Details: [Living with the certificates](setup.md#6-living-with-the-certificates)
-and [Revocation](server.md#revocation-withdrawing-a-certificate).
+```sh
+sudo classis service stop
+sudo classis revoke
+```
+
+It is local: it never contacts the Server. It asks for a confirmation (`--force`
+skips it), keeps the service from starting at boot again, and deletes everything
+in the state directory, `state.json` with it, the Agents' identities included.
+`--keep-cache` spares `config/` and `packages/`. A host enrolled again is a new
+one, with a new Device ID. This build has no command to remove the host from the
+Server's records or to disable its client there.
+
+Details: [Living with the enrolment](setup.md#6-living-with-the-enrolment).

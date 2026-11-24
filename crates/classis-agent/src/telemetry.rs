@@ -274,6 +274,10 @@ struct Endpoints {
     metrics: Option<String>,
     traces: Option<String>,
     logs: Option<String>,
+    /// The hash of the access token the exporters at the Server's own origin were built with, so
+    /// that a new token is a change, and the exporters carrying the old one are replaced. `None`
+    /// where no destination has that origin.
+    bearer: Option<Vec<u8>>,
 }
 
 impl Telemetry {
@@ -299,11 +303,18 @@ impl Telemetry {
         description: &AgentDescription,
         config: &ClientConfig,
     ) -> Vec<String> {
-        let wanted = Endpoints {
+        let mut wanted = Endpoints {
             metrics: endpoint_of(settings.own_metrics.as_ref()),
             traces: endpoint_of(settings.own_traces.as_ref()),
             logs: endpoint_of(settings.own_logs.as_ref()),
+            bearer: None,
         };
+        wanted.bearer = carried_token(
+            config,
+            [&wanted.metrics, &wanted.traces, &wanted.logs]
+                .into_iter()
+                .flatten(),
+        );
         let mut this = self.providers();
         if wanted == this.in_force {
             return Vec::new();
@@ -559,18 +570,6 @@ fn check(settings: &TelemetryConnectionSettings, field: &str) -> Result<(), Stri
     if settings.proxy.is_some() {
         unhonoured.push("proxy");
     }
-    // An offered certificate *is* honoured — but only its `cert`, paired with
-    // the key this Client already holds. A `private_key` in the offer is a key the Server generated
-    // for us, and the rule is that this Client's private key never leaves its host and is
-    // never handed to it: that is the whole point of asking for a certificate through a CSR. Refused
-    // by name rather than quietly ignored, so a Server issuing pairs learns why nothing happened.
-    if settings
-        .certificate
-        .as_ref()
-        .is_some_and(|certificate| !certificate.private_key.is_empty())
-    {
-        unhonoured.push("certificate.private_key");
-    }
     if !unhonoured.is_empty() {
         return Err(format!(
             "{field}: this Client does not implement the offered {} settings",
@@ -638,36 +637,19 @@ impl std::fmt::Debug for RuntimeBoundClient {
     }
 }
 
-/// The HTTP client the OTLP exporters send through: this Client's TLS trust, plus the client
-/// certificate the offer named, if it named one. Without an offered certificate it presents none —
-/// the fleet identity is for the Server, not for a telemetry destination — and it
-/// follows no redirect, so a destination cannot steer the export to another host or to plaintext.
-///
-/// The certificate machinery of the CSR enrolment is reused as-is: the offered `cert` is
-/// paired with the key already on disk — the one the CSR was made for — because that key is what
-/// proves the certificate belongs to this host, and it never travels.
+/// The HTTP client the OTLP exporters send through: this Client's TLS trust and no credential of
+/// its own — the host's access token is for the Server, and [`headers`] puts it only on what goes
+/// to the Server's own origin — and it follows no redirect, so a destination cannot steer the
+/// export to another host or to plaintext.
 ///
 /// `ca_cert` is deliberately *not* added to the trust store. The Baseline is explicit about it:
 /// *"It is not recommended that the Agent accepts this CA as an authority for any purposes."* It
 /// exists so a TLS-terminating intermediary can verify the client later, not so the Agent can widen
 /// whom it trusts on a Server's say-so — the same reasoning that refuses `tls`.
-fn exporter_client(
-    settings: &TelemetryConnectionSettings,
-    field: &str,
-    config: &ClientConfig,
-) -> Result<RuntimeBoundClient, String> {
-    let offered = settings
-        .certificate
-        .as_ref()
-        .map(|certificate| certificate.cert.as_slice())
-        .filter(|cert| !cert.is_empty());
-    let tls = match offered {
-        Some(cert) => crate::tls::client_tls_for(config, Some(cert)),
-        None => crate::tls::trust(config),
-    };
-    let builder = tls
+fn exporter_client(field: &str, config: &ClientConfig) -> Result<RuntimeBoundClient, String> {
+    let builder = crate::tls::trust(config)
         .and_then(|tls| {
-            tls.apply(
+            tls.trust(
                 // The timeout belongs here rather than on the exporter: `opentelemetry-otlp` keeps
                 // its own for the client it would have built, and never applies it to this one.
                 reqwest::Client::builder()
@@ -708,8 +690,15 @@ fn resource(description: &AgentDescription) -> Resource {
         .build()
 }
 
-fn headers(settings: &TelemetryConnectionSettings) -> HashMap<String, String> {
-    settings
+/// The headers an exporter sends: the ones the Server offered, and the host's access token where
+/// the destination has the Server's own origin — there in place of any
+/// `Authorization` that was offered, and nowhere else, so the token never reaches another
+/// collector.
+fn headers(
+    settings: &TelemetryConnectionSettings,
+    config: &ClientConfig,
+) -> HashMap<String, String> {
+    let mut headers: HashMap<String, String> = settings
         .headers
         .as_ref()
         .map(|headers| {
@@ -719,7 +708,32 @@ fn headers(settings: &TelemetryConnectionSettings) -> HashMap<String, String> {
                 .map(|header| (header.key.clone(), header.value.clone()))
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let authorization = crate::packages::ServerOrigin::new(config)
+        .ok()
+        .and_then(|origin| {
+            origin
+                .authorization_for(&settings.destination_endpoint)
+                .map(str::to_string)
+        });
+    if let Some(authorization) = authorization {
+        headers.retain(|key, _| !key.eq_ignore_ascii_case("authorization"));
+        headers.insert("Authorization".to_string(), authorization);
+    }
+    headers
+}
+
+/// A hash of the access token, when any of `destinations` is at the Server's own origin and so
+/// carries it.
+fn carried_token<'a>(
+    config: &ClientConfig,
+    mut destinations: impl Iterator<Item = &'a String>,
+) -> Option<Vec<u8>> {
+    use sha2::Digest as _;
+    let origin = crate::packages::ServerOrigin::new(config).ok()?;
+    destinations
+        .find_map(|destination| origin.authorization_for(destination))
+        .map(|authorization| sha2::Sha256::digest(authorization.as_bytes()).to_vec())
 }
 
 fn metric_provider(
@@ -730,8 +744,8 @@ fn metric_provider(
     let exporter = MetricExporter::builder()
         .with_http()
         .with_endpoint(&settings.destination_endpoint)
-        .with_headers(headers(settings))
-        .with_http_client(exporter_client(settings, "own_metrics", config)?)
+        .with_headers(headers(settings, config))
+        .with_http_client(exporter_client("own_metrics", config)?)
         .build()
         .map_err(|e| format!("own_metrics: cannot build the exporter: {e}"))?;
     // The reader is built explicitly rather than through `with_periodic_exporter`, which would take
@@ -753,8 +767,8 @@ fn trace_provider(
     let exporter = SpanExporter::builder()
         .with_http()
         .with_endpoint(&settings.destination_endpoint)
-        .with_headers(headers(settings))
-        .with_http_client(exporter_client(settings, "own_traces", config)?)
+        .with_headers(headers(settings, config))
+        .with_http_client(exporter_client("own_traces", config)?)
         .build()
         .map_err(|e| format!("own_traces: cannot build the exporter: {e}"))?;
     Ok(SdkTracerProvider::builder()
@@ -771,8 +785,8 @@ fn log_provider(
     let exporter = LogExporter::builder()
         .with_http()
         .with_endpoint(&settings.destination_endpoint)
-        .with_headers(headers(settings))
-        .with_http_client(exporter_client(settings, "own_logs", config)?)
+        .with_headers(headers(settings, config))
+        .with_http_client(exporter_client("own_logs", config)?)
         .build()
         .map_err(|e| format!("own_logs: cannot build the exporter: {e}"))?;
     Ok(SdkLoggerProvider::builder()
@@ -785,7 +799,8 @@ fn log_provider(
 mod tests {
     use super::*;
     use opamp::proto::{
-        any_value, AnyValue, KeyValue as ProtoKeyValue, TlsCertificate, TlsConnectionSettings,
+        any_value, AnyValue, Header, Headers, KeyValue as ProtoKeyValue, TlsCertificate,
+        TlsConnectionSettings,
     };
 
     fn description() -> AgentDescription {
@@ -958,108 +973,49 @@ mod tests {
         assert!(!telemetry.reporting());
     }
 
-    /// The offered `certificate` is *honoured*, not refused — the CSR enrolment's
-    /// machinery is reused as-is, which means the offered `cert` is paired with the key this Client
-    /// already generated for its CSR. With that key present, an offer naming a certificate builds
-    /// an exporter that presents it.
+    /// A TLS client certificate, with or without a private key, that an offer of an own-telemetry
+    /// destination carries is ignored — not refused, not used — and the rest of the offer applies:
+    /// the destination is in force, and the headers it names are what the exporter sends.
     #[tokio::test]
-    async fn an_offered_certificate_is_presented_by_the_exporter() {
+    async fn an_offered_client_certificate_is_ignored_and_the_rest_of_the_offer_applies() {
         opamp::tls::install_ring_provider();
-        let dir = tempfile::tempdir().expect("tempdir");
-        // What the CSR flow leaves behind: the key the request was made for, and the certificate
-        // the Server signed for it. Self-signed here — nothing verifies the chain in this test, the
-        // point is that key and certificate pair into a usable identity.
-        let key = rcgen::KeyPair::generate().expect("key");
-        let params =
-            rcgen::CertificateParams::new(vec!["agent.example".to_string()]).expect("params");
-        let cert = params.self_signed(&key).expect("cert");
-        std::fs::write(
-            dir.path().join(crate::tls::ISSUED_KEY_FILE),
-            key.serialize_pem(),
-        )
-        .expect("write key");
-
-        let config = ClientConfig {
-            state_dir: dir.path().to_path_buf(),
-            ..ClientConfig::default()
-        };
-        let offer = ConnectionSettingsOffers {
-            own_metrics: Some(TelemetryConnectionSettings {
-                destination_endpoint: "http://127.0.0.1:4318/v1/metrics".to_string(),
-                certificate: Some(TlsCertificate {
-                    cert: cert.pem().into_bytes(),
-                    ..Default::default()
-                }),
+        let with_certificate = |private_key: &[u8]| TelemetryConnectionSettings {
+            destination_endpoint: "http://127.0.0.1:4318/v1/metrics".to_string(),
+            headers: Some(Headers {
+                headers: vec![Header {
+                    key: "X-Fleet".to_string(),
+                    value: "kept".to_string(),
+                }],
+            }),
+            certificate: Some(TlsCertificate {
+                cert: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                private_key: private_key.to_vec(),
                 ..Default::default()
             }),
             ..Default::default()
         };
+        for private_key in [&b""[..], &b"-----BEGIN PRIVATE KEY-----"[..]] {
+            let settings = with_certificate(private_key);
+            assert!(
+                check(&settings, "own_metrics").is_ok(),
+                "nothing is refused"
+            );
+            assert_eq!(
+                headers(&settings, &ClientConfig::default()).get("X-Fleet"),
+                Some(&"kept".to_string()),
+                "the offered headers still go"
+            );
 
-        let telemetry = Telemetry::new();
-        let refused = telemetry.apply(&offer, &description(), &config);
-        assert!(refused.is_empty(), "{refused:?}");
-        assert!(telemetry.reporting());
-        telemetry.shutdown();
-    }
-
-    /// And an offered certificate with no key to go with it is refused *by name* rather than
-    /// dropped: without the CSR key there is nothing to prove possession with, so an exporter that
-    /// silently connected without the certificate would be reporting success it did not have.
-    #[test]
-    fn an_offered_certificate_without_its_key_is_refused_and_named() {
-        opamp::tls::install_ring_provider();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = ClientConfig {
-            state_dir: dir.path().to_path_buf(),
-            ..ClientConfig::default()
-        };
-        let offer = ConnectionSettingsOffers {
-            own_metrics: Some(TelemetryConnectionSettings {
-                destination_endpoint: "http://127.0.0.1:4318/v1/metrics".to_string(),
-                certificate: Some(TlsCertificate {
-                    cert: b"-----BEGIN CERTIFICATE-----".to_vec(),
-                    ..Default::default()
-                }),
+            let telemetry = Telemetry::new();
+            let offer = ConnectionSettingsOffers {
+                own_metrics: Some(settings),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let telemetry = Telemetry::new();
-        let refused = telemetry.apply(&offer, &description(), &config);
-        assert_eq!(refused.len(), 1, "{refused:?}");
-        assert!(refused[0].contains("own_metrics"), "{}", refused[0]);
-        assert!(refused[0].contains("no key"), "{}", refused[0]);
-        assert!(!telemetry.reporting());
-    }
-
-    /// But a private key *in the offer* is refused by name. The rule is that this Client's
-    /// private key never leaves its host and is never handed to it — which is the whole reason the
-    /// certificate is obtained through a CSR.
-    #[test]
-    fn an_offered_private_key_is_refused_by_name() {
-        let telemetry = Telemetry::new();
-        let offer = ConnectionSettingsOffers {
-            own_traces: Some(TelemetryConnectionSettings {
-                destination_endpoint: "https://collector.example:4318/v1/traces".to_string(),
-                certificate: Some(TlsCertificate {
-                    cert: b"-----BEGIN CERTIFICATE-----".to_vec(),
-                    private_key: b"-----BEGIN PRIVATE KEY-----".to_vec(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let refused = telemetry.apply(&offer, &description(), &ClientConfig::default());
-        assert_eq!(refused.len(), 1, "{refused:?}");
-        assert!(
-            refused[0].contains("certificate.private_key"),
-            "{}",
-            refused[0]
-        );
-        assert!(!telemetry.reporting());
+            };
+            let refused = telemetry.apply(&offer, &description(), &ClientConfig::default());
+            assert!(refused.is_empty(), "{refused:?}");
+            assert!(telemetry.reporting(), "the destination is in force");
+            telemetry.shutdown();
+        }
     }
 
     /// The Baseline names a number for own metrics — *"The recommended reporting interval is 10
@@ -1164,12 +1120,8 @@ mod tests {
             }
         });
 
-        let client = exporter_client(
-            &destination(&endpoint),
-            "own_metrics",
-            &ClientConfig::default(),
-        )
-        .expect("the client builds");
+        let client =
+            exporter_client("own_metrics", &ClientConfig::default()).expect("the client builds");
         // Bounded from the outside as well: without the client's own timeout this send never
         // returns, and a regression should fail the test rather than hang it.
         let outcome = tokio::time::timeout(SAMPLE_INTERVAL, client.client.post(&endpoint).send())
@@ -1306,12 +1258,8 @@ mod tests {
             record
         });
 
-        let client = exporter_client(
-            &destination(&endpoint),
-            "own_metrics",
-            &ClientConfig::default(),
-        )
-        .expect("the client builds");
+        let client =
+            exporter_client("own_metrics", &ClientConfig::default()).expect("the client builds");
         // Nobody answers the hello; the send fails, and what it offered is what is asserted.
         let _ = tokio::time::timeout(Duration::from_secs(1), client.client.post(&endpoint).send())
             .await;

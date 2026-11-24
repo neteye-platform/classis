@@ -33,7 +33,6 @@ async fn spawn_with(
     .expect("parse");
     let (addr, rest_addr) = support::serve_guarded(
         state.clone(),
-        classis_server::transport::Admission::open(),
         Some(throttle.into_iter().fold(
             OperatorAuth::from_config(&auth).expect("auth"),
             OperatorAuth::with_throttle,

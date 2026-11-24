@@ -5,10 +5,10 @@
 //! the 0.5 releases wrote and no other. It copies and never moves, so the old directories stay as
 //! the backup, and it refuses a `data_dir` that is not empty. What it does with each kind of data:
 //!
-//! - **Trust data** — the certificate register, the revocation list, the hosts, and the bootstrap
-//!   entries with their PKCS#12 files — is carried whole. Trust data it cannot carry makes it exit
-//!   non-zero. The audit files a 0.5 Server wrote are not carried: this Server keeps no audit
-//!   record, so they are named and stay in the old directory.
+//! - **Certificate data** — the certificate register, the revocation list, the hosts, and the
+//!   bootstrap entries with their PKCS#12 files — is not carried: this Server admits no client
+//!   certificate, so they are named and stay in the old directory. The audit files a 0.5 Server
+//!   wrote are not carried either: this Server keeps no audit record.
 //! - **Packages:** each uploaded artifact becomes a blob; each entry takes the signature the
 //!   Deployments held for it — the same bytes wherever it was held, so differing ones leave the
 //!   entry unsigned, named — and a referenced entry is dropped, named. An artifact whose bytes do
@@ -36,20 +36,18 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::bootstrap::{BootstrapStore as _, Entry as BootstrapEntry};
 use crate::configs::{ConfigBackend as _, Configuration};
 use crate::deployments::{Deployment, DeploymentBackend as _};
 use crate::fs;
 use crate::packages::{Entry, Package, PackageBackend as _, PackageId, Platform};
-use crate::revocation::{Host, Issued, LedgerStore as _};
 
-/// What a migration did, line by line, and whether all of the trust data made it.
+/// What a migration did, line by line, and whether the new data directory opens.
 #[derive(Debug, Default)]
 pub struct Report {
     /// One line per thing carried, dropped, listed or skipped, in the order it happened.
     pub lines: Vec<String>,
-    /// Whether some trust data could not be carried — the migration's exit is then non-zero.
-    pub trust_failed: bool,
+    /// Whether the migration failed — its exit is then non-zero.
+    pub failed: bool,
 }
 
 impl Report {
@@ -57,10 +55,10 @@ impl Report {
         self.lines.push(line.into());
     }
 
-    /// Notes trust data that could not be carried.
-    fn failed(&mut self, what: impl std::fmt::Display) {
+    /// Notes a failure.
+    fn fail(&mut self, what: impl std::fmt::Display) {
         self.lines.push(format!("FAILED: {what}"));
-        self.trust_failed = true;
+        self.failed = true;
     }
 }
 
@@ -83,8 +81,6 @@ pub fn run(config_dir: &Path, packages_dir: &Path, data_dir: &Path) -> Result<Re
     }
     fs::open_data_dir(data_dir, true)?;
     let mut report = Report::default();
-    carry_register(config_dir, data_dir, &mut report)?;
-    carry_bootstrap(config_dir, data_dir, &mut report)?;
     // The signatures come from the Deployments, and the Packages a Deployment keeps are the ones
     // carried: read the Deployments, carry the Packages, then write the Deployments.
     let (read, signatures) = read_deployments(packages_dir, &mut report)?;
@@ -121,106 +117,6 @@ fn listing(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("cannot parse {}: {e}", path.display()))
-}
-
-/// The register, the revocation list and the hosts: `config_dir/revocation/`.
-fn carry_register(config_dir: &Path, data_dir: &Path, report: &mut Report) -> Result<(), String> {
-    let old = config_dir.join("revocation");
-    let ledger = fs::FsLedgerStore::open(data_dir)?;
-    let mut carried = 0usize;
-    for (name, path) in listing(&old.join("issued"))? {
-        if !name.ends_with(".json") {
-            report.line(format!(
-                "skipped: {} — not a register entry",
-                path.display()
-            ));
-            continue;
-        }
-        match read_json::<Issued>(&path).and_then(|issued| ledger.put_issued(&issued)) {
-            Ok(()) => carried += 1,
-            Err(e) => report.failed(format!("the register entry {}: {e}", path.display())),
-        }
-    }
-    report.line(format!("carried: {carried} certificate(s) of the register"));
-
-    let list = old.join("revocations.json");
-    if list.exists() {
-        // Byte for byte: the Server reads the list as it always has, and drops a credential entry
-        // it may still hold on its first load.
-        match copy_owner_only(&list, &data_dir.join(fs::REVOCATIONS)) {
-            Ok(()) => report.line("carried: the revocation list"),
-            Err(e) => report.failed(format!("the revocation list: {e}")),
-        }
-    } else {
-        report.line("carried: no revocation list — none was written");
-    }
-
-    let hosts = old.join("hosts.json");
-    if hosts.exists() {
-        match read_json::<BTreeMap<String, Host>>(&hosts)
-            .and_then(|hosts| ledger.save_hosts(&hosts).map(|()| hosts.len()))
-        {
-            Ok(count) => report.line(format!("carried: {count} host(s)")),
-            Err(e) => report.failed(format!("the hosts: {e}")),
-        }
-    }
-    for (name, path) in listing(&old)? {
-        if !matches!(name.as_str(), "issued" | "revocations.json" | "hosts.json") {
-            report.line(format!("skipped: {}", path.display()));
-        }
-    }
-    Ok(())
-}
-
-/// The bootstrap certificates: `config_dir/bootstrap-certificates/<serial>.json` and `.p12`,
-/// re-keyed by issuer and serial.
-fn carry_bootstrap(config_dir: &Path, data_dir: &Path, report: &mut Report) -> Result<(), String> {
-    let old = config_dir.join("bootstrap-certificates");
-    let store = fs::FsBootstrapStore::open(data_dir)?;
-    let listed = listing(&old)?;
-    let mut entries = BTreeMap::new();
-    for (name, path) in &listed {
-        let Some(serial) = name.strip_suffix(".json") else {
-            continue;
-        };
-        match read_json::<BootstrapEntry>(path).and_then(|entry| {
-            store.put(&entry)?;
-            Ok(entry)
-        }) {
-            Ok(entry) => {
-                entries.insert(serial.to_string(), entry);
-            }
-            Err(e) => report.failed(format!("the bootstrap entry {}: {e}", path.display())),
-        }
-    }
-    let mut files = 0usize;
-    for (name, path) in &listed {
-        if name.ends_with(".json") {
-            continue;
-        }
-        let Some(entry) = name
-            .strip_suffix(".p12")
-            .and_then(|serial| entries.get(serial))
-        else {
-            report.line(format!(
-                "dropped: {} — no bootstrap entry names it",
-                path.display()
-            ));
-            continue;
-        };
-        match std::fs::read(path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))
-            .and_then(|file| store.put_p12(&entry.id, &file))
-        {
-            Ok(()) => files += 1,
-            Err(e) => report.failed(format!("the PKCS#12 file {}: {e}", path.display())),
-        }
-    }
-    report.line(format!(
-        "carried: {} bootstrap certificate(s), {files} with its PKCS#12 file",
-        entries.len()
-    ));
-    Ok(())
 }
 
 /// A Deployment as a 0.5 Server wrote it, with the signatures it held per entry.
@@ -518,10 +414,13 @@ fn carry_configurations(
                     "skipped: {} — the audit record is not carried; this Server keeps none",
                     path.display()
                 ));
-            } else if !matches!(
-                name.as_str(),
-                "agents" | "labels" | "revocation" | "bootstrap-certificates"
-            ) {
+            } else if matches!(name.as_str(), "revocation" | "bootstrap-certificates") {
+                report.line(format!(
+                    "skipped: {} — certificates are not carried; this Server admits no client \
+                     certificate",
+                    path.display()
+                ));
+            } else if !matches!(name.as_str(), "agents" | "labels") {
                 report.line(format!(
                     "skipped: {} — not part of a 0.5 layout",
                     path.display()
@@ -733,24 +632,11 @@ fn check_opens(data_dir: &Path, report: &mut Report) {
     let opened = fs::open_data_dir(data_dir, true)
         .and_then(|()| crate::fleet::AppState::new(data_dir.to_path_buf()).map(|_| ()))
         .and_then(|()| crate::packages::PackageStore::open(data_dir.to_path_buf()).map(|_| ()))
-        .and_then(|()| fs::FsDeploymentBackend::open(data_dir)?.load().map(|_| ()))
-        .and_then(|()| fs::FsLedgerStore::open(data_dir)?.load().map(|_| ()))
-        .and_then(|()| fs::FsBootstrapStore::open(data_dir)?.load().map(|_| ()));
+        .and_then(|()| fs::FsDeploymentBackend::open(data_dir)?.load().map(|_| ()));
     match opened {
         Ok(()) => report.line(format!("opened: {} as the Server will", data_dir.display())),
-        Err(e) => report.failed(format!("the new data directory does not open: {e}")),
+        Err(e) => report.fail(format!("the new data directory does not open: {e}")),
     }
-}
-
-/// Copies `from` to `to` byte for byte, owner-only.
-fn copy_owner_only(from: &Path, to: &Path) -> Result<(), String> {
-    let mut source =
-        std::fs::File::open(from).map_err(|e| format!("cannot read {}: {e}", from.display()))?;
-    let mut target = fs::create_owner_only(to)?;
-    std::io::copy(&mut source, &mut target)
-        .and_then(|_| target.sync_all())
-        .map(|_| ())
-        .map_err(|e| format!("cannot copy {} to {}: {e}", from.display(), to.display()))
 }
 
 #[cfg(test)]
@@ -758,7 +644,6 @@ mod tests {
     use super::*;
     use crate::agent_store::AgentStore as _;
     use crate::configs::{revision_hash, Revision};
-    use crate::revocation::{CertId, Facts};
     use sha2::{Digest, Sha256};
 
     fn write(path: &Path, contents: impl AsRef<[u8]>) {
@@ -778,19 +663,15 @@ mod tests {
         }
     }
 
-    /// The layout a 0.5 Server wrote, file by file, in the shapes it wrote them: the register, a
-    /// revocation list still holding a credential entry, the hosts, a bootstrap entry with its
-    /// PKCS#12 file, an audit file, Configurations with Selectors (one of them without an Agent
-    /// type), a Deployment with its
-    /// signatures, a Package with an uploaded and a referenced entry, Agents in envelope version
-    /// 2 and their labels beside them.
+    /// The layout a 0.5 Server wrote, file by file, in the shapes it wrote them: the revocation
+    /// list and a bootstrap PKCS#12 file, an audit file, Configurations with Selectors (one of them
+    /// without an Agent type), a Deployment with its signatures, a Package with an uploaded and a
+    /// referenced entry, Agents in envelope version 2 and their labels beside them.
     struct Old {
         config_dir: PathBuf,
         packages_dir: PathBuf,
         uploaded: Vec<u8>,
         signature: String,
-        issued: Issued,
-        bootstrap: BootstrapEntry,
         released: String,
         unreleased: String,
     }
@@ -799,60 +680,10 @@ mod tests {
         let config_dir = root.join("fleet-configs");
         let packages_dir = root.join("fleet-packages");
 
-        let issued = Issued {
-            facts: Facts {
-                id: CertId::new(b"client CA", "0a"),
-                issuer_name: "CN=client CA".into(),
-                subject: "CN=edge-01".into(),
-                key_fingerprint: "k1".into(),
-                not_after_ms: u64::MAX / 2,
-                host: Some("h1".into()),
-                subject_values: Default::default(),
-            },
-            instance_uid: "00".into(),
-            predecessor: None,
-            issued_ms: 1,
-        };
-        let stem = format!("{}-0a", &issued.facts.id.issuer[..16]);
-        write(
-            &config_dir.join(format!("revocation/issued/{stem}.json")),
-            serde_json::to_vec(&issued).expect("json"),
-        );
-        write(
-            &config_dir.join("revocation/revocations.json"),
-            json(serde_json::json!([
-                {"id": "c1", "revoked": {"credential": {"sha256": "5eed"}}, "revoked_ms": 1},
-                {"id": "r2", "revoked": {"certificate":
-                    {"authority": "client", "issuers": [issued.facts.id.issuer], "serial": "0b"}},
-                 "revoked_ms": 2}
-            ])),
-        );
+        write(&config_dir.join("revocation/revocations.json"), b"[]");
+        write(&config_dir.join("bootstrap-certificates/b5.p12"), b"sealed");
         let released = opamp::uid::InstanceUid::default().to_string();
         let unreleased = opamp::uid::InstanceUid::default().to_string();
-        write(
-            &config_dir.join("revocation/hosts.json"),
-            json(serde_json::json!({
-                "h1": {"gateway": false, "instance_uids": [released]},
-                "gw": {"gateway": true, "instance_uids": []}
-            })),
-        );
-
-        let bootstrap = BootstrapEntry {
-            id: CertId::new(b"bootstrap CA", "b5"),
-            serial: "b5".into(),
-            subject: "O=Kunde, CN=fleet bootstrap".into(),
-            key_fingerprint: "bf".into(),
-            issued_ms: 1,
-            not_after_ms: u64::MAX / 2,
-            ca_key: "ca".into(),
-            p12: true,
-        };
-        write(
-            &config_dir.join("bootstrap-certificates/b5.json"),
-            serde_json::to_vec(&bootstrap).expect("json"),
-        );
-        write(&config_dir.join("bootstrap-certificates/b5.p12"), b"sealed");
-        write(&config_dir.join("bootstrap-certificates/c6.p12"), b"orphan");
 
         write(
             &config_dir.join("audit/audit-1.jsonl"),
@@ -961,16 +792,14 @@ mod tests {
             packages_dir,
             uploaded,
             signature,
-            issued,
-            bootstrap,
             released,
             unreleased,
         }
     }
 
-    /// `server migrate` over the layout a 0.5 Server wrote carries the register, the revocation
-    /// list, the hosts, the bootstrap entries, the Agents with their labels, and the artifacts with
-    /// their signatures, and names the audit files it leaves behind; it drops a referenced entry
+    /// `server migrate` over the layout a 0.5 Server wrote carries the Agents with their labels,
+    /// and the artifacts with their signatures, and names the audit files and the certificate
+    /// data it leaves behind; it drops a referenced entry
     /// and lists every Configuration's old Selector, and a Configuration without an Agent type it
     /// lists and does not carry, leaving its file — and the new data directory opens as the Server
     /// opens it.
@@ -981,29 +810,14 @@ mod tests {
         let data_dir = root.path().join("fleet-data");
         let report = run(&old.config_dir, &old.packages_dir, &data_dir).expect("migrate");
         let text = report.lines.join("\n");
-        assert!(!report.trust_failed, "{text}");
+        assert!(!report.failed, "{text}");
 
-        // Trust data, whole.
-        let ledger = fs::FsLedgerStore::open(&data_dir)
-            .expect("open")
-            .load()
-            .expect("load");
-        assert_eq!(ledger.issued, vec![old.issued.clone()]);
-        assert_eq!(
-            ledger.revocations.len(),
-            1,
-            "the credential entry is dropped on load"
+        // Certificate data is named and left in the old directory.
+        assert!(
+            text.contains("certificates are not carried"),
+            "the certificate directories are named: {text}"
         );
-        assert_eq!(ledger.revocations[0].id, "r2");
-        assert!(ledger.hosts["gw"].gateway);
-        assert!(ledger.hosts["h1"].instance_uids.contains(&old.released));
-        let bootstrap = fs::FsBootstrapStore::open(&data_dir).expect("open");
-        assert_eq!(bootstrap.load().expect("load"), vec![old.bootstrap.clone()]);
-        assert_eq!(
-            bootstrap.p12(&old.bootstrap.id).expect("read"),
-            Some(b"sealed".to_vec())
-        );
-        assert!(text.contains("c6.p12"), "the stray file is named: {text}");
+        assert!(!data_dir.join("revocation").exists());
         assert!(
             !data_dir.join("audit").exists(),
             "no audit record is carried"
@@ -1180,7 +994,7 @@ mod tests {
         let data_dir = root.path().join("fleet-data");
         let report = run(&old.config_dir, &old.packages_dir, &data_dir).expect("migrate");
         let text = report.lines.join("\n");
-        assert!(!report.trust_failed, "the new data directory opens: {text}");
+        assert!(!report.failed, "the new data directory opens: {text}");
         for name in ["canary", "stable"] {
             assert!(
                 text.contains(&format!(
@@ -1235,7 +1049,7 @@ mod tests {
                 && text.contains("does not match its recorded hash"),
             "{text}"
         );
-        assert!(!report.trust_failed, "the new data directory opens: {text}");
+        assert!(!report.failed, "the new data directory opens: {text}");
         let blob = data_dir
             .join("blobs")
             .join(hex::encode(Sha256::digest(&old.uploaded)));
@@ -1245,10 +1059,9 @@ mod tests {
         assert_eq!(packages.summary(&id).expect("carried").entries.len(), 1);
     }
 
-    /// The migration writes into an empty data directory only, and trust data it cannot carry
-    /// makes it fail.
+    /// The migration writes into an empty data directory only.
     #[test]
-    fn migrate_refuses_a_data_directory_that_is_not_empty_and_fails_on_lost_trust_data() {
+    fn migrate_refuses_a_data_directory_that_is_not_empty() {
         let root = tempfile::tempdir().expect("tempdir");
         let old = old_layout(root.path());
         let data_dir = root.path().join("fleet-data");
@@ -1259,18 +1072,32 @@ mod tests {
             std::fs::read(data_dir.join("agents/keep.json")).expect("untouched"),
             b"{}"
         );
+    }
 
-        let data_dir = root.path().join("other");
-        write(&old.config_dir.join("revocation/hosts.json"), b"not json");
-        let report = run(&old.config_dir, &old.packages_dir, &data_dir).expect("migrate");
-        assert!(report.trust_failed);
+    /// A new data directory the Server could not open fails the migration, naming why: the report
+    /// says so and its exit is non-zero.
+    #[test]
+    fn a_new_data_directory_that_does_not_open_fails_the_migration() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let not_a_directory = root.path().join("fleet-data");
+        write(
+            &not_a_directory,
+            b"a file where the data directory should be",
+        );
+        let mut report = Report::default();
+        check_opens(&not_a_directory, &mut report);
+        assert!(report.failed);
         assert!(
             report
                 .lines
                 .iter()
-                .any(|line| line.starts_with("FAILED: the hosts")),
+                .any(|line| line.starts_with("FAILED: the new data directory does not open")),
             "{:?}",
             report.lines
         );
+
+        let mut report = Report::default();
+        check_opens(&root.path().join("empty"), &mut report);
+        assert!(!report.failed, "{:?}", report.lines);
     }
 }

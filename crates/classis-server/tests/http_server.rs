@@ -152,9 +152,9 @@ async fn the_server_serves_plain_http_and_logs_the_keys_its_environment_set() {
         .send()
         .await
         .expect("post");
-    assert_ne!(
+    assert_eq!(
         without_credential.status(),
         401,
-        "the Agent plane asks no credential: whatever it answers, it is not a refusal to admit"
+        "the Agent plane admits no request without a bearer token"
     );
 }

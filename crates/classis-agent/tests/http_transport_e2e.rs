@@ -130,12 +130,17 @@ fn spawn_client(config_path: &Path) -> ClientUnderTest {
 async fn a_configuration_rollout_reaches_a_polling_client() {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app = common::app(state.clone());
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    // The Client is a host of the Server's Space.
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
 
     let state_dir: PathBuf = dir.path().join("client-state");
     let marker = dir.path().join("otelcol-marker");
@@ -158,11 +163,7 @@ async fn a_configuration_rollout_reaches_a_polling_client() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        toml + &common::client_identity(dir.path(), &state_dir),
-    )
-    .expect("write");
+    std::fs::write(&config_path, toml).expect("write");
     stage_owned_program(&state_dir, "otelcol", &program);
 
     let _client = spawn_client(&config_path);
@@ -223,12 +224,17 @@ async fn a_package_rollout_reaches_a_polling_client() {
                 PackageOffering::new(store_dir.path(), store).expect("deployments"),
             )),
     );
-    let app = common::app(state.clone());
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    // The Client is a host of the Server's Space.
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
 
     let state_dir = dir.path().join("client-state");
     let program_dir = state_dir.join("supervisors/myagent/program");
@@ -260,11 +266,7 @@ async fn a_package_rollout_reaches_a_polling_client() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        toml + &common::client_identity(dir.path(), &state_dir),
-    )
-    .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     let _client = spawn_client(&config_path);
 

@@ -43,16 +43,15 @@
                  Text="This is how the fleet patches the Client itself; without it this host is the one machine you update by hand. The Client only ever takes a package named after itself — anything else is refused and reported." />
 
         <!--
-          The client identity is not asked for: it is a pair of files the
-          operator puts on the host. The configuration lives under %ProgramData%, not in
-          INSTALLFOLDER. No square brackets in the text: a control's Text is a formatted
-          string, and [name] would be replaced by the property of that name.
+          The configuration lives under %ProgramData%, not in INSTALLFOLDER. No square
+          brackets in the text: a control's Text is a formatted string, and [name] would be
+          replaced by the property of that name.
         -->
-        <Control Id="IdentityNote" Type="Text" X="20" Y="160" Width="320" Height="44" NoPrefix="yes"
-                 Text="The client certificate and its key — a bootstrap certificate to enrol with, or one already issued — are files you put on this host. Name them as cert_file and key_file in the tls section of %ProgramData%\classis\supervisor.toml afterwards, or run &quot;supervisor service config&quot; from an elevated prompt to enrol this host." />
+        <Control Id="ConfigNote" Type="Text" X="20" Y="160" Width="320" Height="44" NoPrefix="yes"
+                 Text="The configuration is written to %ProgramData%\classis\supervisor.toml. Edit it there afterwards, or run &quot;supervisor service config&quot; from an elevated prompt." />
 
         <Control Id="StartNote" Type="Text" X="20" Y="207" Width="320" Height="25" NoPrefix="yes"
-                 Text="The service is registered but not started, so that a Client which is not yet fully configured never runs against the wrong Server." />
+                 Text="The service is registered but not started, and does not start at boot. Run &quot;supervisor enrol &lt;base-url&gt; &lt;key&gt;&quot; from an elevated prompt: it enrols this host and starts the service." />
       </Dialog>
     </UI>
   </Fragment>

@@ -1,49 +1,42 @@
-//! The certificates `classisctl pki init` makes are all a fleet needs:
-//! a Server configured from `server.toml.fragment` issues the bootstrap certificate as a PKCS#12
-//! file, `classisctl pki p12-extract` writes its pair where `supervisor.toml.fragment` names
-//! it, and the Server admits the real Client configured from that fragment with it once its
-//! enrolment is approved, with no certificate made by anything else. The program is run as an operator runs it; the Server and the Client run in this process.
+//! The certificates `classisctl pki init` makes are all a host needs to reach the Server through
+//! the reverse proxy in front of it: a TLS front serving the certificate and key of `--server-dir`
+//! — the proxy's part, played here by `opamp`'s listener — passes requests to the Server's Agent
+//! plane, which speaks plain HTTP and knows of no certificate, and a host that trusts the CA
+//! `supervisor.toml.fragment` names enrols through it over TLS, with no certificate made by
+//! anything else. The program is run as an operator runs it; the front, the Server and the
+//! Client's `enrol` run in this process.
 
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
+use classis_agent::enrolment::{enrol, Installed, ServiceHost};
+use classis_server::enrolment::Enrolment;
 use classis_server::fleet::AppState;
-use classis_server::revocation::Revocations;
+use classis_server::throttle::{Limits, Throttle};
 
-/// The sections of `server.toml.fragment`, read as the Server reads them.
+/// The sections of `supervisor.toml.fragment` that name what a host trusts.
 #[derive(serde::Deserialize)]
-struct Fragment {
-    tls: classis_server::config::TlsConfig,
-    client_ca: classis_server::config::ClientCaConfig,
-    enrolment: classis_server::config::EnrolmentConfig,
+struct HostFragment {
+    tls: HostTls,
 }
 
-async fn until<T>(what: &str, within: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + within;
-    loop {
-        if let Some(found) = probe() {
-            return found;
-        }
-        assert!(Instant::now() < deadline, "{what} did not happen in time");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+#[derive(serde::Deserialize)]
+struct HostTls {
+    ca_file: std::path::PathBuf,
 }
 
-fn authority(file: &Path, role: &str) -> classis_server::revocation::Authority {
-    let pem = std::fs::read(file).expect("read the CA");
-    let der = opamp::tls::certificates(&pem).expect("pem");
-    let facts = classis_server::ca::facts(der[0].as_ref()).expect("facts");
-    classis_server::revocation::Authority {
-        role: role.to_string(),
-        subject: facts.id.issuer,
-        name: facts.issuer_name,
+/// No service is registered for the test's state directory, whatever the machine has.
+struct NoService;
+
+impl ServiceHost for NoService {
+    fn registered(&self, _: &Path) -> Result<Option<Installed>, String> {
+        Ok(None)
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_fleet_made_by_pki_init_admits_an_enrolled_host() {
+async fn a_fleet_made_by_pki_init_lets_a_host_enrol_through_the_proxy_over_tls() {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let server_dir = dir.path().join("server");
@@ -61,145 +54,78 @@ async fn a_fleet_made_by_pki_init_admits_an_enrolled_host() {
         String::from_utf8_lossy(&made.stderr)
     );
 
-    // The Server, built from the fragment as `main` builds it from `server.toml`.
-    let fragment: Fragment = toml::from_str(
-        &std::fs::read_to_string(server_dir.join("server.toml.fragment")).expect("fragment"),
-    )
-    .expect("the server fragment parses as server.toml sections");
-    let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
-    let enrolment = Arc::new(classis_server::enrolment::Enrolment::new(clock.clone()));
-    let revocations = Arc::new(
-        Revocations::open(
-            Box::new(
-                classis_server::fs::FsLedgerStore::open(&dir.path().join("fleet-configs"))
-                    .expect("ledger"),
-            ),
-            clock,
-            vec![
-                authority(&fragment.client_ca.cert_file, "client"),
-                authority(&fragment.enrolment.bootstrap_ca_file, "bootstrap"),
-            ],
-        )
-        .expect("revocations"),
-    );
-    let signer = classis_server::ca::ClientCa::from_config(&fragment.client_ca)
-        .expect("the client CA pki init made loads");
-    // The Server issues the host's bootstrap certificate from the bootstrap CA key pki init gave
-    // it, as a PKCS#12 file only, and the operator extracts its pair where
-    // supervisor.toml.fragment names it.
-    let bootstrap_ca = classis_server::ca::BootstrapCa::from_config(
-        &fragment.enrolment,
-        Some(&fragment.client_ca),
-    )
-    .expect("the bootstrap CA pki init made loads")
-    .expect("pki init gives the Server the bootstrap CA's key");
-    let bootstrap = classis_server::bootstrap::BootstrapCertificates::on_disk(
-        Some(Box::new(bootstrap_ca)),
-        &dir.path().join("fleet-configs"),
-        Arc::new(classis_server::clock::SystemClock),
-    )
-    .expect("bootstrap record");
-    let request: classis_server::bootstrap::IssueRequest =
-        serde_json::from_value(serde_json::json!({
-            "subject": { "organization": "Kunde GmbH", "organizational_unit": "Werk Nord" },
-            "password": "a password of the operator"
-        }))
-        .expect("request");
-    let issued = bootstrap.issue(&request).expect("a bootstrap certificate");
-    let files = dir.path().join("files");
-    std::fs::create_dir_all(&files).expect("files");
-    std::fs::write(files.join("bootstrap.p12"), &issued.pkcs12).expect("write");
-    std::fs::write(files.join("password"), "a password of the operator\n").expect("write");
-    let extracted = Command::new(env!("CARGO_BIN_EXE_classisctl"))
-        .args(["pki", "p12-extract"])
-        .arg(files.join("bootstrap.p12"))
-        .arg("--out")
-        .arg(&offline_dir)
-        .arg("--password-file")
-        .arg(files.join("password"))
-        .output()
-        .expect("run classisctl");
     assert!(
-        extracted.status.success(),
-        "{}",
-        String::from_utf8_lossy(&extracted.stderr)
+        !server_dir.join("server.toml.fragment").exists(),
+        "nothing for the Server's configuration: the Server holds no certificate"
     );
-    let state = Arc::new(
-        AppState::new(dir.path().join("fleet-configs"))
-            .expect("state")
-            .with_client_ca(Some(signer))
-            .with_enrolment(Some(enrolment.clone()))
-            .with_revocations(Some(revocations.clone())),
+    // The proxy's TLS: the certificate and key pki init made, and no client certificate asked for.
+    let front = opamp::server::listen::ServerTls {
+        identity: opamp::tls::Identity {
+            cert_pem: std::fs::read(server_dir.join("server.pem")).expect("server.pem"),
+            key_pem: std::fs::read(server_dir.join("server-key.pem")).expect("server-key.pem"),
+        },
+        client_auth: opamp::server::listen::ClientAuth::None,
+    }
+    .rustls_config()
+    .expect("a TLS front accepts the material pki init made");
+    let data = dir.path().join("data");
+    classis_server::fs::open_data_dir(&data, true).expect("the data directory");
+    let clock: Arc<dyn classis_server::fleet::Clock> = Arc::new(classis_server::clock::SystemClock);
+    let enrolment = Arc::new(
+        Enrolment::on(
+            &classis_server::Records::Files(data),
+            toml::from_str::<classis_server::config::ServerConfig>("")
+                .expect("the default configuration")
+                .token_lifetime(),
+            clock.clone(),
+            Arc::new(Throttle::new(Limits::default(), clock)),
+        )
+        .expect("the enrolment"),
     );
-    let planes = classis_server::tls::server_tls(&fragment.tls, None, Some(&fragment.enrolment))
-        .expect("the Server accepts the material pki init made");
-    let admission = classis_server::transport::Admission::new(true)
-        .with_enrolment(planes.issuers, Some(enrolment.clone()))
-        .with_revocations(Some(revocations.clone()));
+    let key = enrolment
+        .spaces()
+        .create("lab")
+        .expect("a space")
+        .to_string();
+    let state = Arc::new(AppState::new(dir.path().join("fleet-configs")).expect("state"));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(
-        classis_server::listen::plane(
-            listener,
-            Some(planes.agent.rustls_config().expect("agent plane config")),
-            64,
-            opamp::server::listen::Handle::new(),
-        )
-        .serve(classis_server::agent_app(state.clone(), admission)),
+        opamp::server::listen::Listener::new(listener, opamp::server::listen::Handle::new())
+            .with_tls(front)
+            .serve(classis_server::agent_app(state.clone(), enrolment)),
     );
-    enrolment.open(600).expect("open the window");
 
-    // The real Client, on the supervisor fragment as written.
-    let state_dir = dir.path().join("client-state");
-    let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(
-        &config_path,
-        format!(
-            "endpoint = \"wss://localhost:{port}/v1/opamp\"\nstate_dir = {:?}\n\
-             heartbeat_interval_secs = 1\n{}",
-            state_dir.display().to_string(),
-            std::fs::read_to_string(offline_dir.join("supervisor.toml.fragment"))
-                .expect("fragment"),
-        ),
+    // The host, trusting the CA the supervisor fragment names and nothing else, enrols through the
+    // Client's own `enrol`.
+    let host: HostFragment = toml::from_str(
+        &std::fs::read_to_string(offline_dir.join("supervisor.toml.fragment")).expect("fragment"),
     )
-    .expect("write supervisor.toml");
-    let (stop, shutdown) = classis_agent::shutdown::shutdown_channel();
-    let client = tokio::spawn(classis_agent::service::runtime::run_until_shutdown(
-        classis_agent::service::runtime::RunSpec {
-            config_path,
-            state_dir: None,
-            service: false,
-            agents: None,
-        },
-        shutdown,
-    ));
-
-    let id = until("an enrolment request", Duration::from_secs(20), || {
-        enrolment
-            .pending()
-            .first()
-            .map(|pending| pending.id.clone())
-    })
-    .await;
-    state.approve_enrolment(&id).expect("approve");
-    until(
-        "the host as a member of the fleet",
-        Duration::from_secs(20),
-        || (!state.snapshot().is_empty()).then_some(()),
-    )
-    .await;
-    assert!(
-        state_dir.join("client-cert.pem").exists(),
-        "the host stores the certificate it was issued"
-    );
+    .expect("the supervisor fragment parses");
     assert_eq!(
-        revocations.issued().len(),
-        1,
-        "one approval, one certificate"
+        host.tls.ca_file,
+        offline_dir.join("server-ca.pem"),
+        "the fragment names the CA where `pki init` wrote it"
     );
-    let _ = stop.send(true);
-    client
-        .await
-        .expect("the Client task")
-        .expect("the Client ran until it was stopped");
+    assert!(
+        !std::fs::read_to_string(offline_dir.join("supervisor.toml.fragment"))
+            .expect("fragment")
+            .contains("verification_key"),
+        "the fragment names no package key: packages verify up to the compiled-in Package Roots"
+    );
+    let state_dir = dir.path().join("client-state");
+    let enrolled = enrol(
+        &format!("https://localhost:{port}"),
+        &key,
+        &state_dir,
+        opamp::client::ClientTls {
+            ca_pem: Some(std::fs::read(&host.tls.ca_file).expect("the CA")),
+            identity: None,
+        },
+        &NoService,
+    )
+    .await
+    .expect("a host that trusts the CA the fragment names enrols through the proxy's certificate");
+    assert_eq!(enrolled.space, "lab");
+    assert!(enrolled.state_file.is_file(), "the host holds its state");
 }

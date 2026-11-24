@@ -88,6 +88,26 @@ once someone approves it, and a key that leaks signs Packages that every
 installation accepts until its Package Signer's certificate expires; there is no
 revocation.
 
+The fleet's own credentials
+are kept differently, and each is a secret in the sense of the rule above:
+
+- **A Space's enrolment key is stored recoverably on the Server's disk.** It is
+  kept whole, not as a hash, so the Server can show the same key again after a
+  restart; only an explicit rotation replaces it. Whoever reads the Server's
+  data directory, or a backup of it, can enrol hosts into that Space until the
+  key is rotated, and rotation does not invalidate the hosts already enrolled.
+  The files are owner-only, like everything under `data_dir`.
+- **Client secrets and access tokens are stored only as a SHA-256 hash.** The
+  Server keeps no value that could be presented. Both are 256 random bits, which
+  is why a fast hash serves where a password would need a slow one.
+- **`state.json` on a host holds the client secret and the access token** in
+  clear, in a file only its owner can read. A token never expires unless the
+  Server sets `token_lifetime_secs`, so whoever copies the file can act as that
+  host until a new token is issued.
+
+The Server's log never carries a key, a client secret or a token, and the
+Client's debug form of its credentials prints neither secret.
+
 ## Actions in the workflows
 
 Every action the workflows run, GitHub's own `actions/*` included, is pinned to
@@ -105,20 +125,21 @@ the commit was on the branch, not which state of it was reviewed.
 ## Fleet trust model
 
 **Admission is a fleet-wide trust boundary; within it the host is the only bound
-between Agents**. A peer reaches the OpAMP endpoint by proving _fleet
-membership_ with a client certificate in the TLS handshake, the one proof the
-Agent plane admits by. The certificate also names the **host** it was issued to,
-and an `instance_uid` first reported with one host's certificate is not spoken
-for by another's: such a reporter is re-keyed to an identity of its own. A
-certificate is not bound to one `instance_uid`, which is self-asserted and which
-the Server may re-key.
+between Agents**.
+A peer reaches the OpAMP endpoint and the package download by presenting the
+bearer access token of a host that enrolled with a Space's key, the one proof
+the Agent plane admits by.
+The Server derives the **host** from the token, never from what a request says,
+and an `instance_uid` first reported by one host is not spoken for by another:
+such a report is refused, and one host owns at most 256 `instance_uid`s. A token
+is not bound to one `instance_uid`, which is self-asserted and which the Server
+may re-key. A Space groups hosts; it is not a boundary between them.
 
-The Client no longer runs as a Gateway, but the Server still keeps
-the Gateway mark of its certificate model until that model is removed: **a host
-marked as a Gateway can report under any `instance_uid`** and update that
-Agent's Server-side record (health, effective config, remote-config status, and
-so the Configuration offered to it). This is _not_ a cross-fleet or
-unauthenticated exposure: it is bounded by admission.
+The consequence, which is a design property rather than a defect: **anyone who
+holds a Space's enrolment key can enrol a host**, with no operator approval, and
+a host so enrolled is inside the fleet's trust boundary until its token is
+replaced. This is _not_ an unauthenticated exposure: it is bounded by admission,
+and the key is a secret (see [Secrets](#secrets)).
 
 **A host receives from the Server only what is released to an Agent it speaks
 for**.
@@ -126,17 +147,20 @@ A composed configuration travels only to the Agent it was released to, and the
 package download serves an uploaded artifact only to a host one of whose Agents
 is offered it; every other request is answered `404`, as for an artifact the
 store does not hold, so a host can neither fetch another partition's builds nor
-list the store. A marked host's certificate speaks for any Agent and may fetch
-what any Agent is offered. The bound is no stronger than the partition: a host
-that reports another partition's attributes under a fresh `instance_uid` is
-assigned by that partition's next rollout, and the fleet view shows such an
-Agent waiting before the press.
+list the store. The bound is no stronger than the partition: a host that reports
+another partition's attributes under a fresh `instance_uid` is assigned by that
+partition's next rollout, and the fleet view shows such an Agent waiting before
+the press.
 
 **What this means for operators:** treat one fleet (one Server, one shared
-admission) as a single trust domain, mark no host as a Gateway (`PUT
-/api/v1/hosts/{host}/gateway`) now that no Client is one, and do not place
-mutually distrusting Agents in one fleet; isolate them by separate Server
-instance or network segment.
+set of Spaces) as a single trust domain, and do not place mutually distrusting
+hosts in one fleet; isolate them by separate Server instance or network
+segment. A new token cuts the old one off, but the client secret in the same
+`state.json` can obtain another, so a leaked `state.json` is only left behind by
+revoking the host and enrolling it again, which makes a new client; the old
+client's record stays on the Server, which has no command to remove it. A leaked
+enrolment key is replaced by rotating the Space's key, and this build has no
+operator command for that either.
 
 ## Supported versions
 
@@ -146,7 +170,7 @@ remedy for a vulnerable version is an upgrade — through the fleet's own
 self-update where the Client is concerned. Each fix is listed in the release
 notes of the release that carries it.
 
-| Version                          | Supported |
-| -------------------------------- | --------- |
-| the latest `v<version>` release  | ✅        |
-| any earlier release              | ❌        |
+| Version                         | Supported |
+| ------------------------------- | --------- |
+| the latest `v<version>` release | ✅        |
+| any earlier release             | ❌        |

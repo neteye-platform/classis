@@ -53,9 +53,10 @@ pub struct ClientConfig {
     pub attributes: BTreeMap<String, String>,
     /// Optional TLS trust override for `wss://` / `https://` endpoints.
     pub tls: Option<TlsConfig>,
-    /// An `[auth]` section a file written for an earlier version still holds. The Client sends
-    /// no credential: the section is read only so that it does not fail the
-    /// load — whatever keys it has — and nothing in it is kept. Its presence is what
+    /// An `[auth]` section a file written for an earlier version still holds. The Client's one
+    /// credential is the bearer token in `state.json`, never anything in this file: the
+    /// section is read only so that it does not fail the load — whatever keys it
+    /// has — and nothing in it is kept. Its presence is what
     /// [`leftover_auth_notice`](Self::leftover_auth_notice) reports, once, at startup.
     #[serde(default, rename = "auth")]
     pub leftover_auth: Option<serde::de::IgnoredAny>,
@@ -101,19 +102,14 @@ pub struct ClientConfig {
     /// [`service_state_dir`](Self::service_state_dir)).
     #[serde(skip)]
     pub state_dir_as_written: PathBuf,
-    /// The bootstrap identity a `bootstrap.p12` opened to, held in memory for the enrolment and
-    /// never written to disk. Presented while the Client holds no issued
-    /// certificate; set by the install, never by the file.
-    #[serde(skip)]
-    pub bootstrap_identity: Option<BootstrapIdentity>,
     /// The process account's primary group, where a process account is registered: what the Client
     /// shares with the Managed Processes belongs to it. Set by the run
     /// from the `--process-uid` its registration names, never by the file.
     #[serde(skip)]
     pub process_account_group: Option<crate::supervisor::ports::ProcessAccountGroup>,
-    /// What `enrol` writes into `state.json`: the token every upstream request
-    /// carries and the credentials that replace it. Never set by the file; nothing sets it until
-    /// the authentication cutover, so it is `None` on every Client.
+    /// What `enrol` wrote into `state.json`: the token every upstream request
+    /// carries and the credentials that replace it. Set by the run from the state directory, never
+    /// by the file; `None` where no host is enrolled, which is every unit test's configuration.
     #[serde(skip)]
     pub credentials: Option<crate::credentials::Credentials>,
     /// The largest OpAMP message the Client accepts or sends, on either transport and in either
@@ -133,20 +129,6 @@ pub struct ClientConfig {
     /// itself as a single Agent, as before.
     #[serde(default, rename = "supervisor")]
     pub supervisors: Vec<SupervisorBlock>,
-}
-
-/// A bootstrap certificate and its key as PEM, held in memory, the key in a
-/// buffer wiped when it is dropped. Its `Debug` names neither.
-#[derive(Clone, PartialEq, Eq)]
-pub struct BootstrapIdentity {
-    pub cert_pem: Vec<u8>,
-    pub key_pem: zeroize::Zeroizing<Vec<u8>>,
-}
-
-impl std::fmt::Debug for BootstrapIdentity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BootstrapIdentity").finish_non_exhaustive()
-    }
 }
 
 /// One `[[supervisor]]` block. The common keys are extracted here; everything else
@@ -225,7 +207,7 @@ pub const PROGRAM_DIR: &str = "program";
 pub const TREE_DIR: &str = "tree";
 
 /// The subdirectory a downloaded artifact is staged in, per Supervisor.
-const PACKAGES_DIR: &str = "packages";
+pub(crate) const PACKAGES_DIR: &str = "packages";
 
 /// The default Supervisors' root in the state directory, where `supervisor_dir` names none.
 const SUPERVISORS_DIR: &str = "supervisors";
@@ -731,30 +713,13 @@ impl Default for UpdatesConfig {
 #[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     /// PEM CA bundle that *replaces* the built-in webpki roots — the self-signed-deployment case.
-    /// Optional, so a `[tls]` section can carry a client identity alone and keep the public roots.
     pub ca_file: Option<PathBuf>,
-    /// PEM client certificate chain this Client presents, for a fleet whose Server
-    /// demands mutual TLS. Together with [`key_file`](Self::key_file), and useless without it.
-    ///
-    /// This is the operator-provisioned identity, including the **bootstrap certificate** a host
-    /// enrols with. An identity the Server issued outranks it: the Client stores that one in its
-    /// state directory and prefers it, exactly as persisted connection settings outrank the
-    /// endpoint written here. Deleting the stored pair falls back to this one.
+    /// The client certificate of a certificate-era file. **Ignored**: the Client presents no client
+    /// certificate and reads neither file; the key is parsed only so that such a file
+    /// still loads, and goes with the certificate cleanup.
     pub cert_file: Option<PathBuf>,
-    /// PEM private key for [`cert_file`](Self::cert_file). Never leaves the host.
+    /// The key of [`cert_file`](Self::cert_file). **Ignored**, as it is.
     pub key_file: Option<PathBuf>,
-}
-
-impl TlsConfig {
-    /// Loud validation: half an identity is a configuration error, not a fallback to
-    /// none — a Server demanding mutual TLS would refuse the connection with no hint why.
-    fn check(&self) -> Result<(), String> {
-        match (&self.cert_file, &self.key_file) {
-            (Some(_), None) => Err("[tls] cert_file needs key_file beside it".to_string()),
-            (None, Some(_)) => Err("[tls] key_file needs cert_file beside it".to_string()),
-            _ => Ok(()),
-        }
-    }
 }
 
 /// The transport the endpoint's scheme selects.
@@ -765,8 +730,10 @@ pub enum TransportKind {
 }
 
 fn default_endpoint() -> String {
-    // The Baseline's default port and path, over TLS: the Agent plane serves nothing else.
-    "wss://127.0.0.1:4320/v1/opamp".to_string()
+    // The Baseline's default port and path, on the loopback in plain HTTP: the Server speaks plain
+    // HTTP, so this reaches one on the same machine without a proxy. Any other Server is reached
+    // through the proxy in front of it, which `endpoint` names over TLS.
+    "ws://127.0.0.1:4320/v1/opamp".to_string()
 }
 
 fn default_name() -> String {
@@ -833,7 +800,6 @@ impl Default for ClientConfig {
             source: None,
             path: None,
             state_dir_as_written: default_state_dir(),
-            bootstrap_identity: None,
             process_account_group: None,
             credentials: None,
             max_message_size_bytes: default_max_message_size(),
@@ -878,10 +844,6 @@ impl ClientConfig {
         config
             .transport()
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        if let Some(tls) = &config.tls {
-            tls.check()
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-        }
         // Ignoring the old section would turn a written `enabled = false` into consent the moment
         // a key is set; it is refused, whatever it holds, naming its replacement.
         if config.leftover_self_update.is_some() {
@@ -1042,8 +1004,8 @@ impl ClientConfig {
     #[must_use]
     pub fn leftover_auth_notice(&self) -> Option<&'static str> {
         self.leftover_auth.is_some().then_some(
-            "[auth] is ignored: the Server admits this Client by its client certificate alone, \
-             and nothing from the section is sent — it can be deleted from the file",
+            "[auth] is ignored: this Client reads no credential from the file, and nothing from \
+             the section is sent — it can be deleted from the file",
         )
     }
 
@@ -1580,7 +1542,7 @@ mod tests {
     fn the_default_endpoint_is_wss_on_the_loopback() {
         assert_eq!(
             ClientConfig::default().endpoint,
-            "wss://127.0.0.1:4320/v1/opamp"
+            "ws://127.0.0.1:4320/v1/opamp"
         );
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "classis-tools"
-description = "classisctl, the Classis operator tool: package artifacts and the fleet's certificates"
+description = "classisctl, the Classis operator tool: package artifacts and the server's certificates"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -40,8 +40,8 @@ hex.workspace = true
 # Client needs the same crate for its interactive install, so this is one workspace
 # dependency serving two crates rather than a second prompt library.
 dialoguer.workspace = true
-# The `pki` commands make the fleet's certificates with rcgen, on the dates `time` speaks,
-# and read a certificate's end back with x509-parser — the crates the Server's client CA uses.
+# The `pki` commands make the server CA and the server certificates with rcgen, on the
+# dates `time` speaks, and read a certificate's end back with x509-parser.
 rcgen.workspace = true
 time.workspace = true
 x509-parser.workspace = true
@@ -57,7 +57,7 @@ serde_json.workspace = true
 # The signing file is read strictly — unknown fields refused — which derive states in
 # one line per type rather than in hand-written checks over a `serde_json::Value`.
 serde.workspace = true
-# The passwords and keys these tools read and write are held in buffers wiped on drop.
+# The keys these tools read and write are held in buffers wiped on drop.
 # No TLS or crypto backend comes with it.
 zeroize.workspace = true
 
@@ -65,6 +65,6 @@ zeroize.workspace = true
 # A test Package Root and Package Signers.
 classis-core = { workspace = true, features = ["test-support"] }
 tempfile = "3"
-# The end-to-end test runs the real Server and the real Client in-process on what
-# `pki init` wrote, reading the fragments as their configuration files are read.
+# The end-to-end test runs the real Server, and the real Client's `enrol`, in-process on
+# what `pki init` wrote, reading the fragments as their configuration files are read.
 classis-server = { path = "../classis-server" }

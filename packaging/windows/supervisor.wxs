@@ -114,7 +114,7 @@
                  Before="InstallInitialize"
                  Condition="NOT SELFUPDATE OR SELFUPDATE=&quot;0&quot;" />
     <SetProperty Id="ENDPOINT"
-                 Value="wss://127.0.0.1:4320/v1/opamp"
+                 Value="ws://127.0.0.1:4320/v1/opamp"
                  Sequence="ui"
                  After="LaunchConditions"
                  Condition="NOT ENDPOINT AND NOT Installed" />
@@ -231,7 +231,7 @@
         does and for the same reason: a Client with no configuration
         dials the development default and manages nothing, and an installer must not manufacture
         that state on every host it touches. An install that was given an ENDPOINT still does not
-        start — the client identity is not in yet.
+        start: starting it is the operator's, once the rest of the configuration is in.
       -->
       <Custom Action="RegisterServiceWithEndpoint" After="InstallFiles"
               Condition="NOT REMOVE AND ENDPOINT&lt;&gt;&quot;&quot;" />

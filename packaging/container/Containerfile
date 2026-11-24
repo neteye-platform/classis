@@ -46,10 +46,10 @@ VOLUME /var/lib/classis
 WORKDIR /
 
 # Everything else, every secret included, is mounted as a file and named through the environment.
-# The Server speaks plain HTTP behind a reverse proxy that terminates TLS and
-# authenticates the Agents: reach the Agent port through the proxy alone. Off the
-# loopback it refuses to start without `[rest.auth]`, so this image started with nothing mounted
-# names what is missing and stops.
+# The Server speaks plain HTTP behind a reverse proxy that terminates TLS, and admits an Agent by
+# its bearer token: reach the Agent port through the proxy alone. Off the loopback it refuses to
+# start without `[rest.auth]`, so this image started with nothing mounted names what is missing
+# and stops.
 ENV CLASSIS_SERVER__DATA_DIR=/var/lib/classis \
     CLASSIS_SERVER__LISTEN=0.0.0.0:4320 \
     CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321

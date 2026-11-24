@@ -24,14 +24,14 @@ in [`docs/HARDENING.md`](docs/HARDENING.md).
 > end can do, how to start it, and every configuration key, split into
 > [Server](docs/manual/server.md) and [Client](docs/manual/client.md). Setting
 > up a fleet for the first time? Start with
-> [Setting up a fleet](docs/manual/setup.md): the certificates, both
+> [Setting up a fleet](docs/manual/setup.md): the proxy's certificate, both
 > configurations, and enrolment, in order.
 >
-> **The Server no longer terminates TLS or authenticates Agents**: it speaks
-> plain HTTP behind a reverse proxy that does both. The certificate, enrolment
-> and `[tls]` instructions below and in the manual describe the mutual-TLS mode
-> and are out of date until the enrolment reimplementation (NEAG-34) lands;
-> `scripts/dev-pki.sh` writes a `server.toml` the Server now refuses.
+> **The Server no longer terminates TLS**: it speaks plain HTTP behind a
+> reverse proxy that terminates TLS 1.3, and admits every Agent by its bearer
+> token. Where the instructions below and in the manual give the Server a
+> certificate or a `[tls]` section, that certificate belongs to the proxy; the
+> Server refuses the section.
 >
 > For agent instructions, see [`AGENTS.md`](AGENTS.md) — the single source of
 > truth for all coding agents.
@@ -58,14 +58,15 @@ Collectors **and** agents that were never built to speak OpAMP:
   and change what it runs; the Server ships only a rudimentary UI of its own and
   is built to be integrated into an existing portal.
 - **Client** — one process, installed as a native operating-system service on
-  Linux, macOS, and Windows and able to update its own binary in place.
-  **Supervisor Mode** runs **many supervisors at once**, each managing one
+  Linux, macOS, and Windows and able to update its own binary in place. In
+  **Supervisor Mode** it runs **many supervisors at once**, each managing one
   process, applying the configuration it is sent and reporting health and
-  effective configuration back. Every supervisor also exposes a
-  **Supervisor Endpoint** on loopback — not a mode of its own, but part of what
-  a supervisor is — because the Collector's `opampextension` is a _client only_
-  and needs something to connect to; a Collector carrying it reports through
-  that endpoint instead of being watched from outside. A Collector supervisor
+  effective configuration back, all over one connection to the Server. Every
+  supervisor also exposes a **Supervisor Endpoint** on loopback — not a mode of
+  its own, but part of what a supervisor is — because the Collector's
+  `opampextension` is a _client only_ and needs something to connect to; a
+  Collector carrying it reports through that endpoint instead of being watched
+  from outside. A Collector supervisor
   manages a Collector natively; a **custom supervisor** manages a **foreign
   agent** — an agent of a kind the project does not already know, needing a
   plugin written for it — by translating its lifecycle into the protocol.
@@ -90,33 +91,35 @@ The picture keeps the shape of the
 [OpAMP reference architecture](https://opentelemetry.io/docs/specs/opamp/) — a
 supervisor owning a Collector, exchanging OpAMP with a backend — and extends it
 with what makes Classis different: an **API-first Server** on two listeners,
-whose contract is an OpenAPI REST API, a single **Client**, and **Supervisors**
+whose contract is an OpenAPI REST API, a single **Client**, **Supervisors**
 whose compiled-in kinds each know their agent behind a hexagonal core — each
 exposing a **Supervisor Endpoint** for a Collector that speaks the protocol
-itself — every connection admitted by a client certificate.
+itself — and a **Connection Pool** that carries many Agents over few
+connections, every one of them admitted by an access token.
 
 ![The Server with its Operator and Agent planes, the Client with Supervisor Mode and Gateway Mode, and the agents, Collectors and downstream Clients they serve](docs/images/architecture.png)
 
 _The image carries its [Excalidraw](https://excalidraw.com) scene: open the PNG
-there to edit it, and export it again with "Embed scene" switched on. It still
-draws Gateway Mode, which is gone; the next redraw drops it._
+there to edit it, and export it again with "Embed scene" switched on._
 
 On the wire the Server sees only **Agents**, told apart by `instance_uid` and
 never by the connection that carried them — so whether an Agent is a Supervisor
 running a Collector or a Foreign Agent, or a Collector reporting through its own
 `opampextension`, is invisible to it. Every connection to the **Agent plane** is
-TLS 1.3 with a client certificate, which the Server's client CA issues once an
-operator approves a host's enrolment and renews by itself afterwards; the
-**Operator plane**, where the REST API and the UI live, is a listener of its own
-and stays on the loopback unless it is published behind a password. The
-Supervisor Endpoint is bound to loopback and admits only the process its
-Supervisor started, by a token. A Supervisor's **kind** is the authority on its
-agent: `collector` serves every Collector, with or without the extension;
-`command` runs any other program and observes it from the outside. Adding a new
-kind of managed process means writing another kind against the same ports — the
-core does not change. The terms used here (Server, Client, Agent, Client Modes,
-Supervisor Endpoint, Foreign Agent, Plugin, Port, Selector, Package, Deployment,
-…) are defined in [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md).
+reached through a reverse proxy that terminates TLS 1.3, and every OpAMP
+exchange and package download on it carries a bearer access token. A host gets
+its token by enrolling with the key of the Space it joins, with no operator
+approval; the **Operator plane**, where the REST API and the UI live, is a
+listener of its own and stays on the loopback unless it is published behind a
+password. The Supervisor Endpoint is bound to loopback and admits only the
+process its Supervisor started, by a token. A Supervisor's **kind** is the
+authority on its agent: `collector` serves every Collector, with or without the
+extension; `command` runs any other program and observes it from the outside.
+Adding a new kind of managed process means writing another kind against the same
+ports — the core does not change. The terms used here (Server, Client, Agent,
+Client Modes, Supervisor Endpoint, Connection Pool, Foreign Agent, Plugin, Port,
+Selector, Package, Deployment, …) are defined in
+[`docs/SPECIFICATION.md`](docs/SPECIFICATION.md).
 
 ## Prerequisites
 
@@ -145,7 +148,7 @@ Cargo workspace with seven crates — `opamp` (the OpAMP communication layer,
 publishable on its own, with an Agent's client and a server endpoint with their
 TLS and listener behind the `client` and `server` features),
 `classis-core` (what both ends share beyond the protocol), `classis-server` (the
-Server), `classis-agent` (the Client), `classis-tools` (the
+Server), `classis-agent` (the Client, in all its modes), `classis-tools` (the
 operator command-line tools), `oauth-token` (the client-credentials
 grant and bearer parsing), and `oauth-registration` (dynamic
 registration). This section is the single source for
@@ -195,16 +198,18 @@ here).
   not ship); the scheduled `Interop` workflow runs it weekly, and
   [`interop/README.md`](interop/README.md) says what it covers and how a red run
   is triaged
-- **Make development certificates:** `scripts/dev-pki.sh` — both binaries refuse
-  to run without TLS; it runs the operator tool's `classisctl pki init`, no
-  other tool, and writes the set and a `server.toml` and `supervisor.toml` that
-  use it to `.dev-pki/`. The development Client enrols with the bootstrap
-  certificate; `scripts/seed_test_configs.sh --enrol` approves it. The VS Code
-  launch configurations run it when `.dev-pki/` has no configuration yet
-- **Run the Server:** `cargo run -p classis-server -- --config
-  .dev-pki/server.toml`
-- **Run the Client:** `cargo run -p classis-agent -- --config
-  .dev-pki/supervisor.toml`
+- **Make development certificates:** `scripts/dev-pki.sh` — the Client refuses a
+  plaintext endpoint off the loopback; the script runs the operator tool's
+  `classisctl pki init`, no other tool, and writes the set and a `server.toml`
+  and `supervisor.toml` to `.dev-pki/`. A Client
+  runs only once it is enrolled (`supervisor enrol <base-url> <key>`, with the
+  enrolment key of a Space); this build has no command that creates a Space or
+  shows its key. The VS Code launch configurations run the script when
+  `.dev-pki/` has no configuration yet
+- **Run the Server:**
+  `cargo run -p classis-server -- --config .dev-pki/server.toml`
+- **Run the Client:**
+  `cargo run -p classis-agent -- --config .dev-pki/supervisor.toml`
 - **Run the operator tool:** `cargo run --bin classisctl -- package fetch`
   (fetch a known agent's release and hand it to the Server), `cargo run --bin
   classisctl -- package --help` (build, hash, and sign an artifact out of any
@@ -212,9 +217,9 @@ here).
   certificates) — documented in [the manual](docs/manual/tools.md). Every
   release also publishes it for Linux and macOS.
 
-Both binaries read a TOML configuration file; every setting has a default except
-the TLS material, without which neither starts. The annotated examples live in
-[`config/`](config/). [`scripts/check-rust.sh`](scripts/check-rust.sh) runs
+Both binaries read a TOML configuration file, and every Server setting has a
+default; the Client runs only once it is enrolled. The annotated examples live
+in [`config/`](config/). [`scripts/check-rust.sh`](scripts/check-rust.sh) runs
 exactly these build/test/lint commands, locally through `scripts/check-all.sh`
 and in CI as the `rust` job of
 [`.github/workflows/checks.yml`](.github/workflows/checks.yml);
@@ -282,18 +287,28 @@ configuration key of both ends — is the
 
 A minimal closed control loop on one machine:
 
-1. **Start the Server:** `cargo run -p classis-server -- --config
-   config/server.toml` — it serves two planes on two ports. The **Agent plane**
-   on `4320`: the OpAMP endpoint at `/v1/opamp` (plain HTTP **and** WebSocket)
-   and the package downloads the offers point at. The **Operator plane** on
-   `127.0.0.1:4321`: the REST API under `/api/v1/`, the API docs, and the
-   bundled UI at `/` — on loopback, because it is open until `[rest.auth]`
-   guards it with Basic credentials.
-2. **Start a Client:** `cargo run -p classis-agent -- --config
-   config/supervisor.toml` — it connects over WebSocket by default
-   (`ws://127.0.0.1:4320/v1/opamp`), reports its description and health, and
-   appears in the fleet. Point `endpoint` at an `http(s)://` URL to use the
-   polling transport instead.
+1. **Start the Server:**
+   `cargo run -p classis-server -- --config config/server.toml` — it serves two
+   planes on two ports.
+   The **Agent plane** on `4320`: the OpAMP endpoint at `/v1/opamp` (plain HTTP
+   **and** WebSocket)
+   and the package downloads the offers point at, both behind a bearer token,
+   and the two routes a host gets its token from, `/v1/enrol` and `/v1/token`.
+   The **Operator plane** on
+   `127.0.0.1:4321`: the REST API under `/api/v1/`, the API docs,
+   and the bundled UI at `/` — on loopback, because it is open until
+   `[rest.auth]` guards it with Basic credentials.
+2. **Enrol and start a Client:** a Client runs only once it is enrolled.
+   `cargo run -p classis-agent -- --config config/supervisor.toml enrol
+   <base-url> <key>` registers the host with the Server using the enrolment
+   key of a Space and writes `state.json` in the state directory; this build
+   has no command that creates a Space or shows its key. Then
+   `cargo run -p classis-agent -- --config config/supervisor.toml` — it
+   connects over WebSocket with its access token, reports its description and
+   health, and appears in the fleet. On one machine the endpoint is
+   `ws://127.0.0.1:4320/v1/opamp`: the Server speaks plain HTTP, and the Client
+   accepts plaintext to the loopback alone. Point `endpoint` at an `http://` or,
+   through a proxy, `https://` URL to use the polling transport instead.
 3. **Open the UI** at <http://127.0.0.1:4321/> — the Agent is listed as
    _Connected_. Press **Configurations**, create a Configuration with its
    configuration text, and press **OK**. Then press **Deployments**, create a
@@ -350,11 +365,10 @@ $ curl -X PUT http://127.0.0.1:4321/api/v1/deployments/linux/packages/supervisor
 $ curl -X POST http://127.0.0.1:4321/api/v1/deployments/linux/rollout
 ```
 
-For TLS, give the Server a certificate (`[tls]` in `server.toml`) and the Client
-a `wss://` or `https://` endpoint — plus `ca_file` under `[tls]` when the
-certificate comes from a private CA. The UI and the REST API can present a
-certificate of their own, for example from your organization's PKI, under
-`[rest.tls]`; without it they present `[tls]`'s.
+The Server serves no TLS: put a reverse proxy that terminates TLS 1.3 in front
+of it, and give the Client the proxy's `wss://` or `https://` endpoint — plus
+`ca_file` under `[tls]` when the proxy's certificate comes from a private CA.
+`[tls]` and `[rest.tls]` in `server.toml` are refused at startup.
 
 ### Running as an OS service
 
@@ -362,17 +376,26 @@ The Client registers _itself_ as a native service on Linux (systemd), macOS
 (launchd), and Windows (SCM):
 
 ```sh
-supervisor service install --config /etc/opamp/supervisor.toml     # system service (root/Administrator)
-supervisor service start
+supervisor service install --config /etc/opamp/supervisor.toml     # system service (root/Administrator); starts nothing
+supervisor enrol https://fleet.example <key>                   # enrols the host, starts the service, lets it start at boot
 supervisor service status
 supervisor service stop
+supervisor service start                                       # after a stop
 supervisor service uninstall                                   # never deletes layout or state
+supervisor revoke                                              # leaves the fleet: deletes the state directory
 ```
 
-- **One service per build:** the service is named after the product, `classis`,
-  with no suffix and nothing to look up — so the verbs above take no name at
-  all. A second installation on one host is a second _build_ with its own
-  `PRODUCT_NAME`, not a runtime flag.
+- **A host runs nothing until it is enrolled.** `service install` registers the
+  service but neither starts it nor lets it start at boot. `enrol` takes the
+  Server's base URL and the Space's enrolment key, writes `state.json` in the
+  state directory (owner-only), hands it to the account the service runs as,
+  and starts the service and lets it start at boot. A Client without
+  `state.json` refuses to start and names `enrol`. `revoke` is local, refuses
+  while the service runs, and never contacts the Server.
+- **One service per build:** the service is named after the product,
+  `classis`, with no suffix and nothing to look up — so the verbs above take
+  no name at all. A second installation on one host is a second _build_ with its
+  own `PRODUCT_NAME`, not a runtime flag.
 - **Two roots:** `--root <dir>` given alone puts everything under the one
   directory it names; nothing is ever installed to a fixed path. Without it, a
   Linux system install splits the defaults: the executable layout —
@@ -411,12 +434,11 @@ supervisor service uninstall                                   # never deletes l
   whichever version came up.
 
 The **`Service smoke` workflow** exercises the real thing on an ephemeral runner
-— install, start, the Agent appearing in the fleet, its process killed and
-brought back by the manager, an explicit stop that stays stopped, uninstall —
-and an install that enrols with a `bootstrap.p12` from `--fleet-files`, whose
-service then reaches the Server on the certificate it was issued. It runs weekly
-and on demand rather than per push (it installs a system service and waits on
-timers), on Linux, macOS and Windows. The test is
+— install, `enrol` against a Server that admits by bearer token, the Agent
+appearing in the fleet, its process killed and brought back by the manager, an
+explicit stop that stays stopped, uninstall. It runs weekly and on demand rather
+than per push (it installs a system service and waits on timers), on Linux,
+macOS and Windows. The test is
 `crates/classis-agent/tests/service_smoke.rs`; it is `#[ignore]`d, so an ordinary
 `cargo test` never installs anything.
 

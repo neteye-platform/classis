@@ -1,7 +1,7 @@
 # Classis Server configuration. Every setting has a default, shown here. The Server speaks
-# plain HTTP behind a reverse proxy that terminates TLS and authenticates the Agents;
-# it has no [tls] and checks no Agent's credential, and a [tls], [rest.tls], [client_ca],
-# [enrolment] or [agents.auth] section is refused. Start with:
+# plain HTTP behind a reverse proxy that terminates TLS; it holds no certificate, and admits an
+# Agent only by the bearer token it issued. A [tls], [rest.tls], [client_ca], [enrolment] or
+# [agents.auth] section is refused. Start with:
 # cargo run -p classis-server -- --config server.toml
 #
 # HOW THIS FILE IS ORDERED, AND WHY IT MATTERS. Every bare key comes first; every [section] comes
@@ -29,7 +29,7 @@
 # Settings
 # =============================================================================================
 
-# TWO LISTENERS, SPLIT BY AUDIENCE. Both serve TLS 1.3 and nothing older.
+# TWO LISTENERS, SPLIT BY AUDIENCE. Both speak plain HTTP; the proxy in front terminates TLS 1.3.
 #
 # The AGENT PLANE: the OpAMP endpoint (/v1/opamp) and the package download the offers point at.
 # Port 4320 is the protocol's default. It listens on the loopback until you publish it to where the
@@ -50,12 +50,13 @@ max_connections = 10000
 #   packages/<agent type>@<version>.json  a Package: its identity and entries, no bytes
 #   blobs/<sha256>                        an artifact, named by its SHA-256, stored once
 #   agents/<instance_uid>.json            an Agent: what it reported, its assignment, its labels
-#   hosts/<host>.json                     a Host
-#   certificates/<issuer>-<serial>.json   a certificate the client CA signed (the register)
-#   revocations.json                      the revocation list
-#   bootstrap/<issuer>-<serial>.json      a bootstrap certificate the Server issued, and its
-#                                         PKCS#12 file beside it as .p12
-#   enrolment.json                        the enrolment window and its pending requests
+#   spaces/<name>.json                    a Space, with its enrolment key in recoverable form
+#   clients/<client_id>.json              an enrolled host: its Space and the hashes of its secret
+#                                         and of its one active token, never a value to present
+#
+# spaces/ holds every Space's enrolment key whole, so that it can be read again after a restart:
+# protect that directory, and any backup of it, as you would a password file. A key enrols hosts
+# into its Space until it is rotated; rotating it does not touch a host already enrolled.
 #
 # Back it up as one directory, with the Server stopped. A Server before 0.5.5 kept its state under
 # config_dir and packages_dir instead; those keys stop this Server at startup, and
@@ -75,6 +76,11 @@ max_message_size_bytes = 67108864
 # Server actually asked for is a better answer than a default. Three times the protocol's own
 # default heartbeat of 30 s, because one missed beat is a lost packet.
 stale_after_secs = 90
+
+# How long an access token is accepted after it is issued, in seconds; 0 — the default — means it
+# never expires. A token ends when its client is issued a new one all the same, and an open
+# WebSocket session outlives its token's expiry, ending only when the token is replaced.
+token_lifetime_secs = 0
 
 # The largest package artifact the REST API accepts on upload. A package is a program, not a
 # message: an otelcol-contrib binary is a few hundred megabytes, so this bound is far larger than
@@ -132,8 +138,7 @@ stale_after_secs = 90
 # or a Deployment — can be deleted: roll those Agents out through a Deployment without it first. Taking a bad version back is not a rollout: the fleet only
 # moves forward, and what reverses a release is the host's own health-gated rollback.
 #
-# The download endpoint sits on the Agent plane, behind the same handshake as /v1/opamp: only an
-# Agent holding a certificate of the fleet reaches it. The content hash and the
+# The download endpoint sits on the Agent plane beside /v1/opamp. The content hash and the
 # signature are what protect an installed binary, and an unsigned entry is offered to nobody.
 max_package_size_bytes = 1073741824
 
@@ -186,32 +191,31 @@ max_package_size_bytes = 1073741824
 # password_file = "/run/secrets/fleet-db-password"
 # ca_file = "/etc/opamp/db-ca.pem"      # optional: the roots the database's certificate is checked against
 
-# The AGENT PLANE's admission: none. The Server admits every request of the Agent plane and
-# authenticates no Agent: the reverse proxy in front of it does, and the Agent port must
-# be reachable through it alone, because any peer that reaches it may claim any identity. There is
-# no [agents.auth]: the section is refused. Behind the proxy the peer address the throttle counts is
-# X-Forwarded-For's, trusted from any source: keep the Server's ports closed to everything but
-# the proxy.
+# The AGENT PLANE's admission: every request of the Agent plane — /v1/opamp over HTTP and
+# WebSocket, and the package download — is admitted only by a valid bearer access token. A host
+# gets one by enrolling with its Space's key on /v1/enrol and asking /v1/token for it; repeated
+# failures from one peer address are throttled. There is no [agents.auth] and no [tls]: both are
+# refused. Behind the proxy the peer address the throttle counts is X-Forwarded-For's, trusted
+# from any source: keep the Server's ports closed to everything but the proxy.
 
-# Repeated admission failures from one peer address: past max_failures 401s within
-# window_secs, the address is answered 429 with Retry-After for backoff_secs, before anything else
-# is checked. The Operator plane counts its own failures the same way.
+# Repeated admission failures from one peer address: past max_failures refused authentications
+# (a 401, or a Bearer 400 invalid_request) within window_secs on /v1/enrol, /v1/token, /v1/opamp
+# or the package download, the address is answered 429 with Retry-After for backoff_secs, before
+# anything else is checked. The Operator plane counts its own failures the same way, in a table of
+# its own.
 # [admission_throttle]
 # max_failures = 10
 # window_secs = 60
 # backoff_secs = 300
 
-# How often an admitted peer is heard on the Agent plane. Every OpAMP message and every
-# package download takes a token from the bucket of the host its certificate names — of the Agent
-# it names and of the aggregate, for a host marked as a Gateway. A message past the limit is
-# answered Unavailable with a 30 s retry_info, a download 429 with Retry-After: 30. 0 is refused;
-# the Server warns at startup when messages_per_sec times the heartbeat carries fewer than 256
-# Agents per host.
+# How often a peer is heard on the Agent plane. Every OpAMP message and every package download
+# takes a token from the bucket of the host it arrived over, or of its peer address where no host
+# is named. A message past the limit is answered Unavailable with a 30 s retry_info, a download
+# 429 with Retry-After: 30. 0 is refused; the Server warns at startup when messages_per_sec times
+# the heartbeat carries fewer than 256 Agents per host.
 # [agent_rate_limit]
 # messages_per_sec = 10
 # burst = 300
-# gateway_messages_per_sec = 500
-# gateway_burst = 10000
 
 # Optional connection settings offered to the fleet: every Agent declaring
 # AcceptsOpAMPConnectionSettings is offered these, verifies them by actually connecting, and

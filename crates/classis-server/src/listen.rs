@@ -1,13 +1,11 @@
-//! How the Server's two planes are served. The listener, its TLS and its bounds on
-//! connection setup are `opamp`'s; what is the Server's is that both planes share one
+//! How the Server's two planes are served. The listener and its bounds on connection setup are
+//! `opamp`'s; what is the Server's is that both planes share one
 //! handle and one idea of shutting down.
 
 use std::net::TcpListener;
-use std::sync::Arc;
 use std::time::Duration;
 
 use opamp::server::listen::{Handle, Listener};
-use rustls::ServerConfig;
 
 /// How long connections are given to finish once shutdown has been asked for.
 ///
@@ -17,28 +15,12 @@ use rustls::ServerConfig;
 /// that follows shutdown run.
 pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 
-/// A plane on an already-bound listener, over TLS when `tls` is given, holding at most
-/// `max_connections` at once. `handle` is shared by both planes, so one signal drains
+/// A plane on an already-bound listener, served in plain HTTP on any address and holding at most
+/// `max_connections` at once: the Server sits behind a reverse proxy that terminates TLS, so the
+/// connection it accepts is the proxy's. `handle` is shared by both planes, so one signal drains
 /// both.
 #[must_use]
-pub fn plane(
-    listener: TcpListener,
-    tls: Option<Arc<ServerConfig>>,
-    max_connections: usize,
-    handle: Handle,
-) -> Listener {
-    let plane = Listener::new(listener, handle).with_max_connections(max_connections);
-    match tls {
-        Some(config) => plane.with_tls(config),
-        None => plane,
-    }
-}
-
-/// A plane on an already-bound listener, served in plaintext on any address: the Server sits
-/// behind a reverse proxy that terminates TLS, so the connection it accepts is the
-/// proxy's. `handle` is shared by both planes, as for [`plane`].
-#[must_use]
-pub fn plain_plane(listener: TcpListener, max_connections: usize, handle: Handle) -> Listener {
+pub fn plane(listener: TcpListener, max_connections: usize, handle: Handle) -> Listener {
     Listener::new(listener, handle)
         .with_max_connections(max_connections)
         .with_plaintext_anywhere()

@@ -83,7 +83,7 @@ fn pki(_args: impl Iterator<Item = String>) -> ! {
 /// `data_dir`, copying, so the old directories stay as the backup. It is run while the Server is
 /// stopped — a Server still writing the old directories would be copied half-way — and that is the
 /// operator's to ensure: the older Server takes no lock this could test. Prints what it carried,
-/// dropped and listed, and exits non-zero when trust data could not be carried.
+/// dropped and listed, and exits non-zero when the new data directory does not open.
 fn migrate(mut args: impl Iterator<Item = String>) -> ! {
     init_logging(classis_server::config::LogFormat::Text);
     let (mut config_dir, mut packages_dir, mut data_dir) = (None, None, None);
@@ -109,9 +109,9 @@ fn migrate(mut args: impl Iterator<Item = String>) -> ! {
             for line in &report.lines {
                 println!("{line}");
             }
-            if report.trust_failed {
+            if report.failed {
                 eprintln!(
-                    "the trust data was not carried whole — do not start a Server on {}; fix what \
+                    "the new data directory does not open — do not start a Server on {}; fix what \
                      is named above, empty it, and migrate again",
                     data_dir.display()
                 );
@@ -369,8 +369,6 @@ async fn main() {
     if connection_offer.is_some() {
         info!("offering connection settings to the fleet");
     }
-    // What Agents enrol with, and what the Server signs for them, is NEAG-34's: nothing
-    // here issues a certificate.
     let telemetry_offer = config
         .telemetry_offer
         .as_ref()
@@ -430,22 +428,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // What the client CA signed and what is revoked, kept beside the fleet's records.
-    let revocations = match records.ledger().and_then(|store| {
-        classis_server::revocation::Revocations::open(store, clock.clone(), Vec::new())
-    }) {
-        Ok(revocations) => Arc::new(revocations),
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
     if let Some(warning) = config.rate_limit_warning() {
         warn!("{warning}");
     }
     let agent_rate = Arc::new(classis_server::agent_rate::AgentRate::new(
         config.agent_rate_limit.limits(),
-        config.max_agents,
         clock.clone(),
     ));
     let records_ready: Option<classis_server::fleet::RecordsReady> = match &records {
@@ -455,13 +442,29 @@ async fn main() {
         }
         classis_server::Records::Files(_) => None,
     };
+    // Enrolment and bearer admission of the Agent plane, counting its refusals in a
+    // table of its own, apart from the Operator plane's.
+    let enrolment = match classis_server::enrolment::Enrolment::on(
+        &records,
+        config.token_lifetime(),
+        clock.clone(),
+        Arc::new(classis_server::throttle::Throttle::new(
+            limits,
+            clock.clone(),
+        )),
+    ) {
+        Ok(enrolment) => Arc::new(enrolment),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     let state = match AppState::on(&records) {
         Ok(state) => Arc::new(
             state
                 .with_records_ready(records_ready)
                 .with_agent_rate(Some(agent_rate))
                 .with_connection_offer(connection_offer)
-                .with_revocations(Some(revocations.clone()))
                 .with_telemetry_offer(telemetry_offer)
                 .with_packages(packages)
                 .with_max_message_size(config.max_message_size_bytes)
@@ -475,22 +478,9 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // The Server authenticates no Agent: the proxy in front of it does, and the Agent
-    // port must be reachable through it alone. `AdmitEveryone` is the seam an authenticating
-    // library plugs into later.
-    info!("the OpAMP endpoint admits every request: the Agent port must be reachable only through the authenticating proxy");
     // Two planes, two listeners: Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
-    let agents = classis_server::agent_app(
-        state.clone(),
-        classis_server::transport::Admission::open()
-            .with_authenticator(Arc::new(classis_server::agent_auth::AdmitEveryone))
-            .with_revocations(Some(revocations))
-            .with_throttle(Arc::new(classis_server::throttle::Throttle::new(
-                limits,
-                clock.clone(),
-            ))),
-    );
+    let agents = classis_server::agent_app(state.clone(), enrolment);
     let operator_auth = match config
         .rest
         .auth
@@ -534,9 +524,8 @@ async fn main() {
     info!(listen = %config.listen, "serving the OpAMP endpoint and package downloads over HTTP");
     info!(listen = %config.rest.listen, "serving the REST API, the API docs, and the UI over HTTP");
     let (agents, operators) = tokio::join!(
-        listen::plain_plane(agent_listener, config.max_connections, handle.clone()).serve(agents),
-        listen::plain_plane(operator_listener, config.rest.max_connections, handle)
-            .serve(operators),
+        listen::plane(agent_listener, config.max_connections, handle.clone()).serve(agents),
+        listen::plane(operator_listener, config.rest.max_connections, handle).serve(operators),
     );
     agents.expect("serve the Agent plane");
     operators.expect("serve the Operator plane");
