@@ -8,6 +8,8 @@
   [ADR-0059](0059-managed-processes-run-under-a-process-account-started-by-a-second-service.md)
   · clause 3 superseded by
   [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
+  · clause 3 superseded by
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-19
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** `packaging/linux/postinst` and `packaging/linux/postrm`, the

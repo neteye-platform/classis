@@ -5,6 +5,8 @@
   [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
   · clause 8 superseded by
   [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
+  · clause 8 superseded by
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-11
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** crates/classis-agent/src/update/ (mod.rs and installer.rs), the

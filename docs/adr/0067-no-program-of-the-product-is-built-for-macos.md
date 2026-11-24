@@ -14,6 +14,7 @@
   `classisctl fetch` knows in `crates/classis-tools/src/fetch.rs`, and every
   document that names a platform the product runs on
 - **Supersedes:**
+  [ADR-0009](0009-an-adr-may-supersede-named-clauses-of-another.md) clause 1;
   [ADR-0010](0010-five-crates-the-whole-opamp-communication-layer-in-the-opamp-crate-and-toml-configuration.md)
   clauses 15 and 21; [ADR-0016](0016-what-an-agent-reports-about-itself.md)
   clauses 3, 7 and 13;
@@ -68,9 +69,10 @@ proposed [ADR-0061](0061-the-product-is-named-classis.md) names two macOS
 account names in its clause 2; being proposed, it is revised in the same change
 rather than superseded. Two Decision sentences name macOS as well, those of
 ADR-0019 and ADR-0028, and ADR-0009 names numbered clauses only. This ADR
-restates the two sentences as clauses of its own, naming each, which is the
-narrowest step past ADR-0009's form that removes them; ADR-0028's would
-otherwise contradict clause 15 in binding text.
+extends that form to a Decision sentence named by its place (clause 37), and
+restates the two sentences as clauses of its own, naming each (clauses 35 and
+36). Without the extension, ADR-0028's sentence would stand in binding text and
+contradict clause 15.
 
 ## Decision
 
@@ -879,6 +881,15 @@ nothing on macOS.
 36. **Restates the first sentence of ADR-0028's Decision.** We will build the
     operator tools as one program, `classisctl`, from `crates/classis-tools`,
     and publish it in every release as a `.tar.gz` for Linux on amd64 and arm64.
+37. **Restates ADR-0009 clause 1, extended. A Decision sentence may be named by
+    its place.** A `Supersedes` entry may name the first sentence of an accepted
+    ADR's Decision section, as `the first sentence of its Decision`, or the
+    sentence of its Decision where that section is a single sentence, as `the
+    sentence of its Decision`. Other unnumbered text of a Decision is superseded
+    only whole. The successor restates the named sentence as a numbered clause of
+    its own, as clauses 35 and 36 do; the old ADR's `Status` line records it in
+    the form ADR-0009 clause 2 gives a clause, naming the sentence where the
+    clause number would stand. The rest of the old Decision binds unchanged.
 
 **Out of scope:**
 

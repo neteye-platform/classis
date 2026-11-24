@@ -6,6 +6,8 @@
   [ADR-0055](0055-an-agents-type-is-its-supervisors-and-a-process-never-chooses-it.md)
   · clauses 3, 7 and 13 superseded by
   [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
+  · clauses 3, 7 and 13 superseded by
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-03
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** AgentDescription building in

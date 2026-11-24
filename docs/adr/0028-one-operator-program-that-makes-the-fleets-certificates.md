@@ -12,6 +12,8 @@
   [ADR-0066](0066-a-package-is-accepted-only-when-a-package-signer-the-compiled-in-package-root-issued-signed-it.md)
   · clauses 4 and 17, and the first sentence of its Decision, superseded by
   [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
+  · clauses 4 and 17, and the first sentence of its Decision superseded by
+  [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-10
 - **Deciders:** Davide Zeni
 - **Applies to:** the `pki` commands of `classisctl` in

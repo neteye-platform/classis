@@ -1,6 +1,6 @@
 # ADR-0009: An ADR may supersede named clauses of another, which stays accepted for the rest
 
-- **Status:** 🟢 accepted
+- **Status:** 🟢 accepted · clause 1 superseded by [ADR-0067](0067-no-program-of-the-product-is-built-for-macos.md)
 - **Date:** 2026-10-12
 - **Deciders:** Markus Brigl, Davide Zeni
 - **Applies to:** the supersession mechanics of `docs/adr/README.md` and
