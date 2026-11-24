@@ -1,5 +1,5 @@
-//! What an Agent reports about itself (ADR-0016): its configured attributes, the host's facts,
-//! and the `service.*` attributes of a Managed Process's own description folded in (ADR-0055).
+//! What an Agent reports about itself: its configured attributes, the host's facts,
+//! and the `service.*` attributes of a Managed Process's own description folded in.
 
 use opamp::attributes::{self, string_array_attr, string_attr};
 use opamp::proto::{AgentDescription, KeyValue};
@@ -8,14 +8,14 @@ use tracing::warn;
 
 use super::{AgentState, Local};
 
-/// How much of a type a Managed Process reports reaches the warning about it (ADR-0055 clause 3):
+/// How much of a type a Managed Process reports reaches the warning about it:
 /// enough for any reverse FQDN, and no more of what a process can make as long as it likes.
 const LOGGED_TYPE_CHARS: usize = 128;
 
 impl AgentState {
     /// The Managed Process reported its own description (through the Supervisor Endpoint or the
     /// version probe); fold its `service.*` attributes into ours — identity, type and where the
-    /// Agent runs stay the Supervisor's (goal 16, ADR-0055).
+    /// Agent runs stay the Supervisor's (goal 16).
     pub fn set_process_description(&mut self, description: AgentDescription) {
         let before = reported_types(self.local.process_description.as_ref());
         // Merged per attribute, not replaced wholesale: two sources describe the same process —
@@ -33,8 +33,8 @@ impl AgentState {
         for attr in &description.non_identifying_attributes {
             upsert_attr(&mut merged.non_identifying_attributes, attr);
         }
-        // The type is the Supervisor's, and the fold drops the process's `service.name` (ADR-0055
-        // clause 3). A value that differs is said once, when the process starts to report it, so
+        // The type is the Supervisor's, and the fold drops the process's `service.name`. A value
+        // that differs is said once, when the process starts to report it, so
         // an operator whose Collector states a `dist.name` learns where to set it, and a report
         // repeated every few seconds does not flood the log. Only the merged report's values are
         // compared, so nothing grows however many values a process cycles through. The value is
@@ -57,7 +57,7 @@ impl AgentState {
         self.protocol.force_full();
     }
 
-    /// Attaches the operator-defined attributes this Agent reports (ADR-0041 clause 2).
+    /// Attaches the operator-defined attributes this Agent reports.
     #[must_use]
     pub fn with_attributes(
         mut self,
@@ -80,7 +80,7 @@ impl AgentState {
 impl Local {
     pub(super) fn describe(&self, uid: &InstanceUid) -> AgentDescription {
         // `service.name` is the Agent *type* — the Baseline's "reverse FQDN that uniquely
-        // identifies the Agent type" (ADR-0055), and the Supervisor's alone: the fold below never
+        // identifies the Agent type", and the Supervisor's alone: the fold below never
         // lets a Managed Process restate it. The instance name has its own key below.
         let mut identifying_attributes =
             vec![string_attr(attributes::SERVICE_NAME, &self.service_name)];
@@ -110,10 +110,10 @@ impl Local {
         // placeholder would say something false that a Selector could then match.
         let os = self.host.os();
         let mut non_identifying_attributes = vec![
-            // The operator's name for this Agent (ADR-0016). Non-identifying because the Baseline
+            // The operator's name for this Agent. Non-identifying because the Baseline
             // has no key for a human instance name and admits "any user-defined attributes the end
             // user would like to associate with this Agent" here; identity itself stays
-            // `service.instance.id`. A Selector can match it, which is how ADR-0026's "pin one
+            // `service.instance.id`. A Selector can match it, which is how "pin one
             // host" is expressed for a machine running several Supervisors.
             string_attr(attributes::SERVICE_INSTANCE_NAME, &self.instance_name),
             string_attr(attributes::OS_TYPE, os_type()),
@@ -132,7 +132,7 @@ impl Local {
                 non_identifying_attributes.push(string_attr(key, value));
             }
         }
-        // The host's network addresses — the conventions' `host.ip` and `host.mac` (ADR-0016),
+        // The host's network addresses — the conventions' `host.ip` and `host.mac`,
         // both arrays and both "excluding loopback interfaces". Read live rather than once, so a
         // DHCP move is reported instead of the address the process happened to start with; a host
         // with nothing to say reports no attribute rather than an empty array.
@@ -146,7 +146,7 @@ impl Local {
             identifying_attributes,
             non_identifying_attributes,
         };
-        // Operator-defined attributes (ADR-0041 clause 2) — added only where nothing is reported
+        // Operator-defined attributes — added only where nothing is reported
         // under the same key, so what the code reports always wins. A key added here stands
         // against the Managed Process: the fold below leaves it alone.
         let mut operators_keys = Vec::new();
@@ -161,7 +161,7 @@ impl Local {
                 operators_keys.push(key.as_str());
             }
         }
-        // Fold in what the Managed Process reported about itself (ADR-0055 clause 2) — its
+        // Fold in what the Managed Process reported about itself — its
         // `service.*` attributes alone. A process is code the Supervisor does not vouch for, and
         // where the Agent runs (`host.*`, `os.*`) and what kind of Agent it is (`supervisor.*`)
         // decide which Selectors match and which artifact is offered; those stay the
@@ -230,7 +230,7 @@ fn fold_attr(description: &mut AgentDescription, attr: &KeyValue, identifying: b
 }
 
 /// The `service.name` values a Managed Process's merged report carries, in either list — what
-/// ADR-0055 clause 3 compares against the Supervisor's type. An empty string is no value.
+/// is compared against the Supervisor's type. An empty string is no value.
 fn reported_types(reported: Option<&AgentDescription>) -> Vec<String> {
     let mut types: Vec<String> = Vec::new();
     for list in reported.into_iter().flat_map(|reported| {
@@ -262,7 +262,7 @@ pub(super) fn os_type() -> &'static str {
 }
 
 /// OpenTelemetry semantic-convention value for `host.arch` — the convention says `amd64`/`arm64`
-/// where Rust's constant says `x86_64`/`aarch64` (ADR-0026).
+/// where Rust's constant says `x86_64`/`aarch64`.
 ///
 /// The Baseline points at the conventions for these keys, and the Collector's `opampextension`
 /// reports `runtime.GOARCH`, which is already this vocabulary. Reporting Rust's spelling instead

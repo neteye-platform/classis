@@ -1,4 +1,4 @@
-//! End to end over **plain HTTP polling** (ADR-0013) — the same two things `e2e.rs` and
+//! End to end over **plain HTTP polling** — the same two things `e2e.rs` and
 //! `packages_e2e.rs` prove over a WebSocket: a Configuration rollout is applied, and a signed
 //! package is downloaded, verified, swapped and reported `Installed`.
 //!
@@ -24,10 +24,10 @@ use classis_server::fleet::{AgentView, AppState, PackageOffering};
 use classis_server::packages::Platform;
 
 /// Puts a Package into a ring aimed at the Agent type it is built for, and hands back the ring's
-/// name. Aim belongs to the Deployment now (ADR-0026): a Package reaches nobody by itself, so a
+/// name. Aim belongs to the Deployment now: a Package reaches nobody by itself, so a
 /// test that wants one delivered has to say which ring the host is in — which is the model.
-/// The same, recording the artifact's signature on the ring — where a signature lives since
-/// ADR-0026. A Client refuses an artifact not signed up to its Package Roots (ADR-0066), so the
+/// The same, recording the artifact's signature on the ring — where a signature lives. A
+/// Client refuses an artifact not signed up to its Package Roots, so the
 /// ring is what has to carry it.
 fn ring_holding_signed(
     state: &classis_server::fleet::AppState,
@@ -43,7 +43,7 @@ fn ring_holding_signed(
     deployments
         .put_package("stable", id, true)
         .expect("package into the ring");
-    // The signature is the entry's own (ADR-0033).
+    // The signature is the entry's own.
     if let Some((platform, bytes)) = signature {
         state
             .packages()
@@ -125,7 +125,7 @@ fn spawn_client(config_path: &Path) -> ClientUnderTest {
 /// A Configuration rollout reaches a poller and is applied — `APPLIED`, in sync, and the managed
 /// process restarted on the written file. No Server push is involved: the offer rides the reply to
 /// the Client's own next poll, which is the whole of how this transport learns anything.
-/// Verifies: ADR-0013, G-1
+/// Verifies: G-1
 #[tokio::test]
 async fn a_configuration_rollout_reaches_a_polling_client() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -278,7 +278,7 @@ async fn a_package_rollout_reaches_a_polling_client() {
     wait_until("the package to be reported Installed", || {
         let snapshot = state.snapshot();
         let agent = view(&snapshot, "myagent")?;
-        // The wire name is the Agent type (ADR-0026 clause 16), and this block states none — so it
+        // The wire name is the Agent type, and this block states none — so it
         // is the program's file name, `managed-agent`, not the Supervisor's own name `myagent`.
         let package = agent.packages.iter().find(|p| p.name == "managed-agent")?;
         (package.status == "Installed" && package.version == "2.0.0").then_some(())

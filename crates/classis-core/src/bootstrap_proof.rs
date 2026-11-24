@@ -1,9 +1,9 @@
-//! The proof an enrolment request carries (ADR-0039): the bootstrap certificate it enrols with,
+//! The proof an enrolment request carries: the bootstrap certificate it enrols with,
 //! and a signature made with that certificate's key over the new key. The Server reads which
 //! bootstrap certificate a request rests on from the proof, so a request holds over any hop — a
-//! Gateway in between included (ADR-0039).
+//! Gateway in between included.
 //!
-//! It has the renewal proof's shape (ADR-0021 clause 27): a requested SAN URI, [`URI_PREFIX`] and
+//! It has the renewal proof's shape: a requested SAN URI, [`URI_PREFIX`] and
 //! the base64url (no padding) of [`encode`]'s bytes, with a statement of its own so that neither
 //! proof can stand for the other.
 
@@ -23,7 +23,6 @@ pub fn statement(new_key_sha256: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// Verifies: ADR-0039
     #[test]
     fn a_proof_round_trips_and_a_torn_one_does_not_parse() {
         let content = encode(b"cert", b"sig");
@@ -34,7 +33,6 @@ mod tests {
 
     /// The bootstrap proof's statement is not the renewal proof's, for the same key: a signature
     /// over one never verifies as the other.
-    /// Verifies: ADR-0039
     #[test]
     fn its_statement_differs_from_the_renewal_proofs() {
         let key = [0x01, 0xfe];

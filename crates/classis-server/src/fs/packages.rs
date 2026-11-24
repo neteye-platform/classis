@@ -1,4 +1,4 @@
-//! The package store's metadata on the filesystem (ADR-0026, ADR-0037): the default adapter behind
+//! The package store's metadata on the filesystem: the default adapter behind
 //! [`PackageBackend`](crate::packages::PackageBackend) — one JSON file per Package under
 //! `<data_dir>/packages/`, its entries inside, each naming its artifact by hash. The bytes are the
 //! blob store's.
@@ -31,7 +31,7 @@ impl FsPackageBackend {
 
 impl PackageBackend for FsPackageBackend {
     /// A file that cannot be read, does not parse, or whose name disagrees with the identity it
-    /// holds fails the open naming it; so does anything else in the directory (ADR-0037 clause 6).
+    /// holds fails the open naming it; so does anything else in the directory.
     fn load(&self) -> Result<Vec<Package>, String> {
         let mut packages = Vec::new();
         for (stem, path) in super::json_files(&self.dir)? {
@@ -57,11 +57,11 @@ impl PackageBackend for FsPackageBackend {
                     .map(hex::decode)
                     .transpose()
                     .map_err(|e| format!("invalid signature in {}: {e}", path.display()))?;
-                // Held to the length a PackageSignature can have (ADR-0066 clause 3).
+                // Held to the length a PackageSignature can have.
                 if let Some(signature) = &signature {
                     if !crate::packages::signature_fits(signature) {
                         return Err(format!(
-                            "invalid signature in {}: {} bytes, not 1 to {} (ADR-0066)",
+                            "invalid signature in {}: {} bytes, not 1 to {}",
                             path.display(),
                             signature.len(),
                             classis_core::package::MAX_SIGNATURE_LEN
@@ -74,7 +74,7 @@ impl PackageBackend for FsPackageBackend {
                         platform,
                         content_hash,
                         size: entry.size,
-                        // Offered only once the store's verifier has checked it (ADR-0066).
+                        // Offered only once the store's verifier has checked it.
                         signature: signature.map(crate::packages::Signature::Withheld),
                     },
                 );
@@ -105,8 +105,8 @@ struct PackageMeta {
     entries: Vec<EntryMeta>,
 }
 
-/// One entry as persisted: its platform, the blob that holds its bytes, named by hash only
-/// (ADR-0037 clause 4), their size, and the operator's signature.
+/// One entry as persisted: its platform, the blob that holds its bytes, named by hash only,
+/// their size, and the operator's signature.
 ///
 /// Unknown fields are refused, so an entry an older Server wrote — a reference to a source, or a
 /// `content_hash_hex` beside an artifact file — fails the open naming the file rather than loading
@@ -119,7 +119,7 @@ struct EntryMeta {
     /// The SHA-256 of the artifact, lowercase hex: the blob's name, and what the Agent verifies.
     sha256: String,
     size: u64,
-    /// The operator's Ed25519 signature over this entry, hex (ADR-0033); absent while unsigned.
+    /// The operator's Ed25519 signature over this entry, hex; absent while unsigned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature_hex: Option<String>,
 }

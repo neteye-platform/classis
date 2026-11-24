@@ -1,4 +1,4 @@
-//! A `bootstrap.p12` as the Client opens it (ADR-0029 clause 7): a file an operator downloaded
+//! A `bootstrap.p12` as the Client opens it: a file an operator downloaded
 //! from the Server and carried to the host. Verifies: Q-2
 #![no_main]
 

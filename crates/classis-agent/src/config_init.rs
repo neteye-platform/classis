@@ -1,13 +1,13 @@
 //! The configuration file the questionnaire writes and edits — `service install --interactive`
-//! and `service config` (ADR-0019).
+//! and `service config`.
 //!
-//! A release artifact is the bare binary (ADR-0019), so a fresh host has nothing to copy from, and
+//! A release artifact is the bare binary, so a fresh host has nothing to copy from, and
 //! [`ClientConfig::load`](crate::config::ClientConfig::load) answers a missing file with the
 //! development defaults — a service that installs, starts, dials `127.0.0.1`, and manages nothing.
 //! This module is the way out of that state: it asks the handful of questions a fresh host cannot
 //! answer for itself, offering what the file already holds as each default, and writes the file
 //! or edits the keys it asked about. The bootstrap identity it asks for on a host not yet enrolled —
-//! a PEM pair, or a `bootstrap.p12` and its password (ADR-0029) — is handed back, not written:
+//! a PEM pair, or a `bootstrap.p12` and its password — is handed back, not written:
 //! [`enrol`](crate::service::enrol) carries the host to its first certificate with it.
 //!
 //! The split here is deliberate. [`ask`] is the only part that touches a terminal; [`render`] and
@@ -23,27 +23,27 @@ use dialoguer::{Input, Password};
 
 use crate::config::ClientConfig;
 
-/// The file name written inside the install root when the operator named no `--config` path
-/// (ADR-0019): one rule for systemd, launchd, and the SCM instead of an `/etc` vs `/Library` vs
+/// The file name written inside the install root when the operator named no `--config` path:
+/// one rule for systemd, launchd, and the SCM instead of an `/etc` vs `/Library` vs
 /// `%ProgramData%` policy per platform.
 pub const FILE_NAME: &str = "supervisor.toml";
 
-/// The name the questionnaire copies the answered Server CA to, beside [`FILE_NAME`] (ADR-0019),
-/// and the name the install looks for beside its program (ADR-0020).
+/// The name the questionnaire copies the answered Server CA to, beside [`FILE_NAME`],
+/// and the name the install looks for beside its program.
 pub const SERVER_CA_FILE: &str = "server-ca.pem";
 
-/// The bootstrap certificate the install looks for beside its program (ADR-0020).
+/// The bootstrap certificate the install looks for beside its program.
 pub const BOOTSTRAP_CERT_FILE: &str = "bootstrap.pem";
 
-/// The bootstrap certificate's private key the install looks for beside its program (ADR-0020).
+/// The bootstrap certificate's private key the install looks for beside its program.
 pub const BOOTSTRAP_KEY_FILE: &str = "bootstrap-key.pem";
 
 /// The bootstrap certificate and its key in one password-protected file, which the install looks
-/// for beside its program (ADR-0029 clause 6).
+/// for beside its program.
 pub const BOOTSTRAP_P12_FILE: &str = classis_core::pkcs12::FILE_NAME;
 
 /// The fleet's files that lie beside the program the install runs from, or in the directory
-/// `--fleet-files` names (ADR-0029 clause 6): the questionnaire's defaults, and what a
+/// `--fleet-files` names: the questionnaire's defaults, and what a
 /// non-interactive install takes without a question.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Beside {
@@ -66,8 +66,7 @@ impl Beside {
             .unwrap_or_default()
     }
 
-    /// What lies in the directory `--fleet-files` names, looked in instead of beside the program
-    /// (ADR-0029 clause 6).
+    /// What lies in the directory `--fleet-files` names, looked in instead of beside the program.
     ///
     /// # Errors
     /// Returns an error naming the flag when `dir` is not a readable directory.
@@ -98,7 +97,7 @@ impl Beside {
             }
             (None, None) => None,
         };
-        // Two identities would leave the install to guess which one is meant (ADR-0029 clause 6).
+        // Two identities would leave the install to guess which one is meant.
         let bootstrap = match (file(BOOTSTRAP_P12_FILE), pair) {
             (Some(p12), None)
                 if file(BOOTSTRAP_CERT_FILE).is_none() && file(BOOTSTRAP_KEY_FILE).is_none() =>
@@ -122,7 +121,7 @@ impl Beside {
         }
     }
 
-    /// The bootstrap identity a non-interactive install enrols with (ADR-0029 clause 10): the one
+    /// The bootstrap identity a non-interactive install enrols with: the one
     /// beside the program, when `config` reaches its Server over TLS and its state directory
     /// holds no issued certificate. A `bootstrap.p12` is opened here, with `password` — what
     /// `--bootstrap-password-file` read — so a file that does not open stops the install before
@@ -182,26 +181,26 @@ impl Beside {
 }
 
 /// What the questionnaire writes into the file. Everything else in `supervisor.toml` has a default
-/// that is right on a fresh host, and is written as a comment rather than as a value (ADR-0019).
+/// that is right on a fresh host, and is written as a comment rather than as a value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answers {
-    /// The Server's OpAMP endpoint; its scheme selects the transport (ADR-0013).
+    /// The Server's OpAMP endpoint; its scheme selects the transport.
     pub endpoint: String,
-    /// The operator's name for this Client, reported as `service.instance.name` (ADR-0016) — which
+    /// The operator's name for this Client, reported as `service.instance.name` — which
     /// of the fleet's Clients this is. Not its `service.name`: that is the Agent *type*, the
-    /// constant `supervisor` (ADR-0019), the same on every host and nothing to ask about.
+    /// constant `supervisor`, the same on every host and nothing to ask about.
     pub name: String,
-    /// The CA that signed the Server's certificate, for a `wss://` / `https://` endpoint (ADR-0013).
+    /// The CA that signed the Server's certificate, for a `wss://` / `https://` endpoint.
     /// The questionnaire always asks for it there; `None` for a loopback `ws://` / `http://`
     /// endpoint, or where no question was put — a packaged install.
     pub ca_file: Option<PathBuf>,
-    /// `[packages] self_update` (ADR-0018): whether the Server may replace this Client's own
+    /// `[packages] self_update`: whether the Server may replace this Client's own
     /// binary. The questionnaire does not ask — a new file says `true`; only `--no-self-update` and the MSI's checkbox write
     /// `false`. A new file says which of the two it is; an edited file keeps what it says.
     pub self_update: bool,
 }
 
-/// A bootstrap identity found on this host, not yet opened (ADR-0029 clause 6).
+/// A bootstrap identity found on this host, not yet opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootstrapFiles {
     /// `bootstrap.pem` and `bootstrap-key.pem`.
@@ -210,9 +209,9 @@ pub enum BootstrapFiles {
     Pkcs12(PathBuf),
 }
 
-/// The bootstrap identity (ADR-0021) the Client enrols with. Asked for only while the Client is
+/// The bootstrap identity the Client enrols with. Asked for only while the Client is
 /// not enrolled, and never copied or written into the file: the questionnaire's enrolment presents
-/// it once, to obtain the certificate the Server issues (ADR-0019 clause 17, ADR-0029 clause 8).
+/// it once, to obtain the certificate the Server issues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bootstrap {
     /// The bootstrap certificate and its private key, PEM, where they lie on this host.
@@ -246,16 +245,16 @@ pub struct Written {
     pub bootstrap: Option<Bootstrap>,
 }
 
-/// Ask, write, and report — the whole of `--interactive` and `service config` (ADR-0019).
+/// Ask, write, and report — the whole of `--interactive` and `service config`.
 ///
 /// `current` is what the file at `path` holds, or the defaults where there is none yet, and offers
-/// each question its default; where it holds nothing, what lies `beside` the program does
-/// (ADR-0020 clause 2). A new file is rendered whole; an existing one is edited in place,
+/// each question its default; where it holds nothing, what lies `beside` the program does.
+/// A new file is rendered whole; an existing one is edited in place,
 /// the asked keys changed and everything else — comments, `[[supervisor]]` blocks, the
 /// self-update consent — kept as written. `enrolled` says whether the state directory already
 /// holds an issued certificate, in which case no bootstrap identity is asked for. `password` is
 /// what `--bootstrap-password-file` read, which opens an answered `bootstrap.p12` instead of a
-/// question (ADR-0029 clause 8).
+/// question.
 ///
 /// The answered CA is copied beside the file first, and the file names the copy
 /// ([`copy_ca_beside`]).
@@ -298,7 +297,7 @@ pub fn run(
     }
     if existing {
         // The file may hold `[packages] archive_key`: the text read and the text written are wiped
-        // when they are dropped; what `toml_edit` keeps while it edits is its own (ADR-0057).
+        // when they are dropped; what `toml_edit` keeps while it edits is its own.
         let text = std::fs::read_to_string(path)
             .map(zeroize::Zeroizing::new)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -316,8 +315,8 @@ pub fn run(
 ///
 /// The configuration then depends on nothing outside its own directory for its trust: the copy
 /// survives the removal of wherever the operator brought the CA from, and it lives where the file
-/// and the state do — in the data root, which the install hands over and an uninstall keeps
-/// (ADR-0019). It is written owner-only to a temporary name and renamed into place, so a later
+/// and the state do — in the data root, which the install hands over and an uninstall keeps.
+/// It is written owner-only to a temporary name and renamed into place, so a later
 /// answer replaces a copy left by an earlier one, and an answer that already names the copy — the
 /// default an edit offers — is read before anything is written there.
 ///
@@ -385,9 +384,9 @@ fn write_owner_only(to: &Path, bytes: &[u8], owner: Option<(u32, u32)>) -> Resul
 /// Replace the configuration at `path` with `contents`, keeping who owns it.
 ///
 /// Through a temporary name and a rename, so a Client starting meanwhile reads the old file or the
-/// new one, never half of either. The new file is owner-only like the one it replaces (ADR-0019
-/// clause 18), and on Unix it is given back to the old file's owner: the file of a service that
-/// runs as its own account belongs to that account (ADR-0019 clause 13), and the administrator
+/// new one, never half of either. The new file is owner-only like the one it replaces, and on Unix
+/// it is given back to the old file's owner: the file of a service that
+/// runs as its own account belongs to that account, and the administrator
 /// editing it must not take it away.
 fn replace(path: &Path, contents: &str) -> Result<(), String> {
     let meta = std::fs::symlink_metadata(path)
@@ -446,19 +445,19 @@ fn table<'a>(
 }
 
 /// Write the first configuration from an endpoint *given* rather than asked for — the whole of
-/// `--endpoint` (ADR-0019 clause 42).
+/// `--endpoint`.
 ///
-/// This is the half of ADR-0019 a packaged install can reach. An MSI dialog and a `%post` script
-/// both have an answer and no terminal, and [`run`] is deliberately an error without one; the file
-/// they need is the same file, rendered by the same [`render`] and created by the same
-/// [`write_new`], so the never-overwrite rule and the `0600` mode are not restated here.
+/// This is the half of the install questionnaire a packaged install can reach. An MSI dialog and a
+/// `%post` script both have an answer and no terminal, and [`run`] is deliberately an error without
+/// one; the file they need is the same file, rendered by the same [`render`] and created by the
+/// same [`write_new`], so the never-overwrite rule and the `0600` mode are not restated here.
 ///
 /// The endpoint and the self-update consent are taken, and for a `wss://` / `https://` endpoint
 /// the Server CA that lies `beside` the program, copied beside the file as the questionnaire's
-/// answer would be (ADR-0066 clause 14). The client identity comes from
+/// answer would be. The client identity comes from
 /// an enrolment an operator approves, which the install runs with a bootstrap pair beside the
-/// program (ADR-0020 clause 4); a file written without one fails the install's validation and
-/// stays on disk to be completed (ADR-0019).
+/// program; a file written without one fails the install's validation and
+/// stays on disk to be completed.
 ///
 /// # Errors
 /// Returns an error if the endpoint is not one the loader would accept, or if the file cannot be
@@ -496,8 +495,8 @@ pub fn run_with_endpoint(
 
 /// Whether a configuration is already there — in which case an installer's answer keeps it.
 ///
-/// ADR-0019's rule is that a file somebody answered or edited is never overwritten by a later
-/// install, and a packaged re-install is exactly the later install it had in mind. A leftover
+/// The rule is that a file somebody answered or edited is never overwritten by a later install,
+/// and a packaged re-install is exactly the later install it had in mind. A leftover
 /// `[auth]` in it is no reason to fail or to warn: the Client ignores the section.
 fn keeping_existing(path: &Path) -> bool {
     if path.exists() {
@@ -510,7 +509,7 @@ fn keeping_existing(path: &Path) -> bool {
 /// Put the questions to the operator, each offering what `current` holds as its default. The only
 /// function here that reads a terminal.
 ///
-/// The bootstrap identity is asked for only when `enrolled` is `false` (ADR-0019 clause 17), and
+/// The bootstrap identity is asked for only when `enrolled` is `false`, and
 /// comes back beside the answers rather than in them: it is enrolled with, not written.
 ///
 /// # Errors
@@ -555,9 +554,9 @@ pub fn ask(
         None
     };
 
-    // The bootstrap identity (ADR-0021) a host not yet enrolled enrols with: a PEM certificate and
-    // its key, or a PKCS#12 file and its password (ADR-0029 clause 8). There is no answer without
-    // one, and no question asks for a credential (ADR-0019) — the password opens a file on this
+    // The bootstrap identity a host not yet enrolled enrols with: a PEM certificate and
+    // its key, or a PKCS#12 file and its password. There is no answer without
+    // one, and no question asks for a credential — the password opens a file on this
     // host and is sent nowhere. An enrolled host renews what it was issued and is not asked.
     let bootstrap = if enrolled {
         println!("enrolled: this Client holds a certificate the Server issued");
@@ -575,7 +574,7 @@ pub fn ask(
             endpoint: endpoint.trim().to_string(),
             name: name.trim().to_string(),
             ca_file,
-            // Not asked (ADR-0066 clause 11): a new file writes the consent, and an edited file keeps
+            // Not asked: a new file writes the consent, and an edited file keeps
             // the consent it states.
             self_update: current.self_update_package().is_some(),
         },
@@ -615,7 +614,7 @@ fn ask_bootstrap(
         }
         loop {
             // `dialoguer` hands back a plain copy of what it held wiped; it moves into a buffer
-            // wiped on drop here (ADR-0057).
+            // wiped on drop here.
             let typed = zeroize::Zeroizing::new(
                 Password::new()
                     .with_prompt(format!("Password of {}", cert.display()))
@@ -642,8 +641,7 @@ fn ask_bootstrap(
     }
 }
 
-/// Whether an answered path is read as PKCS#12: by its extension, `.p12` or `.pfx` in any case
-/// (ADR-0029 clause 8).
+/// Whether an answered path is read as PKCS#12: by its extension, `.p12` or `.pfx` in any case.
 #[must_use]
 pub fn is_pkcs12_path(path: &Path) -> bool {
     path.extension()
@@ -651,10 +649,10 @@ pub fn is_pkcs12_path(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("p12") || e.eq_ignore_ascii_case("pfx"))
 }
 
-/// The password a password file holds: its first line, without its `\n` or `\r\n` (ADR-0029
-/// clause 10). The file is read once, at most 4 KiB of it, and left as it is. `flag` is the option
+/// The password a password file holds: its first line, without its `\n` or `\r\n`. The file is read
+/// once, at most 4 KiB of it, and left as it is. `flag` is the option
 /// that named it, `--bootstrap-password-file` here, for the error. The file's bytes and the
-/// password are held in buffers wiped when they are dropped (ADR-0057).
+/// password are held in buffers wiped when they are dropped.
 ///
 /// # Errors
 /// Returns an error naming the flag when the file cannot be read or its first line is empty.
@@ -697,8 +695,8 @@ fn ask_path(prompt: &str, default: Option<String>) -> Result<PathBuf, String> {
     Ok(PathBuf::from(answer.trim()))
 }
 
-/// The default of each question: what the configuration holds (ADR-0019 clause 16), else what
-/// lies beside the program (ADR-0020 clause 2). On a fresh host `current` is the loader's
+/// The default of each question: what the configuration holds, else what
+/// lies beside the program. On a fresh host `current` is the loader's
 /// defaults, so the endpoint and name are suggested, and the files and the key are where the
 /// program found them.
 #[derive(Debug, PartialEq, Eq)]
@@ -734,7 +732,7 @@ impl Defaults {
 ///
 /// Values go through `toml`'s own string encoder rather than into `"{}"`: a name may contain a
 /// quote, and a Windows path is full of backslashes. The file has no `[auth]` section: the Client
-/// sends no credential (ADR-0019 clause 17).
+/// sends no credential.
 #[must_use]
 pub fn render(answers: &Answers) -> String {
     let mut out = String::new();
@@ -804,7 +802,7 @@ fn commented_top_level_keys() -> &'static str {
 ///
 /// `create_new` is what makes "do not overwrite" a property of the syscall rather than of a check
 /// that raced. The mode is set in the same call for the same reason: the file names where the
-/// private key lies and may hold `[packages] archive_key` (ADR-0019 clause 18), before any later
+/// private key lies and may hold `[packages] archive_key`, before any later
 /// `set_permissions` could narrow it.
 ///
 /// # Errors
@@ -860,8 +858,8 @@ fn prompt_failed(e: dialoguer::Error) -> String {
 mod tests {
     use super::*;
 
-    /// The baseline: everything optional declined, except the self-update consent, which since
-    /// ADR-0018 is what declining nothing means.
+    /// The baseline: everything optional declined, except the self-update consent, which is
+    /// what declining nothing means.
     fn answers() -> Answers {
         Answers {
             endpoint: "wss://fleet.example.com/v1/opamp".to_string(),
@@ -874,8 +872,7 @@ mod tests {
     /// What the questionnaire writes names no client identity — the bootstrap pair is enrolled
     /// with, not written — and the Client starts with it once the enrolment has put the issued
     /// certificate into the state directory, which an install does before it registers the
-    /// service (ADR-0019 clauses 17, 19).
-    /// Verifies: ADR-0019
+    /// service.
     #[test]
     fn a_complete_answer_writes_a_file_the_client_starts_with() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -896,7 +893,6 @@ mod tests {
 
     /// The questionnaire suggests the loader's default, and that default is one its own endpoint
     /// rule accepts: TLS, to the loopback literal — never a plaintext or a host-name answer.
-    /// Verifies: ADR-0019
     #[test]
     fn the_suggested_endpoint_is_tls_on_the_loopback() {
         let suggested = ClientConfig::default().endpoint;
@@ -907,8 +903,7 @@ mod tests {
 
     /// A packaged install has an endpoint and no terminal: the file it writes carries no identity,
     /// fails the validation the Client applies at startup, and stays on disk to be completed rather
-    /// than answered again (ADR-0019).
-    /// Verifies: ADR-0019
+    /// than answered again.
     #[test]
     fn installer_answers_alone_fail_validation_and_stay_on_disk() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -927,8 +922,7 @@ mod tests {
     }
 
     /// The endpoint rule is the startup rule: plaintext only to a loopback literal, and the name
-    /// `localhost` is not one (ADR-0019).
-    /// Verifies: ADR-0019
+    /// `localhost` is not one.
     #[test]
     fn a_plaintext_endpoint_is_accepted_only_on_a_loopback_literal() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -954,7 +948,6 @@ mod tests {
 
     /// The point of the whole exercise: what the questionnaire writes must load, and must load as
     /// the answers that were given.
-    /// Verifies: ADR-0019
     #[test]
     fn the_rendered_file_loads_as_what_was_answered() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -976,8 +969,7 @@ mod tests {
     }
 
     /// No answer puts an `[auth]` section in the file: the questionnaire asks for no credential,
-    /// and the Client sends none (ADR-0019 clause 17).
-    /// Verifies: ADR-0019
+    /// and the Client sends none.
     #[test]
     fn a_rendered_file_has_no_auth_section() {
         let given = Answers {
@@ -999,9 +991,8 @@ mod tests {
         }
     }
 
-    /// ADR-0019 clause 42: the packaged path has to produce a file the loader accepts, carrying the
+    /// The packaged path has to produce a file the loader accepts, carrying the
     /// endpoint that was given — the same guarantee the questionnaire has, without a terminal.
-    /// Verifies: ADR-0019
     #[test]
     fn an_endpoint_given_is_written_and_loads() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1017,14 +1008,13 @@ mod tests {
 
         let loaded = ClientConfig::load(&path).expect("the written file loads");
         assert_eq!(loaded.endpoint, "wss://fleet.example.com/v1/opamp");
-        // The self-update consent the installer passed is written, standing by default (ADR-0018).
+        // The self-update consent the installer passed is written, standing by default.
         assert_eq!(loaded.self_update_package(), Some("supervisor"));
     }
 
     /// The withdrawal has a non-interactive twin too (`--no-self-update`, the MSI's cleared
     /// checkbox): it writes `[packages] self_update = false` rather than omitting the key, because
     /// an omitted key is the consent.
-    /// Verifies: ADR-0018
     #[test]
     fn an_installer_can_withhold_the_self_update_consent() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1049,7 +1039,6 @@ mod tests {
 
     /// The file is validated *before* it exists, not after. An install that wrote an unusable file
     /// and then failed to load it would leave the operator fixing a file they never typed.
-    /// Verifies: ADR-0019
     #[test]
     fn a_bad_endpoint_is_refused_before_anything_is_written() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1061,9 +1050,9 @@ mod tests {
         assert!(!path.exists(), "nothing may be left behind");
     }
 
-    /// ADR-0019 clause 16 holds on the packaged path too: a `.deb` reinstalled over a configured
-    /// host must not eat what somebody answered into the first install, or edited since.
-    /// Verifies: ADR-0019
+    /// Never overwriting an existing file holds on the packaged path too: a `.deb` reinstalled over
+    /// a configured host must not eat what somebody answered into the first install, or edited
+    /// since.
     #[test]
     fn an_endpoint_given_never_overwrites_an_existing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1105,10 +1094,9 @@ mod tests {
     }
 
     /// A declined section is absent rather than empty — a bare `[tls]` would say nothing.
-    /// `[packages]` is the one exception and it is the point of ADR-0018: an absent `self_update`
+    /// `[packages]` is the one exception, and deliberately: an absent `self_update`
     /// *means* consent, so both answers are written out, `self_update = true` or `= false`. A
     /// reader of the file can tell which it is.
-    /// Verifies: ADR-0018
     #[test]
     fn declined_sections_are_absent_rather_than_empty_and_the_consent_is_always_written() {
         let rendered = render(&answers());
@@ -1187,8 +1175,7 @@ mod tests {
         assert_eq!(loaded.self_update_package(), Some("supervisor"));
     }
 
-    /// The refusal that protects answers typed once (ADR-0019).
-    /// Verifies: ADR-0019
+    /// The refusal that protects answers typed once.
     #[test]
     fn an_existing_file_is_never_overwritten() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1203,9 +1190,8 @@ mod tests {
     }
 
     /// Without a terminal there is nobody to answer, and blocking a provisioning run forever is
-    /// the failure mode this refuses (ADR-0019). Under `cargo test` stdin is not a tty, which is
+    /// the failure mode this refuses. Under `cargo test` stdin is not a tty, which is
     /// exactly the condition being asserted.
-    /// Verifies: ADR-0019
     #[test]
     fn interactive_without_a_terminal_fails_instead_of_blocking() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1222,7 +1208,6 @@ mod tests {
         assert!(!path.exists(), "nothing was written");
     }
 
-    /// Verifies: ADR-0019
     #[test]
     fn the_file_is_not_readable_by_the_rest_of_the_machine() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1249,7 +1234,7 @@ mod tests {
             (SERVER_CA_FILE, "ca"),
             (BOOTSTRAP_CERT_FILE, "cert"),
             (BOOTSTRAP_KEY_FILE, "key"),
-            // What `pki init` still writes offline, and nothing reads (ADR-0066 clause 12).
+            // What `pki init` still writes offline, and nothing reads.
             (
                 "package-signing-key.pub",
                 &format!("{}\n", "ab".repeat(32))[..],
@@ -1260,8 +1245,7 @@ mod tests {
     }
 
     /// The fleet's files are found by their exact names; half a bootstrap pair is said and not
-    /// taken, and a package key lying there is neither looked for nor named (ADR-0066 clause 12).
-    /// Verifies: ADR-0020, ADR-0066
+    /// taken, and a package key lying there is neither looked for nor named.
     #[test]
     fn the_fleets_files_are_found_beside_the_program_by_their_names() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1284,9 +1268,7 @@ mod tests {
         assert_eq!(beside.warnings.len(), 1, "{:?}", beside.warnings);
     }
 
-    /// Each default is what the file holds, else what lies beside the program (ADR-0020
-    /// clause 2).
-    /// Verifies: ADR-0020
+    /// Each default is what the file holds, else what lies beside the program.
     #[test]
     fn a_default_is_what_the_file_holds_else_what_lies_beside_the_program() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1317,9 +1299,7 @@ mod tests {
     }
 
     /// `--endpoint` writes the CA it finds beside the program, as a copy beside the file, and no
-    /// package key lying there; a loopback `ws://` takes no CA, and a file that exists is kept
-    /// (ADR-0066 clause 14).
-    /// Verifies: ADR-0066
+    /// package key lying there; a loopback `ws://` takes no CA, and a file that exists is kept.
     #[test]
     fn an_endpoint_install_takes_the_ca_beside_the_program() {
         let program = tempfile::tempdir().expect("tempdir");
@@ -1365,8 +1345,7 @@ mod tests {
     }
 
     /// Unasked, the pair beside the program enrols a Client over TLS that holds no issued
-    /// certificate, and only such a one (ADR-0020 clause 4).
-    /// Verifies: ADR-0020
+    /// certificate, and only such a one.
     #[test]
     fn an_unasked_install_enrols_with_the_pair_beside_the_program_until_enrolled() {
         let program = tempfile::tempdir().expect("tempdir");
@@ -1422,8 +1401,7 @@ mod tests {
     }
 
     /// A `bootstrap.p12` is found as a bootstrap identity; lying beside a file of the pair,
-    /// neither is taken; `--fleet-files` names a directory that must be one (ADR-0029 clause 6).
-    /// Verifies: ADR-0029
+    /// neither is taken; `--fleet-files` names a directory that must be one.
     #[test]
     fn a_bootstrap_p12_is_found_alone_and_never_beside_the_pair() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1481,8 +1459,7 @@ mod tests {
 
     /// Unasked, a `bootstrap.p12` enrols with the password `--bootstrap-password-file` gives, and
     /// fails the install without it, under a password that does not open it, or when the flag has
-    /// no file to open (ADR-0029 clause 10).
-    /// Verifies: ADR-0029
+    /// no file to open.
     #[test]
     fn an_unasked_install_opens_a_bootstrap_p12_with_the_password_file_or_fails() {
         let program = tempfile::tempdir().expect("tempdir");
@@ -1531,9 +1508,8 @@ mod tests {
         );
     }
 
-    /// The password is the file's first line without its line ending; an empty one is refused
-    /// (ADR-0029 clause 10). `.p12` and `.pfx` are read as PKCS#12 (clause 8).
-    /// Verifies: ADR-0029
+    /// The password is the file's first line without its line ending; an empty one is refused.
+    /// `.p12` and `.pfx` are read as PKCS#12.
     #[test]
     fn a_password_file_gives_its_first_line_and_a_p12_path_is_known_by_its_extension() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1570,7 +1546,6 @@ mod tests {
 
     /// The answered CA lands beside the configuration under a fixed name, owner-only, and the
     /// rendered file names the copy — so it loads with the original gone.
-    /// Verifies: ADR-0019
     #[test]
     fn the_answered_ca_is_copied_beside_the_configuration() {
         let from = tempfile::tempdir().expect("tempdir");
@@ -1617,7 +1592,6 @@ mod tests {
     /// The default an edit offers for the CA is the copy itself: answering it reads the file
     /// before the copy is written, so it is kept rather than truncated. A copy left by an earlier
     /// answer is replaced by a new one.
-    /// Verifies: ADR-0019
     #[test]
     fn a_copy_onto_itself_keeps_the_file_and_an_old_copy_is_replaced() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1650,8 +1624,7 @@ mod tests {
 
     /// An edit changes the keys the questionnaire asked about and nothing else: the operator's
     /// comments, a `[[supervisor]]` block, the self-update consent and a key not asked about stay
-    /// byte for byte (ADR-0019 clause 16).
-    /// Verifies: ADR-0019
+    /// byte for byte.
     #[test]
     fn an_edit_changes_the_asked_keys_and_keeps_the_rest() {
         let before = "# my notes\n\
@@ -1702,7 +1675,6 @@ mod tests {
 
     /// An edit of a file that has no `[tls]` or `[packages]` yet adds them as tables, and the
     /// file still loads — the top-level keys stay top-level.
-    /// Verifies: ADR-0019
     #[test]
     fn an_edit_adds_what_the_file_did_not_have_and_it_loads() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1723,8 +1695,7 @@ mod tests {
     }
 
     /// Every question offers what the file holds; a fresh host gets the loader's defaults, which
-    /// suggest an endpoint and a name and no file or key (ADR-0019 clause 16).
-    /// Verifies: ADR-0019
+    /// suggest an endpoint and a name and no file or key.
     #[test]
     fn the_defaults_are_what_the_file_holds() {
         let fresh = Defaults::of(&ClientConfig::default(), &Beside::default());
@@ -1757,8 +1728,7 @@ mod tests {
 
     /// The bootstrap pair is asked for while the state directory holds no issued certificate, and
     /// not after — a bootstrap certificate the file names does not count as enrolled, the issued
-    /// pair alone does (ADR-0019 clause 17). `ask` reads exactly this predicate.
-    /// Verifies: ADR-0019
+    /// pair alone does. `ask` reads exactly this predicate.
     #[test]
     fn the_bootstrap_pair_is_asked_only_before_enrolment() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1778,7 +1748,6 @@ mod tests {
         assert!(config.is_enrolled());
     }
 
-    /// Verifies: ADR-0019
     #[test]
     fn an_endpoint_is_validated_by_the_loaders_own_rule() {
         assert!(validate_endpoint("wss://fleet.example.com/v1/opamp").is_ok());
@@ -1787,7 +1756,6 @@ mod tests {
         assert!(err.contains("must start with"), "{err}");
     }
 
-    /// Verifies: ADR-0019
     #[test]
     fn the_server_ca_is_asked_for_where_tls_applies() {
         assert!(is_tls_endpoint("wss://x/v1/opamp"));

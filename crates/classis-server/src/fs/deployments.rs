@@ -1,4 +1,4 @@
-//! Deployments on the filesystem (ADR-0026): the default adapter behind
+//! Deployments on the filesystem: the default adapter behind
 //! [`DeploymentBackend`](crate::deployments::DeploymentBackend).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +10,7 @@ use crate::configs::validate_name;
 use crate::deployments::{check_selector, Deployment, DeploymentBackend};
 use crate::packages::PackageId;
 
-/// One JSON file per Deployment under `<data_dir>/deployments/`, owner-only (ADR-0037).
+/// One JSON file per Deployment under `<data_dir>/deployments/`, owner-only.
 pub struct FsDeploymentBackend {
     dir: PathBuf,
 }
@@ -62,7 +62,7 @@ impl DeploymentBackend for FsDeploymentBackend {
 
 /// A Deployment as persisted: `<data_dir>/deployments/<name>.json`. Unknown fields are refused, so a
 /// file an older Server wrote — with `signatures` beside its Packages — is named rather than read
-/// as something it is not: `server migrate` moves it (ADR-0037).
+/// as something it is not: `server migrate` moves it.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeploymentMeta {
@@ -70,7 +70,7 @@ struct DeploymentMeta {
     selector: BTreeMap<String, String>,
     #[serde(default)]
     packages: Vec<PackageRefMeta>,
-    /// The Configurations it holds, by name (ADR-0034). Absent in a file that holds none.
+    /// The Configurations it holds, by name. Absent in a file that holds none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     configurations: Vec<String>,
 }
@@ -133,7 +133,6 @@ mod tests {
     }
 
     /// The whole store survives a reopen.
-    /// Verifies: ADR-0026, ADR-0034
     #[test]
     fn a_deployment_survives_a_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -157,7 +156,7 @@ mod tests {
         assert_eq!(
             canary.configurations.iter().collect::<Vec<_>>(),
             ["base"],
-            "the Configurations it holds survive too (ADR-0034)"
+            "the Configurations it holds survive too"
         );
 
         assert!(reopened.delete("canary").expect("delete"));
@@ -169,7 +168,6 @@ mod tests {
 
     /// A file this Server did not write fails the open, naming it. A channel that silently vanished
     /// would withdraw nothing and offer nothing, and say neither.
-    /// Verifies: ADR-0026
     #[test]
     fn an_unreadable_file_fails_the_open_and_names_it() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -193,7 +191,6 @@ mod tests {
 
     /// The store is owner-only, and so is every file in it: a Selector says which hosts a fleet
     /// operator considers a channel, which is not another local user's business.
-    /// Verifies: ADR-0026
     #[cfg(unix)]
     #[test]
     fn the_store_and_its_files_are_owner_only() {

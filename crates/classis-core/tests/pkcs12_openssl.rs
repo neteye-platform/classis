@@ -1,4 +1,4 @@
-//! The bootstrap PKCS#12 file against the tool operators already have (ADR-0029): a file OpenSSL 3
+//! The bootstrap PKCS#12 file against the tool operators already have: a file OpenSSL 3
 //! writes with its defaults opens, and one it writes with `-legacy` — RC2 and 3DES — is refused,
 //! since the legacy schemes are not compiled in. Both were written by OpenSSL 3.0 under the
 //! password below, the first with `openssl pkcs12 -export -iter 1000 -maciter -macalg sha256`, the
@@ -8,7 +8,6 @@ use classis_core::pkcs12::file::{open, OpenError};
 
 const PASSWORD: &str = "fuzzing password";
 
-/// Verifies: ADR-0029
 #[test]
 fn a_file_openssl_3_writes_by_default_opens_and_a_legacy_one_is_refused() {
     let current = include_bytes!("data/openssl-3-bootstrap.p12");

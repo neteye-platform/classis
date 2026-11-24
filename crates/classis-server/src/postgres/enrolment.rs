@@ -1,4 +1,4 @@
-//! The enrolment window and its queue in PostgreSQL (ADR-0050 clause 9): the PostgreSQL adapter
+//! The enrolment window and its queue in PostgreSQL: the PostgreSQL adapter
 //! behind [`EnrolmentStore`](crate::enrolment::EnrolmentStore) — the window's end in one row, each
 //! pending request in a row of its own, saved in one transaction before the act that changed them
 //! is answered.
@@ -167,14 +167,12 @@ mod tests {
         assert_eq!(open().load().expect("load"), Some(Persisted::default()));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_enrolment_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
         contract(&|| Box::new(FsEnrolmentStore::open(dir.path())));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_enrolment_port_contract_holds_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -197,7 +195,6 @@ mod tests {
         assert_eq!(store.load().expect("load"), Some(before));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn an_enrolment_save_that_fails_part_way_leaves_nothing_of_itself_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -209,7 +206,6 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn an_enrolment_save_that_fails_part_way_leaves_nothing_of_itself_on_postgres() {
         let Some(test) = TestDatabase::named() else {

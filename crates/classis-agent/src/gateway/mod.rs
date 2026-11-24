@@ -1,4 +1,4 @@
-//! Gateway Mode (ADR-0015): the Client at a network boundary.
+//! Gateway Mode: the Client at a network boundary.
 //!
 //! It is an OpAMP **server** downstream and an OpAMP **client** upstream, and it folds many
 //! downstream connections onto a small pool of upstream ones. What it does *not* do is as
@@ -14,8 +14,8 @@
 //! picks its transport by URL scheme, so serving only one would silently exclude half of them),
 //! [`pool`] holds the upstream connections, [`registry`] routes replies back by `instance_uid`, and
 //! [`cache`] holds the uploaded artifacts the Gateway relays offers of and serves them on the
-//! download route to the hosts they were offered to (ADR-0026).
-//! The endpoint's communication is `opamp::server`'s, the one the Server sits on too (ADR-0010);
+//! download route to the hosts they were offered to.
+//! The endpoint's communication is `opamp::server`'s, the one the Server sits on too;
 //! what is the Gateway's is the [`Forwarding`] handler behind it.
 
 pub mod cache;
@@ -63,19 +63,19 @@ const EXCHANGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30)
 struct Forwarding {
     pool: Pool,
     registry: Arc<Registry>,
-    /// The most distinct Agents one downstream connection may carry (ADR-0015): past it a report
+    /// The most distinct Agents one downstream connection may carry: past it a report
     /// for a *new* Agent is dropped, so a single peer cannot grow the routing state without bound.
     max_agents: usize,
-    /// What the Server revoked, which this Gateway refuses (ADR-0015 clause 14).
+    /// What the Server revoked, which this Gateway refuses.
     revocations: RevocationList,
-    /// Tells a member from an enrolling peer (ADR-0039 clause 4).
+    /// Tells a member from an enrolling peer.
     members: Members,
-    /// The version of the revocation list the bindings were last held against (ADR-0058
-    /// clause 4), so an unchanged list is not asked about every host again.
+    /// The version of the revocation list the bindings were last held against, so an unchanged list
+    /// is not asked about every host again.
     list_checked: std::sync::atomic::AtomicU64,
 }
 
-/// What tells a downstream member from an **enrolling peer** (ADR-0039 clause 4). Without
+/// What tells a downstream member from an **enrolling peer**. Without
 /// `bootstrap_ca_file` the handshake trusts the client CA alone, so every peer that passed it is a
 /// member. With it, a member is a peer whose certificate a CA of `client_ca_file` issued directly —
 /// named as its issuer and signed with its key, as the Server tells the two apart — and any other
@@ -115,8 +115,8 @@ impl Members {
 }
 
 /// Why a plain-HTTP report of an enrolling peer is not forwarded, or `None` when it is the one
-/// thing an enrolling peer sends (ADR-0039 clause 11): its identity, its sequence number and
-/// capabilities, and a certificate signing request carrying a bootstrap proof (ADR-0039 clause 7)
+/// thing an enrolling peer sends: its identity, its sequence number and
+/// capabilities, and a certificate signing request carrying a bootstrap proof
 /// — nothing a member reports, no description, health, effective configuration, configuration
 /// status, package statuses, components, connection-settings status, flags, goodbye or custom
 /// message — whose proof embeds, byte for byte, the certificate `presented` the peer presented in
@@ -150,7 +150,7 @@ fn not_an_enrolment(report: &AgentToServer, presented: &[u8]) -> Option<&'static
     if *report != only {
         return Some("an enrolling peer sends a certificate signing request and nothing else");
     }
-    // Read as the Server reads it: one PEM block, nothing around it (ADR-0039).
+    // Read as the Server reads it: one PEM block, nothing around it.
     let Ok(Some(encoded)) = classis_core::csr::der(&csr.csr).and_then(|der| {
         classis_core::csr::requested_uri(&der, classis_core::bootstrap_proof::URI_PREFIX)
     }) else {
@@ -190,7 +190,7 @@ impl Default for Timings {
 
 /// Serves the downstream endpoint until `shutdown` fires.
 ///
-/// Mutual TLS is per hop (ADR-0039 clause 4): the downstream hop serves TLS 1.3 from
+/// Mutual TLS is per hop: the downstream hop serves TLS 1.3 from
 /// `[gateway.tls]`, and every downstream peer must present a certificate that chains to its
 /// `client_ca_file`, or to its `bootstrap_ca_file` where one is named — the access-control boundary
 /// of the hop. Downstream Agents travel upstream under this Gateway's own member certificate, so
@@ -225,7 +225,7 @@ pub async fn run_on(
 }
 
 /// [`run_on`] with the header bound tightened — what a test waits out instead of the 30 seconds
-/// every OpAMP listener applies (ADR-0010).
+/// every OpAMP listener applies.
 ///
 /// # Errors
 /// As [`run_on`].
@@ -262,7 +262,7 @@ pub async fn run_on_timed(
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot prepare the gateway endpoint {listen}: {e}"))?;
-    // Mutual TLS 1.3 and nothing less (ADR-0015); the load refused a Gateway without it.
+    // Mutual TLS 1.3 and nothing less; the load refused a Gateway without it.
     let tls = gateway
         .tls
         .as_ref()
@@ -272,7 +272,7 @@ pub async fn run_on_timed(
     let registry = Arc::new(Registry::new(cache.clone()));
     let revocations = RevocationList::new(timings.revocation_max_age);
     // Its first peers are not refused for want of a list, nor kept waiting for a Server that does
-    // not answer (ADR-0015 clause 14).
+    // not answer.
     let _ = tokio::time::timeout(
         REVOCATION_FIRST_WAIT,
         revocations::update(&revocations, &config),
@@ -299,15 +299,13 @@ pub async fn run_on_timed(
         members,
         list_checked: std::sync::atomic::AtomicU64::new(u64::MAX),
     });
-    // What the first list names ends now; what a later one names, when it comes (ADR-0058
-    // clause 4).
+    // What the first list names ends now; what a later one names, when it comes.
     let mut changes = handler.revocations.subscribe();
     changes.mark_unchanged();
     handler.end_certificates(cache::now()).await;
     tokio::spawn(keep_bindings(handler.clone(), changes, shutdown.clone()));
     // The receive and send limits the Baseline requires, enforced per hop; beside the OpAMP
-    // endpoint, the download route the Agents behind this Gateway resolve their offers against
-    // (ADR-0026 clause 45).
+    // endpoint, the download route the Agents behind this Gateway resolve their offers against.
     let app = opamp::server::router(handler, Settings::new(config.max_message_size_bytes))
         .merge(cache::router(downloads));
 
@@ -336,8 +334,8 @@ pub async fn run_on_timed(
 }
 
 /// Until `shutdown` fires: ends the bindings of hosts whose certificates ended whenever the
-/// revocation list changes and once an hour (ADR-0058 clause 4), and once an hour, while the
-/// bindings' store cannot be read, says so again (clause 2).
+/// revocation list changes and once an hour, and once an hour, while the
+/// bindings' store cannot be read, says so again.
 async fn keep_bindings(
     forwarding: Arc<Forwarding>,
     mut changes: tokio::sync::watch::Receiver<u64>,
@@ -366,8 +364,8 @@ async fn keep_bindings(
     }
 }
 
-/// Writes the order of the bindings' reports once a minute until `shutdown` fires (ADR-0058
-/// clause 3); the Gateway writes it once more when its endpoint has drained.
+/// Writes the order of the bindings' reports once a minute until `shutdown` fires; the Gateway
+/// writes it once more when its endpoint has drained.
 async fn write_reports(cache: Arc<cache::PackageCache>, mut shutdown: Shutdown) {
     let every = std::time::Duration::from_secs(60);
     let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
@@ -379,7 +377,7 @@ async fn write_reports(cache: Arc<cache::PackageCache>, mut shutdown: Shutdown) 
     }
 }
 
-/// The material the downstream endpoint serves with (ADR-0039 clause 4), and what tells its members
+/// The material the downstream endpoint serves with, and what tells its members
 /// from its enrolling peers: a client certificate that chains to `client_ca_file` — or, where
 /// `bootstrap_ca_file` names one, to that bootstrap CA — is **mandatory** in the handshake. A CA in
 /// both files could not be told apart, so it fails startup naming both keys.
@@ -414,7 +412,7 @@ fn server_tls(tls: &GatewayTlsConfig) -> Result<(ServerTls, Members), String> {
     Ok((
         ServerTls {
             // `opamp` takes the key as its own buffer; the copy is made here and the one read is
-            // wiped (ADR-0057 clause 3).
+            // wiped.
             identity: Identity {
                 cert_pem: crate::tls::certificates_file(&tls.cert_file)?,
                 key_pem: crate::tls::key_file(&tls.key_file)?.to_vec(),
@@ -452,20 +450,18 @@ struct Downstream {
     /// Every Agent this peer turned out to carry, so all of them are released when it goes. A set,
     /// not a list: membership is checked per report, and the cap bounds how large it grows.
     carried: HashSet<InstanceUid>,
-    /// Why the socket was ended from this side, for its close frame (ADR-0015 clause 14).
+    /// Why the socket was ended from this side, for its close frame.
     ended: Arc<Mutex<Option<&'static str>>>,
     /// The certificate it was admitted with, which every report is judged by again.
     certificate: Vec<u8>,
-    /// The host that certificate names, which the offers relayed over it are recorded for
-    /// (ADR-0039 clause 6).
+    /// The host that certificate names, which the offers relayed over it are recorded for.
     host: Option<String>,
-    /// The host that certificate speaks as, which the `instance_uid`s it reports for are bound to
-    /// (ADR-0039 clause 6): the one it names, else the one the Server derives for it.
+    /// The host that certificate speaks as, which the `instance_uid`s it reports for are bound to:
+    /// the one it names, else the one the Server derives for it.
     speaker: String,
-    /// Where that certificate ends, which its reports move the host's kept end to (ADR-0058
-    /// clause 3).
+    /// Where that certificate ends, which its reports move the host's kept end to.
     end: policy::End,
-    /// The certificate chains to the bootstrap CA alone (ADR-0039 clause 4): this peer may relay
+    /// The certificate chains to the bootstrap CA alone: this peer may relay
     /// one enrolment request and nothing else, and binds nothing.
     enrolling: bool,
 }
@@ -536,8 +532,7 @@ impl Handler for Forwarding {
         request: &RequestInfo<'_>,
     ) -> Result<(Downstream, Option<Replies>), Rejection> {
         // No Agent is carried while the bindings' store cannot be read; an enrolling peer's one
-        // plain-HTTP request binds nothing, so the exchange is let through to be judged
-        // (ADR-0058 clause 3).
+        // plain-HTTP request binds nothing, so the exchange is let through to be judged.
         if request.transport == Transport::WebSocket && self.registry.cache().unreadable().is_some()
         {
             return Err(Rejection {
@@ -546,7 +541,7 @@ impl Handler for Forwarding {
                 message: cache::STORE_UNREADABLE.to_string(),
             });
         }
-        // The one admission refusal beyond the handshake, and it is the Server's (ADR-0015 clause 14).
+        // The one admission refusal beyond the handshake, and it is the Server's.
         let certificate = request
             .extensions
             .get::<PeerCertificate>()
@@ -571,7 +566,7 @@ impl Handler for Forwarding {
             }
         }
         // A certificate the revocation list could judge can be read, so this refuses nothing the
-        // handshake and the list admitted; it only gives the binding its host (ADR-0039 clause 6).
+        // handshake and the list admitted; it only gives the binding its host.
         let (Some(speaker), Some(end)) =
             (cache::speaker_of(&certificate), cache::end_of(&certificate))
         else {
@@ -582,7 +577,7 @@ impl Handler for Forwarding {
             });
         };
         // An `Authorization` the peer sends is ignored, never refused, and nothing is forwarded in
-        // its place (ADR-0015 clause 11).
+        // its place.
         let peer = request
             .peer
             .map_or_else(|| "unknown".to_string(), |peer| peer.to_string());
@@ -658,7 +653,7 @@ impl Handler for Forwarding {
         vec![reply]
     }
 
-    /// An unreadable report is dropped, never answered: the Gateway invents nothing (ADR-0015). A
+    /// An unreadable report is dropped, never answered: the Gateway invents nothing. A
     /// plain-HTTP exchange still needs a response, and it says why.
     fn on_unreadable(&self, downstream: &mut Downstream, error: &Unreadable) -> Reply {
         warn!(peer = %downstream.peer, %error, "dropping an unreadable downstream report");
@@ -669,7 +664,7 @@ impl Handler for Forwarding {
     }
 
     /// The peer is gone. Its Agents stop being routable here — and nothing is said upstream on
-    /// their behalf, because they said nothing (ADR-0015 clause 10).
+    /// their behalf, because they said nothing.
     fn on_closed(&self, downstream: Downstream) {
         if let Some(replies) = &downstream.replies {
             let count = downstream.carried.len();
@@ -684,7 +679,7 @@ impl Handler for Forwarding {
 impl Forwarding {
     /// Ends the bindings of every host whose kept certificate end has passed by `now`, or whose
     /// certificate the revocation list held names, with their routes, current offers and places
-    /// upstream, as a binding that makes room goes (ADR-0058 clauses 4 and 1), and
+    /// upstream, as a binding that makes room goes, and
     /// writes their removals.
     async fn end_certificates(&self, now: i64) {
         self.end_bindings(now, true).await;
@@ -742,7 +737,7 @@ impl Forwarding {
             return Reply::Nothing;
         }
         // Forwarded only for an `instance_uid` bound to the host that sent it; the binding logs
-        // a refusal (ADR-0039 clause 5).
+        // a refusal.
         let Some(replies) = &downstream.replies else {
             return Reply::Nothing;
         };
@@ -771,7 +766,7 @@ impl Forwarding {
         Reply::Nothing
     }
 
-    /// An enrolling peer's one report (ADR-0039 clauses 5, 11): forwarded only when it is an
+    /// An enrolling peer's one report: forwarded only when it is an
     /// enrolment request and nothing else, binding nothing, its exchange its route for its one
     /// reply. Any other report is answered `403` and logged.
     async fn forward_enrolment(&self, downstream: &Downstream, report: AgentToServer) -> Reply {
@@ -834,7 +829,7 @@ impl Forwarding {
         };
         let (reply_tx, reply_rx) = oneshot::channel();
         // Forwarded only for an `instance_uid` bound to the host that sent it; the binding logs
-        // a refusal (ADR-0039 clause 5). A binding that made room for it takes its Agent's place
+        // a refusal. A binding that made room for it takes its Agent's place
         // upstream along: no socket going releases a plain-HTTP Agent's.
         let (exchange, evicted) = self
             .registry
@@ -985,7 +980,6 @@ mod tests {
     /// A peer that goes takes its Agents' places on the upstream connections with it, so a peer
     /// coming back under ever new `instance_uid`s grows nothing; an Agent another socket of the
     /// same host carries by then keeps its place and its route.
-    /// Verifies: ADR-0015, ADR-0058
     #[tokio::test]
     async fn the_agents_a_departed_peer_carried_are_released_from_the_pool() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1018,7 +1012,6 @@ mod tests {
     }
 
     /// A plain-HTTP exchange that ends without its reply leaves no route behind.
-    /// Verifies: ADR-0015
     #[tokio::test]
     async fn an_exchange_that_ends_without_its_reply_leaves_no_route() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1059,7 +1052,6 @@ mod tests {
     /// A plain-HTTP peer that polls under ever new `instance_uid`s holds no more places on the
     /// upstream connections than its host holds bindings: the place of an Agent whose binding made
     /// room goes with it, and the Agents still bound keep theirs, on the same connection.
-    /// Verifies: ADR-0039, ADR-0058
     #[tokio::test]
     async fn a_polling_peer_under_new_instance_uids_holds_no_more_places_than_bindings() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1089,7 +1081,6 @@ mod tests {
 
     /// A WebSocket peer whose report makes room among its host's bindings frees the place of the
     /// plain-HTTP Agent whose binding went.
-    /// Verifies: ADR-0039, ADR-0058
     #[tokio::test]
     async fn a_binding_a_socket_makes_room_with_frees_the_place_of_the_agent_it_displaced() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1126,7 +1117,6 @@ mod tests {
     /// A second host reporting for an `instance_uid` bound to the first is not forwarded and takes
     /// no route, over WebSocket and over plain HTTP (`403`): the Server's next reply still reaches
     /// the first host. Two certificates that name no host are two hosts.
-    /// Verifies: ADR-0039
     #[tokio::test]
     async fn a_report_for_another_hosts_instance_uid_is_not_forwarded() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1160,7 +1150,6 @@ mod tests {
     }
 
     /// A host past its `max_carried_agents` brings no further Agent upstream.
-    /// Verifies: ADR-0039
     #[tokio::test]
     async fn a_report_past_the_hosts_bindings_is_not_forwarded() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1180,7 +1169,6 @@ mod tests {
 
     /// A certificate that names no host and the one its renewal brings, naming the host the Server
     /// derived for it, are one host: its Agents stay bound across the renewal.
-    /// Verifies: ADR-0039
     #[tokio::test]
     async fn a_renewal_naming_the_derived_host_keeps_the_agents_bound() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1245,7 +1233,6 @@ mod tests {
     /// A request with a bootstrap proof is an enrolment only as exactly one PEM block, the rule
     /// the Server reads it by: behind a prefix, beside a second block, or after another request it
     /// is not forwarded.
-    /// Verifies: ADR-0039
     #[test]
     fn an_enrolment_request_is_exactly_one_pem_block() {
         let uid = InstanceUid::default();
@@ -1268,7 +1255,6 @@ mod tests {
     /// certificate the peer presented: one naming another certificate — one with that
     /// certificate's issuer and serial included — one whose proof does not parse, and one carrying
     /// the presented certificate with a byte changed are answered `403` and reach no route.
-    /// Verifies: ADR-0039
     #[tokio::test]
     async fn an_enrolling_peer_proves_the_certificate_it_presented() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1338,7 +1324,6 @@ mod tests {
     /// and nothing a member reports; any other is answered `403`. The one it forwards binds
     /// nothing: its exchange is its route until it ends, and an `instance_uid` bound to a host is
     /// not an enrolling peer's to report for.
-    /// Verifies: ADR-0039
     #[tokio::test]
     async fn an_enrolling_peer_relays_one_enrolment_request_and_binds_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1464,7 +1449,6 @@ mod tests {
     /// With `bootstrap_ca_file` a peer of the client CA is a member and one of the bootstrap CA is
     /// enrolling; without it every peer is a member, as the handshake admits the client CA's alone.
     /// A CA in both files fails startup naming both keys.
-    /// Verifies: ADR-0039
     #[test]
     fn a_bootstrap_ca_makes_its_peers_enrolling_and_may_not_be_the_client_ca() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1537,7 +1521,6 @@ mod tests {
     /// `instance_uid` is dropped over WebSocket and answered `403` over plain HTTP, and the host
     /// it is bound to is carried again. A binding read at start holds no place upstream until its
     /// Agent reports.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn a_binding_outlasts_a_gateway_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1585,7 +1568,6 @@ mod tests {
 
     /// A report that makes a new binding reaches the Server only once the store holds the binding;
     /// when the store cannot be written it binds nothing, is not forwarded, and takes no route.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn a_new_binding_is_stored_before_its_report_is_forwarded() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1698,7 +1680,6 @@ mod tests {
     /// and a member's plain-HTTP report are answered `503`, whatever damaged the store, and the
     /// store is left as it was found. An enrolling peer's one request is still relayed upstream,
     /// since it binds nothing.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn an_unreadable_store_refuses_every_downstream_agent() {
         let mut ways = vec![
@@ -1770,7 +1751,6 @@ mod tests {
 
     /// A last line without its newline is dropped as a write a crash cut off, and the bindings
     /// before it hold: another host's report for one of them is refused.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn a_store_cut_off_mid_line_keeps_the_bindings_before_it() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1855,7 +1835,6 @@ mod tests {
     /// leading zero among them, which the list names without it — with its route, its current offer
     /// and its place upstream, in memory and in the store; another host's report then binds the
     /// `instance_uid`. Another host's bindings stay.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn a_revoked_hosts_bindings_end_with_their_route_offer_and_place() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1939,7 +1918,6 @@ mod tests {
     /// Gateway's clock, at start too, and not before: a host that reports under a renewed
     /// certificate keeps them past the old one's `notAfter`. A report under a certificate that has
     /// expired binds nothing.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn a_hosts_bindings_end_with_the_last_certificate_it_reported_under() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2029,7 +2007,6 @@ mod tests {
     /// another host begins to bind the `instance_uid`, the ended host's socket receives none of
     /// the Server's replies, even when that binding cannot be written. The new host's place
     /// upstream is its own.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn an_ended_hosts_route_is_gone_before_another_host_binds_its_instance_uid() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2077,7 +2054,6 @@ mod tests {
     /// test: it holds too where the second report is forwarded at once, without waiting. That
     /// nothing relies on an end the store does not hold is what
     /// `policy::tests::a_moved_end_is_pending_until_written` tests.
-    /// Verifies: ADR-0058
     #[tokio::test]
     async fn a_report_waits_for_its_hosts_end_another_report_is_writing() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -1,6 +1,6 @@
 name: CI
 
-# What the Definition of Done (AGENTS.md §5) asks beyond Linux, on the stack of ADR-0010: the
+# What the Definition of Done (AGENTS.md §5) asks beyond Linux: the
 # Client checked and tested on Windows and macOS, and release builds of the Client on every
 # platform it ships on — Linux, Windows, and macOS — and of the Server on Linux only
 # (docs/SPECIFICATION.md). Build, test and lint on Linux are the 'rust' job of checks.yml, which
@@ -16,13 +16,13 @@ permissions:
   contents: read
 
 jobs:
-  # ADR-0019: the client carries platform-specific service paths (the Windows SCM shim, launchd
+  # The client carries platform-specific service paths (the Windows SCM shim, launchd
   # semantics) that a Linux-only lint never compiles. Keep them honest: clippy and tests on the
   # real platforms. Actual service registration still needs the manual smoke checklist
   # (README.md → "Running as an OS service") — CI runners cannot exercise systemd/launchd/SCM.
   #
   # classis-tools too: the release packs every Client archive with `classisctl`, Windows
-  # included, and publishes it for macOS (ADR-0028).
+  # included, and publishes it for macOS.
   client-windows:
     runs-on: windows-latest
     steps:
@@ -47,7 +47,7 @@ jobs:
       - name: Test
         run: cargo test -p classis-agent --locked
 
-  # ADR-0049 clause 9: the S3 store's tests, which a plain `cargo test` skips, run here against a
+  # The S3 store's tests, which a plain `cargo test` skips, run here against a
   # rustfs service, its image pinned by digest. The key pair is the throwaway one of this job's
   # own container, not a secret. The tests make a prefix of their own and leave the bucket empty.
   s3-store:
@@ -66,7 +66,7 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Create the bucket
-        # The Server creates none (ADR-0049 clause 4). curl signs the request itself; the service
+        # The Server creates none. curl signs the request itself; the service
         # may still be starting, so the first attempts are allowed to fail.
         run: |
           empty="$(printf '' | sha256sum | cut -d' ' -f1)"
@@ -104,7 +104,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Start PostgreSQL with TLS
         # The connection the Server makes: TLS 1.3, the database's certificate verified against
-        # the CA made here and its name checked (ADR-0050 clause 7). Started by `docker run`
+        # the CA made here and its name checked. Started by `docker run`
         # rather than as a service, so that it starts after its certificate is made.
         run: |
           set -euo pipefail
@@ -136,7 +136,7 @@ jobs:
           docker logs postgres >&2
           exit 1
       - name: Test against PostgreSQL
-        # Over TLS against the CA above; each test works in a schema of its own (clause 16).
+        # Over TLS against the CA above; each test works in a schema of its own.
         env:
           CLASSIS_TEST_POSTGRES_HOST: 127.0.0.1
           CLASSIS_TEST_POSTGRES_PORT: "5432"

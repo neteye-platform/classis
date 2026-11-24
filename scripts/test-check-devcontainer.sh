@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Self-test of scripts/check-devcontainer.sh. Verifies: ADR-0002
+# Self-test of scripts/check-devcontainer.sh.
 #
 # Each case builds a fixture under a temporary directory — a devcontainer.json with comments and
 # one pinned Feature, the lock that resolves it, and the editor settings that pin the
 # container-management extension to the host — runs the check against it, and asserts the exit
 # code and, for a failing case, the message that names the violation. The baseline passes; every
-# other case breaks one thing ADR-0002 decides.
+# other case breaks one of the rules the check enforces.
 #
 # Usage:
 #     scripts/test-check-devcontainer.sh
@@ -30,7 +30,7 @@ config() {
   {
     echo '{'
     echo '  "name": "fixture",'
-    echo '  // A comment: the container has no socket mount — see ADR-0002.'
+    echo '  // A comment: the container has no socket mount.'
     echo '  "image": "mcr.microsoft.com/devcontainers/base:debian",'
     printf '  %s\n' "$@"
     echo '  "features": {'

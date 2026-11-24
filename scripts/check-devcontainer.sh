@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Dev Container check for this repository (ADR-0002).
+# Dev Container check for this repository.
 #
-# ADR-0002 keeps the host container engine out of the Dev Container's reach and pins its Features.
-# This check reads the files the decision names and fails on what would break it:
+# The host container engine stays out of the Dev Container's reach, and its Features are pinned.
+# This check reads the files that keep it so and fails on what would break it:
 #
 #   1. Socket: .devcontainer/devcontainer.json mounts no host Docker socket — no 'docker.sock'
 #      and no '/var/run/docker' on any line that is not a full-line comment — and adds no
@@ -77,35 +77,35 @@ _contains() {
 
 features=()
 if [[ ! -f "$ROOT/$CONFIG" ]]; then
-  add_error "$CONFIG: not found — the Dev Container ADR-0002 governs has nothing to check"
+  add_error "$CONFIG: not found — there is no Dev Container to check"
 else
   # 1. Socket.
   if uncommented "$ROOT/$CONFIG" | grep -qE 'docker\.sock|/var/run/docker'; then
-    add_error "$CONFIG: mounts the host Docker socket — the Dev Container never reaches the host engine (ADR-0002); manage host containers from the host-side extension instead"
+    add_error "$CONFIG: mounts the host Docker socket — the Dev Container never reaches the host engine; manage host containers from the host-side extension instead"
   fi
 
   mapfile -t features < <(feature_ids "$ROOT/$CONFIG")
   for id in "${features[@]}"; do
     if [[ "$id" == *docker-in-docker* || "$id" == *docker-outside-of-docker* ]]; then
-      add_error "$CONFIG: Feature '$id' would mount the host Docker socket or nest an engine — neither is added (ADR-0002)"
+      add_error "$CONFIG: Feature '$id' would mount the host Docker socket or nest an engine — neither is added"
     fi
     # 2. Pinning.
     [[ "$id" =~ :[0-9]+$ ]] \
-      || add_error "$CONFIG: Feature '$id' is not pinned by its major version tag alone ('<ref>:N') — an untagged, mutable, or fully versioned reference is not what the lock resolves (ADR-0002)"
+      || add_error "$CONFIG: Feature '$id' is not pinned by its major version tag alone ('<ref>:N') — an untagged, mutable, or fully versioned reference is not what the lock resolves"
   done
 
   # 3. Lock.
   if [[ ! -f "$ROOT/$LOCK" ]]; then
-    add_error "$LOCK: not found — the lock is committed so that the same commit yields the same Features (ADR-0002)"
+    add_error "$LOCK: not found — the lock is committed so that the same commit yields the same Features"
   else
     mapfile -t locked < <(feature_ids "$ROOT/$LOCK")
     for id in "${features[@]}"; do
       _contains "$id" "${locked[@]}" \
-        || add_error "$LOCK: has no entry for Feature '$id' — regenerate the lock (rebuild the container) so the Feature builds from a resolved digest (ADR-0002)"
+        || add_error "$LOCK: has no entry for Feature '$id' — regenerate the lock (rebuild the container) so the Feature builds from a resolved digest"
     done
     for id in "${locked[@]}"; do
       _contains "$id" "${features[@]}" \
-        || add_error "$LOCK: lists Feature '$id', which $CONFIG no longer adds — the lock was not regenerated (ADR-0002)"
+        || add_error "$LOCK: lists Feature '$id', which $CONFIG no longer adds — the lock was not regenerated"
     done
   fi
 fi
@@ -113,10 +113,10 @@ fi
 # 4. Host side: the pair has to sit inside the 'remote.extensionKind' object, so the text is
 # flattened and matched from that key up to the first closing brace.
 if [[ ! -f "$ROOT/$SETTINGS" ]]; then
-  add_error "$SETTINGS: not found — it pins the container-management extension to the host side (ADR-0002)"
+  add_error "$SETTINGS: not found — it pins the container-management extension to the host side"
 elif ! uncommented "$ROOT/$SETTINGS" | tr -d ' \t\n' \
        | grep -qE '"remote\.extensionKind":\{[^}]*"ms-azuretools\.vscode-containers":\["ui"\]'; then
-  add_error "$SETTINGS: does not pin 'ms-azuretools.vscode-containers' to [\"ui\"] under 'remote.extensionKind' — without it the extension runs in the container and asks for the socket (ADR-0002)"
+  add_error "$SETTINGS: does not pin 'ms-azuretools.vscode-containers' to [\"ui\"] under 'remote.extensionKind' — without it the extension runs in the container and asks for the socket"
 fi
 
 if ((${#errors[@]})); then

@@ -1,4 +1,4 @@
-//! Enrolment and the renewals after it, end to end (ADR-0021 clauses 9, 11, 21 and 22): the real
+//! Enrolment and the renewals after it, end to end: the real
 //! Client binary enrols with a bootstrap certificate over mutual TLS, an operator approves its
 //! request, and it renews what it was issued — each step costing the register exactly one
 //! certificate.
@@ -48,14 +48,12 @@ async fn past(state: &AppState, after: u64) {
 /// A host enrols with a bootstrap certificate and an operator's approval, and then renews, over the
 /// WebSocket transport: the approval issues one certificate and the renewal one more. The request
 /// proves the bootstrap certificate it is queued under.
-/// Verifies: ADR-0021, ADR-0039
 #[tokio::test]
 async fn an_enrolment_and_a_renewal_each_issue_one_certificate_over_websocket() {
     enrol_and_renew("wss").await;
 }
 
 /// The same over plain HTTP polling.
-/// Verifies: ADR-0021, ADR-0039
 #[tokio::test]
 async fn an_enrolment_and_a_renewal_each_issue_one_certificate_over_http() {
     enrol_and_renew("https").await;
@@ -63,7 +61,6 @@ async fn an_enrolment_and_a_renewal_each_issue_one_certificate_over_http() {
 
 /// With heartbeats off, the request still reaches the queue at once: it never waits for a message
 /// that would carry it, and the certificate is pushed to the host on approval.
-/// Verifies: ADR-0021
 #[tokio::test]
 async fn an_enrolment_needs_no_heartbeat() {
     let served = Served::start(60).await;
@@ -83,10 +80,9 @@ async fn an_enrolment_needs_no_heartbeat() {
     .await;
 }
 
-/// The questionnaire's enrolment (ADR-0019 clause 17) carries a host to its first certificate with
+/// The questionnaire's enrolment carries a host to its first certificate with
 /// the bootstrap pair where it lies: it returns once an operator approved the request, the issued
 /// certificate is in the state directory, and nothing was copied beside the configuration.
-/// Verifies: ADR-0019
 #[tokio::test]
 async fn the_questionnaires_enrolment_stores_the_issued_certificate_and_copies_nothing() {
     let served = Served::start(600).await;
@@ -152,8 +148,7 @@ async fn the_questionnaires_enrolment_stores_the_issued_certificate_and_copies_n
 
 /// A `bootstrap.p12` enrols as the pair does, from memory: the questionnaire's enrolment opens it
 /// under its password and stores the issued certificate, and the bootstrap key it decrypted is in
-/// no file it writes (ADR-0029 clauses 7 and 8).
-/// Verifies: ADR-0029
+/// no file it writes.
 #[tokio::test]
 async fn a_bootstrap_p12_enrols_and_its_key_is_never_written() {
     const PASSWORD: &str = "a password of the operator";
@@ -257,7 +252,7 @@ async fn enrol_and_renew(scheme: &str) {
             .map(|pending| pending.id.clone())
     })
     .await;
-    // The request proves the bootstrap certificate it was queued under (ADR-0039).
+    // The request proves the bootstrap certificate it was queued under.
     let csr = std::fs::read(state_dir.join(classis_agent::tls::PENDING_CSR_FILE)).expect("csr");
     assert!(
         classis_core::csr::requested_uri(

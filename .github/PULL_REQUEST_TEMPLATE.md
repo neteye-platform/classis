@@ -8,8 +8,7 @@
 
 ## Related
 
-- Closes # <!-- the ticket this lands, or the issue it resolves (ADR-0004) -->
-- Implements / relates to ADR-
+- Closes # <!-- the ticket this lands, or the issue it resolves -->
 
 ## Proof
 
@@ -18,8 +17,8 @@
      tests that decide the acceptance criteria, by name. Every existing test
      the diff changes or removes, each with the reason the behaviour
      changed; "none" is the common answer and the reviewer checks it against
-     the diff. The result of scripts/check-all.sh, the project's test run,
-     and the sensors the toolchain ADR names. A demo, such as a command and
+     the diff. The result of scripts/check-all.sh and the project's test
+     run. A demo, such as a command and
      its output or a screenshot, where a test cannot show it. -->
 
 - Tests:
@@ -31,7 +30,8 @@
 
 <!-- What in the task, its framing, or the existing code the implementer
      disagreed with, each with its evidence, and what could not be confirmed
-     against the specification, the ADRs, the code, or a source (AGENTS.md
+     against the specification, the architecture overview, the code, or a
+     source (AGENTS.md
      [§1](../AGENTS.md#1-principles)). "None" is a claim the reviewer
      checks. -->
 
@@ -40,16 +40,15 @@
 
 ## Documents and decisions
 
-<!-- One statement each, verifiable against the diff. ADR: new, revised, or
-     none, and why none (AGENTS.md [§3](../AGENTS.md#3-adr-rules), rule 2);
-     a new or revised `proposed` ADR ships in its own pull request.
-     ARCHITECTURE.md: updated, or unchanged because the structure is
-     ([§5](../AGENTS.md#5-quality-bar--definition-of-done)). Glossary: the
-     terms this change settled, or none. Specification: the accepted ADRs a
-     change to it moves ([§3](../AGENTS.md#3-adr-rules), rule 7), or
-     untouched. -->
+<!-- One statement each, verifiable against the diff. Decisions: the
+     architecture-relevant choices this change makes, each agreed with the
+     human, or none (AGENTS.md [§3](../AGENTS.md#3-decisions)).
+     ARCHITECTURE.md: updated, or unchanged because the structure and its
+     key decisions are ([§5](../AGENTS.md#5-quality-bar--definition-of-done)).
+     Glossary: the terms this change settled, or none. Specification:
+     changed by a human, or untouched. -->
 
-- ADR:
+- Decisions:
 - ARCHITECTURE.md:
 - Glossary:
 - Specification:

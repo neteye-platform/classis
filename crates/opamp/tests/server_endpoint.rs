@@ -119,7 +119,7 @@ fn report(uid: &[u8], sequence_num: u64) -> AgentToServer {
     }
 }
 
-/// The workspace builds reqwest without a TLS provider of its own (ADR-0013); install the one every
+/// The workspace builds reqwest without a TLS provider of its own; install the one every
 /// binary installs, once, even though these exchanges are plaintext.
 fn client() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -154,7 +154,6 @@ fn decoded(message: Message) -> ServerToAgent {
     frame::decode(&data, LIMIT).expect("a framed ServerToAgent")
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn a_plain_http_exchange_is_answered_by_the_handler() {
     let (addr, handler) = serve(Settings::new(LIMIT)).await;
@@ -166,7 +165,6 @@ async fn a_plain_http_exchange_is_answered_by_the_handler() {
     assert_eq!(*handler.closed.lock().unwrap(), [Transport::Http]);
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn plain_http_refusals_and_empty_replies_keep_their_shape() {
     let (addr, _) = serve(Settings::new(LIMIT)).await;
@@ -184,7 +182,6 @@ async fn plain_http_refusals_and_empty_replies_keep_their_shape() {
     assert_eq!(reply.instance_uid, b"unreadable");
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn the_body_rules_are_the_specifications() {
     let (addr, _) = serve(Settings::new(LIMIT)).await;
@@ -215,7 +212,6 @@ async fn the_body_rules_are_the_specifications() {
     assert_eq!(reply.instance_uid, b"zipped");
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn a_refused_connection_gets_the_handlers_status_and_headers() {
     let (addr, _) = serve(Settings::new(LIMIT)).await;
@@ -231,7 +227,6 @@ async fn a_refused_connection_gets_the_handlers_status_and_headers() {
     assert_eq!(refused.headers()["www-authenticate"], "Bearer");
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn a_websocket_carries_replies_and_pushes() {
     let (addr, handler) = serve(Settings::new(LIMIT)).await;
@@ -289,7 +284,6 @@ async fn a_websocket_carries_replies_and_pushes() {
     assert_eq!(*handler.closed.lock().unwrap(), [Transport::WebSocket]);
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn an_oversized_websocket_message_is_closed_with_1009() {
     let (addr, _) = serve(Settings::new(LIMIT)).await;
@@ -306,7 +300,6 @@ async fn an_oversized_websocket_message_is_closed_with_1009() {
     assert_eq!(close.code, CloseCode::Size);
 }
 
-// Verifies: ADR-0010
 #[tokio::test]
 async fn a_websocket_only_endpoint_on_any_path_serves_no_plain_http() {
     let (addr, _) = serve(Settings {

@@ -1,4 +1,4 @@
-//! The Server's records in one PostgreSQL database (ADR-0050): the connection every PostgreSQL
+//! The Server's records in one PostgreSQL database: the connection every PostgreSQL
 //! adapter shares, the lock that keeps one Server per database, and the schema the Server applies
 //! itself.
 //!
@@ -45,8 +45,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long one call — every round trip of its transaction, the wait for a connection included —
-/// may take before it fails. The Server's callers hold their own locks while a record is written
-/// (ADR-0024 clause 5), so a database that stops answering holds them this long at most. The
+/// may take before it fails. The Server's callers hold their own locks while a record is written,
+/// so a database that stops answering holds them this long at most. The
 /// database's own timeouts below end a statement it is still working on; this one ends a call
 /// whose database, or the network to it, does not answer at all.
 pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -72,13 +72,13 @@ const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(5);
 const KEEPALIVES_RETRIES: u32 = 3;
 
 /// How long a Server waits at startup for the database to answer and for the lock to be free, and
-/// how often it asks again (ADR-0062): long enough for a failover of the database or for the
+/// how often it asks again: long enough for a failover of the database or for the
 /// Server it replaces to stop, short enough that a database nobody brings back fails startup.
 const START_WAIT: Duration = Duration::from_secs(180);
 const START_RETRY: Duration = Duration::from_secs(5);
 
 /// The connections the pool holds at most. The Server writes one record at a time per act, and
-/// the in-memory state answers every read (ADR-0050 clause 4), so a few suffice.
+/// the in-memory state answers every read, so a few suffice.
 const POOL_SIZE: usize = 8;
 
 /// The name the Server's connections carry in `pg_stat_activity`.
@@ -87,7 +87,7 @@ const APPLICATION_NAME: &str = "classis-server";
 /// One database, reached through a pool, held by this Server alone while it runs.
 pub struct Database {
     pool: Pool,
-    /// The connection that holds the session-level advisory lock (clause 6), open for as long as
+    /// The connection that holds the session-level advisory lock, open for as long as
     /// the Server runs.
     _lock: tokio_postgres::Client,
     /// The server process of that connection, as `pg_stat_activity` names it.
@@ -106,7 +106,7 @@ pub struct Database {
     bridge: Bridge,
 }
 
-/// What a Server does about the lock beyond taking it once (ADR-0062).
+/// What a Server does about the lock beyond taking it once.
 #[derive(Clone, Copy)]
 pub(crate) struct LockPolicy {
     /// How long to ask again while another Server holds the lock or the database cannot be
@@ -137,8 +137,7 @@ enum Tls {
 }
 
 impl Database {
-    /// Connects to the database `config` names, takes its lock and brings its schema up to date
-    /// (ADR-0050 clauses 5 to 7).
+    /// Connects to the database `config` names, takes its lock and brings its schema up to date.
     ///
     /// # Errors
     /// Returns an error naming the key when the password or CA file cannot be read, naming the host
@@ -202,7 +201,7 @@ impl Database {
         )?;
         let tls = tls(config)?;
         // `tokio-postgres` copies the password into its own `Config`; the one read is wiped when it
-        // is dropped (ADR-0057 clauses 3 and 4).
+        // is dropped.
         let pg = pg_config(config, &password, schema);
         let bridge = Bridge::new("records-postgres")?;
         let started = std::time::Instant::now();
@@ -246,7 +245,7 @@ impl Database {
                 // What may pass — the name not yet resolving, the connection refused while the
                 // database fails over — is asked again until the time is up; a refusal that will
                 // not change (the credentials, the certificate, the database's name) ends the
-                // wait at once (ADR-0062).
+                // wait at once.
                 Err(failure) if failure.transient && !left.is_zero() => {
                     tracing::warn!(
                         database = %name,
@@ -336,7 +335,7 @@ impl Database {
         })
     }
 
-    /// Whether the Server holds its lock and the database answers a query (ADR-0063).
+    /// Whether the Server holds its lock and the database answers a query.
     ///
     /// # Errors
     /// Returns the loss of the lock, or why the query failed.
@@ -357,7 +356,7 @@ impl Database {
         &self.name
     }
 
-    /// Applies `migrations` in one transaction (clause 5).
+    /// Applies `migrations` in one transaction.
     ///
     /// # Errors
     /// Returns an error naming the database when the schema needs a newer Server or a statement
@@ -460,8 +459,8 @@ impl Drop for Database {
     }
 }
 
-/// Runs `attempt` until it returns a value or `wait` has passed, asking again every `interval`
-/// (ADR-0062): `Ok(None)` is an attempt that found the lock held, and what is returned when the time
+/// Runs `attempt` until it returns a value or `wait` has passed, asking again every `interval`:
+/// `Ok(None)` is an attempt that found the lock held, and what is returned when the time
 /// passes; an error ends the wait at once.
 fn retry_until<T>(
     wait: Duration,
@@ -484,7 +483,7 @@ fn retry_until<T>(
 /// Why every call is refused once the lock's connection has ended.
 fn lost_lock(name: &str) -> String {
     format!(
-        "this Server lost its lock on the {name} — another Server may hold it now (ADR-0062), so \
+        "this Server lost its lock on the {name} — another Server may hold it now, so \
          this one writes nothing more; restart it once the database answers"
     )
 }
@@ -497,7 +496,7 @@ struct LockWatch {
     /// Set once the connection holds the lock: before, its end is a failed attempt, asked again
     /// within the wait, and no loss.
     held: Arc<AtomicBool>,
-    /// Whether the process exits once the loss is logged (ADR-0062).
+    /// Whether the process exits once the loss is logged.
     exit_on_loss: bool,
 }
 
@@ -533,7 +532,7 @@ async fn bounded_attempt<T>(
 }
 
 /// An attempt that did not reach the database: why, and whether asking again may change the
-/// answer (ADR-0062).
+/// answer.
 struct Unreached {
     why: String,
     transient: bool,
@@ -586,7 +585,7 @@ fn may_pass(error: &tokio_postgres::Error) -> bool {
 }
 
 /// A pooled connection, or why there is none: a database lost while the Server runs fails the
-/// calls that need it (clause 7).
+/// calls that need it.
 ///
 /// # Errors
 /// Returns an error when no connection can be had within the pool's timeouts.
@@ -607,7 +606,7 @@ pub(crate) fn sql(error: tokio_postgres::Error) -> String {
     }
 }
 
-/// The connection's settings, every one from `[database.postgres]` (clause 7) — nothing from the
+/// The connection's settings, every one from `[database.postgres]` — nothing from the
 /// environment, and nothing from a connection string. `schema`, when named, is the only schema
 /// the connection sees.
 fn pg_config(
@@ -639,7 +638,7 @@ fn pg_config(
     pg
 }
 
-/// The TLS client of clause 7: TLS 1.3 on *ring* alone, the database's certificate verified
+/// The TLS client: TLS 1.3 on *ring* alone, the database's certificate verified
 /// against the public roots, or against the roots of `ca_file` alone when it names one, and its
 /// host name checked by rustls. `None` — plaintext — only where `tls = false`, which the
 /// configuration allows on a loopback IP literal alone.
@@ -718,7 +717,7 @@ async fn connect_watched(
             lost_lock(&watch.name)
         );
         if watch.exit_on_loss {
-            // ADR-0062: a Server that lost its lock is replaced, not kept refusing calls.
+            // A Server that lost its lock is replaced, not kept refusing calls.
             std::process::exit(1);
         }
     };
@@ -760,7 +759,7 @@ pub(crate) fn unsigned(value: i64) -> u64 {
 
 #[cfg(test)]
 pub(crate) mod testing {
-    //! The database the PostgreSQL tests run against (ADR-0050 clause 16): the one the
+    //! The database the PostgreSQL tests run against: the one the
     //! `CLASSIS_TEST_POSTGRES_*` variables name, never one the tests start. Each test works in a
     //! schema of its own and drops it afterwards.
 
@@ -935,9 +934,8 @@ mod tests {
 
     /// `PGHOST`, `PGSSLMODE` and their kin, set in the Server's environment, change neither the
     /// database nor whether plaintext is allowed: the connection is built from
-    /// `[database.postgres]` alone (ADR-0050 clause 7). The environment is the real one of a child
+    /// `[database.postgres]` alone. The environment is the real one of a child
     /// process.
-    /// Verifies: ADR-0050
     #[test]
     fn pg_variables_change_neither_the_database_nor_plaintext() {
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -991,7 +989,6 @@ mod tests {
     }
 
     /// Without TLS only where `tls = false` says so; a CA file is read as roots and nothing else.
-    /// Verifies: ADR-0050
     #[test]
     fn the_connection_requires_tls_unless_the_configuration_waives_it() {
         let pg = pg_config(&config("127.0.0.1", false), "secret", Some("s"));
@@ -1015,7 +1012,6 @@ mod tests {
     /// The password comes from its file, which its owner and group alone may read; one that
     /// others may read or its group may write fails startup naming the key, before any
     /// connection is made.
-    /// Verifies: ADR-0050
     #[cfg(unix)]
     #[test]
     fn a_password_file_others_may_read_fails_startup_naming_it() {
@@ -1050,7 +1046,6 @@ mod tests {
     }
 
     /// A database that cannot be reached fails startup naming the host and the database.
-    /// Verifies: ADR-0050
     #[test]
     fn an_unreachable_database_fails_startup_naming_it() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1094,8 +1089,7 @@ mod tests {
     }
 
     /// A database that takes the connection and never answers fails startup within the bound of
-    /// one call, naming it, rather than holding the Server forever (ADR-0050 clause 7).
-    /// Verifies: ADR-0050
+    /// one call, naming it, rather than holding the Server forever.
     #[test]
     fn a_database_that_never_answers_fails_startup_within_the_bound() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1159,9 +1153,8 @@ mod tests {
     }
 
     /// A database that stops answering while the Server runs fails the one call that needs it
-    /// within that call's bound, and the call after it as fast; the Server is held no longer
-    /// (ADR-0050 clause 7). The database is reached through a proxy that is frozen mid-run.
-    /// Verifies: ADR-0050
+    /// within that call's bound, and the call after it as fast; the Server is held no longer.
+    /// The database is reached through a proxy that is frozen mid-run.
     #[test]
     fn a_database_that_stops_answering_fails_the_call_within_the_bound() {
         let Some(test) = TestDatabase::named() else {
@@ -1272,9 +1265,8 @@ mod tests {
     /// The connection is what libpq calls `verify-full`: a database whose certificate a root of
     /// `ca_file` signed but that does not name `host`, or that names it but no root of
     /// `ca_file` signed, is refused before a password is sent; one that a root signed for `host`
-    /// is accepted (ADR-0050 clause 7). Run against a listener that speaks the start of the
+    /// is accepted. Run against a listener that speaks the start of the
     /// protocol, so it needs no database.
-    /// Verifies: ADR-0050
     #[test]
     fn the_database_certificate_is_verified_against_its_root_and_its_host_name() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1334,7 +1326,6 @@ mod tests {
     /// again until the wait has passed and then fails naming it; with no wait it is asked once. A
     /// certificate that does not verify, which asking again would not change, fails at once
     /// however long the wait. Needs no database.
-    /// Verifies: ADR-0062
     #[test]
     fn a_database_that_does_not_answer_yet_is_asked_again_until_the_wait_passes() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1433,7 +1424,6 @@ mod tests {
     /// A connection that ends while the lock is asked for is a failed attempt, asked again until
     /// the wait has passed, not a lost lock: the Server's own policy, which exits on a loss, does
     /// not exit. Run in a child process, which such an exit would end.
-    /// Verifies: ADR-0062
     #[test]
     fn a_connection_that_ends_while_the_lock_is_asked_for_is_asked_again() {
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -1483,7 +1473,6 @@ mod tests {
 
     /// A password the database refuses is no reason to ask again: startup fails at once, naming
     /// the refusal, however long the wait.
-    /// Verifies: ADR-0062
     #[test]
     fn a_refused_password_fails_startup_at_once() {
         let Some(test) = TestDatabase::named() else {
@@ -1540,8 +1529,7 @@ mod tests {
     }
 
     /// A Server that finds the lock held asks again until it gets it, and gives up once the wait
-    /// has passed; a failed attempt ends the wait at once (ADR-0062).
-    /// Verifies: ADR-0062
+    /// has passed; a failed attempt ends the wait at once.
     #[test]
     fn the_wait_for_the_lock_is_bounded_and_ends_with_the_lock() {
         let mut asked = 0;
@@ -1578,10 +1566,9 @@ mod tests {
     }
 
     /// A Server whose lock's connection ends while it runs notices: it logs why and refuses every
-    /// call from then on, rather than writing on while a second Server may start (ADR-0050
-    /// clause 6). The session is ended from the database's side, as a restart or an operator
+    /// call from then on, rather than writing on while a second Server may start. The session is
+    /// ended from the database's side, as a restart or an operator
     /// would end it.
-    /// Verifies: ADR-0050
     #[test]
     fn a_server_that_loses_its_lock_logs_it_and_writes_nothing_more() {
         let Some(test) = TestDatabase::named() else {
@@ -1624,7 +1611,6 @@ mod tests {
 
     /// A second Server against the same database fails startup naming it; once the first is
     /// gone, the lock is free again.
-    /// Verifies: ADR-0050
     #[test]
     fn a_second_server_against_the_same_database_fails_startup_naming_it() {
         let Some(test) = TestDatabase::named() else {
@@ -1653,8 +1639,7 @@ mod tests {
     }
 
     /// The database is ready while the Server holds its lock and the database answers, and is not
-    /// once the lock's connection is gone (ADR-0063).
-    /// Verifies: ADR-0063
+    /// once the lock's connection is gone.
     #[test]
     fn the_database_is_ready_while_it_holds_its_lock() {
         let Some(test) = TestDatabase::named() else {
@@ -1674,8 +1659,7 @@ mod tests {
     }
 
     /// A Server started while another holds the lock waits for it and takes it once the first is
-    /// gone (ADR-0062).
-    /// Verifies: ADR-0062
+    /// gone.
     #[test]
     fn a_server_waits_for_the_lock_the_one_it_replaces_releases() {
         let Some(test) = TestDatabase::named() else {
@@ -1698,7 +1682,6 @@ mod tests {
     /// The schema is applied at startup and recorded; a database one migration behind is migrated
     /// at startup; a database whose schema names an oldest Server above this one fails startup
     /// naming both versions and is left unchanged.
-    /// Verifies: ADR-0050
     #[test]
     fn the_server_applies_its_schema_and_refuses_a_newer_one() {
         let Some(test) = TestDatabase::named() else {
@@ -1767,7 +1750,6 @@ mod tests {
     }
 
     /// The whole schema applies on an empty database, and every table it names is there.
-    /// Verifies: ADR-0050
     #[test]
     fn the_embedded_schema_applies_on_an_empty_database() {
         let Some(test) = TestDatabase::named() else {

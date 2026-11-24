@@ -1,5 +1,5 @@
 # The development stores: the S3-compatible store a development Server keeps its artifacts in
-# (ADR-0049) and the PostgreSQL database it keeps its records in (ADR-0050). Run on the host, apart
+# and the PostgreSQL database it keeps its records in. Run on the host, apart
 # from the Dev Container, which reaches both through .devcontainer/forward-dev-stores.sh.
 # See dev/README.md.
 name: opamp-dev-stores
@@ -17,7 +17,7 @@ services:
     ports:
       - "${STORES_BIND:-127.0.0.1}:9100:9000"   # S3 API
 
-  # The development database (ADR-0050 clause 16). The Server creates no database and no role; the
+  # The development database. The Server creates no database and no role; the
   # image makes both, `fleet`, on its first start. The password is a development one. Plaintext:
   # the Server reaches it on the loopback with `tls = false`.
   postgres:

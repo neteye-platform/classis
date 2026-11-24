@@ -1,6 +1,6 @@
 # Dev Container: .devcontainer/devcontainer-lock.json is deliberately NOT ignored — the resolved
 # Feature versions and digests are tracked, so the same commit yields the same environment until
-# the lock is refreshed on purpose (ADR-0002, AGENTS.md, section 6).
+# the lock is refreshed on purpose (AGENTS.md, section 6).
 
 # Build artifacts
 /dist/
@@ -18,7 +18,7 @@
 # with its package directory as the working directory, which puts `crates/classis-agent/client-state/` in
 # the tree. Anchored patterns left those untracked and waiting to be committed by accident.
 # The Server's data directory holds the package artifacts too — programs of hundreds of megabytes
-# each; they belong in a store, never in the repository (ADR-0026, ADR-0037).
+# each; they belong in a store, never in the repository.
 fleet-data/
 client-state/
 

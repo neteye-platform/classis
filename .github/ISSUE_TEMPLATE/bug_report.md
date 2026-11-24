@@ -30,4 +30,4 @@ labels: bug
 
 ## Notes
 
-<!-- Anything else, e.g. a relevant ADR or specification section. -->
+<!-- Anything else, e.g. a relevant specification section. -->

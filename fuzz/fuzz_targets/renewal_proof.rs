@@ -1,4 +1,4 @@
-//! The renewal proof a CSR carries (ADR-0021 clause 27), as the Server decodes it from a SAN a
+//! The renewal proof a CSR carries, as the Server decodes it from a SAN a
 //! peer chose. What decodes encodes back to the same bytes. Verifies: Q-2
 #![no_main]
 

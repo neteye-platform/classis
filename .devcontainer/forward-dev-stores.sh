@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Puts the host's development stores on this container's loopback: 127.0.0.1:9100 (rustfs, the S3
-# store a development Server may keep its artifacts in, ADR-0049 clause 9) and 127.0.0.1:5432
-# (PostgreSQL, the database it may keep its records in, ADR-0050 clause 16) inside the container
+# store a development Server may keep its artifacts in) and 127.0.0.1:5432
+# (PostgreSQL, the database it may keep its records in) inside the container
 # are forwarded to the same ports on the host, where dev/compose.yaml publishes them. Its
 # `[blobs.s3] endpoint` and `[database.postgres] tls = false` may be plaintext on the loopback
 # alone, so the same address works on the host and in the container. The hop to the host stays on

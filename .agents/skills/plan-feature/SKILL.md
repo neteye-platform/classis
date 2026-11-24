@@ -8,12 +8,10 @@ description:
 
 # Plan a feature
 
-The rule is [`AGENTS.md` §4](../../../AGENTS.md#4-working-style); the artifacts
-and their lifecycle are decided in
-[ADR-0004](../../../docs/adr/0004-feature-layer.md). The shapes are the issue
-templates under [`.github/ISSUE_TEMPLATE/`](../../../.github/ISSUE_TEMPLATE/).
-This skill is the order of work and states no rule of its own
-([ADR-0005](../../../docs/adr/0005-procedures-as-skills.md)).
+The rule is [`AGENTS.md` §4](../../../AGENTS.md#4-working-style). The shapes
+are the issue templates under
+[`.github/ISSUE_TEMPLATE/`](../../../.github/ISSUE_TEMPLATE/). This skill is the
+order of work and states no rule of its own.
 
 ## 1. Decide the artifact
 
@@ -35,12 +33,13 @@ the human in the conversation until the questions run out.
    solution from the user's side; the existing behaviour it changes, what must
    stay, and which tests pin it; goals served (`G-n`, `Q-n`); user stories;
    implementation and testing decisions in the project vocabulary, without file
-   paths or code; out of scope; ADR impact. A decision that is
-   architecture-relevant is an ADR, not a bullet: use `propose-adr`.
+   paths or code; out of scope; the key decisions it changes. A decision that
+   is architecture-relevant is agreed with the human first
+   ([`AGENTS.md` §3](../../../AGENTS.md#3-decisions)).
 3. Cut _Ticket_ issues as vertical slices. Each is an end-to-end behaviour that
    is demoable or verifiable on its own, sized to one fresh session, with
    Given/When/Then acceptance criteria, the tickets that block it, and _Read
-   first_: the accepted ADRs whose _Applies to_ it touches, the glossary terms
+   first_: the parts of the architecture overview it touches, the glossary terms
    and conventions in play, the golden path it copies, the seam its tests go on.
    The first slice through new ground is the tracer bullet.
 4. Set each ticket's _Mode_: "unattended" only under the conditions of
@@ -54,5 +53,4 @@ A session claims a ticket from the frontier, the open tickets whose blockers are
 all closed, by assigning itself before any work. Its pull request names the
 ticket it closes. The spec closes only after `design-revision` has run over what
 its tickets touched. Whatever in the spec has to last moves into the
-specification, an ADR, the architecture overview, or the glossary before it
-does.
+specification, the architecture overview, or the glossary before it does.

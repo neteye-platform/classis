@@ -1,4 +1,4 @@
-//! The product's name and title, fixed at build time (ADR-0019 clause 2).
+//! The product's name and title, fixed at build time.
 //!
 //! Three names sit side by side in this program, each naming a different thing, and conflating any
 //! two of them couples things that must be free to move apart:
@@ -20,7 +20,7 @@
 ///
 /// Lowercase `[a-z0-9-]`, 1–32 characters, never a Windows reserved device name — the intersection
 /// of the systemd-unit, launchd-label, SCM service-name and directory-name grammars, which is the
-/// same grammar ADR-0019 set for instance names and for the reason.
+/// same grammar as instance names and for the same reason.
 pub const PRODUCT_NAME: &str = env!("OPAMP_PRODUCT_NAME");
 
 /// The product's display name: prose, for the three places prose belongs — the Add/Remove Programs
@@ -36,7 +36,6 @@ mod tests {
 
     /// The build script is the only thing that can enforce the grammar, so this asserts what it
     /// let through rather than re-implementing the check.
-    /// Verifies: ADR-0019
     #[test]
     fn product_name_satisfies_the_grammar() {
         assert!(!PRODUCT_NAME.is_empty() && PRODUCT_NAME.len() <= 32);
@@ -46,7 +45,6 @@ mod tests {
         assert!(!PRODUCT_NAME.starts_with('-') && !PRODUCT_NAME.ends_with('-'));
     }
 
-    /// Verifies: ADR-0019
     #[test]
     fn display_name_is_prose() {
         assert!(!PRODUCT_TITLE.trim().is_empty());

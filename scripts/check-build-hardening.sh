@@ -17,8 +17,8 @@
 #   4. Release gate: release.yml runs 'cargo deny … check advisories', and every job that runs
 #      'git push' either runs it earlier itself or names the job that does in its 'needs:', so a
 #      version with a known advisory is never tagged. Only a direct 'needs:' counts.
-#   5. Compiler: rust-toolchain.toml pins 'channel' to an exact 'MAJOR.MINOR.PATCH' (ADR-0010
-#      clause 11), not a moving channel name.
+#   5. Compiler: rust-toolchain.toml pins 'channel' to an exact 'MAJOR.MINOR.PATCH', not a
+#      moving channel name.
 #   6. Release profile: Cargo.toml has a '[profile.release]' with 'overflow-checks = true'.
 #   7. Unsafe code: the crate roots in FORBID_UNSAFE carry '#![forbid(unsafe_code)]'. The roots
 #      not listed (the Client's library and binaries, the Server's binary) hold documented unsafe.
@@ -149,9 +149,9 @@ fi
 # 5. Compiler.
 toolchain="$ROOT/rust-toolchain.toml"
 if [[ ! -f "$toolchain" ]]; then
-  add_error "rust-toolchain.toml: not found — ADR-0010 clause 11 pins the compiler there"
+  add_error "rust-toolchain.toml: not found — the compiler is pinned there"
 elif ! uncommented "$toolchain" | grep -qE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$'; then
-  add_error "rust-toolchain.toml: 'channel' is not an exact 'MAJOR.MINOR.PATCH' — a channel name moves under every build (ADR-0010 clause 11)"
+  add_error "rust-toolchain.toml: 'channel' is not an exact 'MAJOR.MINOR.PATCH' — a channel name moves under every build"
 fi
 
 # 6. Release profile.

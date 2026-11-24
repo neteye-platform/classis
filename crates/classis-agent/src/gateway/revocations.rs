@@ -1,9 +1,9 @@
 //! The one admission refusal a Gateway makes beyond its handshake: a downstream certificate its Server has
-//! revoked (ADR-0015 clause 14).
+//! revoked.
 //!
 //! The Server never sees a downstream certificate — the Gateway terminates that handshake and
 //! presents its own upstream — so the Server hands its Gateways the revoked certificates of the
-//! fleet's client CA instead, chains already resolved (ADR-0021 clause 43). The Gateway fetches the
+//! fleet's client CA instead, chains already resolved. The Gateway fetches the
 //! list over its own upstream origin, with its own certificate, keeps it in memory,
 //! and refuses what it names. While it holds no list young enough to trust, it admits nobody: a
 //! Gateway whose Server is away forwards nothing anyway, and a list kept for ever would admit a
@@ -32,8 +32,8 @@ pub const REVOCATION_MAX_AGE: Duration = Duration::from_secs(300);
 pub const REVOCATION_FIRST_WAIT: Duration = Duration::from_secs(5);
 
 /// The largest list body the Gateway reads. The Server names the revoked certificates of its
-/// register, at most 100 000 (ADR-0021 clause 33), and every entry of its list, at most 100 000
-/// (clause 37), once per subject in its client CA file. An entry is at most 130 bytes of JSON with
+/// register, at most 100 000, and every entry of its list, at most 100 000,
+/// once per subject in its client CA file. An entry is at most 130 bytes of JSON with
 /// a 64-character issuer hash and the 40 hex digits of the longest serial RFC 5280 allows. This is
 /// room for all of them with up to eight client CA subjects: 900 000 entries, 117 MB.
 const MAX_LIST_BYTES: usize = 128 << 20;
@@ -109,7 +109,7 @@ impl RevocationList {
     }
 
     /// Whether the list held, however old, names the certificate of `issuer` and `serial`, as the
-    /// Server's register names one (ADR-0058 clause 4).
+    /// Server's register names one.
     #[must_use]
     pub fn lists(&self, issuer: &str, serial: &str) -> bool {
         self.held
@@ -240,7 +240,7 @@ async fn fetch_within(
         .apply(builder)?
         .build()
         .map_err(|e| format!("cannot build the client: {e}"))?;
-    // Admitted by this Gateway's certificate alone: no `Authorization` (ADR-0021 clause 3).
+    // Admitted by this Gateway's certificate alone: no `Authorization`.
     let mut request = client.get(&url);
     if let Some(etag) = list.etag() {
         request = request.header(reqwest::header::IF_NONE_MATCH, etag);
@@ -302,7 +302,6 @@ mod tests {
 
     /// The Gateway fetches the list with its own identity and no `Authorization`, even when
     /// `supervisor.toml` still holds an `[auth]` section from an earlier version.
-    /// Verifies: ADR-0015, ADR-0021
     #[tokio::test]
     async fn the_revocation_list_is_fetched_without_authorization() {
         opamp::tls::install_ring_provider();
@@ -352,7 +351,6 @@ mod tests {
     /// A list body larger than the bound is refused as an unreadable one is, whether it says its
     /// length up front or streams without one: the Gateway keeps what it held, and with nothing
     /// held it still admits nobody.
-    /// Verifies: ADR-0015, ADR-0021
     #[tokio::test]
     async fn an_oversized_revocation_list_is_refused_like_an_unreadable_one() {
         const LIMIT: usize = 4096;
@@ -400,7 +398,6 @@ mod tests {
 
     /// A Gateway with no list yet, or one past its age, admits nobody; with a fresh list it admits
     /// what the list does not name and refuses what it does.
-    /// Verifies: ADR-0015
     #[tokio::test(start_paused = true)]
     async fn the_verdict_follows_the_list_and_its_age() {
         let cert = certificate();

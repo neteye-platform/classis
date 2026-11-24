@@ -260,8 +260,8 @@ impl std::fmt::Display for Exchange {
 /// `Retry-After` as delta-seconds, the form a throttling Server sends.
 ///
 /// The header's other form — an HTTP date — is deliberately not parsed: doing so means an
-/// IMF-fixdate parser, and pulling a dependency in for it is an architecture-relevant decision
-/// (`AGENTS.md` §3.1) that a fallback answers just as well. An unparsable value yields `None`, and
+/// IMF-fixdate parser, and pulling a dependency in for it is not worth it when a fallback answers
+/// just as well. An unparsable value yields `None`, and
 /// the caller then waits the Baseline's *"minimum recommended retry interval"* of 30 seconds — which
 /// for a Server that is overloaded is the conservative reading of a header it sent to be given room.
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
@@ -299,7 +299,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// The workspace builds reqwest without a TLS provider of its own (ADR-0013); install the one
+    /// The workspace builds reqwest without a TLS provider of its own; install the one
     /// every binary installs, even though these exchanges are plaintext.
     fn install_ring_provider() {
         let _ = rustls::crypto::ring::default_provider().install_default();

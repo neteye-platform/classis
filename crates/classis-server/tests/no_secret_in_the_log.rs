@@ -1,4 +1,4 @@
-//! No secret reaches the Server's log (ADR-0022 clause 2): the `server` binary, logging at `trace`,
+//! No secret reaches the Server's log: the `server` binary, logging at `trace`,
 //! is sent a random string in an Agent's `Authorization` header (the credential the proxy in front
 //! of the Server checks, which the Server itself ignores) and a wrong and a right password on the
 //! Operator plane — and none of the values, nor a hash of them, is in what it wrote to standard

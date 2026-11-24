@@ -1,4 +1,4 @@
-//! Repeated admission failures from one peer address are throttled (ADR-0021 clause 24).
+//! Repeated admission failures from one peer address are throttled.
 //!
 //! Every `401` counts as a failure of the peer's IP address. A peer with `max_failures` failures
 //! within `window_secs` is in back-off for `backoff_secs`, and is answered before anything else is
@@ -208,7 +208,6 @@ mod tests {
 
     const PEER: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1));
 
-    /// Verifies: ADR-0021
     #[test]
     fn a_peer_that_fails_too_often_waits_out_the_back_off() {
         let (throttle, clock) = throttle(16);
@@ -237,7 +236,6 @@ mod tests {
         assert_eq!(throttle.retry_after(PEER), None);
     }
 
-    /// Verifies: ADR-0021
     #[test]
     fn a_full_table_keeps_an_address_in_back_off() {
         let (throttle, clock) = throttle(2);
@@ -255,7 +253,6 @@ mod tests {
         );
     }
 
-    /// Verifies: ADR-0021
     #[test]
     fn the_table_is_bounded_and_drops_the_oldest() {
         let (throttle, clock) = throttle(2);
@@ -276,7 +273,6 @@ mod tests {
 
     /// Attempts already under way count against the limit, so sending many at once gains
     /// nothing, and a whole IPv6 /64 is one peer.
-    /// Verifies: ADR-0021
     #[test]
     fn attempts_under_way_count_and_a_slash_64_is_one_peer() {
         let (throttle, _) = throttle(16);

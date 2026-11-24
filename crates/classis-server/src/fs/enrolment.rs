@@ -1,4 +1,4 @@
-//! The enrolment window and its queue on the filesystem (ADR-0037 clause 9): the default adapter
+//! The enrolment window and its queue on the filesystem: the default adapter
 //! behind [`EnrolmentStore`](crate::enrolment::EnrolmentStore).
 
 use std::path::{Path, PathBuf};
@@ -53,7 +53,6 @@ mod tests {
 
     /// The window persists in `enrolment.json`, owner-only, and an Enrolment opened on it again
     /// finds it open; a file that does not parse fails the open naming it.
-    /// Verifies: ADR-0037
     #[test]
     fn the_window_persists_in_enrolment_json() {
         let dir = tempfile::tempdir().expect("tempdir");

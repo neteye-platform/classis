@@ -44,7 +44,7 @@ verify_sha256 "$core_tgz" "$OTELCOL_CORE_SHA256"
 echo "Extracting otelcol to /usr/local/bin..."
 sudo tar -xvf "$core_tgz" -C /usr/local/bin otelcol
 
-# 3. Stage the minimal example Configurations (ADR-0023) for the two Collectors into
+# 3. Stage the minimal example Configurations for the two Collectors into
 # fleet-data/configurations/, so the Server offers them from its next start (see the seed script for
 # the Selector mapping and usage notes).
 echo "Staging example test Configurations..."

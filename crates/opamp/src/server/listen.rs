@@ -1,5 +1,5 @@
-//! The listener an OpAMP endpoint is served on (ADR-0010): TLS from the material the application
-//! hands it, the bounds on connection setup of ADR-0013, and what the handshake learned carried
+//! The listener an OpAMP endpoint is served on: TLS from the material the application
+//! hands it, the bounds on connection setup, and what the handshake learned carried
 //! into every request.
 //!
 //! Every other limit an endpoint enforces starts at a request. A peer that completes the TCP
@@ -48,13 +48,13 @@ pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// ([`Listener::with_max_connections`]).
 pub const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
 
-/// The HTTP/2 streams one connection may have open at once (ADR-0013).
+/// The HTTP/2 streams one connection may have open at once.
 pub const H2_MAX_CONCURRENT_STREAMS: u32 = 100;
 
-/// How often an HTTP/2 connection is pinged (ADR-0013).
+/// How often an HTTP/2 connection is pinged.
 pub const H2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
-/// How long a ping may go unanswered before the HTTP/2 connection is dropped (ADR-0013).
+/// How long a ping may go unanswered before the HTTP/2 connection is dropped.
 pub const H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long the TLS handshake may take before the connection is dropped — `axum_server`'s default,
@@ -62,11 +62,11 @@ pub const H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 pub const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Shuts listeners down. One handle may drain several; how long a drain may take is the caller's
-/// to state (ADR-0010 clause 6).
+/// to state.
 ///
 /// It is `axum_server`'s handle plus what that one cannot reach: the WebSocket sessions, which
 /// outlive the HTTP connection they were upgraded from and so are not counted by its drain. A
-/// shutdown tells them at once, and the same deadline bounds them (ADR-0013 clause 13).
+/// shutdown tells them at once, and the same deadline bounds them.
 #[derive(Clone, Debug)]
 pub struct Handle {
     server: axum_server::Handle<SocketAddr>,
@@ -267,7 +267,7 @@ impl Listener {
     }
 
     /// Sets the floor on the pace of bodies and messages, [`PACE_WINDOW`] and [`MIN_PACE_BYTES`]
-    /// unless stated. For a test to drive it short: the floor is no setting (ADR-0013 clause 14).
+    /// unless stated. For a test to drive it short: the floor is no setting.
     #[doc(hidden)]
     #[must_use]
     pub fn with_pace(mut self, window: Duration, min_bytes: u64) -> Self {
@@ -276,7 +276,7 @@ impl Listener {
     }
 
     /// Caps the connections held at once. A connection past the cap is closed on accept, before
-    /// any TLS handshake, and the ones already held keep working (ADR-0013).
+    /// any TLS handshake, and the ones already held keep working.
     #[must_use]
     pub fn with_max_connections(mut self, max: usize) -> Self {
         self.max_connections = max;
@@ -351,7 +351,7 @@ impl Listener {
 
 /// The header-read bound, with the timer it needs first: without the timer hyper discards the
 /// default, and with the timeout set but no timer it panics. HTTP/2 has no header phase to time,
-/// so it is bounded by its streams and its pings instead (ADR-0013).
+/// so it is bounded by its streams and its pings instead.
 fn bounded<A>(
     mut server: Server<SocketAddr, A>,
     header_read_timeout: Duration,

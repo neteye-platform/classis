@@ -1,4 +1,4 @@
-//! The proof a certificate renewal carries (ADR-0021 clause 27): the certificate being renewed, and
+//! The proof a certificate renewal carries: the certificate being renewed, and
 //! a signature made with its key over the new key. The Server reads which host a renewal is for from
 //! the proof, not from the connection it arrives on — behind a Gateway that connection presents the
 //! Gateway's certificate.
@@ -55,7 +55,6 @@ pub fn decode(content: &[u8]) -> Option<(&[u8], &[u8])> {
 mod tests {
     use super::*;
 
-    /// Verifies: ADR-0021
     #[test]
     fn a_proof_round_trips_and_a_torn_one_does_not_parse() {
         let content = encode(b"cert", b"sig");
@@ -67,7 +66,6 @@ mod tests {
 
     /// A length prefix past what the content holds — the largest one included — does not parse,
     /// on any pointer width.
-    /// Verifies: ADR-0021
     #[test]
     fn a_length_past_the_content_does_not_parse() {
         let mut content = u32::MAX.to_be_bytes().to_vec();

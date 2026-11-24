@@ -1,4 +1,4 @@
-//! The revoked certificates a Gateway fetches from its Server (ADR-0015, ADR-0021): a JSON body
+//! The revoked certificates a Gateway fetches from its Server: a JSON body
 //! the Gateway refuses its downstream peers by. Verifies: Q-2
 #![no_main]
 

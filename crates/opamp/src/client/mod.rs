@@ -1,4 +1,4 @@
-//! An OpAMP agent's side of the protocol (ADR-0010): one Agent's state machine, and the
+//! An OpAMP agent's side of the protocol: one Agent's state machine, and the
 //! connection that carries any number of them to a Server. Behind the `client` feature.
 //!
 //! - [`protocol`] — the state machine, without I/O: which fields a report carries, and what a reply

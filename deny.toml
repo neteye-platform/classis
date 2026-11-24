@@ -17,10 +17,10 @@ yanked = "deny"
 unused-ignored-advisory = "deny"
 ignore = [
     # chrono and humantime are unmaintained, with no patched version, and reach the Server only
-    # through object_store, the S3 client of ADR-0049, which has no release without them. Drop
+    # through object_store, the Server's S3 client, which has no release without them. Drop
     # these once object_store moves to jiff or time.
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; only through object_store (ADR-0049)" },
-    { id = "RUSTSEC-2026-0542", reason = "humantime is unmaintained; only through object_store (ADR-0049)" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; only through object_store" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime is unmaintained; only through object_store" },
 ]
 
 [licenses]
@@ -54,18 +54,18 @@ wildcards = "deny"
 # The workspace's own crates depend on each other by path; only unpublished crates may, so a path
 # never reaches crates.io as a wildcard.
 allow-wildcard-paths = true
-# The TLS stack is rustls on ring and nothing else (ADR-0013): no system OpenSSL, and no aws-lc,
+# The TLS stack is rustls on ring and nothing else: no system OpenSSL, and no aws-lc,
 # whose cmake and C build this project keeps out.
 deny = [
-    { name = "openssl", reason = "TLS is rustls on ring (ADR-0013)" },
-    { name = "openssl-sys", reason = "TLS is rustls on ring (ADR-0013)" },
-    { name = "native-tls", reason = "TLS is rustls on ring (ADR-0013)" },
-    { name = "aws-lc-rs", reason = "TLS is rustls on ring (ADR-0013)" },
-    { name = "aws-lc-sys", reason = "TLS is rustls on ring (ADR-0013)" },
-    # The bootstrap PKCS#12 file is PBES2 with AES only (ADR-0029); `p12-keystore`'s `pbes1`
+    { name = "openssl", reason = "TLS is rustls on ring" },
+    { name = "openssl-sys", reason = "TLS is rustls on ring" },
+    { name = "native-tls", reason = "TLS is rustls on ring" },
+    { name = "aws-lc-rs", reason = "TLS is rustls on ring" },
+    { name = "aws-lc-sys", reason = "TLS is rustls on ring" },
+    # The bootstrap PKCS#12 file is PBES2 with AES only; `p12-keystore`'s `pbes1`
     # feature, which would link these, stays off.
-    { name = "rc2", reason = "no legacy PKCS#12 scheme (ADR-0029)" },
-    { name = "des", reason = "no legacy PKCS#12 scheme (ADR-0029)" },
+    { name = "rc2", reason = "no legacy PKCS#12 scheme" },
+    { name = "des", reason = "no legacy PKCS#12 scheme" },
 ]
 
 [sources]

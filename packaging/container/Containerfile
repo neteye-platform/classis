@@ -1,4 +1,4 @@
-# The Server's image (ADR-0052): the binary the release built and checked, on a distroless glibc
+# The Server's image: the binary the release built and checked, on a distroless glibc
 # base, and nothing else.
 #
 # No `RUN`: the image copies a binary that already exists, so a multi-architecture build needs no
@@ -45,9 +45,9 @@ VOLUME /var/lib/classis
 # reads by default, and every other relative path, then never resolve into the volume it writes.
 WORKDIR /
 
-# Everything else, every secret included, is mounted as a file and named through the environment
-# (ADR-0051). The Server speaks plain HTTP behind a reverse proxy that terminates TLS and
-# authenticates the Agents (ADR-0064): reach the Agent port through the proxy alone. Off the
+# Everything else, every secret included, is mounted as a file and named through the environment.
+# The Server speaks plain HTTP behind a reverse proxy that terminates TLS and
+# authenticates the Agents: reach the Agent port through the proxy alone. Off the
 # loopback it refuses to start without `[rest.auth]`, so this image started with nothing mounted
 # names what is missing and stops.
 ENV CLASSIS_SERVER__DATA_DIR=/var/lib/classis \
@@ -55,7 +55,7 @@ ENV CLASSIS_SERVER__DATA_DIR=/var/lib/classis \
     CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321
 
 # The Agent plane and the Operator plane. No HEALTHCHECK: there is no shell to run one. An
-# orchestrator probes `GET /livez` and `GET /readyz` on 4321 (ADR-0063), or 4320 over TCP.
+# orchestrator probes `GET /livez` and `GET /readyz` on 4321, or 4320 over TCP.
 EXPOSE 4320 4321
 
 ENTRYPOINT ["/usr/local/bin/server"]

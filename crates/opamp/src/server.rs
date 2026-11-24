@@ -1,5 +1,5 @@
-//! One OpAMP server endpoint, for every surface that speaks the Server side of the protocol
-//! (ADR-0010). Behind the `server` feature.
+//! One OpAMP server endpoint, for every surface that speaks the Server side of the protocol.
+//! Behind the `server` feature.
 //!
 //! This crate carries the communication and nothing else: it tells a WebSocket upgrade from a
 //! plain-HTTP exchange as the specification describes, applies the media type, gzip and the
@@ -252,7 +252,7 @@ fn peer_of(extensions: &Extensions) -> Option<SocketAddr> {
 }
 
 /// The WebSocket upgrade, answered here and taken over through hyper, so that `opamp` reads the
-/// frames itself and can judge a message by its data (ADR-0010 clause 5).
+/// frames itself and can judge a message by its data.
 async fn upgrade<H: Handler>(
     State(endpoint): State<Arc<Endpoint<H>>>,
     mut request: Request,
@@ -367,7 +367,7 @@ async fn serve_socket<H: Handler, S>(
 {
     let handler = &endpoint.handler;
     let limit = endpoint.limit;
-    // A listener that holds its connections to a floor (ADR-0013 clause 14) is judged once a window.
+    // A listener that holds its connections to a floor is judged once a window.
     let mut check = messages.as_ref().map(|messages| {
         let mut check = tokio::time::interval_at(
             tokio::time::Instant::now() + messages.window(),

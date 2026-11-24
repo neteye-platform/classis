@@ -1,4 +1,4 @@
-//! Package records in PostgreSQL (ADR-0050 clause 13): the PostgreSQL adapter behind
+//! Package records in PostgreSQL: the PostgreSQL adapter behind
 //! [`PackageBackend`](crate::packages::PackageBackend) — one row per Package and one per entry,
 //! each entry naming its artifact by hash. The bytes are the blob store's, with either.
 
@@ -104,7 +104,7 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
         if let Some(signature) = &signature {
             if !crate::packages::signature_fits(signature) {
                 return Err(named(format!(
-                    "invalid signature: {} bytes, not 1 to {} (ADR-0066)",
+                    "invalid signature: {} bytes, not 1 to {}",
                     signature.len(),
                     classis_core::package::MAX_SIGNATURE_LEN
                 )));
@@ -116,7 +116,7 @@ pub(crate) async fn read_all(client: &impl GenericClient) -> Result<Vec<Package>
                 platform,
                 content_hash,
                 size: unsigned(row.get(5)),
-                // Offered only once the store's verifier has checked it (ADR-0066).
+                // Offered only once the store's verifier has checked it.
                 signature: signature.map(crate::packages::Signature::Withheld),
             },
         );
@@ -246,14 +246,12 @@ mod tests {
         assert_eq!(loaded(&*open()), [shown(&narrowed)]);
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_package_port_contract_holds_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
         contract(&|| Box::new(FsPackageBackend::open(dir.path()).expect("open")));
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn the_package_port_contract_holds_on_postgres() {
         let Some(test) = TestDatabase::named() else {
@@ -276,7 +274,6 @@ mod tests {
         assert_eq!(loaded(store), [shown(&before)]);
     }
 
-    /// Verifies: ADR-0050
     #[test]
     fn a_package_put_is_whole_or_nothing_on_the_filesystem() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -290,7 +287,6 @@ mod tests {
 
     /// One transaction per call, and a row that does not decode fails the load naming the
     /// Package.
-    /// Verifies: ADR-0050
     #[test]
     fn a_package_put_is_whole_or_nothing_and_a_bad_row_is_named_on_postgres() {
         let Some(test) = TestDatabase::named() else {

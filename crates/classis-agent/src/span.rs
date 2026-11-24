@@ -1,12 +1,12 @@
-//! An operation's outcome on the span that measures it (ADR-0016): recorded through `tracing`, which
+//! An operation's outcome on the span that measures it: recorded through `tracing`, which
 //! the telemetry adapter turns into the OpenTelemetry span status.
 
 /// The two fields every operation span declares empty and fills in when it ends.
 ///
 /// They are `tracing-opentelemetry`'s reserved names, not this project's: recording them turns into
-/// the OpenTelemetry span status, which is what ADR-0016 meant by *"the existing outcome becomes the
-/// span status"*. Declared empty at creation because a field can only be recorded on a span that
-/// declared it — and the outcome is, by definition, not known then.
+/// the OpenTelemetry span status, so the existing outcome becomes the span status. Declared empty
+/// at creation because a field can only be recorded on a span that declared it — and the outcome
+/// is, by definition, not known then.
 ///
 /// Written through [`failed`] and [`succeeded`] rather than by hand at a dozen call sites, so the
 /// spelling of the status codes lives in one place.
