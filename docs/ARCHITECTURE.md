@@ -60,7 +60,8 @@ vocabulary of [`GLOSSARY.md`](GLOSSARY.md). One level deep, deeper only where
 the size of a part earns it. The golden path and the test pattern an agent
 copies from are named here.
 
-Five crates in one workspace:
+Seven crates in one workspace, the two OAuth crates not yet wired into the
+product — no Server or Client code depends on them:
 
 - **`opamp`** — the OpAMP communication layer, publishable on its own. Always
   the generated types, framing and the endpoint's body rules. Behind `client`,
@@ -83,6 +84,17 @@ Five crates in one workspace:
   `pkcs12::file`. The `PackageSignature` and its parser are core; verifying one
   up to the compiled-in Package Roots, with `rustls-webpki`, the clock and a
   debug build's Root from the environment, is the adapter `package::chain`.
+- **`oauth-registration`** — RFC 7591 dynamic client registration and nothing
+  more, with no word of Classis in it: a `server` module, the registration
+  route over a storage trait the application implements, and a `client` module,
+  the one request a host makes.
+- **`oauth-token`** — the client-credentials grant of RFC 6749 §4.4 and the
+  bearer credential of RFC 6750, likewise with no word of Classis in it:
+  `server`, the token route over a storage trait; `client`, the one request a
+  host makes; `bearer`, the reading of a presented credential and of the
+  `WWW-Authenticate` challenges that refuse one, which the registration route
+  uses; and `secret`, the generator of the 256-bit credentials and their
+  SHA-256 hash.
 - **`classis-server`** — the Server: the fleet and its Hosts, its
   Configurations, labels, packages and Deployments, the Agent plane and the
   Operator plane.
@@ -360,10 +372,11 @@ that alters one edits its line here ([`AGENTS.md`
 
 ### Shape
 
-- Five crates in one Cargo workspace on tokio and axum: `opamp` (the whole OpAMP
-  layer, publishable, reading WebSocket frames itself), `classis-core`,
-  `classis-server`, `classis-agent` and `classis-tools`. Configuration is TOML,
-  and the Server's may also come from its environment.
+- Seven crates in one Cargo workspace on tokio and axum: `opamp` (the whole
+  OpAMP layer, publishable, reading WebSocket frames itself), `classis-core`,
+  `classis-server`, `classis-agent`, `classis-tools`, and the standalone
+  `oauth-token` and `oauth-registration`, with no word of Classis in them.
+  Configuration is TOML, and the Server's may also come from its environment.
 - Ports and adapters: every dependency points at the core, decided by the
   `dependency_direction` test.
 - The protocol is pinned to a released OpAMP Baseline, compiled from the

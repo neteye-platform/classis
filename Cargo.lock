@@ -1987,6 +1987,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "oauth-registration"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "http",
+ "oauth-token",
+ "reqwest",
+ "rustls",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "oauth-token"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "constant_time_eq",
+ "form_urlencoded",
+ "http",
+ "percent-encoding",
+ "reqwest",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+ "zeroize",
+]
+
+[[package]]
 name = "objc2-core-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

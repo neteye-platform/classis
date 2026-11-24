@@ -1,0 +1,43 @@
+[package]
+name = "oauth-registration"
+description = "OAuth 2.0 dynamic client registration (RFC 7591) for the client-credentials grant: a registration endpoint over a storage trait, and the one request a client makes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Neither side is on by default: without features this is the profile's two constants alone, and a
+# program that wants neither pulls no web framework or HTTP client.
+[features]
+server = ["dep:axum", "dep:tokio", "dep:serde_json", "dep:uuid", "dep:http", "dep:zeroize"]
+client = ["dep:reqwest", "dep:serde_json", "dep:zeroize"]
+
+[dependencies]
+oauth-token.workspace = true
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true
+rustls.workspace = true
+tower.workspace = true
+sha2.workspace = true
+base64.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+
+[[test]]
+name = "server"
+required-features = ["server"]
+
+[[test]]
+name = "client"
+required-features = ["client"]

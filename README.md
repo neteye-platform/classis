@@ -147,12 +147,14 @@ Foreign Agent, Plugin, Port, Selector, Package, Deployment, …) are defined in
 ## Build, Test & Run
 
 The toolchain is **Rust stable**, provided by the Dev Container; the code is one
-Cargo workspace with five crates — `opamp` (the OpAMP communication layer,
+Cargo workspace with seven crates — `opamp` (the OpAMP communication layer,
 publishable on its own, with an Agent's client and a server endpoint with their
 TLS and listener behind the `client` and `server` features), `classis-core`
 (what both ends share beyond the protocol), `classis-server` (the Server),
-`classis-agent` (the Client, in all its modes), and `classis-tools` (the
-operator command-line tools). This section is the single source for
+`classis-agent` (the Client, in all its modes), `classis-tools` (the operator
+command-line tools), `oauth-token` (the client-credentials grant and bearer
+parsing), and `oauth-registration` (dynamic registration). This section is the
+single source for
 build/test/run commands — both humans and agents rely on it (AGENTS.md links
 here).
 
@@ -165,6 +167,13 @@ here).
   done` — inside the workspace Cargo builds `opamp` once with every feature any
   crate asks for, so only a build of each feature on its own shows that it
   stands alone.
+- **Test and lint the OAuth crates per feature:** `cargo test -p oauth-token -p
+  oauth-registration --locked --all-features` and `for f in "" client server; do
+  cargo clippy -p oauth-token -p oauth-registration --all-targets --locked
+  --no-default-features --features "$f" -- -D warnings; done` — their tests need
+  features the workspace build alone does not turn on for a crate's own test
+  targets, and every optional feature is verified separately, for the same
+  reason as with `opamp`.
 - **Lint and test `classis-agent` with fewer Supervisor kinds:** `cargo clippy
   -p classis-agent --all-targets --no-default-features -- -D warnings && cargo
   test -p classis-agent --no-default-features` — a wrapped kind, when the code
@@ -179,7 +188,8 @@ here).
 - **Check the supply chain:** `cargo deny check` (needs `cargo install
   cargo-deny`): advisories, licences, sources and banned crates, as
   [`deny.toml`](deny.toml) sets them; reviewed advisories are recorded there
-  with a reason
+  with a reason. The fuzz targets keep a lockfile of their own; audit that graph
+  too with `cargo deny --manifest-path fuzz/Cargo.toml check`
 - **Fuzz a parser:** `cargo +nightly fuzz run <target> fuzz/corpus/<target>
   fuzz/seeds/<target>` (needs `cargo install cargo-fuzz` and a nightly
   toolchain); the targets are listed in [`fuzz/Cargo.toml`](fuzz/Cargo.toml),
