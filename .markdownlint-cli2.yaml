@@ -10,3 +10,6 @@ config:
   # A code span may hold a leading space on purpose: the client CA's name with ` CA` turned into
   # ` Certificate`.
   no-space-in-code: false
+  # The changelog repeats Added, Changed and Removed under every version.
+  no-duplicate-heading:
+    siblings_only: true
