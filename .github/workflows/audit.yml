@@ -43,5 +43,7 @@ jobs:
       - name: cargo deny
         run: cargo deny check
       # The fuzz targets have a lockfile of their own (fuzz/Cargo.lock); the same gate holds.
+      # The main audit above enforces that every exception in deny.toml is still needed; the fuzz
+      # graph carries no root-only object_store dependency, so only that lint is relaxed here.
       - name: cargo deny (fuzz targets)
-        run: cargo deny --manifest-path fuzz/Cargo.toml check
+        run: cargo deny --manifest-path fuzz/Cargo.toml check --allow advisory-not-detected

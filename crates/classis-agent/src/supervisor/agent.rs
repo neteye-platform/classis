@@ -2196,7 +2196,7 @@ mod tests {
 
     /// The reason the naive gate is wrong: a Server may send an offer
     /// *without* declaring `OffersConnectionSettings` — this project's own does exactly that for a
-    /// `[telemetry_offer]`-only or `[client_ca]`-only configuration. Withholding the acknowledgement
+    /// `[telemetry_offer]`-only configuration. Withholding the acknowledgement
     /// would leave its hash gate open and have it re-offer for ever, so the offer arms the report.
     #[test]
     fn a_connection_settings_status_is_reported_to_a_server_that_offered_without_declaring_the_bit()

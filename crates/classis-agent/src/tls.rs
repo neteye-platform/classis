@@ -17,9 +17,6 @@ use crate::config::ClientConfig;
 pub fn trust(config: &ClientConfig) -> Result<ClientTls, String> {
     Ok(ClientTls {
         ca_pem: config.ca_file().map(certificates_file).transpose()?,
-        // The Client presents no client certificate: the Server admits it by its bearer token. The
-        // field goes with the certificate cleanup of `opamp`.
-        identity: None,
     })
 }
 

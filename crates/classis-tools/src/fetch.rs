@@ -1397,14 +1397,11 @@ fn server_http(cacert: Option<&Path>) -> Result<reqwest::Client, String> {
     let ca_pem = cacert
         .map(|path| std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display())))
         .transpose()?;
-    opamp::client::connection::ClientTls {
-        ca_pem,
-        identity: None,
-    }
-    .trust(client_builder())
-    .map_err(|e| format!("--cacert: {e}"))?
-    .build()
-    .map_err(|e| format!("cannot build an HTTP client: {e}"))
+    opamp::client::connection::ClientTls { ca_pem }
+        .trust(client_builder())
+        .map_err(|e| format!("--cacert: {e}"))?
+        .build()
+        .map_err(|e| format!("cannot build an HTTP client: {e}"))
 }
 
 fn client_builder() -> reqwest::ClientBuilder {

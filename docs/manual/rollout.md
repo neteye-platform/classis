@@ -217,10 +217,10 @@ artifact is uploaded: the Server holds what it offers, and a Client fetches from
 its own Server alone. Nothing in this step reaches any host, and nothing in the
 next one does either: a stored Package aims at nobody at all.
 
-The calls go to the Operator plane over TLS. `--cacert ca.pem` names the CA that
-signed the Server's certificate; off the loopback, add the operator credential
-with `-u`. Steps 4 to 6 and 9 can be done in the UI's **Packages** and
-**Deployments** tabs as well;
+The calls go to the Operator plane through its proxy, over TLS.
+`--cacert ca.pem` names the CA that signed the proxy's certificate; off the
+loopback, add the operator credential with `-u`. Steps 4 to 6 and 9 can be done
+in the UI's **Packages** and **Deployments** tabs as well;
 [A host's life](lifecycle.md#releasing-an-update-in-the-ui) shows how.
 
 ```console

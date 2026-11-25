@@ -14,8 +14,8 @@ path = "src/main.rs"
 
 [features]
 # `agent_app_open_for_tests` and `agent_app_admitted_as_for_tests`: the Agent plane without
-# admission. Enabled by the tests of this crate, through its own dev-dependency, and until the
-# certificate cleanup by those of `classis-agent`; never by a build of the Server.
+# admission. Enabled by the tests of this crate alone, through its own dev-dependency, never by a
+# build of the Server.
 test-support = []
 
 [dependencies]
@@ -44,11 +44,6 @@ argon2.workspace = true
 libc.workspace = true
 base64.workspace = true
 constant_time_eq.workspace = true
-# Reading when a certificate the Server depends on ends. `verify` and `rcgen` serve only
-# the unwired certificate modules (`ca`, `bootstrap`, `revocation`) until the certificate cleanup
-# removes them.
-x509-parser = { workspace = true, features = ["verify"] }
-rcgen.workspace = true
 # The TLS 1.3 client configuration of the S3 store and of PostgreSQL: the
 # Server terminates no TLS of its own.
 rustls.workspace = true
@@ -75,6 +70,7 @@ classis-core = { workspace = true, features = ["test-support"] }
 # The integration tests of this crate enable its own `test-support` feature.
 classis-server = { path = ".", features = ["test-support"] }
 flate2.workspace = true
+rcgen.workspace = true
 tokio-tungstenite.workspace = true
 # The two OAuth clients enrol a host and ask for its token in the tests of `/v1/enrol` and
 # `/v1/token`.

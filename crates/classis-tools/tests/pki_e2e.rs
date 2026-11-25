@@ -58,13 +58,12 @@ async fn a_fleet_made_by_pki_init_lets_a_host_enrol_through_the_proxy_over_tls()
         !server_dir.join("server.toml.fragment").exists(),
         "nothing for the Server's configuration: the Server holds no certificate"
     );
-    // The proxy's TLS: the certificate and key pki init made, and no client certificate asked for.
+    // The proxy's TLS: the certificate and key pki init made.
     let front = opamp::server::listen::ServerTls {
         identity: opamp::tls::Identity {
             cert_pem: std::fs::read(server_dir.join("server.pem")).expect("server.pem"),
             key_pem: std::fs::read(server_dir.join("server-key.pem")).expect("server-key.pem"),
         },
-        client_auth: opamp::server::listen::ClientAuth::None,
     }
     .rustls_config()
     .expect("a TLS front accepts the material pki init made");
@@ -120,7 +119,6 @@ async fn a_fleet_made_by_pki_init_lets_a_host_enrol_through_the_proxy_over_tls()
         &state_dir,
         opamp::client::ClientTls {
             ca_pem: Some(std::fs::read(&host.tls.ca_file).expect("the CA")),
-            identity: None,
         },
         &NoService,
     )

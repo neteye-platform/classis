@@ -185,8 +185,11 @@ here).
 - **Check the supply chain:** `cargo deny check` (needs `cargo install
   cargo-deny`): advisories, licences, sources and banned crates, as
   [`deny.toml`](deny.toml) sets them; reviewed advisories are recorded there
-  with a reason. The fuzz targets keep a lockfile of their own; audit that graph
-  too with `cargo deny --manifest-path fuzz/Cargo.toml check`
+  with a reason. The fuzz targets keep a lockfile of their own, so the gate runs
+  again on that graph with `cargo deny --manifest-path fuzz/Cargo.toml check
+  --allow advisory-not-detected` — only the main graph owns the root-only
+  exceptions and validates them, so that one lint alone is relaxed for the fuzz
+  graph
 - **Fuzz a parser:** `cargo +nightly fuzz run <target> fuzz/corpus/<target>
   fuzz/seeds/<target>` (needs `cargo install cargo-fuzz` and a nightly
   toolchain); the targets are listed in [`fuzz/Cargo.toml`](fuzz/Cargo.toml),

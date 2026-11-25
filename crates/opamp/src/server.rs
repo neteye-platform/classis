@@ -78,7 +78,8 @@ impl Settings {
 pub struct RequestInfo<'a> {
     pub transport: Transport,
     pub headers: &'a HeaderMap,
-    /// The request's extensions — where a TLS acceptor puts the peer certificate.
+    /// The request's extensions — where a layer in front of the endpoint puts what it knows of the
+    /// request.
     pub extensions: &'a Extensions,
     /// The peer, when the listener was served with connect info.
     pub peer: Option<SocketAddr>,
@@ -208,7 +209,8 @@ pub struct Closing {
 }
 
 impl Closing {
-    /// `1008`: the connection violates the endpoint's policy — what a revoked proof does.
+    /// `1008`: the connection violates the endpoint's policy — what a refused credential does, a
+    /// replaced token for one.
     #[must_use]
     pub fn policy(reason: &str) -> Self {
         Closing {

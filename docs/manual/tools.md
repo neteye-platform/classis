@@ -264,9 +264,9 @@ only the request that failed.
 - **Network egress** to `api.github.com` and to the release asset host.
 - **The upload speaks TLS to the Operator plane**, so the Server's URL is
   `https://`; type it so at the prompt, which suggests `http://`. The tool has
-  no CA option and trusts the Server's certificate through this machine's own
-  trust store, so a Server whose certificate comes from a private CA needs that
-  CA trusted here. Off the loopback, carry the
+  no CA option and trusts the certificate of the proxy in front of the Server
+  through this machine's own trust store, so a proxy whose certificate comes
+  from a private CA needs that CA trusted here. Off the loopback, carry the
   [`[rest.auth]`](server.md#the-operator-plane-restauth) credential in the URL:
   `https://fleet-admin:secret@fleet.example:4321`.
 - **GitHub rate-limits unauthenticated requests to 60 per hour** per address. A

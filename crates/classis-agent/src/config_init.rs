@@ -965,8 +965,6 @@ mod tests {
         let held = ClientConfig {
             tls: Some(crate::config::TlsConfig {
                 ca_file: Some(PathBuf::from("/held/ca.pem")),
-                cert_file: None,
-                key_file: None,
             }),
             ..ClientConfig::default()
         };

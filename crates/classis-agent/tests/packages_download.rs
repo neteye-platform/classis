@@ -461,7 +461,7 @@ async fn tls_origin(
     SocketAddr,
     std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
 ) {
-    use opamp::server::listen::{ClientAuth, Listener, ServerTls};
+    use opamp::server::listen::{Listener, ServerTls};
     let key = rcgen::KeyPair::generate().expect("key");
     let cert = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
         .expect("params")
@@ -472,7 +472,6 @@ async fn tls_origin(
             cert_pem: cert.pem().into_bytes(),
             key_pem: key.serialize_pem().into_bytes(),
         },
-        client_auth: ClientAuth::None,
     }
     .rustls_config()
     .expect("tls");
@@ -543,8 +542,6 @@ async fn the_bearer_token_goes_to_the_servers_origin_alone_over_tls() {
         endpoint: format!("wss://{server}/v1/opamp"),
         tls: Some(classis_agent::config::TlsConfig {
             ca_file: Some(dir.path().join("ca.pem")),
-            cert_file: None,
-            key_file: None,
         }),
         state_dir: dir.path().join("state"),
         credentials: Some(classis_agent::credentials::Credentials {

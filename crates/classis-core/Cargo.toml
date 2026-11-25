@@ -19,17 +19,8 @@ test-support = ["dep:ring", "dep:time"]
 git2.workspace = true
 
 [dependencies]
-# The bootstrap certificate as a password-protected PKCS#12 file, written by the Server and read by
-# the Client: `pkcs12`, `pkcs5` and `der` read which schemes a file uses; `rcgen` and
-# `x509-parser` tell whether the key and the certificate belong together.
-p12-keystore.workspace = true
-pkcs12.workspace = true
-pkcs5.workspace = true
-der.workspace = true
+# A test Package Root and Package Signers (`package::testing`) are made with `rcgen`.
 rcgen.workspace = true
-x509-parser.workspace = true
-# The host a certificate that names none is taken for, on the Server and on a Gateway alike:
-# the SHA-256 of its issuer and serial.
 sha2.workspace = true
 hex.workspace = true
 # A Package signature is a Package Signer's certificate and its Ed25519 signature, verified up to a
@@ -39,9 +30,6 @@ rustls-pki-types.workspace = true
 # A test Package Root and Package Signers for the tests of every crate (`package::testing`).
 ring = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
-# The key a `bootstrap.p12` opens to is held in a buffer wiped on drop. No TLS or
-# crypto backend comes with it.
-zeroize.workspace = true
 
 [dev-dependencies]
 ring.workspace = true

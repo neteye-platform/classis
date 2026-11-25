@@ -55,8 +55,8 @@ pub struct PersistedAgent {
     /// The operator's labels on this Agent: part of its record, so they follow
     /// a re-key and leave with a forget.
     pub labels: BTreeMap<String, String>,
-    /// The Host the Agent last arrived over — its own on a direct connection,
-    /// the Gateway's behind one; `None` without `[client_ca]`. It grants nothing.
+    /// The Host the Agent last arrived over; `None` while nothing names one.
+    /// It grants nothing.
     pub host: Option<String>,
 }
 

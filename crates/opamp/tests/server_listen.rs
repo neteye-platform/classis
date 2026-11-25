@@ -1,19 +1,19 @@
-//! The listener an OpAMP endpoint is served on: the bound on connection setup, the
-//! client-certificate rules, and what the handshake carries into a request.
+//! The listener an OpAMP endpoint is served on: the bound on connection setup, TLS with
+//! the server's certificate alone, and what the listener carries into a request.
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::extract::ConnectInfo;
 use axum::routing::get;
-use axum::{Extension, Router};
-use opamp::server::listen::{ClientAuth, Handle, Listener, PeerCertificate, ServerTls};
+use axum::Router;
+use opamp::server::listen::{Handle, Listener, ServerTls};
 use opamp::tls::Identity;
 use rcgen::{CertificateParams, IsCa, Issuer, KeyPair};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-/// A throwaway CA that issues the server's and the clients' certificates.
+/// A throwaway CA that issues the server's certificate and that the clients trust.
 struct Pki {
     ca_pem: String,
     ca_key_pem: String,
@@ -48,12 +48,9 @@ impl Pki {
 fn router() -> Router {
     Router::new().route(
         "/",
-        get(
-            |Extension(peer): Extension<PeerCertificate>,
-             ConnectInfo(addr): ConnectInfo<SocketAddr>| async move {
-                format!("certificate={} peer={}", peer.present(), addr.ip())
-            },
-        ),
+        get(|ConnectInfo(addr): ConnectInfo<SocketAddr>| async move {
+            format!("peer={}", addr.ip())
+        }),
     )
 }
 
@@ -67,12 +64,11 @@ fn bind() -> (std::net::TcpListener, u16) {
     (listener, port)
 }
 
-/// A TLS listener on an ephemeral port, with `client_auth`, and the port it is on.
-fn spawn_tls(pki: &Pki, client_auth: ClientAuth) -> u16 {
+/// A TLS listener on an ephemeral port, and the port it is on.
+fn spawn_tls(pki: &Pki) -> u16 {
     opamp::tls::install_ring_provider();
     let tls = ServerTls {
         identity: pki.issue("localhost"),
-        client_auth,
     }
     .rustls_config()
     .expect("server config");
@@ -81,17 +77,13 @@ fn spawn_tls(pki: &Pki, client_auth: ClientAuth) -> u16 {
     port
 }
 
-fn client(pki: &Pki, identity: Option<&Identity>) -> reqwest::Client {
+fn client(pki: &Pki) -> reqwest::Client {
     opamp::tls::install_ring_provider();
-    let mut builder = reqwest::Client::builder()
+    reqwest::Client::builder()
         .use_rustls_tls()
-        .tls_certs_only([reqwest::Certificate::from_pem(pki.ca_pem.as_bytes()).expect("ca")]);
-    if let Some(identity) = identity {
-        let mut pem = identity.key_pem.clone();
-        pem.extend_from_slice(&identity.cert_pem);
-        builder = builder.identity(reqwest::Identity::from_pem(&pem).expect("identity"));
-    }
-    builder.build().expect("client")
+        .tls_certs_only([reqwest::Certificate::from_pem(pki.ca_pem.as_bytes()).expect("ca")])
+        .build()
+        .expect("client")
 }
 
 async fn get_text(client: &reqwest::Client, port: u16) -> reqwest::Result<String> {
@@ -124,9 +116,9 @@ async fn a_connection_that_never_finishes_its_headers_is_hung_up_on() {
     assert!(closed.is_ok(), "the listener left a silent connection open");
 }
 
-/// A plain listener puts the peer's address into the request, and no certificate.
+/// A plain listener puts the peer's address into the request.
 #[tokio::test]
-async fn a_plain_listener_carries_the_peer_and_no_certificate() {
+async fn a_plain_listener_carries_the_peer() {
     opamp::tls::install_ring_provider();
     let (listener, port) = bind();
     spawn(Listener::new(listener, Handle::new()));
@@ -136,50 +128,20 @@ async fn a_plain_listener_carries_the_peer_and_no_certificate() {
         .text()
         .await
         .expect("text");
-    assert_eq!(text, "certificate=false peer=127.0.0.1");
+    assert_eq!(text, "peer=127.0.0.1");
 }
 
-/// With an optional client certificate the handshake succeeds either way, and the request says
-/// whether a verified certificate came with it — so the application can require one per route.
+/// A TLS listener authenticates itself alone: a client that trusts its CA is served, with the
+/// peer's address in the request, and one that trusts another CA never gets past the handshake.
 #[tokio::test]
-async fn an_optional_client_certificate_is_carried_into_the_request() {
+async fn a_tls_listener_serves_the_client_that_trusts_it_and_no_other() {
     let pki = Pki::new();
-    let port = spawn_tls(
-        &pki,
-        ClientAuth::Optional {
-            ca_pem: pki.ca_pem.clone().into_bytes(),
-        },
-    );
-    let with = get_text(&client(&pki, Some(&pki.issue("agent"))), port)
+    let port = spawn_tls(&pki);
+    let served = get_text(&client(&pki), port)
         .await
-        .expect("with a certificate");
-    assert_eq!(with, "certificate=true peer=127.0.0.1");
-    let without = get_text(&client(&pki, None), port)
-        .await
-        .expect("without a certificate");
-    assert_eq!(without, "certificate=false peer=127.0.0.1");
-}
-
-/// With a required client certificate, a peer without one never gets past the handshake, and one
-/// from another CA neither.
-#[tokio::test]
-async fn a_required_client_certificate_refuses_the_handshake_without_one() {
-    let pki = Pki::new();
-    let port = spawn_tls(
-        &pki,
-        ClientAuth::Required {
-            ca_pem: pki.ca_pem.clone().into_bytes(),
-        },
-    );
-    assert!(get_text(&client(&pki, None), port).await.is_err());
-    let stranger = Pki::new().issue("agent");
-    assert!(get_text(&client(&pki, Some(&stranger)), port)
-        .await
-        .is_err());
-    let with = get_text(&client(&pki, Some(&pki.issue("agent"))), port)
-        .await
-        .expect("with a certificate");
-    assert_eq!(with, "certificate=true peer=127.0.0.1");
+        .expect("a trusting client");
+    assert_eq!(served, "peer=127.0.0.1");
+    assert!(get_text(&client(&Pki::new()), port).await.is_err());
 }
 
 /// Material that cannot be used is refused before anything listens, naming the part.
@@ -188,12 +150,7 @@ fn unusable_material_names_the_part() {
     let pki = Pki::new();
     let mut identity = pki.issue("localhost");
     identity.key_pem = b"no key here".to_vec();
-    let error = ServerTls {
-        identity,
-        client_auth: ClientAuth::None,
-    }
-    .rustls_config()
-    .expect_err("no key");
+    let error = ServerTls { identity }.rustls_config().expect_err("no key");
     assert!(error.starts_with("the TLS key:"), "{error}");
 }
 
@@ -204,7 +161,7 @@ fn unusable_material_names_the_part() {
 #[tokio::test]
 async fn a_client_offering_only_tls_1_2_is_refused() {
     let pki = Pki::new();
-    let port = spawn_tls(&pki, ClientAuth::None);
+    let port = spawn_tls(&pki);
     let mut roots = rustls::RootCertStore::empty();
     for cert in opamp::tls::certificates(pki.ca_pem.as_bytes()).expect("ca") {
         roots.add(cert).expect("anchor");
@@ -280,7 +237,7 @@ async fn connections_past_the_cap_are_refused_while_established_ones_keep_workin
         .text()
         .await
         .expect("text");
-    assert_eq!(text, "certificate=false peer=127.0.0.1");
+    assert_eq!(text, "peer=127.0.0.1");
 }
 
 /// A listener without TLS on an address other than the loopback literals is refused before it

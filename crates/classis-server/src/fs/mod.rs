@@ -8,24 +8,18 @@
 
 mod agents;
 mod blobs;
-mod bootstrap;
 mod clients;
 mod configs;
 mod deployments;
-mod enrolment;
 mod packages;
-mod revocation;
 mod spaces;
 
 pub use agents::FsAgentStore;
 pub use blobs::FsBlobStore;
-pub use bootstrap::FsBootstrapStore;
 pub use clients::FsClientStore;
 pub use configs::FsConfigBackend;
 pub use deployments::FsDeploymentBackend;
-pub use enrolment::FsEnrolmentStore;
 pub use packages::FsPackageBackend;
-pub use revocation::FsLedgerStore;
 pub use spaces::FsSpaceStore;
 
 use std::ffi::OsString;
