@@ -114,13 +114,15 @@ module has no role.
   own (`bridge`). With `[packages.repository]` the `PackageStore` holds what
   the adapter in `repository` read from a Package Repository and writes
   nothing: `PackageStore::from_repository` takes those Packages, the
-  repository is the `BlobStore` the downloads read, every write is refused, and
-  a Manifest that is not well formed or names a Blob the repository lacks is
-  set aside rather than failing the startup. The adapter reads a directory
-  through `object_store`'s local filesystem, the interface of its S3 client,
-  and the Manifest through `fs::read_manifest`, the format the filesystem
-  package backend writes; `BootstrapStore` under the `BootstrapCertificates` in
-  `bootstrap`; `EnrolmentStore` under the `Enrolment` in `enrolment`;
+  repository's `RepositoryBlobs` is the `BlobStore` the downloads read, every
+  write is refused, and a Manifest that is not well formed or names a Blob the
+  repository lacks is set aside rather than failing the startup. The adapter
+  reads a directory through `object_store`'s local filesystem and a prefix of a
+  bucket through its S3 client, connected as the S3 blob store is
+  (`s3::connect`), and the Manifest through `fs::read_manifest`, the format the
+  filesystem package backend writes; `BootstrapStore` under the
+  `BootstrapCertificates` in `bootstrap`; `EnrolmentStore` under the
+  `Enrolment` in `enrolment`;
   `LedgerStore` in `revocation`. The filesystem adapters are in `fs`, which also
   opens the data directory and refuses anything its layout does not name. With
   `[database] store = "postgres"` every port but the blob port has its

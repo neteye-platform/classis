@@ -278,6 +278,7 @@ fn records_that_hold_an_uploaded_package_stop_the_startup() {
         &classis_server::Records::Files(data_dir.path().to_path_buf()),
         &RepositoryConfig {
             path: Some(root.path().to_path_buf()),
+            s3: None,
         },
     )
     .err()
@@ -293,6 +294,7 @@ fn records_that_hold_an_uploaded_package_stop_the_startup() {
         &classis_server::Records::Files(empty.path().to_path_buf()),
         &RepositoryConfig {
             path: Some(root.path().to_path_buf()),
+            s3: None,
         },
     )
     .expect("records without Packages");

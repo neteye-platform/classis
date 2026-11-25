@@ -526,15 +526,32 @@ as [`[blobs]`](#blobs) says. Present, the Server reads its Packages from a
 [Package Repository](#a-package-repository-packages-another-party-writes) and
 writes none.
 
+The repository has one source: a directory, or a prefix of a bucket.
+
 ```toml
 [packages.repository]
 path = "/srv/classis/repository"
 ```
 
+```toml
+[packages.repository.s3]
+endpoint = "https://s3.example.net"
+bucket = "classis"
+region = "eu-central-1"
+prefix = "repository/"
+```
+
 - `path` is the directory of the repository. The Server checks neither its
   owner nor its mode, and it may be a read-only mount: the Server only lists
   and reads it.
-- **A section without `path` stops the start**, naming the key.
+- `[packages.repository.s3]` names the bucket, and the repository is under
+  `prefix` in it. Its keys are those of [`[blobs.s3]`](#blobs), and they are
+  checked in the same way: `https://` (plaintext to `127.0.0.1` and `::1`
+  alone), a `prefix` that is empty or ends in `/`, and a key pair set whole or
+  not at all. Without a key pair the Server uses the workload identity of its
+  platform. The credentials need to list and read the prefix, and nothing more.
+- **A section with neither source, or with both, stops the start**, naming the
+  keys.
 - **`[packages.repository]` and `[blobs]` together stop the start**, naming both
   sections: with a repository the Server keeps no artifact of its own.
 
@@ -1872,6 +1889,10 @@ what is available, and the Server decides what is released and to whom.
     └── 6c8a…64 hex digits…      one Blob per SHA-256
 ```
 
+The root is the directory `path` names, or `prefix` in the bucket of
+`[packages.repository.s3]`: then a Manifest is the object
+`<prefix>packages/otelcol@1.19.0.json`, and a Blob `<prefix>blobs/<sha256>`.
+
 A Manifest is `packages/<agent_type>@<version>.json`. It holds the identity of
 the Package and one entry per platform:
 
@@ -1919,10 +1940,16 @@ Under `packages/`, the Server reads only names that end in `.json` and do not
 start with `.`. Under `blobs/`, it reads only names of 64 lowercase hex digits.
 It ignores every other file, and everything outside `packages/` and `blobs/`.
 
+In a bucket, one upload of an object is atomic already: upload the Blobs, then
+the Manifest, each with one `PUT`.
+
 ### What the Server does with it
 
 - **It reads the repository at startup.** That first listing must succeed: a
-  directory that does not exist stops the start, naming it.
+  directory that does not exist, a bucket that does not exist, and credentials
+  the bucket refuses stop the start at once, naming them. A bucket that does
+  not answer yet is asked again every 5 seconds for up to 3 minutes, as for
+  `[blobs.s3]`.
 - **It checks every signature** up to the Package Roots, as for an uploaded
   Package. A signature that does not verify, or that a Package Signer in
   [`revoked_signers`](#packages) made, withholds its entry: the entry is

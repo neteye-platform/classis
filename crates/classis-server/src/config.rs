@@ -268,13 +268,19 @@ impl BlobsConfig {
                  region"
                     .to_string(),
             ),
-            ("s3", Some(s3)) => s3.check(),
+            ("s3", Some(s3)) => s3.check_in(BLOBS_S3),
             (other, _) => Err(format!(
                 "[blobs] store must be \"fs\" or \"s3\", not {other:?}"
             )),
         }
     }
 }
+
+/// The name of the `[blobs.s3]` section, as a message names it.
+pub(crate) const BLOBS_S3: &str = "[blobs.s3]";
+
+/// The name of the `[packages.repository.s3]` section, as a message names it.
+pub(crate) const REPOSITORY_S3: &str = "[packages.repository.s3]";
 
 /// The `[blobs.s3]` section: the one bucket that keeps the artifacts,
 /// and how the Server reaches it. Every setting of the connection is here and nowhere else; the
@@ -326,7 +332,10 @@ impl S3BlobsConfig {
         opamp::endpoint::is_plaintext(&self.endpoint)
     }
 
-    fn check(&self) -> Result<(), String> {
+    /// Loud validation of the section `section` names: an endpoint that stays off plaintext
+    /// beyond the loopback, a bucket and a region, a prefix the client keeps as it is, and no
+    /// half of a key pair.
+    pub(crate) fn check_in(&self, section: &str) -> Result<(), String> {
         // Q-1: a package is never sent unencrypted beyond the loopback, to the store neither.
         let endpoint = &self.endpoint;
         match endpoint.split_once("://").map(|(scheme, _)| scheme) {
@@ -335,20 +344,20 @@ impl S3BlobsConfig {
                 if opamp::endpoint::is_loopback_literal(opamp::endpoint::host_of(endpoint)) => {}
             Some("http") => {
                 return Err(format!(
-                    "[blobs.s3] endpoint {endpoint}: plaintext is for 127.0.0.1 and ::1 alone — \
+                    "{section} endpoint {endpoint}: plaintext is for 127.0.0.1 and ::1 alone — \
                      use https://"
                 ))
             }
             _ => {
                 return Err(format!(
-                    "[blobs.s3] endpoint {endpoint} must start with https:// (http:// only to \
+                    "{section} endpoint {endpoint} must start with https:// (http:// only to \
                      127.0.0.1 or ::1)"
                 ))
             }
         }
         for (key, value) in [("bucket", &self.bucket), ("region", &self.region)] {
             if value.trim().is_empty() {
-                return Err(format!("[blobs.s3] {key} must not be empty"));
+                return Err(format!("{section} {key} must not be empty"));
             }
         }
         let prefix = &self.prefix;
@@ -362,7 +371,7 @@ impl S3BlobsConfig {
                     .any(|segment| segment.is_empty() || segment == "." || segment == ".."))
         {
             return Err(format!(
-                "[blobs.s3] prefix {prefix:?} must be empty or end in `/`, with no empty, `.` or \
+                "{section} prefix {prefix:?} must be empty or end in `/`, with no empty, `.` or \
                  `..` segment, e.g. \"fleet/\""
             ));
         }
@@ -373,17 +382,16 @@ impl S3BlobsConfig {
             .find(|c| !c.is_ascii() || c.is_ascii_control() || "\\{^}%`]\">[~<#|*?".contains(*c))
         {
             return Err(format!(
-                "[blobs.s3] prefix {prefix:?} holds {c:?}, which the S3 client would \
+                "{section} prefix {prefix:?} holds {c:?}, which the S3 client would \
                  percent-encode — use letters, digits and - _ . / ! ' ( ) & $ @ = ; : + , and \
                  space"
             ));
         }
         if self.access_key_id.is_some() != self.secret_access_key_file.is_some() {
-            return Err(
-                "[blobs.s3] access_key_id and secret_access_key_file are set together or not at \
+            return Err(format!(
+                "{section} access_key_id and secret_access_key_file are set together or not at \
                  all — without both, the Server uses its platform's workload identity"
-                    .to_string(),
-            );
+            ));
         }
         Ok(())
     }
@@ -660,7 +668,7 @@ impl PackagesConfig {
 }
 
 /// The `[packages.repository]` section: where the Package Repository is. The Server only lists and
-/// reads it, so it needs no more than read access.
+/// reads it, so it needs no more than read access. It names one source, a directory or a bucket.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryConfig {
@@ -668,22 +676,48 @@ pub struct RepositoryConfig {
     /// be a read-only mount, the signatures protect what an Agent installs, and nothing in it is
     /// secret.
     pub path: Option<PathBuf>,
+    /// The bucket that holds the repository under its prefix, with the connection settings of
+    /// `[blobs.s3]`.
+    pub s3: Option<S3BlobsConfig>,
+}
+
+/// The one source a [`RepositoryConfig`] names, once it is checked.
+#[derive(Debug)]
+pub enum RepositorySource<'a> {
+    /// A directory: `path`.
+    Directory(&'a Path),
+    /// A prefix of a bucket: `[packages.repository.s3]`.
+    Bucket(&'a S3BlobsConfig),
 }
 
 impl RepositoryConfig {
+    /// The source the section names.
+    ///
+    /// # Errors
+    /// Returns an error naming the keys when the section names no source, or both.
+    pub fn source(&self) -> Result<RepositorySource<'_>, String> {
+        match (&self.path, &self.s3) {
+            (Some(path), None) if path.as_os_str().is_empty() => Err(
+                "[packages.repository] path is empty — name the directory of the repository"
+                    .to_string(),
+            ),
+            (Some(path), None) => Ok(RepositorySource::Directory(path)),
+            (None, Some(bucket)) => Ok(RepositorySource::Bucket(bucket)),
+            (None, None) => Err(format!(
+                "[packages.repository] names no source — set path to the directory of the \
+                 repository, or a {REPOSITORY_S3} section naming its bucket"
+            )),
+            (Some(_), Some(_)) => Err(format!(
+                "[packages.repository] path and {REPOSITORY_S3} are both set — a repository has \
+                 one source; keep one of them"
+            )),
+        }
+    }
+
     fn check(&self) -> Result<(), String> {
-        match &self.path {
-            Some(path) if path.as_os_str().is_empty() => Err(
-                "[packages.repository] path is empty — name the directory of the \
-                     repository"
-                    .to_string(),
-            ),
-            Some(_) => Ok(()),
-            None => Err(
-                "[packages.repository] names no source — set path to the directory \
-                         of the repository"
-                    .to_string(),
-            ),
+        match self.source()? {
+            RepositorySource::Directory(_) => Ok(()),
+            RepositorySource::Bucket(bucket) => bucket.check_in(REPOSITORY_S3),
         }
     }
 }
@@ -2802,9 +2836,9 @@ mod tests {
         );
     }
 
-    /// `[blobs]`: the filesystem by default; `"s3"` with its bucket; any other store, a bucket
-    /// beside the filesystem, a plaintext endpoint off the loopback, and half a key pair each fail
-    /// startup naming the key — with no store to reach.
+    /// `[packages.repository]`: a directory or a bucket, exactly one, and no `[blobs]` beside it;
+    /// a bucket is checked as `[blobs.s3]` is, each refusal naming the key of its own section —
+    /// with no store to reach.
     #[test]
     fn a_package_repository_names_one_source_and_no_blob_store() {
         let load = |text: &str| {
@@ -2814,6 +2848,7 @@ mod tests {
             ServerConfig::load(&path)
         };
         let repository = "[packages.repository]\npath = \"/srv/repository\"\n";
+        let bucket = "[packages.repository.s3]\nbucket = \"fleet\"\nregion = \"eu-1\"\n";
 
         let config = load("").expect("the default");
         assert!(config.packages.repository.is_none());
@@ -2850,14 +2885,60 @@ mod tests {
                 vec!["[packages.repository] path"],
             ),
             (format!("{repository}rescan = 5\n"), vec!["rescan"]),
+            (
+                format!("{repository}{bucket}endpoint = \"https://s3.example\"\n"),
+                vec!["[packages.repository] path", "[packages.repository.s3]"],
+            ),
+            (
+                format!("{bucket}endpoint = \"http://s3.example\"\n"),
+                vec!["[packages.repository.s3] endpoint"],
+            ),
+            (
+                format!("{bucket}endpoint = \"https://s3.example\"\nprefix = \"fleet\"\n"),
+                vec!["[packages.repository.s3] prefix"],
+            ),
+            (
+                format!("{bucket}endpoint = \"https://s3.example\"\naccess_key_id = \"k\"\n"),
+                vec!["[packages.repository.s3] access_key_id"],
+            ),
+            (
+                format!("{bucket}endpoint = \"https://s3.example\"\n[blobs]\n"),
+                vec!["[packages.repository]", "[blobs]"],
+            ),
         ] {
             let refused = load(&text).expect_err(&text);
             for name in named {
                 assert!(refused.contains(name), "{text}: {refused}");
             }
         }
+
+        let config = load(&format!(
+            "{bucket}endpoint = \"https://s3.example\"\nprefix = \"repository/\"\n"
+        ))
+        .expect("a bucket");
+        let source = config
+            .packages
+            .repository
+            .as_ref()
+            .expect("a repository")
+            .source()
+            .expect("one source");
+        let RepositorySource::Bucket(s3) = source else {
+            panic!("a bucket, not {source:?}");
+        };
+        assert_eq!(
+            (s3.bucket.as_str(), s3.prefix.as_str()),
+            ("fleet", "repository/")
+        );
+        assert!(
+            !config.filesystem_blobs(),
+            "the repository holds the artifacts"
+        );
     }
 
+    /// `[blobs]`: the filesystem by default; `"s3"` with its bucket; any other store, a bucket
+    /// beside the filesystem, a plaintext endpoint off the loopback, and half a key pair each fail
+    /// startup naming the key — with no store to reach.
     #[test]
     fn the_blob_store_is_chosen_and_checked_naming_the_key() {
         let load = |blobs: &str| {
