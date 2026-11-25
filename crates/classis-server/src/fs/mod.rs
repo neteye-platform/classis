@@ -21,7 +21,7 @@ pub use bootstrap::FsBootstrapStore;
 pub use configs::FsConfigBackend;
 pub use deployments::FsDeploymentBackend;
 pub use enrolment::FsEnrolmentStore;
-pub use packages::FsPackageBackend;
+pub use packages::{read_manifest, too_large, FsPackageBackend, MAX_MANIFEST_BYTES};
 pub use revocation::FsLedgerStore;
 
 use std::ffi::OsString;

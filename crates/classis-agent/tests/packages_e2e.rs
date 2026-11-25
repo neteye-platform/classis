@@ -144,6 +144,67 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         .put_entry(&set, &this_host(), artifact.clone())
         .expect("put entry");
 
+    installed_end_to_end(store, &set, Some(signature)).await;
+}
+
+/// The same with a Package Repository in place of the upload: another party wrote the
+/// artifact and its manifest, the signature inside, into a directory, and the Server only reads
+/// it. The Client still downloads the artifact from the Server, and from nowhere else.
+#[tokio::test]
+async fn a_package_read_from_a_repository_is_downloaded_verified_and_installed() {
+    let artifact = std::fs::read(env!("CARGO_BIN_EXE_stub_agent")).expect("read stub");
+    let hash = <sha2::Sha256 as sha2::Digest>::digest(&artifact);
+    let signature = common::package_roots()
+        .signer
+        .sign(&classis_core::package::statement(
+            "managed-agent",
+            "2.0.0",
+            &hash,
+        ));
+    let root = tempfile::tempdir().expect("repository");
+    std::fs::create_dir_all(root.path().join("blobs")).expect("blobs/");
+    std::fs::create_dir_all(root.path().join("packages")).expect("packages/");
+    std::fs::write(root.path().join("blobs").join(hex::encode(hash)), &artifact)
+        .expect("write the blob");
+    let host = this_host();
+    let manifest = serde_json::json!({
+        "agent_type": "managed-agent",
+        "version": "2.0.0",
+        "entries": [{
+            "os": host.os,
+            "arch": host.arch,
+            "sha256": hex::encode(hash),
+            "size": artifact.len(),
+            "signature_hex": hex::encode(&signature),
+        }],
+    });
+    std::fs::write(
+        root.path().join("packages/managed-agent@2.0.0.json"),
+        serde_json::to_vec(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    let repository = classis_server::repository::Repository::open_directory(root.path())
+        .expect("open the repository");
+    let store = PackageStore::from_repository(
+        repository.read().expect("read the repository"),
+        Box::new(repository),
+    )
+    .with_verifier(Box::new(common::server_verifier()));
+    let set =
+        classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
+
+    installed_end_to_end(store, &set, None).await;
+}
+
+/// A Server on `store`, which holds `set` for this host, and the real Client: the rollout act
+/// releases `set` — writing `signature` onto its entry first, when one is given — and the Client
+/// downloads it, verifies it, swaps it in, and reports it `Installed`.
+async fn installed_end_to_end(
+    store: PackageStore,
+    set: &classis_server::packages::PackageId,
+    signature: Option<Vec<u8>>,
+) {
     let (addr, state, dir) = spawn_server(store).await;
 
     // The managed binary starts as a copy of the stub, in the Supervisor's own `program/`
@@ -182,6 +243,7 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         .expect("write supervisor.toml");
 
     let _client = spawn_client(&config_path);
+    let host = this_host();
 
     // A saved Set reaches nobody: the rollout act releases it, retried until the
     // Agent has reported and can be assigned — which is the decision, not an accident of the
@@ -190,8 +252,8 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         state
             .rollout_deployment(&ring_holding_signed(
                 &state,
-                &set,
-                Some((&this_host(), signature.clone())),
+                set,
+                signature.clone().map(|signature| (&host, signature)),
             ))
             .ok()
             .filter(|assigned| *assigned >= 1)

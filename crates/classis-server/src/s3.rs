@@ -353,11 +353,7 @@ impl BlobStore for S3BlobStore {
             .bridge
             .run(async move { store.get(&key).await })
             .map_err(|e| format!("cannot read blob {sha256} from bucket {}: {e}", self.bucket))?;
-        Ok(Box::new(ObjectReader {
-            stream: Some(result.into_stream()),
-            current: Bytes::new(),
-            bridge: self.bridge.clone(),
-        }))
+        Ok(Box::new(ObjectReader::new(result, self.bridge.clone())))
     }
 
     fn exists(&self, sha256: &str) -> Result<bool, String> {
@@ -428,11 +424,22 @@ fn read_part(bytes: &mut dyn Read) -> std::io::Result<Vec<u8>> {
 }
 
 /// An object's bytes as the port hands them out: each chunk of the response fetched on the
-/// adapter's runtime when the reader asks for it.
-struct ObjectReader {
+/// adapter's runtime when the reader asks for it. The Package Repository reads through it too.
+pub(crate) struct ObjectReader {
     stream: Option<futures_util::stream::BoxStream<'static, object_store::Result<Bytes>>>,
     current: Bytes,
     bridge: Arc<Bridge>,
+}
+
+impl ObjectReader {
+    /// Reads the object `result` answered with, each chunk fetched on `bridge`.
+    pub(crate) fn new(result: object_store::GetResult, bridge: Arc<Bridge>) -> Self {
+        ObjectReader {
+            stream: Some(result.into_stream()),
+            current: Bytes::new(),
+            bridge,
+        }
+    }
 }
 
 impl Read for ObjectReader {
@@ -875,6 +882,7 @@ mod tests {
         let blobs = |config: &S3BlobsConfig| BlobsConfig {
             store: "s3".to_string(),
             s3: Some(again(config)),
+            given: true,
         };
 
         let store = PackageStore::open_with(dir.path().to_path_buf(), &blobs(&config))

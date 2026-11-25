@@ -26,6 +26,7 @@ pub mod listen;
 pub mod migrate;
 pub mod packages;
 pub mod postgres;
+pub mod repository;
 pub mod revocation;
 pub mod s3;
 pub mod throttle;
@@ -60,11 +61,11 @@ impl Records {
     pub fn open(config: &config::ServerConfig) -> Result<Self, String> {
         match config.database.postgres() {
             None => {
-                fs::open_data_dir(&config.data_dir, config.blobs.s3().is_none())?;
+                fs::open_data_dir(&config.data_dir, config.filesystem_blobs())?;
                 Ok(Records::Files(config.data_dir.clone()))
             }
             Some(database) => {
-                fs::open_data_dir_beside_database(&config.data_dir, config.blobs.s3().is_none())?;
+                fs::open_data_dir_beside_database(&config.data_dir, config.filesystem_blobs())?;
                 Ok(Records::Postgres(postgres::Database::open(database)?))
             }
         }
@@ -245,6 +246,39 @@ impl packages::PackageStore {
             &store,
         )?;
         Self::with_backend(backend, Box::new(store))
+    }
+
+    /// Opens the store on the Package Repository `repository` names: one listing of it, which
+    /// must succeed, so a Server never starts without knowing its repository. The records hold no
+    /// Package of their own then, and one they hold stops the startup naming it rather than being
+    /// hidden.
+    ///
+    /// # Errors
+    /// Returns an error when the records hold a Package, or when the repository cannot be opened
+    /// or listed.
+    pub fn on_repository(
+        records: &Records,
+        repository: &config::RepositoryConfig,
+    ) -> Result<Self, String> {
+        let uploaded = records.packages()?.load()?;
+        if !uploaded.is_empty() {
+            let named: Vec<String> = uploaded.iter().map(|p| p.id.to_string()).collect();
+            return Err(format!(
+                "the records hold uploaded Packages ({}), and [packages.repository] is set — \
+                 with a Package Repository the Server reads no Package from its records; move \
+                 them into the repository and out of the records, as \"Moving uploaded \
+                 Packages into a Package Repository\" in the Server manual says, and start the \
+                 Server again",
+                named.join(", ")
+            ));
+        }
+        let repository = repository::Repository::open(repository)?;
+        let packages = repository.read()?;
+        tracing::info!(
+            packages = packages.len(),
+            "reading the Packages from a Package Repository, which the Server does not write"
+        );
+        Ok(Self::from_repository(packages, Box::new(repository)))
     }
 }
 

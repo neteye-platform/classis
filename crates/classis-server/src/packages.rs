@@ -489,6 +489,45 @@ pub struct PackageStore {
     /// The check every signature passes before it is held: nothing verifies
     /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
+    /// Whether the Packages come from a Package Repository, which the store only reads: every
+    /// write is then refused with [`FROM_REPOSITORY`].
+    read_only: bool,
+}
+
+/// The refusal of every write to a Package, an entry or a signature on a Server that reads its
+/// Packages from a Package Repository: the REST API answers it with `409`.
+pub const FROM_REPOSITORY: &str = "this Server reads its Packages from its Package Repository and \
+     writes none — write the change into the repository, and the Server reads it from there";
+
+/// The backend of a store on a Package Repository: it holds no Package of its own and takes no
+/// write, so a write that reached it would change nothing.
+struct Repository;
+
+impl PackageBackend for Repository {
+    fn load(&self) -> Result<Vec<Package>, String> {
+        Ok(Vec::new())
+    }
+
+    fn put(&self, _package: &Package) -> Result<(), String> {
+        Err(FROM_REPOSITORY.to_string())
+    }
+
+    fn remove(&self, _id: &PackageId) -> Result<(), String> {
+        Err(FROM_REPOSITORY.to_string())
+    }
+}
+
+/// Names a Package whose version is not SemVer: it is kept and read, never a candidate and never
+/// written to.
+fn warn_if_not_semver(package: &Package) {
+    if !package.id.is_semver() {
+        tracing::warn!(
+            package = %package.id,
+            "{} — the package is kept, but it is no candidate and nothing is written to \
+             it; republish its content under a SemVer version and sign it again",
+            not_semver(&package.id.version)
+        );
+    }
 }
 
 impl PackageStore {
@@ -531,15 +570,7 @@ impl PackageStore {
                     }
                 }
             }
-            // Kept and read, never a candidate and never written to.
-            if !package.id.is_semver() {
-                tracing::warn!(
-                    package = %package.id,
-                    "{} — the package is kept, but it is no candidate and nothing is written to \
-                     it; republish its content under a SemVer version and sign it again",
-                    not_semver(&package.id.version)
-                );
-            }
+            warn_if_not_semver(&package);
             sets.insert(package.id.clone(), package);
         }
         let store = PackageStore {
@@ -548,6 +579,7 @@ impl PackageStore {
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
+            read_only: false,
         };
         // A blob no entry names is deleted at startup: an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -558,6 +590,39 @@ impl PackageStore {
         }
         *store.sets.write().expect("sets lock") = sets;
         Ok(store)
+    }
+
+    /// Opens the store on a Package Repository: `packages`, what a listing of it read, and its
+    /// Blobs, `blobs`. Every entry names a Blob the listing found, of its size. The store writes
+    /// nothing and deletes nothing: every write is refused with [`FROM_REPOSITORY`], and a Blob
+    /// no entry names is not the store's business.
+    #[must_use]
+    pub fn from_repository(packages: Vec<Package>, blobs: Box<dyn BlobStore>) -> Self {
+        let mut sets = BTreeMap::new();
+        for package in packages {
+            warn_if_not_semver(&package);
+            sets.insert(package.id.clone(), package);
+        }
+        PackageStore {
+            backend: Box::new(Repository),
+            blobs,
+            sets: RwLock::new(sets),
+            life: Mutex::new(Life::default()),
+            verifier: Box::new(Unarmed),
+            read_only: true,
+        }
+    }
+
+    /// The gate every write to a Package, an entry or a signature passes first.
+    ///
+    /// # Errors
+    /// [`FROM_REPOSITORY`] when the Packages come from a Package Repository.
+    pub fn refuse_write(&self) -> Result<(), String> {
+        if self.read_only {
+            Err(FROM_REPOSITORY.to_string())
+        } else {
+            Ok(())
+        }
     }
 
     /// Replaces the Package Roots the signatures are checked against — tests pass a test Root —
@@ -676,6 +741,7 @@ impl PackageStore {
     /// a Package is its identity and its entries, so creating one that exists is the same request
     /// arriving twice.
     pub fn create(&self, id: &PackageId) -> Result<(), String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         if sets.contains_key(id) {
             return Ok(());
@@ -695,6 +761,7 @@ impl PackageStore {
     /// # Errors
     /// Returns an error when no Package of that identity exists.
     pub fn writable(&self, id: &PackageId) -> Result<(), String> {
+        self.refuse_write()?;
         if self.sets.read().expect("sets lock").contains_key(id) {
             Ok(())
         } else {
@@ -777,6 +844,7 @@ impl PackageStore {
         platform: &Platform,
         signature: Vec<u8>,
     ) -> Result<SignatureState, String> {
+        self.refuse_write()?;
         if signature.is_empty() {
             return Err(
                 "the signature is empty — it says nothing; delete the one held instead".to_string(),
@@ -809,6 +877,7 @@ impl PackageStore {
     /// # Errors
     /// `no package set …` or `no entry …` when the entry does not exist (a `404`).
     pub fn remove_signature(&self, id: &PackageId, platform: &Platform) -> Result<bool, String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         let set = sets
             .get_mut(id)
@@ -864,6 +933,7 @@ impl PackageStore {
     /// normal state, and deleting the Package is its own act. Its blob goes with the last entry
     /// that names it.
     pub fn delete_entry(&self, id: &PackageId, platform: &Platform) -> Result<bool, String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         let Some(set) = sets.get_mut(id) else {
             return Ok(false);
@@ -885,6 +955,7 @@ impl PackageStore {
     /// `Ok(false)` when none of that identity exists. The fleet removes every assignment that
     /// referenced it, which withdraws the offer; Agents that installed it keep running it.
     pub fn delete_set(&self, id: &PackageId) -> Result<bool, String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         if !sets.contains_key(id) {
             return Ok(false);

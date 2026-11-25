@@ -114,3 +114,10 @@ path = "fuzz_targets/package_signature.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "package_manifest"
+path = "fuzz_targets/package_manifest.rs"
+test = false
+doc = false
+bench = false

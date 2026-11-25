@@ -1376,10 +1376,15 @@ fn set_response(state: &AppState, id: &PackageId) -> Response {
     }
 }
 
-/// Maps a store refusal onto the status the REST contract names: immutability and emptiness are
-/// conflicts with the Package's current state (`409`), absence is `404`, bad input `400`.
+/// Maps a store refusal onto the status the REST contract names: a write to Packages read from a
+/// Package Repository, immutability and emptiness are conflicts with the Package's current state
+/// (`409`), absence is `404`, bad input `400`.
 fn package_error(e: String) -> Response {
-    if e.contains("not configured") || e.starts_with("no package set") || e.starts_with("no entry")
+    if e == crate::packages::FROM_REPOSITORY {
+        error(StatusCode::CONFLICT, e)
+    } else if e.contains("not configured")
+        || e.starts_with("no package set")
+        || e.starts_with("no entry")
     {
         error(StatusCode::NOT_FOUND, e)
     } else if e.contains("immutable") || e.contains("holds no entries") || e.contains("is pinned") {

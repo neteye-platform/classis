@@ -519,6 +519,25 @@ years and nothing else ends it earlier.
 fingerprint of a certificate; the release's certificate is
 `packaging/package-signer.der`.
 
+#### `[packages.repository]`
+
+Optional; absent means the Packages are uploaded through the REST API and kept
+as [`[blobs]`](#blobs) says. Present, the Server reads its Packages from a
+[Package Repository](#a-package-repository-packages-another-party-writes) and
+writes none.
+
+```toml
+[packages.repository]
+path = "/srv/classis/repository"
+```
+
+- `path` is the directory of the repository. The Server checks neither its
+  owner nor its mode, and it may be a read-only mount: the Server only lists
+  and reads it.
+- **A section without `path` stops the start**, naming the key.
+- **`[packages.repository]` and `[blobs]` together stop the start**, naming both
+  sections: with a repository the Server keeps no artifact of its own.
+
 ### `[admission_throttle]`
 
 Optional; absent means the defaults shown. See
@@ -1830,6 +1849,118 @@ while the Gateway is still fetching is answered `503` with `Retry-After: 30` and
 asks again. Every artifact is offered as a path, which a Client behind a Gateway
 resolves against the Gateway. How the Gateway holds what it fetches is in
 [the Client's manual](client.md#the-package-cache).
+
+## A Package Repository: Packages another party writes
+
+A Package Repository is a tree of static files that holds Packages. One party
+writes it — a person, a CI pipeline, or an operator of the product — and the
+Server only reads it. It is like a yum repository: it is not a service and runs
+no process. Many Servers can read one repository, and they need no
+coordination, because none of them writes.
+
+The repository holds only what can be installed. Deployments, rollouts,
+assignments and Agents stay in the records of the Server: the repository says
+what is available, and the Server decides what is released and to whom.
+
+### Its layout
+
+```text
+<root>/
+├── packages/
+│   └── otelcol@1.19.0.json      one Manifest per Package
+└── blobs/
+    └── 6c8a…64 hex digits…      one Blob per SHA-256
+```
+
+A Manifest is `packages/<agent_type>@<version>.json`. It holds the identity of
+the Package and one entry per platform:
+
+```json
+{
+  "agent_type": "otelcol",
+  "version": "1.19.0",
+  "entries": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "sha256": "6c8a…64 lowercase hex digits…",
+      "size": 48213504,
+      "signature_hex": "3082…the .sig of the release…"
+    }
+  ]
+}
+```
+
+- The name of the file must match `agent_type` and `version` in it.
+- A field the format does not name is refused.
+- `sha256` names the Blob, `blobs/<sha256>`, and `size` is its length in bytes.
+- `signature_hex` is the signature of the entry in hex, as the `.sig` of a
+  release holds it. An entry without one is listed, and offered to nobody.
+
+This is the format of the files under `<data_dir>/packages/` of a Server that
+keeps its Packages on the filesystem, so its data directory is a repository too.
+
+### Writing one by hand
+
+Write the Blobs first and the Manifest last. A Package is in the repository
+only when its Manifest is, so a Server never reads a Manifest whose Blobs are
+still on their way.
+
+```sh
+sha=$(sha256sum otelcol-linux-amd64 | cut -d' ' -f1)
+cp otelcol-linux-amd64 "$root/blobs/$sha"
+# Write the Manifest under a name that does not end in .json, then rename it:
+# the rename is atomic, so a Server reads the old file or the new one.
+cp otelcol@1.19.0.json "$root/packages/.otelcol@1.19.0.tmp"
+mv "$root/packages/.otelcol@1.19.0.tmp" "$root/packages/otelcol@1.19.0.json"
+```
+
+Under `packages/`, the Server reads only names that end in `.json` and do not
+start with `.`. Under `blobs/`, it reads only names of 64 lowercase hex digits.
+It ignores every other file, and everything outside `packages/` and `blobs/`.
+
+### What the Server does with it
+
+- **It reads the repository at startup.** That first listing must succeed: a
+  directory that does not exist stops the start, naming it.
+- **It checks every signature** up to the Package Roots, as for an uploaded
+  Package. A signature that does not verify, or that a Package Signer in
+  [`revoked_signers`](#packages) made, withholds its entry: the entry is
+  `missing` and offered to nobody.
+- **It sets aside a Manifest that is not well formed, and starts.** These
+  Manifests are not loaded, and a warning names each one and why:
+  - a Manifest larger than 256 KiB;
+  - a Manifest that does not parse, holds an unknown field, or whose name does
+    not match its identity;
+  - a Manifest that names a Blob the repository does not hold, or that holds it
+    at another size.
+
+  The other Packages load. The warning is logged once, not at every listing.
+- **It serves the downloads from the repository.** The bytes pass through the
+  Server: an Agent never reaches the repository.
+- **It refuses every write.** A REST write or delete of a Package, an entry or
+  a signature gets `409`, and the message names the repository. Write the
+  change into the repository instead.
+
+### Moving uploaded Packages into a Package Repository
+
+With `[packages.repository]`, the Server reads no Package from its records. If
+the records hold an uploaded Package, the start stops and names it, so that no
+Package is hidden.
+
+The data directory of a Server that keeps its Packages on the filesystem is a
+repository already. To move its Packages:
+
+1. Copy `<data_dir>/packages/` and `<data_dir>/blobs/` of that Server into the
+   repository, or set `path` to a copy of its data directory.
+2. Remove the Packages from the records: with the records on the filesystem,
+   delete the files under `<data_dir>/packages/`; with the records in
+   PostgreSQL, delete each Package through the REST API before you set
+   `[packages.repository]`.
+3. Remove `[blobs]`, set `[packages.repository]`, and start the Server.
+
+The Deployments name their Packages by identity, so they hold the same Packages
+when they are read from the repository.
 
 ## The REST API
 

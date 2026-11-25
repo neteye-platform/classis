@@ -160,10 +160,12 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # presenting a client certificate to a Server with a publicly trusted one, which needs
 # a rustls config built by hand. Data, not code — and already in the tree via the TLS stack.
 webpki-roots = "1"
-# Artifact bytes in an S3-compatible bucket. `aws-base`, `ring` and `reqwest` build the
-# S3 client on *ring*; the `aws` feature would pull `aws-lc-rs`, and so would the
-# default `fs`, which nothing here needs. The HTTP client is the Server's own, handed in.
-object_store = { version = "0.14.2", default-features = false, features = ["aws-base", "ring", "reqwest"] }
+# Artifact bytes in an S3-compatible bucket, and a Package Repository in a bucket or a
+# directory. `aws-base`, `ring` and `reqwest` build the S3 client on *ring*; the `aws`
+# feature would pull `aws-lc-rs`. `fs` is the same interface over a local directory, so one
+# adapter reads a repository from either; it adds `walkdir` and `nix`, both already in the tree.
+# The HTTP client is the Server's own, handed in.
+object_store = { version = "0.14.2", default-features = false, features = ["aws-base", "ring", "reqwest", "fs"] }
 # The Server's records in PostgreSQL. `tokio-postgres` speaks the protocol in plain SQL
 # and reads no `PG*` variable; `with-serde_json-1` maps `jsonb` to `serde_json::Value`, already in
 # the tree. `deadpool-postgres` pools the connections on the Tokio runtime. `tokio-postgres-rustls`

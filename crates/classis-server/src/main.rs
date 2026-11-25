@@ -410,19 +410,28 @@ async fn main() {
             "refusing the Package Signers named in [packages] revoked_signers"
         );
     }
-    let packages =
-        classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
-            .map(|store| {
-                store.with_verifier(Box::new(
-                    classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
-                ))
-            })
-            .and_then(|store| {
-                if !store.is_empty() {
-                    info!("offering software packages to the fleet");
-                }
-                classis_server::fleet::PackageOffering::on(&records, store)
-            });
+    let store = match &config.packages.repository {
+        Some(repository) => {
+            classis_server::packages::PackageStore::on_repository(&records, repository)
+        }
+        None => classis_server::packages::PackageStore::open_on(
+            &records,
+            &config.data_dir,
+            &config.blobs,
+        ),
+    };
+    let packages = store
+        .map(|store| {
+            store.with_verifier(Box::new(
+                classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
+            ))
+        })
+        .and_then(|store| {
+            if !store.is_empty() {
+                info!("offering software packages to the fleet");
+            }
+            classis_server::fleet::PackageOffering::on(&records, store)
+        });
     let packages = match packages {
         Ok(offering) => Some(offering),
         Err(e) => {
