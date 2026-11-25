@@ -63,10 +63,10 @@ fn publish(root: &Path, version: &str, platforms: &[(&str, &str, &[u8])]) {
 async fn spawn_on(root: &Path) -> TestServer {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let repository = Repository::open_directory(root).expect("open the repository");
+    let mut repository = Repository::open_directory(root).expect("open the repository");
     let store = PackageStore::from_repository(
         repository.read().expect("read the repository"),
-        Box::new(repository),
+        Box::new(repository.blob_store()),
     )
     .with_verifier(Box::new(RootsVerifier::new(support::test_root().0.roots())));
     let state = Arc::new(
@@ -304,6 +304,7 @@ struct ServerUnderTest(std::process::Child);
 
 impl Drop for ServerUnderTest {
     fn drop(&mut self) {
+        // The process may have stopped already, and a drop has no one to tell of a failure.
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
@@ -339,6 +340,7 @@ fn start(config: &Path) -> Started {
     let (lines, logged) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            // Once the test has what it waited for, nobody receives the rest of the log.
             let _ = lines.send(line);
         }
     });
@@ -350,9 +352,18 @@ fn start(config: &Path) -> Started {
             return Started::Serving(ServerUnderTest(child));
         }
     }
+    // A Server that never said it serves is stopped; one that stopped on its own is reaped.
     let _ = child.kill();
     let _ = child.wait();
     Started::Stopped(log.join("\n"))
+}
+
+/// [`start`] on a blocking thread, so the test's runtime is never held while it waits.
+async fn started(config: &Path) -> Started {
+    let config = config.to_path_buf();
+    tokio::task::spawn_blocking(move || start(&config))
+        .await
+        .expect("the start of the server runs to its end")
 }
 
 /// The binary reads the repository its configuration names, and refuses one beside `[blobs]` or
@@ -381,7 +392,7 @@ async fn the_binary_reads_the_repository_its_configuration_names() {
     };
 
     write("\n[blobs]\nstore = \"fs\"\n");
-    match start(&config) {
+    match started(&config).await {
         Started::Stopped(log) => assert!(
             log.contains("[packages.repository]") && log.contains("[blobs]"),
             "{log}"
@@ -390,7 +401,7 @@ async fn the_binary_reads_the_repository_its_configuration_names() {
     }
 
     write("");
-    let Started::Serving(running) = start(&config) else {
+    let Started::Serving(running) = started(&config).await else {
         panic!("the server did not start on its repository");
     };
     let listed: serde_json::Value =
@@ -411,7 +422,7 @@ async fn the_binary_reads_the_repository_its_configuration_names() {
     let id = classis_server::packages::PackageId::new(support::AGENT_TYPE, "2.0.0").expect("id");
     uploaded.create(&id).expect("create");
     drop(uploaded);
-    match start(&config) {
+    match started(&config).await {
         Started::Stopped(log) => assert!(log.contains(&id.to_string()), "{log}"),
         Started::Serving(_) => panic!("records holding an uploaded Package started"),
     }

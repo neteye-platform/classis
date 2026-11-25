@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as Key;
@@ -35,17 +35,39 @@ const MANIFESTS: &str = "packages";
 /// Where the Blobs are, under the root of the repository.
 const BLOBS: &str = "blobs";
 
-/// One Package Repository and what the last listing of it set aside. A clone reads the same
-/// repository and shares that record.
-#[derive(Clone)]
+/// One Package Repository, read by its listings, and what the last listing set aside.
+///
+/// It is `Send` and `Sync`. A listing takes it mutably, so the record of what was set aside
+/// has one owner and needs no lock; the downloads read through a [`RepositoryBlobs`] of their
+/// own.
+#[derive(Debug)]
 pub struct Repository {
+    source: Source,
+    /// Each manifest the last listing set aside, with why, so a warning is logged when that
+    /// changes and not at every listing.
+    set_aside: BTreeMap<String, String>,
+}
+
+/// The Blobs of a [`Repository`], for the downloads: read, never written and never deleted.
+#[derive(Debug)]
+pub struct RepositoryBlobs(Source);
+
+/// What both halves read through: the store, its name and the runtime its calls run on. A clone
+/// is another handle on the same store.
+#[derive(Clone)]
+struct Source {
     store: Arc<dyn ObjectStore>,
     /// What a message names the repository by: its directory.
     name: String,
     bridge: Arc<Bridge>,
-    /// Each manifest the last listing set aside, with why, so a warning is logged when that
-    /// changes and not at every listing.
-    set_aside: Arc<Mutex<BTreeMap<String, String>>>,
+}
+
+impl std::fmt::Debug for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Source")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Repository {
@@ -64,6 +86,16 @@ impl Repository {
 
     /// Opens the repository in the directory `path`.
     ///
+    /// ```no_run
+    /// use classis_server::repository::Repository;
+    ///
+    /// let mut repository = Repository::open_directory("/srv/classis/repository".as_ref())?;
+    /// for package in repository.read()? {
+    ///     println!("{} holds {} entries", package.id, package.entries.len());
+    /// }
+    /// # Ok::<(), String>(())
+    /// ```
+    ///
     /// # Errors
     /// Returns an error naming `path` when it is not a directory that can be opened.
     pub fn open_directory(path: &Path) -> Result<Self, String> {
@@ -75,10 +107,12 @@ impl Repository {
             return Err(named(&"not a directory"));
         }
         Ok(Repository {
-            store: Arc::new(store),
-            name: path.display().to_string(),
-            bridge: Arc::new(Bridge::new("repository")?),
-            set_aside: Arc::new(Mutex::new(BTreeMap::new())),
+            source: Source {
+                store: Arc::new(store),
+                name: path.display().to_string(),
+                bridge: Arc::new(Bridge::new("repository")?),
+            },
+            set_aside: BTreeMap::new(),
         })
     }
 
@@ -89,15 +123,16 @@ impl Repository {
     ///
     /// # Errors
     /// Returns an error naming the repository when it cannot be listed.
-    pub fn read(&self) -> Result<Vec<Package>, String> {
-        let blobs: BTreeMap<String, u64> = self.blobs()?.into_iter().collect();
+    pub fn read(&mut self) -> Result<Vec<Package>, String> {
+        let blobs: BTreeMap<String, u64> = self.source.blobs()?.into_iter().collect();
         let mut packages = Vec::new();
         let mut set_aside = BTreeMap::new();
-        for object in self.listing(MANIFESTS)? {
+        for object in self.source.listing(MANIFESTS)? {
             let Some(file_name) = manifest_name(&object) else {
                 continue;
             };
             match self
+                .source
                 .manifest(&object, &file_name)
                 .and_then(|package| held(package, &file_name, &blobs))
             {
@@ -111,6 +146,39 @@ impl Repository {
         Ok(packages)
     }
 
+    /// A handle on the Blobs of the repository, for the package store to serve the downloads
+    /// from.
+    #[must_use]
+    pub fn blob_store(&self) -> RepositoryBlobs {
+        RepositoryBlobs(self.source.clone())
+    }
+
+    /// Logs each manifest set aside that the last listing did not set aside for the same reason,
+    /// and keeps `set_aside` for the next listing to compare with.
+    fn report(&mut self, set_aside: BTreeMap<String, String>) {
+        for (manifest, why) in &set_aside {
+            if self.set_aside.get(manifest) != Some(why) {
+                tracing::warn!(
+                    repository = %self.source.name,
+                    manifest = %manifest,
+                    "the manifest is set aside and its Package is not loaded — {why}"
+                );
+            }
+        }
+        for manifest in self.set_aside.keys() {
+            if !set_aside.contains_key(manifest) {
+                tracing::info!(
+                    repository = %self.source.name,
+                    manifest = %manifest,
+                    "the manifest is no longer set aside"
+                );
+            }
+        }
+        self.set_aside = set_aside;
+    }
+}
+
+impl Source {
     /// Every Blob the repository holds, with its size, from the listing alone.
     fn blobs(&self) -> Result<Vec<(String, u64)>, String> {
         Ok(self
@@ -125,7 +193,8 @@ impl Repository {
 
     /// The objects directly under `dir`. A directory the repository does not hold lists empty.
     fn listing(&self, dir: &str) -> Result<Vec<ObjectMeta>, String> {
-        let store = self.store.clone();
+        // The future runs on the adapter's runtime, so it owns its handle on the store.
+        let store = Arc::clone(&self.store);
         let prefix = Key::from(dir);
         self.bridge
             .run(async move { store.list_with_delimiter(Some(&prefix)).await })
@@ -149,7 +218,7 @@ impl Repository {
 
     /// The bytes of the object at `key`, as a stream.
     fn reader(&self, key: &Key) -> Result<ObjectReader, String> {
-        let store = self.store.clone();
+        let store = Arc::clone(&self.store);
         let location = key.clone();
         let result = self
             .bridge
@@ -160,39 +229,7 @@ impl Repository {
                     self.name
                 )
             })?;
-        Ok(ObjectReader::new(result, self.bridge.clone()))
-    }
-
-    /// Logs each manifest set aside that the last listing did not set aside for the same reason,
-    /// and keeps `set_aside` for the next listing to compare with.
-    fn report(&self, set_aside: BTreeMap<String, String>) {
-        let mut last = self.set_aside.lock().expect("set-aside lock");
-        for (manifest, why) in &set_aside {
-            if last.get(manifest) != Some(why) {
-                tracing::warn!(
-                    repository = %self.name,
-                    manifest = %manifest,
-                    "the manifest is set aside and its Package is not loaded — {why}"
-                );
-            }
-        }
-        for manifest in last.keys() {
-            if !set_aside.contains_key(manifest) {
-                tracing::info!(
-                    repository = %self.name,
-                    manifest = %manifest,
-                    "the manifest is no longer set aside"
-                );
-            }
-        }
-        *last = set_aside;
-    }
-
-    fn blob_key(sha256: &str) -> Result<Key, String> {
-        if !is_hash(sha256) {
-            return Err(format!("{sha256:?} is not the SHA-256 of a blob"));
-        }
-        Ok(Key::from(BLOBS).join(sha256))
+        Ok(ObjectReader::new(result, Arc::clone(&self.bridge)))
     }
 }
 
@@ -233,27 +270,34 @@ fn held(
     Ok(package)
 }
 
-/// The Blobs of the repository, for the downloads: read, never written and never deleted.
-impl BlobStore for Repository {
+/// The key of the Blob `sha256`; only a hash names one, so nothing else can name a path.
+fn blob_key(sha256: &str) -> Result<Key, String> {
+    if !is_hash(sha256) {
+        return Err(format!("{sha256:?} is not the SHA-256 of a blob"));
+    }
+    Ok(Key::from(BLOBS).join(sha256))
+}
+
+impl BlobStore for RepositoryBlobs {
     fn put(&self, _bytes: &mut dyn Read) -> Result<(String, u64), String> {
         Err(FROM_REPOSITORY.to_string())
     }
 
     fn get(&self, sha256: &str) -> Result<Box<dyn Read + Send>, String> {
-        Ok(Box::new(self.reader(&Self::blob_key(sha256)?)?))
+        Ok(Box::new(self.0.reader(&blob_key(sha256)?)?))
     }
 
     fn exists(&self, sha256: &str) -> Result<bool, String> {
-        let Ok(key) = Self::blob_key(sha256) else {
+        let Ok(key) = blob_key(sha256) else {
             return Ok(false);
         };
-        let store = self.store.clone();
-        match self.bridge.run(async move { store.head(&key).await }) {
+        let store = Arc::clone(&self.0.store);
+        match self.0.bridge.run(async move { store.head(&key).await }) {
             Ok(_) => Ok(true),
             Err(object_store::Error::NotFound { .. }) => Ok(false),
             Err(e) => Err(format!(
                 "cannot ask the Package Repository {} for blob {sha256}: {e}",
-                self.name
+                self.0.name
             )),
         }
     }
@@ -263,7 +307,7 @@ impl BlobStore for Repository {
     }
 
     fn list(&self) -> Result<Vec<(String, u64)>, String> {
-        self.blobs()
+        self.0.blobs()
     }
 }
 
@@ -274,6 +318,7 @@ mod tests {
     use crate::packages::test_signing::{signed, test_root};
     use crate::packages::{PackageId, PackageStore, Platform, SignatureState};
     use sha2::{Digest, Sha256};
+    use std::sync::Mutex;
 
     /// The party that writes a repository, past the Server: what a test stands in for.
     trait Writer {
@@ -372,9 +417,9 @@ mod tests {
 
     /// The package store on `repository`, its signatures checked by `verifier`, as the binary
     /// opens it.
-    fn store_on(repository: &Repository, verifier: RootsVerifier) -> PackageStore {
+    fn store_on(repository: &mut Repository, verifier: RootsVerifier) -> PackageStore {
         let packages = repository.read().expect("read the repository");
-        PackageStore::from_repository(packages, Box::new(repository.clone()))
+        PackageStore::from_repository(packages, Box::new(repository.blob_store()))
             .with_verifier(Box::new(verifier))
     }
 
@@ -430,7 +475,7 @@ mod tests {
                 signed_entry(&package, windows(), b"windows build"),
             ],
         );
-        let store = store_on(&writer.open(), armed());
+        let store = store_on(&mut writer.open(), armed());
 
         let listed = store.list();
         assert_eq!(listed.len(), 1);
@@ -502,7 +547,7 @@ mod tests {
             &manifest(&absent, &[signed_entry(&absent, linux(), b"never written")]),
         );
 
-        let repository = writer.open();
+        let mut repository = writer.open();
         let (packages, logs) = logged(|| repository.read().expect("read"));
         let loaded: Vec<String> = packages.iter().map(|p| p.id.to_string()).collect();
         assert_eq!(loaded, vec!["otelcol@1.0.0"], "only the good one loads");
@@ -558,7 +603,7 @@ mod tests {
                 .map(|entry| entry.signature_state)
                 .collect()
         };
-        let store = store_on(&writer.open(), armed());
+        let store = store_on(&mut writer.open(), armed());
         assert_eq!(
             states(&store),
             vec![SignatureState::Valid, SignatureState::Missing],
@@ -566,7 +611,7 @@ mod tests {
         );
         let revoked = RevokedSigners::parse(&[hex::encode(Sha256::digest(&test_root().1.der))])
             .expect("revoked");
-        let store = store_on(&writer.open(), armed().with_revoked(revoked));
+        let store = store_on(&mut writer.open(), armed().with_revoked(revoked));
         assert_eq!(
             states(&store),
             vec![SignatureState::Missing, SignatureState::Missing],
@@ -605,8 +650,9 @@ mod tests {
             &package,
             &[signed_entry(&package, linux(), b"build")],
         );
-        let repository = writer.open();
-        let store = store_on(&repository, armed());
+        let mut repository = writer.open();
+        let store = store_on(&mut repository, armed());
+        let blobs = repository.blob_store();
         let refused = |result: Result<(), String>| {
             assert_eq!(result.expect_err("refused"), FROM_REPOSITORY);
         };
@@ -621,12 +667,12 @@ mod tests {
         refused(store.remove_signature(&package, &linux()).map(|_| ()));
         refused(store.delete_entry(&package, &linux()).map(|_| ()));
         refused(store.delete_set(&package).map(|_| ()));
-        refused(repository.put(&mut &b"bytes"[..]).map(|_| ()));
+        refused(blobs.put(&mut &b"bytes"[..]).map(|_| ()));
         let sha256 = hex::encode(Sha256::digest(b"build"));
-        refused(repository.delete(&sha256));
-        assert!(repository.exists(&sha256).expect("exists"));
-        assert!(!repository.exists(&"0".repeat(64)).expect("exists"));
-        assert!(repository.get("../x").is_err(), "only a hash names a blob");
+        refused(blobs.delete(&sha256));
+        assert!(blobs.exists(&sha256).expect("exists"));
+        assert!(!blobs.exists(&"0".repeat(64)).expect("exists"));
+        assert!(blobs.get("../x").is_err(), "only a hash names a blob");
         assert_eq!(
             store.list()[0].entries[0].signature_state,
             SignatureState::Valid
@@ -652,14 +698,14 @@ mod tests {
     fn a_directory_that_does_not_exist_fails_the_open_naming_it() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing");
-        let refused = Repository::open_directory(&missing).err().expect("refused");
+        let refused = Repository::open_directory(&missing).expect_err("refused");
         assert!(
             refused.contains("[packages.repository] path") && refused.contains("missing"),
             "{refused}"
         );
         let file = dir.path().join("file");
         std::fs::write(&file, b"x").expect("write");
-        let refused = Repository::open_directory(&file).err().expect("refused");
+        let refused = Repository::open_directory(&file).expect_err("refused");
         assert!(refused.contains("not a directory"), "{refused}");
     }
 
@@ -684,7 +730,7 @@ mod tests {
         for dir in ["blobs", "packages", ""] {
             read_only(&writer.0.path().join(dir), 0o555);
         }
-        let store = store_on(&writer.open(), armed());
+        let store = store_on(&mut writer.open(), armed());
         let (sha256, _) = store.artifact(&package, &linux()).expect("an entry");
         assert_eq!(
             read_all(store.open_artifact(&sha256).expect("open")),
@@ -715,7 +761,7 @@ mod tests {
         uploaded.create(&id("empty", "1.0.0")).expect("create");
 
         let read = store_on(
-            &Repository::open_directory(dir.path()).expect("open"),
+            &mut Repository::open_directory(dir.path()).expect("open"),
             armed(),
         );
         // Each Package, and each of its entries as its platform, its hash and its state.

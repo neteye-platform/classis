@@ -1386,7 +1386,7 @@ impl ServerConfig {
     /// Whether the artifacts are kept under `data_dir/blobs/`: neither a bucket nor a Package
     /// Repository holds them.
     #[must_use]
-    pub fn filesystem_blobs(&self) -> bool {
+    pub(crate) fn filesystem_blobs(&self) -> bool {
         self.blobs.s3().is_none() && self.packages.repository.is_none()
     }
 

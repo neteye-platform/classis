@@ -184,11 +184,11 @@ async fn a_package_read_from_a_repository_is_downloaded_verified_and_installed()
     )
     .expect("write the manifest");
 
-    let repository = classis_server::repository::Repository::open_directory(root.path())
+    let mut repository = classis_server::repository::Repository::open_directory(root.path())
         .expect("open the repository");
     let store = PackageStore::from_repository(
         repository.read().expect("read the repository"),
-        Box::new(repository),
+        Box::new(repository.blob_store()),
     )
     .with_verifier(Box::new(common::server_verifier()));
     let set =

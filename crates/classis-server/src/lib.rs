@@ -272,13 +272,16 @@ impl packages::PackageStore {
                 named.join(", ")
             ));
         }
-        let repository = repository::Repository::open(repository)?;
+        let mut repository = repository::Repository::open(repository)?;
         let packages = repository.read()?;
         tracing::info!(
             packages = packages.len(),
             "reading the Packages from a Package Repository, which the Server does not write"
         );
-        Ok(Self::from_repository(packages, Box::new(repository)))
+        Ok(Self::from_repository(
+            packages,
+            Box::new(repository.blob_store()),
+        ))
     }
 }
 

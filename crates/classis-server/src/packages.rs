@@ -480,7 +480,9 @@ struct Life {
 /// read, its metadata persisted through a [`PackageBackend`] and its artifacts through a
 /// [`BlobStore`].
 pub struct PackageStore {
-    backend: Box<dyn PackageBackend>,
+    /// Where the Packages persist; `None` when they come from a Package Repository, which the
+    /// store only reads, so every write is refused with [`FROM_REPOSITORY`].
+    backend: Option<Box<dyn PackageBackend>>,
     blobs: Box<dyn BlobStore>,
     sets: RwLock<BTreeMap<PackageId, Package>>,
     /// The blobs an upload or a deletion is working on while no lock on `sets` is held, so that
@@ -489,33 +491,13 @@ pub struct PackageStore {
     /// The check every signature passes before it is held: nothing verifies
     /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
-    /// Whether the Packages come from a Package Repository, which the store only reads: every
-    /// write is then refused with [`FROM_REPOSITORY`].
-    read_only: bool,
 }
 
 /// The refusal of every write to a Package, an entry or a signature on a Server that reads its
 /// Packages from a Package Repository: the REST API answers it with `409`.
-pub const FROM_REPOSITORY: &str = "this Server reads its Packages from its Package Repository and \
+pub(crate) const FROM_REPOSITORY: &str =
+    "this Server reads its Packages from its Package Repository and \
      writes none — write the change into the repository, and the Server reads it from there";
-
-/// The backend of a store on a Package Repository: it holds no Package of its own and takes no
-/// write, so a write that reached it would change nothing.
-struct Repository;
-
-impl PackageBackend for Repository {
-    fn load(&self) -> Result<Vec<Package>, String> {
-        Ok(Vec::new())
-    }
-
-    fn put(&self, _package: &Package) -> Result<(), String> {
-        Err(FROM_REPOSITORY.to_string())
-    }
-
-    fn remove(&self, _id: &PackageId) -> Result<(), String> {
-        Err(FROM_REPOSITORY.to_string())
-    }
-}
 
 /// Names a Package whose version is not SemVer: it is kept and read, never a candidate and never
 /// written to.
@@ -574,12 +556,11 @@ impl PackageStore {
             sets.insert(package.id.clone(), package);
         }
         let store = PackageStore {
-            backend,
+            backend: Some(backend),
             blobs,
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
-            read_only: false,
         };
         // A blob no entry names is deleted at startup: an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -604,12 +585,11 @@ impl PackageStore {
             sets.insert(package.id.clone(), package);
         }
         PackageStore {
-            backend: Box::new(Repository),
+            backend: None,
             blobs,
             sets: RwLock::new(sets),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
-            read_only: true,
         }
     }
 
@@ -617,12 +597,18 @@ impl PackageStore {
     ///
     /// # Errors
     /// [`FROM_REPOSITORY`] when the Packages come from a Package Repository.
-    pub fn refuse_write(&self) -> Result<(), String> {
-        if self.read_only {
-            Err(FROM_REPOSITORY.to_string())
-        } else {
-            Ok(())
-        }
+    pub(crate) fn refuse_write(&self) -> Result<(), String> {
+        self.backend().map(|_| ())
+    }
+
+    /// Where the Packages persist.
+    ///
+    /// # Errors
+    /// [`FROM_REPOSITORY`] when the Packages come from a Package Repository.
+    fn backend(&self) -> Result<&dyn PackageBackend, String> {
+        self.backend
+            .as_deref()
+            .ok_or_else(|| FROM_REPOSITORY.to_string())
     }
 
     /// Replaces the Package Roots the signatures are checked against — tests pass a test Root —
@@ -862,7 +848,7 @@ impl PackageStore {
             .map_err(|why| format!("the signature is refused, nothing is stored — {why}"))?;
         let previous = entry.signature.replace(Signature::Offered(signature));
         let state = signature_state(entry);
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             // What did not reach the disk did not happen.
             if let Some(entry) = set.entries.get_mut(platform) {
                 entry.signature = previous;
@@ -889,7 +875,7 @@ impl PackageStore {
         let Some(previous) = entry.signature.take() else {
             return Ok(false);
         };
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             if let Some(entry) = set.entries.get_mut(platform) {
                 entry.signature = Some(previous);
             }
@@ -913,7 +899,7 @@ impl PackageStore {
         // The metadata is written under the lock, as every write of a Package is: the store must
         // hold what memory holds, in the order it changed. A PostgreSQL call is bounded;
         // the blob store is not asked here.
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             match previous {
                 Some(previous) => set.entries.insert(platform, previous),
                 None => set.entries.remove(&platform),
@@ -941,7 +927,7 @@ impl PackageStore {
         let Some(removed) = set.entries.remove(platform) else {
             return Ok(false);
         };
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             set.entries.insert(platform.clone(), removed);
             return Err(e);
         }
@@ -960,7 +946,7 @@ impl PackageStore {
         if !sets.contains_key(id) {
             return Ok(false);
         }
-        self.backend.remove(id)?;
+        self.backend()?.remove(id)?;
         let removed = sets.remove(id).expect("checked above");
         let doomed: Vec<String> = removed
             .entries
@@ -1204,7 +1190,7 @@ impl PackageStore {
     }
 
     fn persist(&self, set: &Package) -> Result<(), String> {
-        self.backend.put(set)
+        self.backend()?.put(set)
     }
 }
 
@@ -1788,7 +1774,10 @@ mod tests {
             let mut old = store.sets.read().expect("sets lock")[&set].clone();
             old.entries.get_mut(&windows()).expect("entry").signature =
                 Some(Signature::Offered(vec![1u8; 64]));
-            store.backend.put(&old).expect("write the old form");
+            store
+                .backend()
+                .and_then(|backend| backend.put(&old))
+                .expect("write the old form");
         }
         let states = |store: &PackageStore| -> Vec<SignatureState> {
             store

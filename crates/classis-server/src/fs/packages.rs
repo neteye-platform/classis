@@ -39,7 +39,7 @@ pub fn read_manifest(file_name: &str, bytes: &mut dyn std::io::Read) -> Result<P
 }
 
 /// The refusal of a manifest larger than [`MAX_MANIFEST_BYTES`].
-pub fn too_large(file_name: &str) -> String {
+pub(crate) fn too_large(file_name: &str) -> String {
     format!("{file_name} is larger than {MAX_MANIFEST_BYTES} bytes, the limit of a manifest")
 }
 
