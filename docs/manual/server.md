@@ -1954,12 +1954,20 @@ the Manifest, each with one `PUT`.
   not answer yet is asked again every 5 seconds for up to 3 minutes, as for
   `[blobs.s3]`.
 - **It reads the repository again every `rescan_secs`**, with no restart. A
-  Package written while the Server runs is offered within one interval and one
-  listing, and the first Package of an empty repository makes the Server
-  declare `OffersPackages` to the Agents from then on. A listing that fails
-  changes nothing: the Packages of the last listing stay in use, and a warning
-  names the failure when it starts or changes. A directory that is gone counts
-  as a listing that fails, not as an empty repository.
+  Package written while the Server runs is available within one interval and
+  one listing: listed, and ready to be put into a Deployment and rolled out.
+  The first Package of an empty repository makes the Server declare
+  `OffersPackages` to the Agents from then on. A listing that fails changes
+  nothing: the Packages of the last listing stay in use, and a warning names
+  the failure when it starts or changes. A directory that is gone counts as a
+  listing that fails, not as an empty repository.
+- **It keeps the entries of a Package an Agent's assignment pins.** A Manifest
+  that gives such a Package other bytes or other signatures is refused, with
+  one warning: the Server keeps serving the entries it had while their Blobs
+  are in the repository, and holds the Package missing once they are gone.
+  Publish new content under a new version, as for an upload. The Server
+  remembers what it took while it runs; after a restart it takes the Manifest
+  it finds.
 - **It checks every signature** up to the Package Roots, as for an uploaded
   Package. A signature that does not verify, or that a Package Signer in
   [`revoked_signers`](#packages) made, withholds its entry: the entry is
@@ -1994,8 +2002,9 @@ It is missing, not deleted:
 - **Its downloads get `404`.**
 
 When the Manifest is written again, all of this works again at the next
-listing, with no other act. A store that lists nothing for one interval
-therefore changes no Deployment.
+listing, with no other act: an Agent whose assignment pins the Package is
+offered it again without a new rollout. A store that lists nothing for one
+interval therefore changes no Deployment.
 
 ### Moving uploaded Packages into a Package Repository
 
@@ -2003,19 +2012,37 @@ With `[packages.repository]`, the Server reads no Package from its records. If
 the records hold an uploaded Package, the start stops and names it, so that no
 Package is hidden.
 
-The data directory of a Server that keeps its Packages on the filesystem is a
-repository already. To move its Packages:
+This procedure is for a Server whose records are on the filesystem. Its data
+directory is a repository already:
 
 1. Copy `<data_dir>/packages/` and `<data_dir>/blobs/` of that Server into the
    repository, or set `path` to a copy of its data directory.
-2. Remove the Packages from the records: with the records on the filesystem,
-   delete the files under `<data_dir>/packages/`; with the records in
-   PostgreSQL, delete each Package through the REST API before you set
-   `[packages.repository]`.
+2. Delete the files under `<data_dir>/packages/`. The Deployments and the
+   assignments are other files, and they stay as they are.
 3. Remove `[blobs]`, set `[packages.repository]`, and start the Server.
 
 The Deployments name their Packages by identity, so they hold the same Packages
 when they are read from the repository.
+
+Moving the uploaded Packages of a Server whose records are in PostgreSQL is not
+covered: their Manifests are rows of the database, and no tool writes them into
+a repository yet. Deleting them through the REST API is no way around it: a
+Package an assignment pins cannot be deleted, and one that is deleted leaves
+every Deployment that held it.
+
+### Limits of the directory source
+
+The directory source is meant for tests and for moving a Server whose records
+are on the filesystem. In production, use a bucket.
+
+- **The Server follows symbolic links in the directory**, so whoever writes the
+  directory decides which files of the Server's host it reads and serves.
+- **The `path` is resolved once, at the start.** If `path` is a symbolic link
+  that is pointed at another directory later, the Server reads the old one
+  until it restarts.
+- **A file name under `packages/` or `blobs/` that is not valid UTF-8 fails the
+  listing.** At the start it stops the Server, naming the error; later the
+  Packages of the last listing stay in use until the file is gone.
 
 ## The REST API
 

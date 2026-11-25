@@ -97,9 +97,7 @@ async fn spawn_on(root: &Path) -> (TestServer, Repository) {
 fn listing(server: &TestServer, repository: &mut Repository) {
     server
         .state
-        .packages()
-        .expect("package delivery")
-        .replace(repository.read().expect("read the repository"))
+        .replace_packages(repository.read().expect("read the repository"))
         .expect("replace");
 }
 
@@ -309,6 +307,81 @@ fn agent_report(uid: &InstanceUid, sequence_num: u64, installed: Option<&[u8]>) 
     report
 }
 
+/// Makes the test Agent known, puts `1.0.0` into the Deployment `stable` aimed at it, rolls it
+/// out, and has the Agent report it installed: what its assignment pins. Answers the aggregate
+/// hash it reports.
+async fn pin_and_install(server: &TestServer, uid: &InstanceUid) -> Vec<u8> {
+    let client = reqwest::Client::new();
+    let deployment = rest(server, "/api/v1/deployments/stable");
+    exchange(server, &agent_report(uid, 1, None)).await;
+    let aimed = client
+        .put(&deployment)
+        .json(&serde_json::json!({ "selector": { "service.name": support::AGENT_TYPE } }))
+        .send()
+        .await
+        .expect("put deployment");
+    assert_eq!(aimed.status(), 200);
+    let held = client
+        .put(format!(
+            "{deployment}/packages/{}/1.0.0",
+            support::AGENT_TYPE
+        ))
+        .send()
+        .await
+        .expect("put package");
+    assert_eq!(held.status(), 200);
+    let rolled = client
+        .post(format!("{deployment}/rollout"))
+        .send()
+        .await
+        .expect("rollout");
+    assert_eq!(rolled.status(), 200);
+    let offer = exchange(server, &agent_report(uid, 2, None))
+        .await
+        .packages_available
+        .expect("an offer");
+    let installed = offer.all_packages_hash;
+    assert!(exchange(server, &agent_report(uid, 3, Some(&installed)))
+        .await
+        .packages_available
+        .is_none());
+    installed
+}
+
+/// A Manifest that changes the entries of a Package an Agent's assignment pins is refused: the
+/// Server keeps serving the bytes it had, and offers the Agent nothing new; the new content takes
+/// a new version.
+#[tokio::test]
+async fn a_pinned_package_keeps_its_bytes_when_its_manifest_changes() {
+    let root = tempfile::tempdir().expect("repository");
+    publish(root.path(), "1.0.0", &[("linux", "amd64", b"linux build")]);
+    let (server, mut repository) = spawn_on(root.path()).await;
+    let uid = InstanceUid::default();
+    let installed = pin_and_install(&server, &uid).await;
+    let download = format!(
+        "http://{}/api/v1/packages/{}/1.0.0/file?os=linux&arch=amd64",
+        server.addr,
+        support::AGENT_TYPE
+    );
+
+    publish(root.path(), "1.0.0", &[("linux", "amd64", b"other build")]);
+    listing(&server, &mut repository);
+    let served = reqwest::get(&download)
+        .await
+        .expect("download")
+        .bytes()
+        .await
+        .expect("bytes");
+    assert_eq!(served.as_ref(), b"linux build", "the bytes it had");
+    assert!(
+        exchange(&server, &agent_report(&uid, 4, Some(&installed)))
+            .await
+            .packages_available
+            .is_none(),
+        "nothing new is offered under the same version"
+    );
+}
+
 /// A Server with an empty repository declares `OffersPackages` from the listing that finds the
 /// first Package.
 #[tokio::test]
@@ -319,6 +392,9 @@ async fn the_first_package_written_declares_offers_packages() {
     let offers =
         |reply: &ServerToAgent| reply.capabilities & ServerCapabilities::OffersPackages as u64 != 0;
 
+    let mut woken = server.state.subscribe();
+    woken.borrow_and_update();
+
     assert!(!offers(
         &exchange(&server, &agent_report(&uid, 1, None)).await
     ));
@@ -327,6 +403,16 @@ async fn the_first_package_written_declares_offers_packages() {
     assert!(offers(
         &exchange(&server, &agent_report(&uid, 2, None)).await
     ));
+    assert!(
+        woken.has_changed().expect("the Server runs"),
+        "a listing that changes the Packages wakes the WebSocket sessions"
+    );
+    woken.borrow_and_update();
+    listing(&server, &mut repository);
+    assert!(
+        !woken.has_changed().expect("the Server runs"),
+        "a listing that changes nothing wakes nobody"
+    );
 }
 
 /// A Package that a Deployment holds and an Agent's assignment pins leaves the repository: the
@@ -368,34 +454,7 @@ async fn a_package_that_leaves_the_repository_is_missing_until_it_is_back() {
             .expect("rollout")
     };
 
-    // The Agent is known, the Deployment holds the Package, and the rollout pins it.
-    exchange(&server, &agent_report(&uid, 1, None)).await;
-    let aimed = client
-        .put(&deployment)
-        .json(&serde_json::json!({ "selector": { "service.name": support::AGENT_TYPE } }))
-        .send()
-        .await
-        .expect("put deployment");
-    assert_eq!(aimed.status(), 200);
-    let held = client
-        .put(format!(
-            "{deployment}/packages/{}/1.0.0",
-            support::AGENT_TYPE
-        ))
-        .send()
-        .await
-        .expect("put package");
-    assert_eq!(held.status(), 200);
-    assert_eq!(rollout().await.status(), 200);
-    let offer = exchange(&server, &agent_report(&uid, 2, None))
-        .await
-        .packages_available
-        .expect("an offer");
-    let installed = offer.all_packages_hash.clone();
-    assert!(exchange(&server, &agent_report(&uid, 3, Some(&installed)))
-        .await
-        .packages_available
-        .is_none());
+    let installed = pin_and_install(&server, &uid).await;
     assert_eq!(availability().await, "present");
     assert_eq!(
         client

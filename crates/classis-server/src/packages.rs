@@ -15,7 +15,7 @@
 //! runs on, never another one. It checks a signature against the operator's public key when it
 //! holds one, and only reports what it found: the Agent's own check decides.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::{Mutex, RwLock};
 
@@ -491,6 +491,21 @@ pub struct PackageStore {
     /// The check every signature passes before it is held: nothing verifies
     /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
+    /// What a store on a Package Repository remembers from one listing to the next.
+    followed: Mutex<Followed>,
+}
+
+/// What a store on a Package Repository remembers from one listing to the next, for as long as
+/// the Server runs.
+#[derive(Default)]
+struct Followed {
+    /// The entries the store last took for each Package that is in the repository or that an
+    /// Agent's assignment pins, whether or not the store holds it now: what a changed Manifest of
+    /// a pinned Package is held to.
+    taken: BTreeMap<PackageId, Package>,
+    /// The Packages whose changed entries the store refuses, with why, so that a warning is
+    /// logged when that changes and not at every listing.
+    refused: BTreeMap<PackageId, String>,
 }
 
 /// The refusal of every write to a Package, an entry or a signature on a Server that reads its
@@ -561,6 +576,7 @@ impl PackageStore {
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
+            followed: Mutex::new(Followed::default()),
         };
         // A blob no entry names is deleted at startup: an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -584,12 +600,17 @@ impl PackageStore {
             warn_if_not_semver(&package);
             sets.insert(package.id.clone(), package);
         }
+        let followed = Followed {
+            taken: sets.clone(),
+            refused: BTreeMap::new(),
+        };
         PackageStore {
             backend: None,
             blobs,
             sets: RwLock::new(sets),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
+            followed: Mutex::new(followed),
         }
     }
 
@@ -659,7 +680,14 @@ impl PackageStore {
     /// Package Repository read, in one change: an offer or a listing sees the Packages of one
     /// listing or of the next, never a mix. A Package held already with the same entries keeps
     /// the signatures the store checked, so nothing is checked, or logged, again; a new or changed
-    /// one is checked now. Each Package that joins or leaves the store is logged.
+    /// one is checked now. Each Package that joins or leaves the store is logged. Answers whether
+    /// anything changed.
+    ///
+    /// The entries of a Package that `pinned` says an Agent's assignment pins do not change: a
+    /// Manifest that gives it other entries is refused, with one warning, and the store keeps the
+    /// entries it took, or holds the Package missing when their Blobs are gone. New content takes
+    /// a new version, as for an upload. The store remembers what it took for as long as the
+    /// Server runs, a Package that left the repository included.
     ///
     /// A Package that leaves is no Deployment's business here: the Deployments that hold it keep
     /// it, a rollout of one is refused ([`missing_in`](Self::missing_in)), and an Agent whose
@@ -668,7 +696,11 @@ impl PackageStore {
     /// # Errors
     /// Returns an error, and changes nothing, when the store keeps uploaded Packages: those are
     /// written through the REST API, and no listing replaces them.
-    pub fn replace(&self, packages: Vec<Package>) -> Result<(), String> {
+    pub fn replace(
+        &self,
+        packages: Vec<Package>,
+        pinned: &dyn Fn(&PackageId) -> bool,
+    ) -> Result<bool, String> {
         if self.backend.is_some() {
             return Err(
                 "the store keeps uploaded Packages, and only a store on a Package \
@@ -676,6 +708,8 @@ impl PackageStore {
                     .to_string(),
             );
         }
+        let mut followed = self.followed.lock().expect("followed lock");
+        let listed: BTreeSet<PackageId> = packages.iter().map(|p| p.id.clone()).collect();
         let mut next = BTreeMap::new();
         let mut fresh = Vec::new();
         {
@@ -685,31 +719,94 @@ impl PackageStore {
                     Some(kept) if same_entries(kept, &package) => {
                         next.insert(package.id.clone(), kept.clone());
                     }
-                    kept => fresh.push((package, kept.is_some())),
+                    kept => fresh.push((package, kept.cloned())),
                 }
             }
         }
-        // Checked with no lock held: an offer waits for none of it.
-        for (mut package, changed) in fresh {
-            if changed {
-                tracing::info!(package = %package.id, "the Package Repository holds other entries for the package");
-            } else {
-                warn_if_not_semver(&package);
-                tracing::info!(package = %package.id, "the Package Repository holds a new package");
+        // Decided with no lock on the Packages held, so an offer waits for none of it: `pinned`
+        // asks the fleet, and a Blob is asked of the repository.
+        let mut refused = BTreeMap::new();
+        let mut changed = false;
+        for (mut package, held) in fresh {
+            let id = package.id.clone();
+            match followed.taken.get(&id) {
+                Some(taken) if !same_entries(taken, &package) && pinned(&id) => {
+                    let why = if self.blobs_still_held(taken) {
+                        let kept = match held {
+                            Some(held) => held,
+                            None => {
+                                changed = true;
+                                let mut back = taken.clone();
+                                self.check_signatures(&mut back);
+                                back
+                            }
+                        };
+                        next.insert(id.clone(), kept);
+                        "an Agent's assignment pins the entries it had, so the Server keeps them"
+                    } else {
+                        "an Agent's assignment pins the entries it had, and their Blobs are gone, \
+                         so the package is missing"
+                    };
+                    refused.insert(id, why.to_string());
+                    continue;
+                }
+                Some(_) => tracing::info!(
+                    package = %id,
+                    "the Package Repository holds the package again, or other entries for it"
+                ),
+                None => {
+                    warn_if_not_semver(&package);
+                    tracing::info!(package = %id, "the Package Repository holds a new package");
+                }
             }
             self.check_signatures(&mut package);
-            next.insert(package.id.clone(), package);
+            followed.taken.insert(id.clone(), package.clone());
+            next.insert(id, package);
+            changed = true;
         }
+        for (id, why) in &refused {
+            if followed.refused.get(id) != Some(why) {
+                tracing::warn!(
+                    package = %id,
+                    "the Manifest changes the entries of the package, and {why} — publish the \
+                     new content under a new version"
+                );
+            }
+        }
+        for id in followed.refused.keys() {
+            if !refused.contains_key(id) {
+                tracing::info!(package = %id, "the Manifest of the package is taken again");
+            }
+        }
+        followed.refused = refused;
+        // What is gone from the repository is remembered only while an assignment pins it.
+        followed
+            .taken
+            .retain(|id, _| listed.contains(id) || pinned(id));
         let mut sets = self.sets.write().expect("sets lock");
         for id in sets.keys().filter(|id| !next.contains_key(*id)) {
-            tracing::info!(
-                package = %id,
-                "the package left the Package Repository: it is missing from every Deployment \
-                 that holds it, and offered to nobody until it is back"
-            );
+            changed = true;
+            if !followed.refused.contains_key(id) {
+                tracing::info!(
+                    package = %id,
+                    "the package left the Package Repository: it is missing from every \
+                     Deployment that holds it, and offered to nobody until it is back"
+                );
+            }
         }
         *sets = next;
-        Ok(())
+        Ok(changed)
+    }
+
+    /// Whether the repository still holds every Blob the entries of `package` name. A store that
+    /// cannot be asked is taken to hold them: a lost answer is no reason to withdraw a Package.
+    fn blobs_still_held(&self, package: &Package) -> bool {
+        package.entries.values().all(|entry| {
+            !matches!(
+                self.blobs.exists(&hex::encode(&entry.content_hash)),
+                Ok(false)
+            )
+        })
     }
 
     /// Whether the store holds the Package `id`.

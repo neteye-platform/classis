@@ -492,11 +492,9 @@ async fn main() {
     };
     if let Some((repository, every)) = reread {
         let listed = state.clone();
-        tokio::spawn(repository.reread_every(every, move |packages| {
-            listed
-                .packages()
-                .map_or(Ok(()), |store| store.replace(packages))
-        }));
+        tokio::spawn(
+            repository.reread_every(every, move |packages| listed.replace_packages(packages)),
+        );
         info!(
             rescan_secs = every.as_secs(),
             "reading the Package Repository again at a fixed interval"

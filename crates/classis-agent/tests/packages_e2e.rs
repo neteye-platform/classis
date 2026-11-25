@@ -200,14 +200,22 @@ async fn a_package_read_from_a_repository_is_downloaded_verified_and_installed()
 
     std::fs::remove_file(root.path().join("packages/managed-agent@2.0.0.json"))
         .expect("remove the manifest");
+    let reported = |state: &AppState| {
+        view(&state.snapshot(), "myagent")
+            .expect("the agent")
+            .sequence_num
+    };
+    let before = reported(&installed.state);
     installed
         .state
-        .packages()
-        .expect("package delivery")
-        .replace(repository.read().expect("read the repository"))
+        .replace_packages(repository.read().expect("read the repository"))
         .expect("the next listing");
-    // A few heartbeats later the Client still runs what it installed.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Two reports after the listing: the Client has had the Server's answer to the first, which
+    // offers nothing, and reported what it runs after it.
+    wait_until("two reports after the Package left", || {
+        (reported(&installed.state) >= before + 2).then_some(())
+    })
+    .await;
     let snapshot = installed.state.snapshot();
     let package = view(&snapshot, "myagent")
         .expect("the agent")

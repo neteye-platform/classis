@@ -2372,6 +2372,25 @@ impl AppState {
         self.offering().map(PackageOffering::store)
     }
 
+    /// Replaces the Packages read from the Package Repository with `packages`, what a later
+    /// listing of it read. The entries of a Package an Agent's assignment pins do not change, as
+    /// for an upload ([`PackageStore::replace`]). When anything changed, every WebSocket session
+    /// is woken, so an Agent pinned to a Package that is back is offered it without speaking
+    /// first.
+    ///
+    /// # Errors
+    /// Returns an error when package delivery is not configured, or when its store keeps uploaded
+    /// Packages.
+    pub fn replace_packages(&self, packages: Vec<crate::packages::Package>) -> Result<(), String> {
+        let changed = self
+            .package_store()?
+            .replace(packages, &|id| self.package_set_assigned(id))?;
+        if changed {
+            self.push.send_modify(|rev| *rev += 1);
+        }
+        Ok(())
+    }
+
     /// The package store for a write to a Package, an entry or a signature. On a Package
     /// Repository the write is refused before anything else is asked, so the refusal names the
     /// repository whatever else would stand in its way.

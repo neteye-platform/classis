@@ -172,8 +172,21 @@ impl Repository {
     /// the last listing. A file that is neither a manifest nor a Blob is ignored.
     ///
     /// # Errors
-    /// Returns an error naming the repository when it cannot be listed.
+    /// Returns an error naming the repository when it cannot be listed, or when its directory
+    /// went away while it was listed.
     pub fn read(&mut self) -> Result<Vec<Package>, String> {
+        // The Manifests first and the Blobs after: a writer writes the Blobs of a Manifest before
+        // it, so every Blob a Manifest read here names is in the listing that follows.
+        let mut read = Vec::new();
+        for object in self.source.listing(MANIFESTS)? {
+            if let Some(file_name) = manifest_name(&object) {
+                let manifest = self.source.manifest(&object, &file_name);
+                read.push((file_name, manifest));
+            }
+        }
+        let blobs: BTreeMap<String, u64> = self.source.blobs()?.into_iter().collect();
+        // Asked once both listings are done: a directory that went away before or during them
+        // listed as an empty one.
         if let Some(directory) = &self.source.directory {
             if !directory.is_dir() {
                 return Err(format!(
@@ -182,18 +195,10 @@ impl Repository {
                 ));
             }
         }
-        let blobs: BTreeMap<String, u64> = self.source.blobs()?.into_iter().collect();
         let mut packages = Vec::new();
         let mut set_aside = BTreeMap::new();
-        for object in self.source.listing(MANIFESTS)? {
-            let Some(file_name) = manifest_name(&object) else {
-                continue;
-            };
-            match self
-                .source
-                .manifest(&object, &file_name)
-                .and_then(|package| held(package, &file_name, &blobs))
-            {
+        for (file_name, manifest) in read {
+            match manifest.and_then(|package| held(package, &file_name, &blobs)) {
                 Ok(package) => packages.push(package),
                 Err(why) => {
                     set_aside.insert(file_name, why);
@@ -328,12 +333,27 @@ impl Source {
     }
 
     /// Reads the manifest `object`, refused unread when the listing says it is larger than a
-    /// manifest may be.
+    /// manifest may be, or when it is not a regular file.
     fn manifest(&self, object: &ObjectMeta, file_name: &str) -> Result<Package, String> {
         if object.size > MAX_MANIFEST_BYTES as u64 {
             return Err(too_large(file_name));
         }
+        self.regular(&object.location, file_name)?;
         read_manifest(file_name, &mut self.reader(&object.location)?)
+    }
+
+    /// Refuses `key` in a directory when it is not a regular file. A named pipe would hold the
+    /// open, and the listing with it, until something writes to it.
+    fn regular(&self, key: &Key, named: &str) -> Result<(), String> {
+        let Some(directory) = &self.directory else {
+            return Ok(());
+        };
+        let path = directory.join(key.as_ref());
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => Ok(()),
+            Ok(_) => Err(format!("{named} is not a regular file")),
+            Err(e) => Err(format!("cannot read {named}: {e}")),
+        }
     }
 
     /// The key of `path` under the root of the repository.
@@ -410,7 +430,9 @@ impl BlobStore for RepositoryBlobs {
     }
 
     fn get(&self, sha256: &str) -> Result<Box<dyn Read + Send>, String> {
-        Ok(Box::new(self.0.reader(&self.0.blob_key(sha256)?)?))
+        let key = self.0.blob_key(sha256)?;
+        self.0.regular(&key, &format!("blob {sha256}"))?;
+        Ok(Box::new(self.0.reader(&key)?))
     }
 
     fn exists(&self, sha256: &str) -> Result<bool, String> {
@@ -575,6 +597,12 @@ mod tests {
 
     /// Runs `work` and answers what it answered and what it logged.
     fn logged<T>(work: impl FnOnce() -> T) -> (T, String) {
+        logged_with(|_| work())
+    }
+
+    /// Runs `work`, which can read what has been logged so far, and answers what it answered and
+    /// what it logged.
+    fn logged_with<T>(work: impl FnOnce(&dyn Fn() -> String) -> T) -> (T, String) {
         let logs = Arc::new(Mutex::new(Vec::<u8>::new()));
         let writer = {
             let logs = logs.clone();
@@ -584,9 +612,9 @@ mod tests {
             .with_writer(writer)
             .with_ansi(false)
             .finish();
-        let answer = tracing::subscriber::with_default(subscriber, work);
-        let logs = String::from_utf8(logs.lock().expect("logs").clone()).expect("utf-8");
-        (answer, logs)
+        let so_far = || String::from_utf8_lossy(&logs.lock().expect("logs")).into_owned();
+        let answer = tracing::subscriber::with_default(subscriber, || work(&so_far));
+        (answer, so_far())
     }
 
     fn read_all(mut bytes: Box<dyn Read + Send>) -> Vec<u8> {
@@ -821,6 +849,72 @@ mod tests {
         nothing_is_written(new().as_ref());
         the_store_follows_each_listing(new().as_ref());
         a_package_that_leaves_is_missing_until_it_is_back(new().as_ref());
+        a_pinned_package_keeps_its_entries(new().as_ref());
+    }
+
+    /// The entries of a Package an Agent's assignment pins do not change: a Manifest that gives
+    /// it other entries is refused with one warning, the store keeps the entries it had while
+    /// their Blobs are there and holds the Package missing once they are gone, and the new entries
+    /// are taken once no assignment pins it.
+    fn a_pinned_package_keeps_its_entries(writer: &dyn Writer) {
+        let package = id("otelcol", "1.0.0");
+        publish(
+            writer,
+            &package,
+            &[signed_entry(&package, linux(), b"first build")],
+        );
+        let mut repository = writer.open();
+        let store = store_on(&mut repository, armed());
+        let pinned = |_: &PackageId| true;
+        let hash = |store: &PackageStore| store.artifact(&package, &linux()).map(|(hash, _)| hash);
+
+        publish(
+            writer,
+            &package,
+            &[signed_entry(&package, linux(), b"second build")],
+        );
+        let (changed, logs) = logged(|| {
+            (0..3)
+                .map(|_| {
+                    store
+                        .replace(repository.read().expect("read"), &pinned)
+                        .expect("replace")
+                })
+                .collect::<Vec<bool>>()
+        });
+        assert_eq!(changed, vec![false; 3], "nothing changes");
+        assert_eq!(
+            hash(&store),
+            Some(Sha256::digest(b"first build").to_vec()),
+            "the store keeps the entries it had"
+        );
+        assert_eq!(
+            store.list()[0].entries[0].signature_state,
+            SignatureState::Valid
+        );
+        assert_eq!(
+            logs.matches("changes the entries").count(),
+            1,
+            "one warning over three listings: {logs}"
+        );
+
+        writer.remove(&format!(
+            "blobs/{}",
+            hex::encode(Sha256::digest(b"first build"))
+        ));
+        assert!(store
+            .replace(repository.read().expect("read"), &pinned)
+            .expect("replace"));
+        assert!(!store.holds(&package), "its Blobs are gone: it is missing");
+
+        assert!(store
+            .replace(repository.read().expect("read"), &|_| false)
+            .expect("replace"));
+        assert_eq!(
+            hash(&store),
+            Some(Sha256::digest(b"second build").to_vec()),
+            "with no assignment pinning it, the new entries are taken"
+        );
     }
 
     /// A Package written after the startup is in the store after the next listing, and its
@@ -847,7 +941,7 @@ mod tests {
         );
         let (_, logs) = logged(|| {
             store
-                .replace(repository.read().expect("read"))
+                .replace(repository.read().expect("read"), &|_| false)
                 .expect("replace")
         });
         assert!(
@@ -869,7 +963,7 @@ mod tests {
         let (_, logs) = logged(|| {
             for _ in 0..10 {
                 store
-                    .replace(repository.read().expect("read"))
+                    .replace(repository.read().expect("read"), &|_| false)
                     .expect("replace");
             }
         });
@@ -916,7 +1010,7 @@ mod tests {
 
         writer.remove(&format!("packages/{package}.json"));
         store
-            .replace(repository.read().expect("read"))
+            .replace(repository.read().expect("read"), &|_| false)
             .expect("replace");
         assert!(
             store.list().is_empty(),
@@ -941,7 +1035,7 @@ mod tests {
             &[signed_entry(&package, linux(), b"build")],
         );
         store
-            .replace(repository.read().expect("read"))
+            .replace(repository.read().expect("read"), &|_| false)
             .expect("replace");
         assert!(store.missing_in(&deployment).is_empty(), "it is back");
         assert!(store
@@ -1091,12 +1185,10 @@ mod tests {
                 &[signed_entry(&package, linux(), artifact)],
             ))
             .expect("utf-8");
+            // In the order the Server asks: the prefix when it opens, then the Manifests, each
+            // Manifest, the Blobs, and the download.
             let (port, requests) = store_answering(vec![
                 reply(200, &listing("p/", &[])),
-                reply(
-                    200,
-                    &listing("p/blobs/", &[(format!("p/blobs/{sha256}"), 5)]),
-                ),
                 reply(
                     200,
                     &listing(
@@ -1105,6 +1197,10 @@ mod tests {
                     ),
                 ),
                 reply(200, &manifest),
+                reply(
+                    200,
+                    &listing("p/blobs/", &[(format!("p/blobs/{sha256}"), 5)]),
+                ),
                 reply(200, "build"),
                 reply(200, ""),
             ]);
@@ -1148,7 +1244,7 @@ mod tests {
             )
             .expect("open");
             let failed = repository.read().err().expect("the listing fails");
-            assert!(failed.contains("cannot list blobs/"), "{failed}");
+            assert!(failed.contains("cannot list packages/"), "{failed}");
         }
 
         /// A bucket that does not exist, or credentials it refuses, stop the open at once, naming
@@ -1261,12 +1357,12 @@ mod tests {
             .enable_all()
             .build()
             .expect("runtime");
-        let (_, logs) = logged(|| {
+        let (_, logs) = logged_with(|so_far| {
             runtime.block_on(async {
                 let listed = Arc::clone(&store);
                 let task = tokio::spawn(
                     repository.reread_every(Duration::from_millis(50), move |packages| {
-                        listed.replace(packages)
+                        listed.replace(packages, &|_| false).map(|_| ())
                     }),
                 );
                 publish(
@@ -1278,10 +1374,18 @@ mod tests {
 
                 let moved = writer.0.path().with_extension("moved");
                 std::fs::rename(writer.0.path(), &moved).expect("move the repository away");
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                wait_until("a warning that names the failure", || {
+                    so_far().contains("no longer a directory")
+                })
+                .await;
+                // More listings that fail alike: however many run, none warns again.
+                tokio::time::sleep(Duration::from_millis(200)).await;
                 assert!(store.holds(&package), "the last listing stays in use");
                 std::fs::rename(&moved, writer.0.path()).expect("move it back");
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                wait_until("the listings to succeed again", || {
+                    so_far().contains("listed again")
+                })
+                .await;
                 task.abort();
             });
         });
@@ -1291,6 +1395,45 @@ mod tests {
             "one warning for listings that fail alike: {logs}"
         );
         assert!(logs.contains("listed again"), "{logs}");
+    }
+
+    /// A Manifest that is not a regular file, such as a named pipe that would hold its open, is
+    /// set aside, and the listing goes on.
+    #[cfg(unix)]
+    #[test]
+    fn a_manifest_that_is_not_a_regular_file_is_set_aside() {
+        let writer = Directory::new();
+        let package = id("otelcol", "1.0.0");
+        publish(
+            &writer,
+            &package,
+            &[signed_entry(&package, linux(), b"build")],
+        );
+        let pipe = writer.0.path().join("packages/pipe@1.0.0.json");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .expect("mkfifo");
+        assert!(made.success(), "mkfifo {}", pipe.display());
+        let mut repository = writer.open();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // A test that gave up waiting no longer receives.
+            let _ = sender.send(logged(|| repository.read()));
+        });
+        let (read, logs) = receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the listing does not wait on the pipe");
+        let loaded: Vec<String> = read
+            .expect("read")
+            .iter()
+            .map(|p| p.id.to_string())
+            .collect();
+        assert_eq!(loaded, vec!["otelcol@1.0.0"]);
+        assert!(
+            logs.contains("pipe@1.0.0.json is not a regular file"),
+            "{logs}"
+        );
     }
 
     /// A read-only mount reads as any other directory: the Server needs read access alone.

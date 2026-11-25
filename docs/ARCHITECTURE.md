@@ -118,10 +118,12 @@ module has no role.
   write is refused, and a Manifest that is not well formed or names a Blob the
   repository lacks is set aside rather than failing the startup. The
   composition root has `Repository::reread_every` list it again every
-  `rescan_secs` on a blocking thread, and `PackageStore::replace` swaps the
-  Packages in one change, checking only the signatures of what is new; a
-  Package that leaves is missing from the Deployments that hold it, whose
-  rollout `missing_in` refuses. The adapter
+  `rescan_secs` on a blocking thread, and `AppState::replace_packages` hands
+  each listing to `PackageStore::replace`, which swaps the Packages in one
+  change, checks only the signatures of what is new, keeps the entries of a
+  Package an assignment pins (the fleet answers which), and then wakes the
+  WebSocket sessions; a Package that leaves is missing from the Deployments
+  that hold it, whose rollout `missing_in` refuses. The adapter
   reads a directory through `object_store`'s local filesystem and a prefix of a
   bucket through its S3 client, connected as the S3 blob store is
   (`s3::connect`), and the Manifest through `fs::read_manifest`, the format the
