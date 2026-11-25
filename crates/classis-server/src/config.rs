@@ -679,6 +679,21 @@ pub struct RepositoryConfig {
     /// The bucket that holds the repository under its prefix, with the connection settings of
     /// `[blobs.s3]`.
     pub s3: Option<S3BlobsConfig>,
+    /// How often the Server reads the repository again after startup, in seconds: at least
+    /// [`MIN_RESCAN_SECS`].
+    #[serde(default = "default_rescan_secs")]
+    pub rescan_secs: u64,
+}
+
+/// The interval between two listings of a Package Repository when none is set, in seconds.
+pub const DEFAULT_RESCAN_SECS: u64 = 60;
+
+/// The shortest interval between two listings of a Package Repository, in seconds: each listing
+/// asks the store for two directories or two prefixes, for every Server that reads it.
+pub const MIN_RESCAN_SECS: u64 = 10;
+
+fn default_rescan_secs() -> u64 {
+    DEFAULT_RESCAN_SECS
 }
 
 /// The one source a [`RepositoryConfig`] names, once it is checked.
@@ -714,7 +729,19 @@ impl RepositoryConfig {
         }
     }
 
+    /// How long the Server waits between two listings of the repository.
+    #[must_use]
+    pub fn rescan(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.rescan_secs)
+    }
+
     fn check(&self) -> Result<(), String> {
+        if self.rescan_secs < MIN_RESCAN_SECS {
+            return Err(format!(
+                "[packages.repository] rescan_secs is {}, below the minimum of {MIN_RESCAN_SECS}",
+                self.rescan_secs
+            ));
+        }
         match self.source()? {
             RepositorySource::Directory(_) => Ok(()),
             RepositorySource::Bucket(bucket) => bucket.check_in(REPOSITORY_S3),
@@ -2866,6 +2893,16 @@ mod tests {
             !config.filesystem_blobs(),
             "the repository holds the artifacts"
         );
+        let rescan = |config: &ServerConfig| {
+            config
+                .packages
+                .repository
+                .as_ref()
+                .map(RepositoryConfig::rescan)
+        };
+        assert_eq!(rescan(&config), Some(std::time::Duration::from_secs(60)));
+        let config = load(&format!("{repository}rescan_secs = 10\n")).expect("the minimum");
+        assert_eq!(rescan(&config), Some(std::time::Duration::from_secs(10)));
 
         for (text, named) in [
             (
@@ -2885,6 +2922,10 @@ mod tests {
                 vec!["[packages.repository] path"],
             ),
             (format!("{repository}rescan = 5\n"), vec!["rescan"]),
+            (
+                format!("{repository}rescan_secs = 9\n"),
+                vec!["[packages.repository] rescan_secs", "10"],
+            ),
             (
                 format!("{repository}{bucket}endpoint = \"https://s3.example\"\n"),
                 vec!["[packages.repository] path", "[packages.repository.s3]"],

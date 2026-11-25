@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,6 +64,9 @@ struct Source {
     /// What a message names the repository by: its directory, or its bucket and prefix.
     name: String,
     bridge: Arc<Bridge>,
+    /// The directory of a repository on the filesystem, which must still be there at each
+    /// listing: the local store lists a directory that is gone as an empty one.
+    directory: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Source {
@@ -114,6 +117,7 @@ impl Repository {
             prefix: String::new(),
             name: path.display().to_string(),
             bridge: Arc::new(Bridge::new("repository")?),
+            directory: Some(path.to_path_buf()),
         }))
     }
 
@@ -151,6 +155,7 @@ impl Repository {
                 config.bucket, config.prefix
             ),
             bridge: Arc::new(bridge),
+            directory: None,
         }))
     }
 
@@ -169,6 +174,14 @@ impl Repository {
     /// # Errors
     /// Returns an error naming the repository when it cannot be listed.
     pub fn read(&mut self) -> Result<Vec<Package>, String> {
+        if let Some(directory) = &self.source.directory {
+            if !directory.is_dir() {
+                return Err(format!(
+                    "the Package Repository {} is no longer a directory",
+                    self.source.name
+                ));
+            }
+        }
         let blobs: BTreeMap<String, u64> = self.source.blobs()?.into_iter().collect();
         let mut packages = Vec::new();
         let mut set_aside = BTreeMap::new();
@@ -189,6 +202,68 @@ impl Repository {
         }
         self.report(set_aside);
         Ok(packages)
+    }
+
+    /// Reads the repository again every `every`, for as long as the Server runs, and hands each
+    /// listing to `apply`, which replaces the Packages in use. A listing that fails changes
+    /// nothing: the Packages of the last one stay in use, a warning names the failure when it
+    /// starts or changes, and a message says so when the listings succeed again. Each listing
+    /// runs on a blocking thread, so the runtime is never held by the store.
+    pub async fn reread_every(
+        mut self,
+        every: Duration,
+        apply: impl Fn(Vec<Package>) -> Result<(), String> + Send + Sync + 'static,
+    ) {
+        let apply = Arc::new(apply);
+        let mut failing: Option<String> = None;
+        let mut ticks = tokio::time::interval(every);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick is at once, and the startup has read the repository already.
+        ticks.tick().await;
+        loop {
+            ticks.tick().await;
+            let apply = Arc::clone(&apply);
+            let listing = tokio::task::spawn_blocking(move || {
+                let listed = self.read().and_then(|packages| apply(packages));
+                (self, listed)
+            })
+            .await;
+            let listed = match listing {
+                Ok((repository, listed)) => {
+                    self = repository;
+                    listed
+                }
+                // The runtime is shutting down, and the Server with it.
+                Err(e) if e.is_cancelled() => return,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "the listing of the Package Repository stopped; the Packages of the last \
+                         listing stay in use until the Server restarts"
+                    );
+                    return;
+                }
+            };
+            match listed {
+                Ok(()) => {
+                    if failing.take().is_some() {
+                        tracing::info!(
+                            repository = %self.source.name,
+                            "the Package Repository is listed again"
+                        );
+                    }
+                }
+                Err(why) => {
+                    if failing.as_deref() != Some(why.as_str()) {
+                        tracing::warn!(
+                            repository = %self.source.name,
+                            "{why} — the Packages of the last listing stay in use"
+                        );
+                    }
+                    failing = Some(why);
+                }
+            }
+        }
     }
 
     /// A handle on the Blobs of the repository, for the package store to serve the downloads
@@ -375,6 +450,8 @@ mod tests {
     trait Writer {
         /// Writes `bytes` at `key` under the root, whole or not at all.
         fn put(&self, key: &str, bytes: &[u8]);
+        /// Deletes what is at `key` under the root.
+        fn remove(&self, key: &str);
         /// The repository as a Server opens it.
         fn open(&self) -> Repository;
     }
@@ -397,6 +474,10 @@ mod tests {
             let staged = dir.join(".staged");
             std::fs::write(&staged, bytes).expect("write");
             std::fs::rename(&staged, &path).expect("rename");
+        }
+
+        fn remove(&self, key: &str) {
+            std::fs::remove_file(self.0.path().join(key)).expect("remove");
         }
 
         fn open(&self) -> Repository {
@@ -738,6 +819,138 @@ mod tests {
         a_signature_that_does_not_verify_withholds_its_entry(new().as_ref());
         other_files_are_ignored(new().as_ref());
         nothing_is_written(new().as_ref());
+        the_store_follows_each_listing(new().as_ref());
+        a_package_that_leaves_is_missing_until_it_is_back(new().as_ref());
+    }
+
+    /// A Package written after the startup is in the store after the next listing, and its
+    /// signature is checked then; one that does not verify is named once, not at every listing.
+    fn the_store_follows_each_listing(writer: &dyn Writer) {
+        let mut repository = writer.open();
+        let store = store_on(&mut repository, armed());
+        assert!(store.is_empty(), "an empty repository offers nothing");
+
+        let package = id("otelcol", "1.0.0");
+        let stranger = classis_core::package::testing::TestRoot::new().signer();
+        let hash = Sha256::digest(b"windows build");
+        publish(
+            writer,
+            &package,
+            &[
+                signed_entry(&package, linux(), b"linux build"),
+                Written {
+                    platform: windows(),
+                    artifact: b"windows build",
+                    signature: Some(stranger.sign_artifact("otelcol", "1.0.0", &hash)),
+                },
+            ],
+        );
+        let (_, logs) = logged(|| {
+            store
+                .replace(repository.read().expect("read"))
+                .expect("replace")
+        });
+        assert!(
+            !store.is_empty(),
+            "the first Package declares OffersPackages"
+        );
+        let states: Vec<SignatureState> = store.list()[0]
+            .entries
+            .iter()
+            .map(|entry| entry.signature_state)
+            .collect();
+        assert_eq!(states, vec![SignatureState::Valid, SignatureState::Missing]);
+        assert_eq!(
+            logs.matches("does not verify").count(),
+            1,
+            "the new Package's signatures are checked: {logs}"
+        );
+
+        let (_, logs) = logged(|| {
+            for _ in 0..10 {
+                store
+                    .replace(repository.read().expect("read"))
+                    .expect("replace");
+            }
+        });
+        assert!(
+            !logs.contains("WARN"),
+            "an unchanged Package is not checked again: {logs}"
+        );
+        assert_eq!(
+            store.list()[0].entries[0].signature_state,
+            SignatureState::Valid
+        );
+    }
+
+    /// A Package whose manifest is removed leaves the store at the next listing: a Deployment that
+    /// holds it names it missing, nothing of it is offered or served, and it all works again once
+    /// the manifest is back.
+    fn a_package_that_leaves_is_missing_until_it_is_back(writer: &dyn Writer) {
+        let package = id("otelcol", "1.0.0");
+        publish(
+            writer,
+            &package,
+            &[signed_entry(&package, linux(), b"build")],
+        );
+        let mut repository = writer.open();
+        let store = store_on(&mut repository, armed());
+        let deployment = crate::deployments::Deployment {
+            name: "stable".to_string(),
+            selector: BTreeMap::from([("channel".to_string(), "stable".to_string())]),
+            packages: BTreeMap::from([(package.agent_type.clone(), package.clone())]),
+            configurations: Default::default(),
+        };
+        let attr = opamp::attributes::string_attr;
+        let host = opamp::proto::AgentDescription {
+            identifying_attributes: vec![attr(opamp::attributes::SERVICE_NAME, "otelcol")],
+            non_identifying_attributes: vec![
+                attr(opamp::attributes::OS_TYPE, "linux"),
+                attr(opamp::attributes::HOST_ARCH, "amd64"),
+            ],
+        };
+        assert!(store.missing_in(&deployment).is_empty());
+        assert!(store
+            .offer_for_assigned(Some(&package), Some(&host))
+            .is_some());
+
+        writer.remove(&format!("packages/{package}.json"));
+        store
+            .replace(repository.read().expect("read"))
+            .expect("replace");
+        assert!(
+            store.list().is_empty(),
+            "the Package is absent from the list"
+        );
+        assert!(!store.holds(&package));
+        assert_eq!(store.missing_in(&deployment), vec![package.display_name()]);
+        assert!(
+            store
+                .offer_for_assigned(Some(&package), Some(&host))
+                .is_none(),
+            "an Agent it is assigned to is offered nothing"
+        );
+        assert!(
+            store.artifact(&package, &linux()).is_none(),
+            "nothing is served"
+        );
+
+        publish(
+            writer,
+            &package,
+            &[signed_entry(&package, linux(), b"build")],
+        );
+        store
+            .replace(repository.read().expect("read"))
+            .expect("replace");
+        assert!(store.missing_in(&deployment).is_empty(), "it is back");
+        assert!(store
+            .offer_for_assigned(Some(&package), Some(&host))
+            .is_some());
+        assert_eq!(
+            store.list()[0].entries[0].signature_state,
+            SignatureState::Valid
+        );
     }
 
     #[test]
@@ -794,6 +1007,14 @@ mod tests {
                 self.bridge
                     .run(async move { client.put(&key, payload).await })
                     .expect("put");
+            }
+
+            fn remove(&self, key: &str) {
+                let client = Arc::clone(&self.client);
+                let key = self.key(key);
+                self.bridge
+                    .run(async move { client.delete(&key).await })
+                    .expect("delete");
             }
 
             fn open(&self) -> Repository {
@@ -910,6 +1131,26 @@ mod tests {
             }
         }
 
+        /// A listing that the bucket refuses after the startup is an error, so the Packages in
+        /// use stay as they are. Needs no store.
+        #[test]
+        fn a_listing_the_bucket_refuses_fails() {
+            let (port, _) = store_answering(vec![
+                reply(200, &listing("", &[])),
+                reply(500, "<Error><Code>InternalError</Code></Error>"),
+            ]);
+            let dir = tempfile::tempdir().expect("tempdir");
+            let mut repository = Repository::open_bucket_within(
+                &config_for(port, dir.path()),
+                QUICK,
+                Duration::ZERO,
+                Duration::ZERO,
+            )
+            .expect("open");
+            let failed = repository.read().err().expect("the listing fails");
+            assert!(failed.contains("cannot list blobs/"), "{failed}");
+        }
+
         /// A bucket that does not exist, or credentials it refuses, stop the open at once, naming
         /// the section and the bucket; a store that does not answer yet is asked again. Needs no
         /// store.
@@ -970,6 +1211,86 @@ mod tests {
         std::fs::write(&file, b"x").expect("write");
         let refused = Repository::open_directory(&file).expect_err("refused");
         assert!(refused.contains("not a directory"), "{refused}");
+    }
+
+    /// A directory that goes away after the startup fails the listing, rather than reading as an
+    /// empty repository and taking every Package away; it reads again once it is back.
+    #[test]
+    fn a_directory_that_goes_away_fails_the_listing() {
+        let writer = Directory::new();
+        let package = id("otelcol", "1.0.0");
+        publish(
+            &writer,
+            &package,
+            &[signed_entry(&package, linux(), b"build")],
+        );
+        let mut repository = writer.open();
+        assert_eq!(repository.read().expect("read").len(), 1);
+
+        let moved = writer.0.path().with_extension("moved");
+        std::fs::rename(writer.0.path(), &moved).expect("move the repository away");
+        let failed = repository.read().err().expect("the listing fails");
+        assert!(failed.contains("no longer a directory"), "{failed}");
+        std::fs::rename(&moved, writer.0.path()).expect("move it back");
+        assert_eq!(repository.read().expect("read").len(), 1);
+    }
+
+    /// Polls `done` until it holds, for a few seconds at most.
+    async fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// The listing at an interval: a Package written while the Server runs is in the store within
+    /// one interval and one listing, and a listing that fails keeps the Packages of the last one,
+    /// with one warning that names the failure and a message once the listings succeed again.
+    #[test]
+    fn the_repository_is_read_again_at_each_interval() {
+        let writer = Directory::new();
+        let mut repository = writer.open();
+        let store = Arc::new(store_on(&mut repository, armed()));
+        let package = id("otelcol", "1.0.0");
+        // One thread for the loop and the test, so the loop's own log is the one read below.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (_, logs) = logged(|| {
+            runtime.block_on(async {
+                let listed = Arc::clone(&store);
+                let task = tokio::spawn(
+                    repository.reread_every(Duration::from_millis(50), move |packages| {
+                        listed.replace(packages)
+                    }),
+                );
+                publish(
+                    &writer,
+                    &package,
+                    &[signed_entry(&package, linux(), b"build")],
+                );
+                wait_until("the new Package", || store.holds(&package)).await;
+
+                let moved = writer.0.path().with_extension("moved");
+                std::fs::rename(writer.0.path(), &moved).expect("move the repository away");
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                assert!(store.holds(&package), "the last listing stays in use");
+                std::fs::rename(&moved, writer.0.path()).expect("move it back");
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                task.abort();
+            });
+        });
+        assert_eq!(
+            logs.matches("no longer a directory").count(),
+            1,
+            "one warning for listings that fail alike: {logs}"
+        );
+        assert!(logs.contains("listed again"), "{logs}");
     }
 
     /// A read-only mount reads as any other directory: the Server needs read access alone.

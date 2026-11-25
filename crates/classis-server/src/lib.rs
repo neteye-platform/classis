@@ -251,7 +251,8 @@ impl packages::PackageStore {
     /// Opens the store on the Package Repository `repository` names: one listing of it, which
     /// must succeed, so a Server never starts without knowing its repository. The records hold no
     /// Package of their own then, and one they hold stops the startup naming it rather than being
-    /// hidden.
+    /// hidden. Answers the store and the repository, for the composition root to read again
+    /// ([`Repository::reread_every`](repository::Repository::reread_every)).
     ///
     /// # Errors
     /// Returns an error when the records hold a Package, or when the repository cannot be opened
@@ -259,7 +260,7 @@ impl packages::PackageStore {
     pub fn on_repository(
         records: &Records,
         repository: &config::RepositoryConfig,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, repository::Repository), String> {
         let uploaded = records.packages()?.load()?;
         if !uploaded.is_empty() {
             let named: Vec<String> = uploaded.iter().map(|p| p.id.to_string()).collect();
@@ -278,10 +279,8 @@ impl packages::PackageStore {
             packages = packages.len(),
             "reading the Packages from a Package Repository, which the Server does not write"
         );
-        Ok(Self::from_repository(
-            packages,
-            Box::new(repository.blob_store()),
-        ))
+        let store = Self::from_repository(packages, Box::new(repository.blob_store()));
+        Ok((store, repository))
     }
 }
 

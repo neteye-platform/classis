@@ -149,7 +149,9 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
 
 /// The same with a Package Repository in place of the upload: another party wrote the
 /// artifact and its manifest, the signature inside, into a directory, and the Server only reads
-/// it. The Client still downloads the artifact from the Server, and from nowhere else.
+/// it. The Client still downloads the artifact from the Server, and from nowhere else. When the
+/// manifest then leaves the repository, the Client keeps the version it runs and uninstalls
+/// nothing.
 #[tokio::test]
 async fn a_package_read_from_a_repository_is_downloaded_verified_and_installed() {
     let artifact = std::fs::read(env!("CARGO_BIN_EXE_stub_agent")).expect("read stub");
@@ -194,7 +196,43 @@ async fn a_package_read_from_a_repository_is_downloaded_verified_and_installed()
     let set =
         classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
 
-    installed_end_to_end(store, &set, None).await;
+    let installed = installed_end_to_end(store, &set, None).await;
+
+    std::fs::remove_file(root.path().join("packages/managed-agent@2.0.0.json"))
+        .expect("remove the manifest");
+    installed
+        .state
+        .packages()
+        .expect("package delivery")
+        .replace(repository.read().expect("read the repository"))
+        .expect("the next listing");
+    // A few heartbeats later the Client still runs what it installed.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let snapshot = installed.state.snapshot();
+    let package = view(&snapshot, "myagent")
+        .expect("the agent")
+        .packages
+        .iter()
+        .find(|p| p.name == "managed-agent")
+        .expect("the package it reports");
+    assert_eq!(
+        (package.status.as_str(), package.version.as_str()),
+        ("Installed", "2.0.0"),
+        "the Agent keeps the version it runs"
+    );
+    assert!(installed.managed.exists(), "the program is still there");
+    let record = std::fs::read_to_string(&installed.record).expect("the installation record");
+    assert!(record.contains("2.0.0"), "nothing is uninstalled: {record}");
+}
+
+/// What an installation left for a test to look at: the Server's state, the managed program, the
+/// record of the installation, and the running Client.
+struct Installed {
+    state: Arc<AppState>,
+    managed: std::path::PathBuf,
+    record: std::path::PathBuf,
+    _client: ClientUnderTest,
+    _dir: tempfile::TempDir,
 }
 
 /// A Server on `store`, which holds `set` for this host, and the real Client: the rollout act
@@ -204,7 +242,7 @@ async fn installed_end_to_end(
     store: PackageStore,
     set: &classis_server::packages::PackageId,
     signature: Option<Vec<u8>>,
-) {
+) -> Installed {
     let (addr, state, dir) = spawn_server(store).await;
 
     // The managed binary starts as a copy of the stub, in the Supervisor's own `program/`
@@ -242,7 +280,7 @@ async fn installed_end_to_end(
     std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
         .expect("write supervisor.toml");
 
-    let _client = spawn_client(&config_path);
+    let client = spawn_client(&config_path);
     let host = this_host();
 
     // A saved Set reaches nobody: the rollout act releases it, retried until the
@@ -285,9 +323,15 @@ async fn installed_end_to_end(
     // The managed process ran the swapped-in binary (the marker exists) and the persisted record
     // survives — a restart is not re-offered the same package.
     assert!(marker.exists(), "the swapped binary ran");
-    assert!(state_dir
-        .join("supervisors/myagent/installed-package.json")
-        .exists());
+    let record = state_dir.join("supervisors/myagent/installed-package.json");
+    assert!(record.exists());
+    Installed {
+        state,
+        managed,
+        record,
+        _client: client,
+        _dir: dir,
+    }
 }
 
 /// The preflight, reached through the `command` kind's own configuration: `version_args`

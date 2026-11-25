@@ -3537,6 +3537,16 @@ fn refuse_unreleasable(
             deployment.name
         )));
     }
+    let missing = store.missing_in(deployment);
+    if !missing.is_empty() {
+        return Err(RolloutError::NotApplicable(format!(
+            "deployment {:?} holds packages that are missing from the Package Repository: {} — \
+             write them into the repository again, or take them out of the deployment, before \
+             rolling it out",
+            deployment.name,
+            missing.join("; ")
+        )));
+    }
     let unsigned = store.unsigned_in(deployment);
     if unsigned.is_empty() {
         return Ok(());

@@ -550,6 +550,9 @@ prefix = "repository/"
   alone), a `prefix` that is empty or ends in `/`, and a key pair set whole or
   not at all. Without a key pair the Server uses the workload identity of its
   platform. The credentials need to list and read the prefix, and nothing more.
+- `rescan_secs` is how often the Server reads the repository again after its
+  start, in seconds: 60 by default, at least 10. A value below 10 stops the
+  start, naming the key.
 - **A section with neither source, or with both, stops the start**, naming the
   keys.
 - **`[packages.repository]` and `[blobs]` together stop the start**, naming both
@@ -1950,6 +1953,13 @@ the Manifest, each with one `PUT`.
   the bucket refuses stop the start at once, naming them. A bucket that does
   not answer yet is asked again every 5 seconds for up to 3 minutes, as for
   `[blobs.s3]`.
+- **It reads the repository again every `rescan_secs`**, with no restart. A
+  Package written while the Server runs is offered within one interval and one
+  listing, and the first Package of an empty repository makes the Server
+  declare `OffersPackages` to the Agents from then on. A listing that fails
+  changes nothing: the Packages of the last listing stay in use, and a warning
+  names the failure when it starts or changes. A directory that is gone counts
+  as a listing that fails, not as an empty repository.
 - **It checks every signature** up to the Package Roots, as for an uploaded
   Package. A signature that does not verify, or that a Package Signer in
   [`revoked_signers`](#packages) made, withholds its entry: the entry is
@@ -1968,6 +1978,24 @@ the Manifest, each with one `PUT`.
 - **It refuses every write.** A REST write or delete of a Package, an entry or
   a signature gets `409`, and the message names the repository. Write the
   change into the repository instead.
+
+### A Package that leaves the repository
+
+When a Manifest is removed, its Package leaves the Server at the next listing.
+It is missing, not deleted:
+
+- **The Deployments that hold it do not change.** Their view marks it, in each
+  entry of `packages`, with `"availability": "missing"` in place of
+  `"present"`.
+- **A rollout of such a Deployment gets `409`**, and the message names the
+  missing Packages, as it names unsigned entries.
+- **An Agent whose assignment pins it is offered nothing.** It keeps the
+  version it runs, and its Client uninstalls nothing.
+- **Its downloads get `404`.**
+
+When the Manifest is written again, all of this works again at the next
+listing, with no other act. A store that lists nothing for one interval
+therefore changes no Deployment.
 
 ### Moving uploaded Packages into a Package Repository
 

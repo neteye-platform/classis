@@ -410,10 +410,16 @@ async fn main() {
             "refusing the Package Signers named in [packages] revoked_signers"
         );
     }
+    // The repository is read again once the Server's state is built, every rescan interval.
+    let mut reread = None;
     let store = match &config.packages.repository {
-        Some(repository) => {
-            classis_server::packages::PackageStore::on_repository(&records, repository)
-        }
+        Some(repository) => classis_server::packages::PackageStore::on_repository(
+            &records, repository,
+        )
+        .map(|(store, read)| {
+            reread = Some((read, repository.rescan()));
+            store
+        }),
         None => classis_server::packages::PackageStore::open_on(
             &records,
             &config.data_dir,
@@ -484,6 +490,18 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    if let Some((repository, every)) = reread {
+        let listed = state.clone();
+        tokio::spawn(repository.reread_every(every, move |packages| {
+            listed
+                .packages()
+                .map_or(Ok(()), |store| store.replace(packages))
+        }));
+        info!(
+            rescan_secs = every.as_secs(),
+            "reading the Package Repository again at a fixed interval"
+        );
+    }
     // The Server authenticates no Agent: the proxy in front of it does, and the Agent
     // port must be reachable through it alone. `AdmitEveryone` is the seam an authenticating
     // library plugs into later.

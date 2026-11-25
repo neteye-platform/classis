@@ -116,7 +116,12 @@ module has no role.
   nothing: `PackageStore::from_repository` takes those Packages, the
   repository's `RepositoryBlobs` is the `BlobStore` the downloads read, every
   write is refused, and a Manifest that is not well formed or names a Blob the
-  repository lacks is set aside rather than failing the startup. The adapter
+  repository lacks is set aside rather than failing the startup. The
+  composition root has `Repository::reread_every` list it again every
+  `rescan_secs` on a blocking thread, and `PackageStore::replace` swaps the
+  Packages in one change, checking only the signatures of what is new; a
+  Package that leaves is missing from the Deployments that hold it, whose
+  rollout `missing_in` refuses. The adapter
   reads a directory through `object_store`'s local filesystem and a prefix of a
   bucket through its S3 client, connected as the S3 blob store is
   (`s3::connect`), and the Manifest through `fs::read_manifest`, the format the
@@ -445,9 +450,10 @@ that alters one edits its line here ([`AGENTS.md`
   port; artifacts are kept by SHA-256. Records may live in PostgreSQL instead
   (the Server waits for the database and its lock at startup and exits when it
   loses the lock), artifact bytes in an S3-compatible bucket, and the Packages
-  in a Package Repository the Server reads, in which a Manifest that is not
-  well formed sets its Package aside rather than stopping the Server. An old
-  layout is moved by the offline `server migrate`.
+  in a Package Repository the Server reads at startup and at an interval, in
+  which a Manifest that is not well formed sets its Package aside rather than
+  stopping the Server, and a Package that leaves is missing, not deleted. An
+  old layout is moved by the offline `server migrate`.
 - The REST API is described by OpenAPI, and the bundled UI uses it alone; the UI
   colours configurations with a vendored Shiki whose hash is pinned.
 - `classisctl` is the one operator program: it makes the fleet's certificate

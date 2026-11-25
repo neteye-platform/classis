@@ -2024,10 +2024,29 @@ struct DeploymentPackageView {
     version: String,
     /// What an operator reads: the Agent type and the version together.
     display_name: String,
+    /// Whether the Server holds the Package. `missing` when it has left the Package Repository:
+    /// a rollout of the Deployment is refused, and an Agent it is assigned to keeps what it runs,
+    /// until the Package is back.
+    availability: Availability,
+}
+
+/// Whether the Server holds a Package that a Deployment holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+enum Availability {
+    /// The Server holds the Package.
+    Present,
+    /// The Package has left the Package Repository, and the Deployment still holds it.
+    Missing,
 }
 
 impl DeploymentView {
-    fn of(deployment: Deployment, reach: crate::fleet::DeploymentReach) -> Self {
+    /// The view of `deployment`, whose Packages `store` holds or lacks.
+    fn of(
+        deployment: Deployment,
+        reach: crate::fleet::DeploymentReach,
+        store: Option<&crate::packages::PackageStore>,
+    ) -> Self {
         let mut packages: Vec<DeploymentPackageView> = deployment
             .packages
             .values()
@@ -2035,6 +2054,11 @@ impl DeploymentView {
                 agent_type: id.agent_type.clone(),
                 version: id.version.clone(),
                 display_name: id.display_name(),
+                availability: if store.is_some_and(|store| store.holds(id)) {
+                    Availability::Present
+                } else {
+                    Availability::Missing
+                },
             })
             .collect();
         packages.sort_by(|a, b| a.agent_type.cmp(&b.agent_type));
@@ -2113,7 +2137,7 @@ async fn list_deployments(State(state): State<Arc<AppState>>) -> Response {
                     .into_iter()
                     .map(|deployment| {
                         let counts = reach.get(&deployment.name).copied().unwrap_or_default();
-                        DeploymentView::of(deployment, counts)
+                        DeploymentView::of(deployment, counts, state.packages())
                     })
                     .collect::<Vec<_>>(),
             )
@@ -2424,7 +2448,7 @@ fn deployment_response(state: &AppState, deployment: Deployment) -> Response {
         .get(&deployment.name)
         .copied()
         .unwrap_or_default();
-    Json(DeploymentView::of(deployment, reach)).into_response()
+    Json(DeploymentView::of(deployment, reach, state.packages())).into_response()
 }
 
 /// The enrolment window as the API answers with it.
