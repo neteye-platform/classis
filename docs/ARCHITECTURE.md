@@ -44,9 +44,10 @@ true.
   Collector reports through its own `opampextension` to the Supervisor Endpoint,
   which admits only the process its Supervisor started.
 - **Package downloads** come from the Server alone: every artifact is uploaded
-  to it, and a Client fetches only from its own Server's origin, or from its
-  Gateway. What arrives is checked against its hash and its signature, made by a
-  Package Signer that a Package Root compiled into the Client issued.
+  to it, or read from the Package Repository it is configured with, and a
+  Client fetches only from its own Server's origin, or from its Gateway. What
+  arrives is checked against its hash and its signature, made by a Package
+  Signer that a Package Root compiled into the Client issued.
 - **The service manager** starts the Client and restarts it after a self-update.
   Where a process account is registered, it also runs the second service, which
   starts the Managed Processes under that account.
@@ -110,8 +111,25 @@ module has no role.
   SHA-256) under the `PackageStore` in `packages`, the bytes in `data_dir` or,
   with `[blobs] store = "s3"`, in one bucket of an S3-compatible store through
   the adapter in `s3`, which bridges the synchronous port onto a runtime of its
-  own (`bridge`); `BootstrapStore` under the `BootstrapCertificates` in
-  `bootstrap`; `EnrolmentStore` under the `Enrolment` in `enrolment`;
+  own (`bridge`). With `[packages.repository]` the `PackageStore` holds what
+  the adapter in `repository` read from a Package Repository and writes
+  nothing: `PackageStore::from_repository` takes those Packages, the
+  repository's `RepositoryBlobs` is the `BlobStore` the downloads read, every
+  write is refused, and a Manifest that is not well formed or names a Blob the
+  repository lacks is set aside rather than failing the startup. The
+  composition root has `Repository::reread_every` list it again every
+  `rescan_secs` on a blocking thread, and `AppState::replace_packages` hands
+  each listing to `PackageStore::replace`, which swaps the Packages in one
+  change, checks only the signatures of what is new, keeps the entries of a
+  Package an assignment pins (the fleet answers which), and then wakes the
+  WebSocket sessions; a Package that leaves is missing from the Deployments
+  that hold it, whose rollout `missing_in` refuses. The adapter
+  reads a directory through `object_store`'s local filesystem and a prefix of a
+  bucket through its S3 client, connected as the S3 blob store is
+  (`s3::connect`), and the Manifest through `fs::read_manifest`, the format the
+  filesystem package backend writes; `BootstrapStore` under the
+  `BootstrapCertificates` in `bootstrap`; `EnrolmentStore` under the
+  `Enrolment` in `enrolment`;
   `LedgerStore` in `revocation`. The filesystem adapters are in `fs`, which also
   opens the data directory and refuses anything its layout does not name. With
   `[database] store = "postgres"` every port but the blob port has its
@@ -417,8 +435,9 @@ that alters one edits its line here ([`AGENTS.md`
   below the highest version that type has had on the host.
 - Every Package entry carries its own signature, accepted only when a Package
   Signer issued by the compiled-in Package Root signed it. Every artifact is
-  uploaded to the Server and downloaded only from its origin; `package sign`
-  signs a signing file's hashes without the artifacts.
+  uploaded to the Server, or read from the Package Repository another party
+  writes and the Server only reads, and downloaded only from the Server's
+  origin; `package sign` signs a signing file's hashes without the artifacts.
 - A Deployment carries Packages and Configurations and is the one thing rolled
   out. A rollout is an explicit act per Agent that pins what it releases;
   nothing an assignment pins can be deleted. A Configuration is named content
@@ -432,8 +451,11 @@ that alters one edits its line here ([`AGENTS.md`
 - The Server's state lives under one `data_dir`, one store per domain behind a
   port; artifacts are kept by SHA-256. Records may live in PostgreSQL instead
   (the Server waits for the database and its lock at startup and exits when it
-  loses the lock), artifact bytes in an S3-compatible bucket. An old layout is
-  moved by the offline `server migrate`.
+  loses the lock), artifact bytes in an S3-compatible bucket, and the Packages
+  in a Package Repository the Server reads at startup and at an interval, in
+  which a Manifest that is not well formed sets its Package aside rather than
+  stopping the Server, and a Package that leaves is missing, not deleted. An
+  old layout is moved by the offline `server migrate`.
 - The REST API is described by OpenAPI, and the bundled UI uses it alone; the UI
   colours configurations with a vendored Shiki whose hash is pinned.
 - `classisctl` is the one operator program: it makes the fleet's certificate

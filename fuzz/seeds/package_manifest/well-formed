@@ -1,0 +1,13 @@
+{
+  "agent_type": "otelcol",
+  "version": "1.0.0",
+  "entries": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "sha256": "6c8a9a93e7b1cbf5d0a6e3a8e93ba8d8f35b0e31d3b7a53f3c6c1f6ad1bfb7f5",
+      "size": 4096,
+      "signature_hex": "3082"
+    }
+  ]
+}

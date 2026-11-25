@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 
 use crate::blobs::{is_hash, BlobStore};
 use crate::bridge::Bridge;
-use crate::config::S3BlobsConfig;
+use crate::config::{S3BlobsConfig, BLOBS_S3};
 
 /// The bytes of one part of a multipart upload. S3 takes no part below 5 MiB but the last, so an
 /// upload holds this much in memory while it is streamed.
@@ -59,23 +59,23 @@ const WORKLOAD_IDENTITY: [(&str, AmazonS3ConfigKey); 5] = [
 /// How long an S3 request may wait, so a store that stops answering fails the
 /// one call that needs it instead of holding it — and whatever lock its caller holds — forever.
 #[derive(Clone, Copy, Debug)]
-struct Limits {
+pub(crate) struct Limits {
     /// A connection, TLS included.
-    connect: Duration,
+    pub(crate) connect: Duration,
     /// Silence: from the request until its answer begins — the upload of one part included —
     /// and then between two pieces of the answer, so a download of any size runs as long as
     /// bytes keep coming.
-    silence: Duration,
+    pub(crate) silence: Duration,
     /// Retries of a request that failed or fell silent, and how long after the first attempt
     /// one may still start.
-    retries: usize,
-    retry_for: Duration,
+    pub(crate) retries: usize,
+    pub(crate) retry_for: Duration,
 }
 
 /// The limits the Server runs with: a stalled store fails a call within about two minutes at
 /// most — the last retry's silence after `retry_for` — and a single silent request within 30
 /// seconds.
-const LIMITS: Limits = Limits {
+pub(crate) const LIMITS: Limits = Limits {
     connect: Duration::from_secs(10),
     silence: Duration::from_secs(30),
     retries: 2,
@@ -85,8 +85,8 @@ const LIMITS: Limits = Limits {
 /// How long the Server waits at startup for the bucket to answer, and how often it asks again:
 /// the time the database gets, so a store and a database that come back together
 /// are both waited for.
-const START_WAIT: Duration = Duration::from_secs(180);
-const START_RETRY: Duration = Duration::from_secs(5);
+pub(crate) const START_WAIT: Duration = Duration::from_secs(180);
+pub(crate) const START_RETRY: Duration = Duration::from_secs(5);
 
 /// What in a failed listing means that asking again will not change the answer: a bucket that does
 /// not exist, credentials or a signature the store refuses, a certificate that does not verify.
@@ -165,55 +165,25 @@ impl S3BlobStore {
         wait: Duration,
         interval: Duration,
     ) -> Result<Self, String> {
-        let builder = builder(config, &|name| std::env::var(name).ok(), limits)?;
-        let store = builder
-            .build()
-            .map_err(|e| format!("[blobs.s3]: cannot build the S3 client: {e}"))?;
-        let s3 = S3BlobStore {
-            store: Arc::new(store),
-            bucket: config.bucket.clone(),
-            prefix: config.prefix.clone(),
-            bridge: Arc::new(Bridge::new("blobs-s3")?),
-        };
-        let started = std::time::Instant::now();
-        loop {
-            let root = s3.root();
-            let store = s3.store.clone();
-            let Err(error) = s3
-                .bridge
-                .run(async move { store.list_with_delimiter(root.as_ref()).await })
-            else {
-                break;
-            };
-            let left = wait.saturating_sub(started.elapsed());
-            if !may_pass(&error) || left.is_zero() {
-                return Err(format!(
-                    "[blobs.s3] bucket {}: it does not exist or cannot be listed: {error}",
-                    s3.bucket
-                ));
-            }
-            tracing::warn!(
-                bucket = %s3.bucket,
-                error = %error,
-                retry_in_secs = interval.as_secs(),
-                left_secs = left.as_secs(),
-                "cannot list the S3 bucket yet; asking again"
-            );
-            std::thread::sleep(interval.min(left));
-        }
+        let bridge = Bridge::new("blobs-s3")?;
+        let store = connect(config, BLOBS_S3, &bridge, limits, wait, interval)?;
         tracing::info!(
             endpoint = %config.endpoint,
-            bucket = %s3.bucket,
-            prefix = %s3.prefix,
+            bucket = %config.bucket,
+            prefix = %config.prefix,
             "keeping the package artifacts in an S3 bucket"
         );
-        Ok(s3)
+        Ok(S3BlobStore {
+            store,
+            bucket: config.bucket.clone(),
+            prefix: config.prefix.clone(),
+            bridge: Arc::new(bridge),
+        })
     }
 
     /// `<prefix>` as a key, `None` for the whole bucket.
     fn root(&self) -> Option<Key> {
-        let prefix = self.prefix.trim_end_matches('/');
-        (!prefix.is_empty()).then(|| Key::from(prefix))
+        root_of(&self.prefix)
     }
 
     fn blob_key(&self, sha256: &str) -> Result<Key, String> {
@@ -312,6 +282,60 @@ impl S3BlobStore {
     }
 }
 
+/// The S3 client for the bucket `config` names, the section `section`, once it lists its prefix.
+/// Nothing is created: a bucket that does not exist fails here, naming it. A store that does not
+/// answer yet — the name not resolving, the connection refused, a server error — is asked again
+/// every `interval` for `wait`; a refusal that will not change fails at once. Each request runs
+/// on `bridge` within `limits`.
+///
+/// # Errors
+/// Returns an error naming the key when the secret or the CA file cannot be read, and naming the
+/// bucket when it does not exist or cannot be listed.
+pub(crate) fn connect(
+    config: &S3BlobsConfig,
+    section: &str,
+    bridge: &Bridge,
+    limits: Limits,
+    wait: Duration,
+    interval: Duration,
+) -> Result<Arc<AmazonS3>, String> {
+    let store = Arc::new(
+        builder(config, section, &|name| std::env::var(name).ok(), limits)?
+            .build()
+            .map_err(|e| format!("{section}: cannot build the S3 client: {e}"))?,
+    );
+    let started = std::time::Instant::now();
+    loop {
+        let root = root_of(&config.prefix);
+        let client = Arc::clone(&store);
+        let Err(error) = bridge.run(async move { client.list_with_delimiter(root.as_ref()).await })
+        else {
+            return Ok(store);
+        };
+        let left = wait.saturating_sub(started.elapsed());
+        if !may_pass(&error) || left.is_zero() {
+            return Err(format!(
+                "{section} bucket {}: it does not exist or cannot be listed: {error}",
+                config.bucket
+            ));
+        }
+        tracing::warn!(
+            bucket = %config.bucket,
+            error = %error,
+            retry_in_secs = interval.as_secs(),
+            left_secs = left.as_secs(),
+            "cannot list the S3 bucket yet; asking again"
+        );
+        std::thread::sleep(interval.min(left));
+    }
+}
+
+/// `prefix` as a key, `None` for the whole bucket.
+fn root_of(prefix: &str) -> Option<Key> {
+    let prefix = prefix.trim_end_matches('/');
+    (!prefix.is_empty()).then(|| Key::from(prefix))
+}
+
 /// A key under `<prefix>`, as [`S3BlobStore::classify`] reads it.
 enum Kind {
     Blob(String),
@@ -353,11 +377,7 @@ impl BlobStore for S3BlobStore {
             .bridge
             .run(async move { store.get(&key).await })
             .map_err(|e| format!("cannot read blob {sha256} from bucket {}: {e}", self.bucket))?;
-        Ok(Box::new(ObjectReader {
-            stream: Some(result.into_stream()),
-            current: Bytes::new(),
-            bridge: self.bridge.clone(),
-        }))
+        Ok(Box::new(ObjectReader::new(result, self.bridge.clone())))
     }
 
     fn exists(&self, sha256: &str) -> Result<bool, String> {
@@ -428,11 +448,22 @@ fn read_part(bytes: &mut dyn Read) -> std::io::Result<Vec<u8>> {
 }
 
 /// An object's bytes as the port hands them out: each chunk of the response fetched on the
-/// adapter's runtime when the reader asks for it.
-struct ObjectReader {
+/// adapter's runtime when the reader asks for it. The Package Repository reads through it too.
+pub(crate) struct ObjectReader {
     stream: Option<futures_util::stream::BoxStream<'static, object_store::Result<Bytes>>>,
     current: Bytes,
     bridge: Arc<Bridge>,
+}
+
+impl ObjectReader {
+    /// Reads the object `result` answered with, each chunk fetched on `bridge`.
+    pub(crate) fn new(result: object_store::GetResult, bridge: Arc<Bridge>) -> Self {
+        ObjectReader {
+            stream: Some(result.into_stream()),
+            current: Bytes::new(),
+            bridge,
+        }
+    }
 }
 
 impl Read for ObjectReader {
@@ -464,6 +495,7 @@ impl Read for ObjectReader {
 /// `variable` reads the environment, and is asked for the names of [`WORKLOAD_IDENTITY`] alone.
 fn builder(
     config: &S3BlobsConfig,
+    section: &str,
     variable: &dyn Fn(&str) -> Option<String>,
     limits: Limits,
 ) -> Result<AmazonS3Builder, String> {
@@ -477,11 +509,17 @@ fn builder(
             max_retries: limits.retries,
             retry_timeout: limits.retry_for,
         })
-        .with_http_connector(TlsConnector::new(config.ca_file.as_deref(), limits)?);
+        .with_http_connector(TlsConnector::new(
+            config.ca_file.as_deref(),
+            section,
+            limits,
+        )?);
     match (&config.access_key_id, &config.secret_access_key_file) {
         (Some(key_id), Some(file)) => {
-            let secret =
-                crate::config::read_secret_file("[blobs.s3] secret_access_key_file", file)?;
+            let secret = crate::config::read_secret_file(
+                &format!("{section} secret_access_key_file"),
+                file,
+            )?;
             // `object_store` takes the key as its own `String`: the copy is made at this call, and
             // the one read is wiped when it is dropped.
             builder = builder
@@ -514,19 +552,19 @@ struct TlsConnector {
 }
 
 impl TlsConnector {
-    fn new(ca_file: Option<&Path>, limits: Limits) -> Result<Self, String> {
+    fn new(ca_file: Option<&Path>, section: &str, limits: Limits) -> Result<Self, String> {
         let mut roots = rustls::RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
         };
         if let Some(path) = ca_file {
             let pem = std::fs::read(path)
-                .map_err(|e| format!("[blobs.s3] ca_file {}: {e}", path.display()))?;
+                .map_err(|e| format!("{section} ca_file {}: {e}", path.display()))?;
             for certificate in opamp::tls::certificates(&pem)
-                .map_err(|e| format!("[blobs.s3] ca_file {}: {e}", path.display()))?
+                .map_err(|e| format!("{section} ca_file {}: {e}", path.display()))?
             {
                 roots
                     .add(certificate)
-                    .map_err(|e| format!("[blobs.s3] ca_file {}: {e}", path.display()))?;
+                    .map_err(|e| format!("{section} ca_file {}: {e}", path.display()))?;
             }
         }
         let tls = opamp::tls::client_builder()
@@ -621,7 +659,7 @@ pub fn copy_from_filesystem<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::BlobsConfig;
     use crate::fs::FsBlobStore;
@@ -629,7 +667,7 @@ mod tests {
 
     /// The store the S3 tests run against, under a prefix of its own so that
     /// tests running at once never see each other's keys; `None`, said aloud, where none is named.
-    fn named_store() -> Option<S3BlobsConfig> {
+    pub(crate) fn named_store() -> Option<S3BlobsConfig> {
         let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
         let (Some(endpoint), Some(bucket)) = (
             variable("CLASSIS_TEST_S3_ENDPOINT"),
@@ -658,7 +696,7 @@ mod tests {
     }
 
     /// The same settings again — a second Server start on the same prefix.
-    fn again(config: &S3BlobsConfig) -> S3BlobsConfig {
+    pub(crate) fn again(config: &S3BlobsConfig) -> S3BlobsConfig {
         S3BlobsConfig {
             endpoint: config.endpoint.clone(),
             bucket: config.bucket.clone(),
@@ -875,6 +913,7 @@ mod tests {
         let blobs = |config: &S3BlobsConfig| BlobsConfig {
             store: "s3".to_string(),
             s3: Some(again(config)),
+            given: true,
         };
 
         let store = PackageStore::open_with(dir.path().to_path_buf(), &blobs(&config))
@@ -977,6 +1016,7 @@ mod tests {
         let asked = std::cell::RefCell::new(Vec::new());
         builder(
             &config("https://s3.example"),
+            BLOBS_S3,
             &|name| {
                 asked.borrow_mut().push(name.to_string());
                 Some("x".to_string())
@@ -1018,6 +1058,7 @@ mod tests {
         }
         let builder = builder(
             &config("https://s3.example"),
+            BLOBS_S3,
             &|name| std::env::var(name).ok(),
             LIMITS,
         )
@@ -1060,7 +1101,7 @@ mod tests {
 
     /// What `status` and `body` answer, as a store would: the listing of an empty bucket for
     /// `200`.
-    fn reply(status: u16, body: &str) -> String {
+    pub(crate) fn reply(status: u16, body: &str) -> String {
         format!(
             "HTTP/1.1 {status} X\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
              Connection: close\r\n\r\n{body}",
@@ -1069,13 +1110,15 @@ mod tests {
     }
 
     /// A store on a loopback port that answers each request with the next of `replies` (the last
-    /// again, when they run out), and how many requests it has had.
-    fn store_answering(replies: Vec<String>) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    /// again, when they run out), and the request line of each request it has had.
+    pub(crate) fn store_answering(
+        replies: Vec<String>,
+    ) -> (u16, Arc<std::sync::Mutex<Vec<String>>>) {
         use std::io::{Read as _, Write as _};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
-        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = asked.clone();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let requests = asked.clone();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
                 let mut seen = Vec::new();
@@ -1086,8 +1129,18 @@ mod tests {
                         Ok(n) => seen.extend_from_slice(&chunk[..n]),
                     }
                 }
-                let n = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let line = String::from_utf8_lossy(&seen)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                let n = {
+                    let mut requests = requests.lock().expect("requests");
+                    requests.push(line);
+                    requests.len() - 1
+                };
                 let answer = &replies[n.min(replies.len() - 1)];
+                // A client that gave up on the answer is the test's to notice, not the store's.
                 let _ = stream.write_all(answer.as_bytes());
             }
         });
@@ -1095,7 +1148,7 @@ mod tests {
     }
 
     /// A configuration for the store on `port`, with a key pair so that the request goes to it.
-    fn config_for(port: u16, dir: &Path) -> S3BlobsConfig {
+    pub(crate) fn config_for(port: u16, dir: &Path) -> S3BlobsConfig {
         let secret = dir.join("secret");
         std::fs::write(&secret, "the-secret").expect("write");
         #[cfg(unix)]
@@ -1136,11 +1189,8 @@ mod tests {
                 Duration::from_millis(50),
             )
             .map(|_| ());
-            (
-                opened,
-                asked.load(std::sync::atomic::Ordering::SeqCst),
-                started.elapsed(),
-            )
+            let asked = asked.lock().expect("requests").len();
+            (opened, asked, started.elapsed())
         };
 
         let (opened, asked, _) = ask(vec![
@@ -1262,13 +1312,14 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-            let err = builder(&keyed, &|_| None, LIMITS).expect_err("readable by others");
+            let err = builder(&keyed, BLOBS_S3, &|_| None, LIMITS).expect_err("readable by others");
             assert!(err.contains("[blobs.s3] secret_access_key_file"), "{err}");
             // Its group may read it, as an orchestrator's secret mount lets it.
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod");
         }
         let builder = builder(
             &keyed,
+            BLOBS_S3,
             &|_| panic!("no AWS_* variable beside a key pair"),
             LIMITS,
         )

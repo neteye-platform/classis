@@ -410,19 +410,34 @@ async fn main() {
             "refusing the Package Signers named in [packages] revoked_signers"
         );
     }
-    let packages =
-        classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
-            .map(|store| {
-                store.with_verifier(Box::new(
-                    classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
-                ))
-            })
-            .and_then(|store| {
-                if !store.is_empty() {
-                    info!("offering software packages to the fleet");
-                }
-                classis_server::fleet::PackageOffering::on(&records, store)
-            });
+    // The repository is read again once the Server's state is built, every rescan interval.
+    let mut reread = None;
+    let store = match &config.packages.repository {
+        Some(repository) => classis_server::packages::PackageStore::on_repository(
+            &records, repository,
+        )
+        .map(|(store, read)| {
+            reread = Some((read, repository.rescan()));
+            store
+        }),
+        None => classis_server::packages::PackageStore::open_on(
+            &records,
+            &config.data_dir,
+            &config.blobs,
+        ),
+    };
+    let packages = store
+        .map(|store| {
+            store.with_verifier(Box::new(
+                classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
+            ))
+        })
+        .and_then(|store| {
+            if !store.is_empty() {
+                info!("offering software packages to the fleet");
+            }
+            classis_server::fleet::PackageOffering::on(&records, store)
+        });
     let packages = match packages {
         Ok(offering) => Some(offering),
         Err(e) => {
@@ -475,6 +490,16 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    if let Some((repository, every)) = reread {
+        let listed = state.clone();
+        tokio::spawn(
+            repository.reread_every(every, move |packages| listed.replace_packages(packages)),
+        );
+        info!(
+            rescan_secs = every.as_secs(),
+            "reading the Package Repository again at a fixed interval"
+        );
+    }
     // The Server authenticates no Agent: the proxy in front of it does, and the Agent
     // port must be reachable through it alone. `AdmitEveryone` is the seam an authenticating
     // library plugs into later.

@@ -62,8 +62,9 @@ pub struct ServerConfig {
     /// named.
     pub packages_dir: Option<IgnoredAny>,
     /// Where the artifacts' bytes are kept: the filesystem under `data_dir`, or a bucket of an
-    /// S3-compatible object store.
-    #[serde(default)]
+    /// S3-compatible object store. Refused beside `[packages.repository]`, so whether the file
+    /// holds the section is kept.
+    #[serde(default, deserialize_with = "BlobsConfig::given")]
     pub blobs: BlobsConfig,
     /// Where the Server keeps its records: files under `data_dir`, or one PostgreSQL database.
     #[serde(default)]
@@ -218,6 +219,9 @@ pub struct BlobsConfig {
     pub store: String,
     /// The bucket, when `store = "s3"`; refused beside `store = "fs"`.
     pub s3: Option<S3BlobsConfig>,
+    /// Whether the configuration holds the section, which the default does not.
+    #[serde(skip)]
+    pub(crate) given: bool,
 }
 
 impl Default for BlobsConfig {
@@ -225,6 +229,7 @@ impl Default for BlobsConfig {
         BlobsConfig {
             store: default_blob_store(),
             s3: None,
+            given: false,
         }
     }
 }
@@ -234,6 +239,13 @@ fn default_blob_store() -> String {
 }
 
 impl BlobsConfig {
+    /// The section as the configuration holds it, marked as given.
+    fn given<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut blobs = BlobsConfig::deserialize(deserializer)?;
+        blobs.given = true;
+        Ok(blobs)
+    }
+
     /// The bucket's settings when the store is S3, `None` when it is the filesystem.
     #[must_use]
     pub fn s3(&self) -> Option<&S3BlobsConfig> {
@@ -256,13 +268,19 @@ impl BlobsConfig {
                  region"
                     .to_string(),
             ),
-            ("s3", Some(s3)) => s3.check(),
+            ("s3", Some(s3)) => s3.check_in(BLOBS_S3),
             (other, _) => Err(format!(
                 "[blobs] store must be \"fs\" or \"s3\", not {other:?}"
             )),
         }
     }
 }
+
+/// The name of the `[blobs.s3]` section, as a message names it.
+pub(crate) const BLOBS_S3: &str = "[blobs.s3]";
+
+/// The name of the `[packages.repository.s3]` section, as a message names it.
+pub(crate) const REPOSITORY_S3: &str = "[packages.repository.s3]";
 
 /// The `[blobs.s3]` section: the one bucket that keeps the artifacts,
 /// and how the Server reaches it. Every setting of the connection is here and nowhere else; the
@@ -314,7 +332,10 @@ impl S3BlobsConfig {
         opamp::endpoint::is_plaintext(&self.endpoint)
     }
 
-    fn check(&self) -> Result<(), String> {
+    /// Loud validation of the section `section` names: an endpoint that stays off plaintext
+    /// beyond the loopback, a bucket and a region, a prefix the client keeps as it is, and no
+    /// half of a key pair.
+    pub(crate) fn check_in(&self, section: &str) -> Result<(), String> {
         // Q-1: a package is never sent unencrypted beyond the loopback, to the store neither.
         let endpoint = &self.endpoint;
         match endpoint.split_once("://").map(|(scheme, _)| scheme) {
@@ -323,20 +344,20 @@ impl S3BlobsConfig {
                 if opamp::endpoint::is_loopback_literal(opamp::endpoint::host_of(endpoint)) => {}
             Some("http") => {
                 return Err(format!(
-                    "[blobs.s3] endpoint {endpoint}: plaintext is for 127.0.0.1 and ::1 alone — \
+                    "{section} endpoint {endpoint}: plaintext is for 127.0.0.1 and ::1 alone — \
                      use https://"
                 ))
             }
             _ => {
                 return Err(format!(
-                    "[blobs.s3] endpoint {endpoint} must start with https:// (http:// only to \
+                    "{section} endpoint {endpoint} must start with https:// (http:// only to \
                      127.0.0.1 or ::1)"
                 ))
             }
         }
         for (key, value) in [("bucket", &self.bucket), ("region", &self.region)] {
             if value.trim().is_empty() {
-                return Err(format!("[blobs.s3] {key} must not be empty"));
+                return Err(format!("{section} {key} must not be empty"));
             }
         }
         let prefix = &self.prefix;
@@ -350,7 +371,7 @@ impl S3BlobsConfig {
                     .any(|segment| segment.is_empty() || segment == "." || segment == ".."))
         {
             return Err(format!(
-                "[blobs.s3] prefix {prefix:?} must be empty or end in `/`, with no empty, `.` or \
+                "{section} prefix {prefix:?} must be empty or end in `/`, with no empty, `.` or \
                  `..` segment, e.g. \"fleet/\""
             ));
         }
@@ -361,17 +382,16 @@ impl S3BlobsConfig {
             .find(|c| !c.is_ascii() || c.is_ascii_control() || "\\{^}%`]\">[~<#|*?".contains(*c))
         {
             return Err(format!(
-                "[blobs.s3] prefix {prefix:?} holds {c:?}, which the S3 client would \
+                "{section} prefix {prefix:?} holds {c:?}, which the S3 client would \
                  percent-encode — use letters, digits and - _ . / ! ' ( ) & $ @ = ; : + , and \
                  space"
             ));
         }
         if self.access_key_id.is_some() != self.secret_access_key_file.is_some() {
-            return Err(
-                "[blobs.s3] access_key_id and secret_access_key_file are set together or not at \
+            return Err(format!(
+                "{section} access_key_id and secret_access_key_file are set together or not at \
                  all — without both, the Server uses its platform's workload identity"
-                    .to_string(),
-            );
+            ));
         }
         Ok(())
     }
@@ -623,6 +643,9 @@ pub struct PackagesConfig {
     /// load, as an expired one is. Read at start.
     #[serde(default)]
     pub revoked_signers: Vec<String>,
+    /// The Package Repository the Server reads its Packages from, and writes none to. Without it
+    /// the Packages are uploaded through the REST API and kept as `[blobs]` says.
+    pub repository: Option<RepositoryConfig>,
 }
 
 impl PackagesConfig {
@@ -636,7 +659,93 @@ impl PackagesConfig {
     }
 
     fn check(&self) -> Result<(), String> {
-        self.revoked_signers().map(|_| ())
+        self.revoked_signers()?;
+        match &self.repository {
+            Some(repository) => repository.check(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The `[packages.repository]` section: where the Package Repository is. The Server only lists and
+/// reads it, so it needs no more than read access. It names one source, a directory or a bucket.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryConfig {
+    /// The directory that holds the repository. Neither its owner nor its mode is checked: it may
+    /// be a read-only mount, the signatures protect what an Agent installs, and nothing in it is
+    /// secret.
+    pub path: Option<PathBuf>,
+    /// The bucket that holds the repository under its prefix, with the connection settings of
+    /// `[blobs.s3]`.
+    pub s3: Option<S3BlobsConfig>,
+    /// How often the Server reads the repository again after startup, in seconds: at least
+    /// [`MIN_RESCAN_SECS`].
+    #[serde(default = "default_rescan_secs")]
+    pub rescan_secs: u64,
+}
+
+/// The interval between two listings of a Package Repository when none is set, in seconds.
+pub const DEFAULT_RESCAN_SECS: u64 = 60;
+
+/// The shortest interval between two listings of a Package Repository, in seconds: each listing
+/// asks the store for two directories or two prefixes, for every Server that reads it.
+pub const MIN_RESCAN_SECS: u64 = 10;
+
+fn default_rescan_secs() -> u64 {
+    DEFAULT_RESCAN_SECS
+}
+
+/// The one source a [`RepositoryConfig`] names, once it is checked.
+#[derive(Debug)]
+pub enum RepositorySource<'a> {
+    /// A directory: `path`.
+    Directory(&'a Path),
+    /// A prefix of a bucket: `[packages.repository.s3]`.
+    Bucket(&'a S3BlobsConfig),
+}
+
+impl RepositoryConfig {
+    /// The source the section names.
+    ///
+    /// # Errors
+    /// Returns an error naming the keys when the section names no source, or both.
+    pub fn source(&self) -> Result<RepositorySource<'_>, String> {
+        match (&self.path, &self.s3) {
+            (Some(path), None) if path.as_os_str().is_empty() => Err(
+                "[packages.repository] path is empty — name the directory of the repository"
+                    .to_string(),
+            ),
+            (Some(path), None) => Ok(RepositorySource::Directory(path)),
+            (None, Some(bucket)) => Ok(RepositorySource::Bucket(bucket)),
+            (None, None) => Err(format!(
+                "[packages.repository] names no source — set path to the directory of the \
+                 repository, or a {REPOSITORY_S3} section naming its bucket"
+            )),
+            (Some(_), Some(_)) => Err(format!(
+                "[packages.repository] path and {REPOSITORY_S3} are both set — a repository has \
+                 one source; keep one of them"
+            )),
+        }
+    }
+
+    /// How long the Server waits between two listings of the repository.
+    #[must_use]
+    pub fn rescan(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.rescan_secs)
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self.rescan_secs < MIN_RESCAN_SECS {
+            return Err(format!(
+                "[packages.repository] rescan_secs is {}, below the minimum of {MIN_RESCAN_SECS}",
+                self.rescan_secs
+            ));
+        }
+        match self.source()? {
+            RepositorySource::Directory(_) => Ok(()),
+            RepositorySource::Bucket(bucket) => bucket.check_in(REPOSITORY_S3),
+        }
     }
 }
 
@@ -1275,6 +1384,16 @@ impl ServerConfig {
         self.blobs.check()?;
         self.database.check()?;
         self.packages.check()?;
+        // With a repository the artifacts have no other place: a [blobs] section beside it would
+        // name a store that keeps nothing.
+        if self.packages.repository.is_some() && self.blobs.given {
+            return Err(
+                "[packages.repository] and [blobs] are both set — the Server reads its Packages \
+                 and their artifacts from the repository and keeps none of its own; remove \
+                 [blobs]"
+                    .to_string(),
+            );
+        }
         // The two planes are two listeners. Addresses that collide would surface as the
         // second bind failing with "address already in use" — a message about sockets for what is
         // really a configuration mistake, so it is refused here, by name.
@@ -1323,6 +1442,13 @@ impl ServerConfig {
             );
         }
         self.check_secure()
+    }
+
+    /// Whether the artifacts are kept under `data_dir/blobs/`: neither a bucket nor a Package
+    /// Repository holds them.
+    #[must_use]
+    pub(crate) fn filesystem_blobs(&self) -> bool {
+        self.blobs.s3().is_none() && self.packages.repository.is_none()
     }
 
     /// A warning when one host cannot report for all the Agents it may speak for at the fleet's
@@ -2734,6 +2860,120 @@ mod tests {
                 .expect("loads")
                 .environment_notice(),
             None
+        );
+    }
+
+    /// `[packages.repository]`: a directory or a bucket, exactly one, and no `[blobs]` beside it;
+    /// a bucket is checked as `[blobs.s3]` is, each refusal naming the key of its own section —
+    /// with no store to reach.
+    #[test]
+    fn a_package_repository_names_one_source_and_no_blob_store() {
+        let load = |text: &str| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("server.toml");
+            std::fs::write(&path, format!("{TLS}{text}")).expect("write");
+            ServerConfig::load(&path)
+        };
+        let repository = "[packages.repository]\npath = \"/srv/repository\"\n";
+        let bucket = "[packages.repository.s3]\nbucket = \"fleet\"\nregion = \"eu-1\"\n";
+
+        let config = load("").expect("the default");
+        assert!(config.packages.repository.is_none());
+        assert!(config.filesystem_blobs());
+        let config = load(repository).expect("a directory");
+        assert_eq!(
+            config
+                .packages
+                .repository
+                .as_ref()
+                .and_then(|r| r.path.as_deref()),
+            Some(std::path::Path::new("/srv/repository"))
+        );
+        assert!(
+            !config.filesystem_blobs(),
+            "the repository holds the artifacts"
+        );
+        let rescan = |config: &ServerConfig| {
+            config
+                .packages
+                .repository
+                .as_ref()
+                .map(RepositoryConfig::rescan)
+        };
+        assert_eq!(rescan(&config), Some(std::time::Duration::from_secs(60)));
+        let config = load(&format!("{repository}rescan_secs = 10\n")).expect("the minimum");
+        assert_eq!(rescan(&config), Some(std::time::Duration::from_secs(10)));
+
+        for (text, named) in [
+            (
+                format!("{repository}[blobs]\nstore = \"fs\"\n"),
+                vec!["[packages.repository]", "[blobs]"],
+            ),
+            (
+                format!("{repository}[blobs]\n"),
+                vec!["[packages.repository]", "[blobs]"],
+            ),
+            (
+                "[packages.repository]\n".to_string(),
+                vec!["[packages.repository]", "path"],
+            ),
+            (
+                "[packages.repository]\npath = \"\"\n".to_string(),
+                vec!["[packages.repository] path"],
+            ),
+            (format!("{repository}rescan = 5\n"), vec!["rescan"]),
+            (
+                format!("{repository}rescan_secs = 9\n"),
+                vec!["[packages.repository] rescan_secs", "10"],
+            ),
+            (
+                format!("{repository}{bucket}endpoint = \"https://s3.example\"\n"),
+                vec!["[packages.repository] path", "[packages.repository.s3]"],
+            ),
+            (
+                format!("{bucket}endpoint = \"http://s3.example\"\n"),
+                vec!["[packages.repository.s3] endpoint"],
+            ),
+            (
+                format!("{bucket}endpoint = \"https://s3.example\"\nprefix = \"fleet\"\n"),
+                vec!["[packages.repository.s3] prefix"],
+            ),
+            (
+                format!("{bucket}endpoint = \"https://s3.example\"\naccess_key_id = \"k\"\n"),
+                vec!["[packages.repository.s3] access_key_id"],
+            ),
+            (
+                format!("{bucket}endpoint = \"https://s3.example\"\n[blobs]\n"),
+                vec!["[packages.repository]", "[blobs]"],
+            ),
+        ] {
+            let refused = load(&text).expect_err(&text);
+            for name in named {
+                assert!(refused.contains(name), "{text}: {refused}");
+            }
+        }
+
+        let config = load(&format!(
+            "{bucket}endpoint = \"https://s3.example\"\nprefix = \"repository/\"\n"
+        ))
+        .expect("a bucket");
+        let source = config
+            .packages
+            .repository
+            .as_ref()
+            .expect("a repository")
+            .source()
+            .expect("one source");
+        let RepositorySource::Bucket(s3) = source else {
+            panic!("a bucket, not {source:?}");
+        };
+        assert_eq!(
+            (s3.bucket.as_str(), s3.prefix.as_str()),
+            ("fleet", "repository/")
+        );
+        assert!(
+            !config.filesystem_blobs(),
+            "the repository holds the artifacts"
         );
     }
 

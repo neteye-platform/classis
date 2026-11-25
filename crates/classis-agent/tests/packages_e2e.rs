@@ -144,6 +144,113 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         .put_entry(&set, &this_host(), artifact.clone())
         .expect("put entry");
 
+    installed_end_to_end(store, &set, Some(signature)).await;
+}
+
+/// The same with a Package Repository in place of the upload: another party wrote the
+/// artifact and its manifest, the signature inside, into a directory, and the Server only reads
+/// it. The Client still downloads the artifact from the Server, and from nowhere else. When the
+/// manifest then leaves the repository, the Client keeps the version it runs and uninstalls
+/// nothing.
+#[tokio::test]
+async fn a_package_read_from_a_repository_is_downloaded_verified_and_installed() {
+    let artifact = std::fs::read(env!("CARGO_BIN_EXE_stub_agent")).expect("read stub");
+    let hash = <sha2::Sha256 as sha2::Digest>::digest(&artifact);
+    let signature = common::package_roots()
+        .signer
+        .sign(&classis_core::package::statement(
+            "managed-agent",
+            "2.0.0",
+            &hash,
+        ));
+    let root = tempfile::tempdir().expect("repository");
+    std::fs::create_dir_all(root.path().join("blobs")).expect("blobs/");
+    std::fs::create_dir_all(root.path().join("packages")).expect("packages/");
+    std::fs::write(root.path().join("blobs").join(hex::encode(hash)), &artifact)
+        .expect("write the blob");
+    let host = this_host();
+    let manifest = serde_json::json!({
+        "agent_type": "managed-agent",
+        "version": "2.0.0",
+        "entries": [{
+            "os": host.os,
+            "arch": host.arch,
+            "sha256": hex::encode(hash),
+            "size": artifact.len(),
+            "signature_hex": hex::encode(&signature),
+        }],
+    });
+    std::fs::write(
+        root.path().join("packages/managed-agent@2.0.0.json"),
+        serde_json::to_vec(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    let mut repository = classis_server::repository::Repository::open_directory(root.path())
+        .expect("open the repository");
+    let store = PackageStore::from_repository(
+        repository.read().expect("read the repository"),
+        Box::new(repository.blob_store()),
+    )
+    .with_verifier(Box::new(common::server_verifier()));
+    let set =
+        classis_server::packages::PackageId::new("managed-agent", "2.0.0").expect("package id");
+
+    let installed = installed_end_to_end(store, &set, None).await;
+
+    std::fs::remove_file(root.path().join("packages/managed-agent@2.0.0.json"))
+        .expect("remove the manifest");
+    let reported = |state: &AppState| {
+        view(&state.snapshot(), "myagent")
+            .expect("the agent")
+            .sequence_num
+    };
+    let before = reported(&installed.state);
+    installed
+        .state
+        .replace_packages(repository.read().expect("read the repository"))
+        .expect("the next listing");
+    // Two reports after the listing: the Client has had the Server's answer to the first, which
+    // offers nothing, and reported what it runs after it.
+    wait_until("two reports after the Package left", || {
+        (reported(&installed.state) >= before + 2).then_some(())
+    })
+    .await;
+    let snapshot = installed.state.snapshot();
+    let package = view(&snapshot, "myagent")
+        .expect("the agent")
+        .packages
+        .iter()
+        .find(|p| p.name == "managed-agent")
+        .expect("the package it reports");
+    assert_eq!(
+        (package.status.as_str(), package.version.as_str()),
+        ("Installed", "2.0.0"),
+        "the Agent keeps the version it runs"
+    );
+    assert!(installed.managed.exists(), "the program is still there");
+    let record = std::fs::read_to_string(&installed.record).expect("the installation record");
+    assert!(record.contains("2.0.0"), "nothing is uninstalled: {record}");
+}
+
+/// What an installation left for a test to look at: the Server's state, the managed program, the
+/// record of the installation, and the running Client.
+struct Installed {
+    state: Arc<AppState>,
+    managed: std::path::PathBuf,
+    record: std::path::PathBuf,
+    _client: ClientUnderTest,
+    _dir: tempfile::TempDir,
+}
+
+/// A Server on `store`, which holds `set` for this host, and the real Client: the rollout act
+/// releases `set` — writing `signature` onto its entry first, when one is given — and the Client
+/// downloads it, verifies it, swaps it in, and reports it `Installed`.
+async fn installed_end_to_end(
+    store: PackageStore,
+    set: &classis_server::packages::PackageId,
+    signature: Option<Vec<u8>>,
+) -> Installed {
     let (addr, state, dir) = spawn_server(store).await;
 
     // The managed binary starts as a copy of the stub, in the Supervisor's own `program/`
@@ -181,7 +288,8 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
     std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
         .expect("write supervisor.toml");
 
-    let _client = spawn_client(&config_path);
+    let client = spawn_client(&config_path);
+    let host = this_host();
 
     // A saved Set reaches nobody: the rollout act releases it, retried until the
     // Agent has reported and can be assigned — which is the decision, not an accident of the
@@ -190,8 +298,8 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
         state
             .rollout_deployment(&ring_holding_signed(
                 &state,
-                &set,
-                Some((&this_host(), signature.clone())),
+                set,
+                signature.clone().map(|signature| (&host, signature)),
             ))
             .ok()
             .filter(|assigned| *assigned >= 1)
@@ -223,9 +331,15 @@ async fn a_signed_package_is_downloaded_verified_swapped_and_reported_installed(
     // The managed process ran the swapped-in binary (the marker exists) and the persisted record
     // survives — a restart is not re-offered the same package.
     assert!(marker.exists(), "the swapped binary ran");
-    assert!(state_dir
-        .join("supervisors/myagent/installed-package.json")
-        .exists());
+    let record = state_dir.join("supervisors/myagent/installed-package.json");
+    assert!(record.exists());
+    Installed {
+        state,
+        managed,
+        record,
+        _client: client,
+        _dir: dir,
+    }
 }
 
 /// The preflight, reached through the `command` kind's own configuration: `version_args`

@@ -38,6 +38,14 @@ terms below are the ones it uses without defining.
 - **Blob** — the bytes of an Entry's artifact as the Server stores them, named
   by their SHA-256; identical bytes are one blob, whichever Entries name it.
   _Avoid:_ artifact file, binary.
+- **Package Repository** — a tree of static files, in a directory or under a
+  prefix of a bucket, that holds Packages as one Manifest each and their Blobs;
+  another party writes it, and a Server only reads it. _Avoid:_ package
+  registry, package server, index.
+- **Manifest** — the file of a Package Repository that holds one Package, at
+  `packages/<agent_type>@<version>.json`: its identity and its Entries, each
+  naming its Blob by SHA-256. A Package is in the repository once its Manifest
+  is. _Avoid:_ index, metadata file.
 - **Data directory** — the one directory, `data_dir`, under which the Server
   keeps all of its state, one subdirectory per domain. _Avoid:_ config
   directory, package directory, state directory (that is the Client's).

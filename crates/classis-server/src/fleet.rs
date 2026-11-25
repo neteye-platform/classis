@@ -2372,6 +2372,34 @@ impl AppState {
         self.offering().map(PackageOffering::store)
     }
 
+    /// Replaces the Packages read from the Package Repository with `packages`, what a later
+    /// listing of it read. The entries of a Package an Agent's assignment pins do not change, as
+    /// for an upload ([`PackageStore::replace`]). When anything changed, every WebSocket session
+    /// is woken, so an Agent pinned to a Package that is back is offered it without speaking
+    /// first.
+    ///
+    /// # Errors
+    /// Returns an error when package delivery is not configured, or when its store keeps uploaded
+    /// Packages.
+    pub fn replace_packages(&self, packages: Vec<crate::packages::Package>) -> Result<(), String> {
+        let changed = self
+            .package_store()?
+            .replace(packages, &|id| self.package_set_assigned(id))?;
+        if changed {
+            self.push.send_modify(|rev| *rev += 1);
+        }
+        Ok(())
+    }
+
+    /// The package store for a write to a Package, an entry or a signature. On a Package
+    /// Repository the write is refused before anything else is asked, so the refusal names the
+    /// repository whatever else would stand in its way.
+    fn writable_store(&self) -> Result<&PackageStore, String> {
+        let store = self.package_store()?;
+        store.refuse_write()?;
+        Ok(store)
+    }
+
     /// Whether any Agent's assignment references this Package — the gate that makes an assigned
     /// Package's bytes immutable. The Agent store answers it; the fleet lock
     /// keeps a rollout from pinning it meanwhile.
@@ -2449,7 +2477,7 @@ impl AppState {
     /// to update: a Package is its identity and its entries, so creating one that exists is the
     /// same request arriving twice.
     pub fn create_package_set(&self, id: &PackageId) -> Result<(), String> {
-        self.package_store()?.create(id)?;
+        self.writable_store()?.create(id)?;
         info!(package = %id, "package stored — nothing distributed");
         Ok(())
     }
@@ -2463,8 +2491,9 @@ impl AppState {
         platform: &Platform,
         bytes: &mut dyn std::io::Read,
     ) -> Result<(), String> {
+        let store = self.writable_store()?;
         self.refuse_if_assigned(id)?;
-        self.package_store()?.put_entry_from(id, platform, bytes)?;
+        store.put_entry_from(id, platform, bytes)?;
         info!(set = %id, platform = %format!("{}-{}", platform.os, platform.arch), "package entry stored");
         Ok(())
     }
@@ -2473,8 +2502,9 @@ impl AppState {
     /// to an Agent, so a refused upload is refused before its bytes are
     /// streamed.
     pub fn check_package_upload(&self, id: &PackageId) -> Result<(), String> {
+        let store = self.writable_store()?;
         self.refuse_if_assigned(id)?;
-        self.package_store()?.writable(id)
+        store.writable(id)
     }
 
     /// Writes the operator's signature onto one entry of a Package, and answers what the
@@ -2487,10 +2517,9 @@ impl AppState {
         platform: &Platform,
         signature: Vec<u8>,
     ) -> Result<SignatureState, String> {
+        let store = self.writable_store()?;
         self.refuse_if_assigned(id)?;
-        let state = self
-            .package_store()?
-            .put_signature(id, platform, signature)?;
+        let state = store.put_signature(id, platform, signature)?;
         info!(set = %id, platform = %platform.tag(), state = state.as_str(), "package entry signed");
         Ok(state)
     }
@@ -2502,8 +2531,9 @@ impl AppState {
         id: &PackageId,
         platform: &Platform,
     ) -> Result<bool, String> {
+        let store = self.writable_store()?;
         self.refuse_if_assigned(id)?;
-        let removed = self.package_store()?.remove_signature(id, platform)?;
+        let removed = store.remove_signature(id, platform)?;
         if removed {
             info!(set = %id, platform = %platform.tag(), "package entry signature removed");
         }
@@ -2517,8 +2547,9 @@ impl AppState {
         id: &PackageId,
         platform: &Platform,
     ) -> Result<bool, String> {
+        let store = self.writable_store()?;
         self.refuse_if_assigned(id)?;
-        let deleted = self.package_store()?.delete_entry(id, platform)?;
+        let deleted = store.delete_entry(id, platform)?;
         if deleted {
             info!(set = %id, "package entry deleted");
         }
@@ -2533,6 +2564,7 @@ impl AppState {
     /// The fleet lock is held across the check and the delete, so a rollout cannot pin it in
     /// between.
     pub fn delete_package_set(&self, id: &PackageId) -> Result<bool, String> {
+        let store = self.writable_store()?;
         let fleet = self.fleet.lock().expect("fleet lock");
         let pinning = self.agent_store.pinning(Pin::Package(id));
         if pinning > 0 {
@@ -2541,7 +2573,7 @@ impl AppState {
                  through a Deployment without it, or forget them, before deleting it"
             ));
         }
-        let deleted = self.package_store()?.delete_set(id)?;
+        let deleted = store.delete_set(id)?;
         if deleted {
             if let Some(store) = self.deployment_store() {
                 let left = store.drop_package(id).map_err(|e| e.to_string())?;
@@ -3522,6 +3554,16 @@ fn refuse_unreleasable(
             "deployment {:?} holds no package and no configuration — put one in it before rolling \
              it out",
             deployment.name
+        )));
+    }
+    let missing = store.missing_in(deployment);
+    if !missing.is_empty() {
+        return Err(RolloutError::NotApplicable(format!(
+            "deployment {:?} holds packages that are missing from the Package Repository: {} — \
+             write them into the repository again, or take them out of the deployment, before \
+             rolling it out",
+            deployment.name,
+            missing.join("; ")
         )));
     }
     let unsigned = store.unsigned_in(deployment);

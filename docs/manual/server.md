@@ -519,6 +519,45 @@ years and nothing else ends it earlier.
 fingerprint of a certificate; the release's certificate is
 `packaging/package-signer.der`.
 
+#### `[packages.repository]`
+
+Optional; absent means the Packages are uploaded through the REST API and kept
+as [`[blobs]`](#blobs) says. Present, the Server reads its Packages from a
+[Package Repository](#a-package-repository-packages-another-party-writes) and
+writes none.
+
+The repository has one source: a directory, or a prefix of a bucket.
+
+```toml
+[packages.repository]
+path = "/srv/classis/repository"
+```
+
+```toml
+[packages.repository.s3]
+endpoint = "https://s3.example.net"
+bucket = "classis"
+region = "eu-central-1"
+prefix = "repository/"
+```
+
+- `path` is the directory of the repository. The Server checks neither its
+  owner nor its mode, and it may be a read-only mount: the Server only lists
+  and reads it.
+- `[packages.repository.s3]` names the bucket, and the repository is under
+  `prefix` in it. Its keys are those of [`[blobs.s3]`](#blobs), and they are
+  checked in the same way: `https://` (plaintext to `127.0.0.1` and `::1`
+  alone), a `prefix` that is empty or ends in `/`, and a key pair set whole or
+  not at all. Without a key pair the Server uses the workload identity of its
+  platform. The credentials need to list and read the prefix, and nothing more.
+- `rescan_secs` is how often the Server reads the repository again after its
+  start, in seconds: 60 by default, at least 10. A value below 10 stops the
+  start, naming the key.
+- **A section with neither source, or with both, stops the start**, naming the
+  keys.
+- **`[packages.repository]` and `[blobs]` together stop the start**, naming both
+  sections: with a repository the Server keeps no artifact of its own.
+
 ### `[admission_throttle]`
 
 Optional; absent means the defaults shown. See
@@ -1830,6 +1869,180 @@ while the Gateway is still fetching is answered `503` with `Retry-After: 30` and
 asks again. Every artifact is offered as a path, which a Client behind a Gateway
 resolves against the Gateway. How the Gateway holds what it fetches is in
 [the Client's manual](client.md#the-package-cache).
+
+## A Package Repository: Packages another party writes
+
+A Package Repository is a tree of static files that holds Packages. One party
+writes it — a person, a CI pipeline, or an operator of the product — and the
+Server only reads it. It is like a yum repository: it is not a service and runs
+no process. Many Servers can read one repository, and they need no
+coordination, because none of them writes.
+
+The repository holds only what can be installed. Deployments, rollouts,
+assignments and Agents stay in the records of the Server: the repository says
+what is available, and the Server decides what is released and to whom.
+
+### Its layout
+
+```text
+<root>/
+├── packages/
+│   └── otelcol@1.19.0.json      one Manifest per Package
+└── blobs/
+    └── 6c8a…64 hex digits…      one Blob per SHA-256
+```
+
+The root is the directory `path` names, or `prefix` in the bucket of
+`[packages.repository.s3]`: then a Manifest is the object
+`<prefix>packages/otelcol@1.19.0.json`, and a Blob `<prefix>blobs/<sha256>`.
+
+A Manifest is `packages/<agent_type>@<version>.json`. It holds the identity of
+the Package and one entry per platform:
+
+```json
+{
+  "agent_type": "otelcol",
+  "version": "1.19.0",
+  "entries": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "sha256": "6c8a…64 lowercase hex digits…",
+      "size": 48213504,
+      "signature_hex": "3082…the .sig of the release…"
+    }
+  ]
+}
+```
+
+- The name of the file must match `agent_type` and `version` in it.
+- A field the format does not name is refused.
+- `sha256` names the Blob, `blobs/<sha256>`, and `size` is its length in bytes.
+- `signature_hex` is the signature of the entry in hex, as the `.sig` of a
+  release holds it. An entry without one is listed, and offered to nobody.
+
+This is the format of the files under `<data_dir>/packages/` of a Server that
+keeps its Packages on the filesystem, so its data directory is a repository too.
+
+### Writing one by hand
+
+Write the Blobs first and the Manifest last. A Package is in the repository
+only when its Manifest is, so a Server never reads a Manifest whose Blobs are
+still on their way.
+
+```sh
+sha=$(sha256sum otelcol-linux-amd64 | cut -d' ' -f1)
+cp otelcol-linux-amd64 "$root/blobs/$sha"
+# Write the Manifest under a name that does not end in .json, then rename it:
+# the rename is atomic, so a Server reads the old file or the new one.
+cp otelcol@1.19.0.json "$root/packages/.otelcol@1.19.0.tmp"
+mv "$root/packages/.otelcol@1.19.0.tmp" "$root/packages/otelcol@1.19.0.json"
+```
+
+Under `packages/`, the Server reads only names that end in `.json` and do not
+start with `.`. Under `blobs/`, it reads only names of 64 lowercase hex digits.
+It ignores every other file, and everything outside `packages/` and `blobs/`.
+
+In a bucket, one upload of an object is atomic already: upload the Blobs, then
+the Manifest, each with one `PUT`.
+
+### What the Server does with it
+
+- **It reads the repository at startup.** That first listing must succeed: a
+  directory that does not exist, a bucket that does not exist, and credentials
+  the bucket refuses stop the start at once, naming them. A bucket that does
+  not answer yet is asked again every 5 seconds for up to 3 minutes, as for
+  `[blobs.s3]`.
+- **It reads the repository again every `rescan_secs`**, with no restart. A
+  Package written while the Server runs is available within one interval and
+  one listing: listed, and ready to be put into a Deployment and rolled out.
+  The first Package of an empty repository makes the Server declare
+  `OffersPackages` to the Agents from then on. A listing that fails changes
+  nothing: the Packages of the last listing stay in use, and a warning names
+  the failure when it starts or changes. A directory that is gone counts as a
+  listing that fails, not as an empty repository.
+- **It keeps the entries of a Package an Agent's assignment pins.** A Manifest
+  that gives such a Package other bytes or other signatures is refused, with
+  one warning: the Server keeps serving the entries it had while their Blobs
+  are in the repository, and holds the Package missing once they are gone.
+  Publish new content under a new version, as for an upload. The Server
+  remembers what it took while it runs; after a restart it takes the Manifest
+  it finds.
+- **It checks every signature** up to the Package Roots, as for an uploaded
+  Package. A signature that does not verify, or that a Package Signer in
+  [`revoked_signers`](#packages) made, withholds its entry: the entry is
+  `missing` and offered to nobody.
+- **It sets aside a Manifest that is not well formed, and starts.** These
+  Manifests are not loaded, and a warning names each one and why:
+  - a Manifest larger than 256 KiB;
+  - a Manifest that does not parse, holds an unknown field, or whose name does
+    not match its identity;
+  - a Manifest that names a Blob the repository does not hold, or that holds it
+    at another size.
+
+  The other Packages load. The warning is logged once, not at every listing.
+- **It serves the downloads from the repository.** The bytes pass through the
+  Server: an Agent never reaches the repository.
+- **It refuses every write.** A REST write or delete of a Package, an entry or
+  a signature gets `409`, and the message names the repository. Write the
+  change into the repository instead.
+
+### A Package that leaves the repository
+
+When a Manifest is removed, its Package leaves the Server at the next listing.
+It is missing, not deleted:
+
+- **The Deployments that hold it do not change.** Their view marks it, in each
+  entry of `packages`, with `"availability": "missing"` in place of
+  `"present"`.
+- **A rollout of such a Deployment gets `409`**, and the message names the
+  missing Packages, as it names unsigned entries.
+- **An Agent whose assignment pins it is offered nothing.** It keeps the
+  version it runs, and its Client uninstalls nothing.
+- **Its downloads get `404`.**
+
+When the Manifest is written again, all of this works again at the next
+listing, with no other act: an Agent whose assignment pins the Package is
+offered it again without a new rollout. A store that lists nothing for one
+interval therefore changes no Deployment.
+
+### Moving uploaded Packages into a Package Repository
+
+With `[packages.repository]`, the Server reads no Package from its records. If
+the records hold an uploaded Package, the start stops and names it, so that no
+Package is hidden.
+
+This procedure is for a Server whose records are on the filesystem. Its data
+directory is a repository already:
+
+1. Copy `<data_dir>/packages/` and `<data_dir>/blobs/` of that Server into the
+   repository, or set `path` to a copy of its data directory.
+2. Delete the files under `<data_dir>/packages/`. The Deployments and the
+   assignments are other files, and they stay as they are.
+3. Remove `[blobs]`, set `[packages.repository]`, and start the Server.
+
+The Deployments name their Packages by identity, so they hold the same Packages
+when they are read from the repository.
+
+Moving the uploaded Packages of a Server whose records are in PostgreSQL is not
+covered: their Manifests are rows of the database, and no tool writes them into
+a repository yet. Deleting them through the REST API is no way around it: a
+Package an assignment pins cannot be deleted, and one that is deleted leaves
+every Deployment that held it.
+
+### Limits of the directory source
+
+The directory source is meant for tests and for moving a Server whose records
+are on the filesystem. In production, use a bucket.
+
+- **The Server follows symbolic links in the directory**, so whoever writes the
+  directory decides which files of the Server's host it reads and serves.
+- **The `path` is resolved once, at the start.** If `path` is a symbolic link
+  that is pointed at another directory later, the Server reads the old one
+  until it restarts.
+- **A file name under `packages/` or `blobs/` that is not valid UTF-8 fails the
+  listing.** At the start it stops the Server, naming the error; later the
+  Packages of the last listing stay in use until the file is gone.
 
 ## The REST API
 

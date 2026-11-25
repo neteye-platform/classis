@@ -173,14 +173,20 @@ pub fn package_root_file(dir: &Path) -> std::path::PathBuf {
 /// A Server's package store on `dir`, checking signatures up to both test Roots.
 #[allow(dead_code)]
 pub fn server_store(dir: &Path) -> classis_server::packages::PackageStore {
-    let roots = package_roots();
     classis_server::packages::PackageStore::open(dir.to_path_buf())
         .expect("store")
-        .with_verifier(Box::new(classis_server::config::RootsVerifier::new(
-            classis_core::package::Roots::from_der([
-                roots.ours.der.as_slice(),
-                roots.theirs.der.as_slice(),
-            ])
-            .expect("test roots"),
-        )))
+        .with_verifier(Box::new(server_verifier()))
+}
+
+/// The Server's signature check, up to both test Package Roots.
+#[allow(dead_code)]
+pub fn server_verifier() -> classis_server::config::RootsVerifier {
+    let roots = package_roots();
+    classis_server::config::RootsVerifier::new(
+        classis_core::package::Roots::from_der([
+            roots.ours.der.as_slice(),
+            roots.theirs.der.as_slice(),
+        ])
+        .expect("test roots"),
+    )
 }

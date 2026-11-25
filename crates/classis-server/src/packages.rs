@@ -15,7 +15,7 @@
 //! runs on, never another one. It checks a signature against the operator's public key when it
 //! holds one, and only reports what it found: the Agent's own check decides.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::{Mutex, RwLock};
 
@@ -480,7 +480,9 @@ struct Life {
 /// read, its metadata persisted through a [`PackageBackend`] and its artifacts through a
 /// [`BlobStore`].
 pub struct PackageStore {
-    backend: Box<dyn PackageBackend>,
+    /// Where the Packages persist; `None` when they come from a Package Repository, which the
+    /// store only reads, so every write is refused with [`FROM_REPOSITORY`].
+    backend: Option<Box<dyn PackageBackend>>,
     blobs: Box<dyn BlobStore>,
     sets: RwLock<BTreeMap<PackageId, Package>>,
     /// The blobs an upload or a deletion is working on while no lock on `sets` is held, so that
@@ -489,6 +491,40 @@ pub struct PackageStore {
     /// The check every signature passes before it is held: nothing verifies
     /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
+    /// What a store on a Package Repository remembers from one listing to the next.
+    followed: Mutex<Followed>,
+}
+
+/// What a store on a Package Repository remembers from one listing to the next, for as long as
+/// the Server runs.
+#[derive(Default)]
+struct Followed {
+    /// The entries the store last took for each Package that is in the repository or that an
+    /// Agent's assignment pins, whether or not the store holds it now: what a changed Manifest of
+    /// a pinned Package is held to.
+    taken: BTreeMap<PackageId, Package>,
+    /// The Packages whose changed entries the store refuses, with why, so that a warning is
+    /// logged when that changes and not at every listing.
+    refused: BTreeMap<PackageId, String>,
+}
+
+/// The refusal of every write to a Package, an entry or a signature on a Server that reads its
+/// Packages from a Package Repository: the REST API answers it with `409`.
+pub(crate) const FROM_REPOSITORY: &str =
+    "this Server reads its Packages from its Package Repository and \
+     writes none — write the change into the repository, and the Server reads it from there";
+
+/// Names a Package whose version is not SemVer: it is kept and read, never a candidate and never
+/// written to.
+fn warn_if_not_semver(package: &Package) {
+    if !package.id.is_semver() {
+        tracing::warn!(
+            package = %package.id,
+            "{} — the package is kept, but it is no candidate and nothing is written to \
+             it; republish its content under a SemVer version and sign it again",
+            not_semver(&package.id.version)
+        );
+    }
 }
 
 impl PackageStore {
@@ -531,23 +567,16 @@ impl PackageStore {
                     }
                 }
             }
-            // Kept and read, never a candidate and never written to.
-            if !package.id.is_semver() {
-                tracing::warn!(
-                    package = %package.id,
-                    "{} — the package is kept, but it is no candidate and nothing is written to \
-                     it; republish its content under a SemVer version and sign it again",
-                    not_semver(&package.id.version)
-                );
-            }
+            warn_if_not_semver(&package);
             sets.insert(package.id.clone(), package);
         }
         let store = PackageStore {
-            backend,
+            backend: Some(backend),
             blobs,
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
+            followed: Mutex::new(Followed::default()),
         };
         // A blob no entry names is deleted at startup: an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -558,6 +587,49 @@ impl PackageStore {
         }
         *store.sets.write().expect("sets lock") = sets;
         Ok(store)
+    }
+
+    /// Opens the store on a Package Repository: `packages`, what a listing of it read, and its
+    /// Blobs, `blobs`. Every entry names a Blob the listing found, of its size. The store writes
+    /// nothing and deletes nothing: every write is refused with [`FROM_REPOSITORY`], and a Blob
+    /// no entry names is not the store's business.
+    #[must_use]
+    pub fn from_repository(packages: Vec<Package>, blobs: Box<dyn BlobStore>) -> Self {
+        let mut sets = BTreeMap::new();
+        for package in packages {
+            warn_if_not_semver(&package);
+            sets.insert(package.id.clone(), package);
+        }
+        let followed = Followed {
+            taken: sets.clone(),
+            refused: BTreeMap::new(),
+        };
+        PackageStore {
+            backend: None,
+            blobs,
+            sets: RwLock::new(sets),
+            life: Mutex::new(Life::default()),
+            verifier: Box::new(Unarmed),
+            followed: Mutex::new(followed),
+        }
+    }
+
+    /// The gate every write to a Package, an entry or a signature passes first.
+    ///
+    /// # Errors
+    /// [`FROM_REPOSITORY`] when the Packages come from a Package Repository.
+    pub(crate) fn refuse_write(&self) -> Result<(), String> {
+        self.backend().map(|_| ())
+    }
+
+    /// Where the Packages persist.
+    ///
+    /// # Errors
+    /// [`FROM_REPOSITORY`] when the Packages come from a Package Repository.
+    fn backend(&self) -> Result<&dyn PackageBackend, String> {
+        self.backend
+            .as_deref()
+            .ok_or_else(|| FROM_REPOSITORY.to_string())
     }
 
     /// Replaces the Package Roots the signatures are checked against — tests pass a test Root —
@@ -575,28 +647,184 @@ impl PackageStore {
     fn drop_unverified(&self) {
         let mut sets = self.sets.write().expect("sets lock");
         for set in sets.values_mut() {
-            for entry in set.entries.values_mut() {
-                let Some(signature) = entry.signature.take() else {
+            self.check_signatures(set);
+        }
+    }
+
+    /// Offers each signature of `set` that verifies, and withholds the rest, naming each.
+    fn check_signatures(&self, set: &mut Package) {
+        for entry in set.entries.values_mut() {
+            let Some(signature) = entry.signature.take() else {
+                continue;
+            };
+            let bytes = signature.into_bytes();
+            entry.signature = Some(
+                match verify_entry(self.verifier.as_ref(), &set.id, entry, &bytes) {
+                    Ok(()) => Signature::Offered(bytes),
+                    Err(why) => {
+                        tracing::warn!(
+                            package = %set.id,
+                            platform = %entry.platform.tag(),
+                            "the stored signature does not verify, so the entry is offered to \
+                             nobody — {why}; it stays in the store until a signature that \
+                             verifies replaces it"
+                        );
+                        Signature::Withheld(bytes)
+                    }
+                },
+            );
+        }
+    }
+
+    /// Replaces every Package the store holds with `packages`, what a later listing of its
+    /// Package Repository read, in one change: an offer or a listing sees the Packages of one
+    /// listing or of the next, never a mix. A Package held already with the same entries keeps
+    /// the signatures the store checked, so nothing is checked, or logged, again; a new or changed
+    /// one is checked now. Each Package that joins or leaves the store is logged. Answers whether
+    /// anything changed.
+    ///
+    /// The entries of a Package that `pinned` says an Agent's assignment pins do not change: a
+    /// Manifest that gives it other entries is refused, with one warning, and the store keeps the
+    /// entries it took, or holds the Package missing when their Blobs are gone. New content takes
+    /// a new version, as for an upload. The store remembers what it took for as long as the
+    /// Server runs, a Package that left the repository included.
+    ///
+    /// A Package that leaves is no Deployment's business here: the Deployments that hold it keep
+    /// it, a rollout of one is refused ([`missing_in`](Self::missing_in)), and an Agent whose
+    /// assignment pins it is offered nothing until it is back.
+    ///
+    /// # Errors
+    /// Returns an error, and changes nothing, when the store keeps uploaded Packages: those are
+    /// written through the REST API, and no listing replaces them.
+    pub fn replace(
+        &self,
+        packages: Vec<Package>,
+        pinned: &dyn Fn(&PackageId) -> bool,
+    ) -> Result<bool, String> {
+        if self.backend.is_some() {
+            return Err(
+                "the store keeps uploaded Packages, and only a store on a Package \
+                        Repository is replaced by a listing"
+                    .to_string(),
+            );
+        }
+        let mut followed = self.followed.lock().expect("followed lock");
+        let listed: BTreeSet<PackageId> = packages.iter().map(|p| p.id.clone()).collect();
+        let mut next = BTreeMap::new();
+        let mut fresh = Vec::new();
+        {
+            let held = self.sets.read().expect("sets lock");
+            for package in packages {
+                match held.get(&package.id) {
+                    Some(kept) if same_entries(kept, &package) => {
+                        next.insert(package.id.clone(), kept.clone());
+                    }
+                    kept => fresh.push((package, kept.cloned())),
+                }
+            }
+        }
+        // Decided with no lock on the Packages held, so an offer waits for none of it: `pinned`
+        // asks the fleet, and a Blob is asked of the repository.
+        let mut refused = BTreeMap::new();
+        let mut changed = false;
+        for (mut package, held) in fresh {
+            let id = package.id.clone();
+            match followed.taken.get(&id) {
+                Some(taken) if !same_entries(taken, &package) && pinned(&id) => {
+                    let why = if self.blobs_still_held(taken) {
+                        let kept = match held {
+                            Some(held) => held,
+                            None => {
+                                changed = true;
+                                let mut back = taken.clone();
+                                self.check_signatures(&mut back);
+                                back
+                            }
+                        };
+                        next.insert(id.clone(), kept);
+                        "an Agent's assignment pins the entries it had, so the Server keeps them"
+                    } else {
+                        "an Agent's assignment pins the entries it had, and their Blobs are gone, \
+                         so the package is missing"
+                    };
+                    refused.insert(id, why.to_string());
                     continue;
-                };
-                let bytes = signature.into_bytes();
-                entry.signature = Some(
-                    match verify_entry(self.verifier.as_ref(), &set.id, entry, &bytes) {
-                        Ok(()) => Signature::Offered(bytes),
-                        Err(why) => {
-                            tracing::warn!(
-                                package = %set.id,
-                                platform = %entry.platform.tag(),
-                                "the stored signature does not verify, so the entry is offered to \
-                                 nobody — {why}; it stays in the store until a signature that \
-                                 verifies replaces it"
-                            );
-                            Signature::Withheld(bytes)
-                        }
-                    },
+                }
+                Some(_) => tracing::info!(
+                    package = %id,
+                    "the Package Repository holds the package again, or other entries for it"
+                ),
+                None => {
+                    warn_if_not_semver(&package);
+                    tracing::info!(package = %id, "the Package Repository holds a new package");
+                }
+            }
+            self.check_signatures(&mut package);
+            followed.taken.insert(id.clone(), package.clone());
+            next.insert(id, package);
+            changed = true;
+        }
+        for (id, why) in &refused {
+            if followed.refused.get(id) != Some(why) {
+                tracing::warn!(
+                    package = %id,
+                    "the Manifest changes the entries of the package, and {why} — publish the \
+                     new content under a new version"
                 );
             }
         }
+        for id in followed.refused.keys() {
+            if !refused.contains_key(id) {
+                tracing::info!(package = %id, "the Manifest of the package is taken again");
+            }
+        }
+        followed.refused = refused;
+        // What is gone from the repository is remembered only while an assignment pins it.
+        followed
+            .taken
+            .retain(|id, _| listed.contains(id) || pinned(id));
+        let mut sets = self.sets.write().expect("sets lock");
+        for id in sets.keys().filter(|id| !next.contains_key(*id)) {
+            changed = true;
+            if !followed.refused.contains_key(id) {
+                tracing::info!(
+                    package = %id,
+                    "the package left the Package Repository: it is missing from every \
+                     Deployment that holds it, and offered to nobody until it is back"
+                );
+            }
+        }
+        *sets = next;
+        Ok(changed)
+    }
+
+    /// Whether the repository still holds every Blob the entries of `package` name. A store that
+    /// cannot be asked is taken to hold them: a lost answer is no reason to withdraw a Package.
+    fn blobs_still_held(&self, package: &Package) -> bool {
+        package.entries.values().all(|entry| {
+            !matches!(
+                self.blobs.exists(&hex::encode(&entry.content_hash)),
+                Ok(false)
+            )
+        })
+    }
+
+    /// Whether the store holds the Package `id`.
+    pub fn holds(&self, id: &PackageId) -> bool {
+        self.sets.read().expect("sets lock").contains_key(id)
+    }
+
+    /// Every Package `deployment` holds that the store does not, by display name: what a refused
+    /// rollout names. Only a store on a Package Repository lacks one, when the Package has left
+    /// the repository and the Deployment still holds it.
+    pub fn missing_in(&self, deployment: &Deployment) -> Vec<String> {
+        let sets = self.sets.read().expect("sets lock");
+        deployment
+            .packages
+            .values()
+            .filter(|id| !sets.contains_key(*id))
+            .map(PackageId::display_name)
+            .collect()
     }
 
     /// The signature an entry stores, offered or not — what a migration carried, for its tests.
@@ -676,6 +904,7 @@ impl PackageStore {
     /// a Package is its identity and its entries, so creating one that exists is the same request
     /// arriving twice.
     pub fn create(&self, id: &PackageId) -> Result<(), String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         if sets.contains_key(id) {
             return Ok(());
@@ -695,6 +924,7 @@ impl PackageStore {
     /// # Errors
     /// Returns an error when no Package of that identity exists.
     pub fn writable(&self, id: &PackageId) -> Result<(), String> {
+        self.refuse_write()?;
         if self.sets.read().expect("sets lock").contains_key(id) {
             Ok(())
         } else {
@@ -777,6 +1007,7 @@ impl PackageStore {
         platform: &Platform,
         signature: Vec<u8>,
     ) -> Result<SignatureState, String> {
+        self.refuse_write()?;
         if signature.is_empty() {
             return Err(
                 "the signature is empty — it says nothing; delete the one held instead".to_string(),
@@ -794,7 +1025,7 @@ impl PackageStore {
             .map_err(|why| format!("the signature is refused, nothing is stored — {why}"))?;
         let previous = entry.signature.replace(Signature::Offered(signature));
         let state = signature_state(entry);
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             // What did not reach the disk did not happen.
             if let Some(entry) = set.entries.get_mut(platform) {
                 entry.signature = previous;
@@ -809,6 +1040,7 @@ impl PackageStore {
     /// # Errors
     /// `no package set …` or `no entry …` when the entry does not exist (a `404`).
     pub fn remove_signature(&self, id: &PackageId, platform: &Platform) -> Result<bool, String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         let set = sets
             .get_mut(id)
@@ -820,7 +1052,7 @@ impl PackageStore {
         let Some(previous) = entry.signature.take() else {
             return Ok(false);
         };
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             if let Some(entry) = set.entries.get_mut(platform) {
                 entry.signature = Some(previous);
             }
@@ -844,7 +1076,7 @@ impl PackageStore {
         // The metadata is written under the lock, as every write of a Package is: the store must
         // hold what memory holds, in the order it changed. A PostgreSQL call is bounded;
         // the blob store is not asked here.
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             match previous {
                 Some(previous) => set.entries.insert(platform, previous),
                 None => set.entries.remove(&platform),
@@ -864,6 +1096,7 @@ impl PackageStore {
     /// normal state, and deleting the Package is its own act. Its blob goes with the last entry
     /// that names it.
     pub fn delete_entry(&self, id: &PackageId, platform: &Platform) -> Result<bool, String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         let Some(set) = sets.get_mut(id) else {
             return Ok(false);
@@ -871,7 +1104,7 @@ impl PackageStore {
         let Some(removed) = set.entries.remove(platform) else {
             return Ok(false);
         };
-        if let Err(e) = self.backend.put(set) {
+        if let Err(e) = self.backend().and_then(|backend| backend.put(set)) {
             set.entries.insert(platform.clone(), removed);
             return Err(e);
         }
@@ -885,11 +1118,12 @@ impl PackageStore {
     /// `Ok(false)` when none of that identity exists. The fleet removes every assignment that
     /// referenced it, which withdraws the offer; Agents that installed it keep running it.
     pub fn delete_set(&self, id: &PackageId) -> Result<bool, String> {
+        self.refuse_write()?;
         let mut sets = self.sets.write().expect("sets lock");
         if !sets.contains_key(id) {
             return Ok(false);
         }
-        self.backend.remove(id)?;
+        self.backend()?.remove(id)?;
         let removed = sets.remove(id).expect("checked above");
         let doomed: Vec<String> = removed
             .entries
@@ -978,8 +1212,9 @@ impl PackageStore {
     /// One Agent's offer, composed from its **assignment**: the entry [`offered_entry`]
     /// names, plus the `all_packages_hash` over it (the Baseline's per-Agent aggregate). `None`
     /// when the Agent is offered nothing — it keeps running what it runs. An assignment whose
-    /// Package is gone composes nothing rather than failing: a pinned Package cannot be deleted,
-    /// so the case is a race, not a state.
+    /// Package the store does not hold composes nothing rather than failing: a pinned Package
+    /// cannot be deleted, but it can leave the Package Repository, and the Agent then keeps what
+    /// it runs until the Package is back.
     pub fn offer_for_assigned(
         &self,
         assigned: Option<&PackageId>,
@@ -1133,7 +1368,7 @@ impl PackageStore {
     }
 
     fn persist(&self, set: &Package) -> Result<(), String> {
-        self.backend.put(set)
+        self.backend()?.put(set)
     }
 }
 
@@ -1175,6 +1410,21 @@ const REMOVED_WHILE_UPLOADED: &str =
     "the artifact was removed while it was uploaded; upload it again";
 
 /// Whether any entry of `sets` names the blob `sha256`.
+/// Whether `a` and `b` hold the same entries: the same platforms, bytes, sizes and signatures.
+fn same_entries(a: &Package, b: &Package) -> bool {
+    a.entries.len() == b.entries.len()
+        && a.entries
+            .iter()
+            .zip(&b.entries)
+            .all(|((pa, ea), (pb, eb))| {
+                pa == pb
+                    && ea.content_hash == eb.content_hash
+                    && ea.size == eb.size
+                    && ea.signature.as_ref().map(Signature::bytes)
+                        == eb.signature.as_ref().map(Signature::bytes)
+            })
+}
+
 fn referenced(sets: &BTreeMap<PackageId, Package>, sha256: &str) -> bool {
     sets.values()
         .flat_map(|set| set.entries.values())
@@ -1717,7 +1967,10 @@ mod tests {
             let mut old = store.sets.read().expect("sets lock")[&set].clone();
             old.entries.get_mut(&windows()).expect("entry").signature =
                 Some(Signature::Offered(vec![1u8; 64]));
-            store.backend.put(&old).expect("write the old form");
+            store
+                .backend()
+                .and_then(|backend| backend.put(&old))
+                .expect("write the old form");
         }
         let states = |store: &PackageStore| -> Vec<SignatureState> {
             store
