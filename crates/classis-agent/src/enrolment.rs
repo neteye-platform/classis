@@ -112,6 +112,35 @@ pub fn check_endpoint_matches_enrolment(
     Ok(())
 }
 
+/// A warning when `state.json` can be read by accounts other than its owner's: on Windows the
+/// file has no mode, takes the rights its directory passes on, and a directory the operator named
+/// that no `service install` has cut off may pass on a read right to every local user. Only
+/// warned of: the operator named the directory, and its rights are theirs to decide.
+#[cfg(windows)]
+fn readable_by_other_accounts(state_file: &Path) -> Option<String> {
+    use crate::win32::files::{Access, Entry};
+    /// `BUILTIN\Users`, Everyone, and Authenticated Users.
+    const OTHERS: [&str; 3] = ["S-1-5-32-545", "S-1-1-0", "S-1-5-11"];
+    let dacl = Entry::open(state_file, Access::Read, false)
+        .and_then(|entry| entry.dacl())
+        .ok()?;
+    dacl.allows_read_to(&OTHERS).then(|| {
+        format!(
+            "{} can be read by every local account: it holds this host's client secret and token. \
+             Restrict the rights of its directory to the account that runs the Client and to \
+             Administrators",
+            state_file.display()
+        )
+    })
+}
+
+/// No warning off Windows: the file is created with the mode `0600`.
+#[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)]
+fn readable_by_other_accounts(_state_file: &Path) -> Option<String> {
+    None
+}
+
 /// What `state.json` holds, for a host that must have enrolled before it runs.
 ///
 /// # Errors
@@ -406,6 +435,10 @@ pub async fn enrol(
         warnings: Vec::new(),
     };
     let Some(installed) = installed else {
+        // No service manages this directory, so nothing has cut the rights it passes on.
+        enrolled
+            .warnings
+            .extend(readable_by_other_accounts(&state_file));
         return Ok(enrolled);
     };
     let after = |step: &str, e: String| {
