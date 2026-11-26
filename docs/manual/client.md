@@ -1188,10 +1188,11 @@ nothing beforehand and simply report the manager's own refusal.
 A host belongs to exactly one **Space** of its Server, and it joins by enrolling
 with that Space's **enrolment key**, `cle1_<space>_<secret>`. The key names the
 Space, so no command takes the Space a second time. It is reusable and admits
-the host at once: no operator approves a request. Treat it as a secret. This
-build of the Server has no operator command that creates a Space or shows or
-rotates its key, so this page takes the key as given: you have it from whoever
-runs the Server.
+the host at once: no operator approves a request. Treat it as a secret. The
+Server's operator makes a Space and prints its key with
+`classis-cli space create <name>`, over the Server's admin socket
+([The operator's socket](server.md#the-operators-socket)); this page takes the
+key as given.
 
 A Client without a `state.json` runs nothing. Installing it registers the
 service but neither starts it nor lets it start at boot; `enrol` is what

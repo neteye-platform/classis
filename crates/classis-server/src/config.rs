@@ -72,6 +72,12 @@ pub struct ServerConfig {
     /// endpoint, and a Client downloads from no other host. Read only so that a leftover
     /// key can be named.
     pub advertised_url: Option<IgnoredAny>,
+    /// The URL hosts reach the Server at from outside its proxy — the base `classis-cli
+    /// enrol-command` prints its install command against, and what an operator types into
+    /// `classis enrol <url> <key>`. Absent, that command refuses: no Server guesses the domain its
+    /// proxy answers for.
+    #[serde(default)]
+    pub public_url: Option<String>,
     /// The largest OpAMP message the Server accepts or sends, on either transport and in either
     /// direction. The Baseline requires the limit, recommends this default, and asks that it be
     /// configurable — a fleet of small status reports can be served with far less.
@@ -123,6 +129,10 @@ pub struct ServerConfig {
     /// The Package Signers the Server refuses.
     #[serde(default)]
     pub packages: PackagesConfig,
+    /// The path of the Unix socket `classis-cli` administers the Spaces over. The Server creates it
+    /// owner-only, and its directory too when that is missing.
+    #[serde(default = "default_admin_socket")]
+    pub admin_socket: PathBuf,
 }
 
 /// The `[log]` section: the format of every line the Server writes to standard error. The level is
@@ -937,6 +947,10 @@ fn default_data_dir() -> PathBuf {
     PathBuf::from("fleet-data")
 }
 
+fn default_admin_socket() -> PathBuf {
+    PathBuf::from(classis_admin::protocol::DEFAULT_SOCKET)
+}
+
 fn default_max_message_size() -> usize {
     opamp::frame::DEFAULT_MAX_MESSAGE_SIZE
 }
@@ -981,6 +995,7 @@ impl Default for ServerConfig {
             blobs: BlobsConfig::default(),
             database: DatabaseConfig::default(),
             advertised_url: None,
+            public_url: None,
             max_message_size_bytes: default_max_message_size(),
             max_package_size_bytes: default_max_package_size(),
             max_total_package_bytes: default_max_total_package_size(),
@@ -993,6 +1008,7 @@ impl Default for ServerConfig {
             log: LogConfig::default(),
             packages: PackagesConfig::default(),
             token_lifetime_secs: 0,
+            admin_socket: default_admin_socket(),
         }
     }
 }
@@ -1002,6 +1018,51 @@ impl Default for ServerConfig {
 /// of one socket as far as the second `bind` is concerned.
 fn listeners_collide(a: SocketAddr, b: SocketAddr) -> bool {
     a.port() == b.port() && (a.ip() == b.ip() || a.ip().is_unspecified() || b.ip().is_unspecified())
+}
+
+/// The rules on `public_url`. The same transport rule as every URL of this product (Q-1): `https://`
+/// anywhere, `http://` to a loopback IP literal alone — and no credential, query or fragment, which
+/// is what the Client itself refuses on the URL an operator types there. A path prefix is kept:
+/// a proxy may mount the Server under one, and the Client resolves its routes against the base.
+///
+/// Nothing the printed command line cannot carry gets through: `classis-cli enrol-command` puts this
+/// URL into a single-quoted argument of a `curl` line and a PowerShell line, and a quote or a
+/// control character there ends the argument early.
+fn check_public_url(url: &str) -> Result<(), String> {
+    // Checked on the raw text first: the URL parser drops tabs and newlines rather than refusing
+    // them, which would silently change the base an operator wrote.
+    if let Some(c) = url.chars().find(|c| c.is_control() || *c == '\'') {
+        return Err(format!(
+            "public_url {url:?} holds {c:?} — the URL of the public endpoint carries no quote and \
+             no control character; the command line classis-cli prints would break on it"
+        ));
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("public_url {url}: {e}"))?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" if opamp::endpoint::is_loopback_literal(parsed.host_str().unwrap_or("")) => {}
+        "http" => {
+            return Err(format!(
+                "public_url {url}: plaintext is for 127.0.0.1 and ::1 alone — use https://"
+            ))
+        }
+        _ => {
+            return Err(format!(
+                "public_url {url} must start with https:// (http:// only to 127.0.0.1 or ::1)"
+            ))
+        }
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(format!(
+            "public_url {url} must be a scheme, a host and perhaps a path prefix, and nothing \
+             else — no user, password, query or fragment"
+        ));
+    }
+    Ok(())
 }
 
 impl ServerConfig {
@@ -1233,6 +1294,11 @@ impl ServerConfig {
                  plane that holds no connection serves nobody"
                     .to_string(),
             );
+        }
+        // The public URL goes into the install command an operator pastes onto a host, so a wrong
+        // one is refused at load, by name, and not at the first `enrol-command`.
+        if let Some(url) = &self.public_url {
+            check_public_url(url)?;
         }
         self.check_secure()
     }
@@ -1762,6 +1828,121 @@ mod tests {
         let err = toml::from_str::<ServerConfig>("token_lifetime_secs = \"soon\"")
             .expect_err("not a number");
         assert!(err.to_string().contains("token_lifetime_secs"), "{err}");
+    }
+
+    /// The operator's socket defaults to the path `classis-cli` looks at, and the file and the
+    /// environment set it like any other key.
+    #[test]
+    fn the_admin_socket_defaults_to_the_clis_path_and_is_configurable() {
+        let default: ServerConfig = toml::from_str("").expect("parse");
+        assert_eq!(
+            default.admin_socket,
+            PathBuf::from(classis_admin::protocol::DEFAULT_SOCKET)
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("server.toml");
+        std::fs::write(&path, "admin_socket = \"/var/run/classis.sock\"\n").expect("write");
+        assert_eq!(
+            ServerConfig::load(&path).expect("loads").admin_socket,
+            PathBuf::from("/var/run/classis.sock")
+        );
+
+        let from_environment = ServerConfig::load_layered(
+            None,
+            variables(&[("CLASSIS_SERVER__ADMIN_SOCKET", "/srv/classis/admin.sock")]),
+        )
+        .expect("loads")
+        .config;
+        assert_eq!(
+            from_environment.admin_socket,
+            PathBuf::from("/srv/classis/admin.sock")
+        );
+    }
+
+    /// What `public_url` takes: an `https://` URL with a proxy's path prefix kept whole, and an
+    /// `http://` URL to a loopback IP literal alone. Absent it stays absent, which is what makes
+    /// `enrol-command` refuse. What it refuses is what the command line `classis-cli` prints could
+    /// not carry, or what the Client itself refuses on the URL an operator types there.
+    /// Verifies: Q-1
+    #[test]
+    fn the_public_url_is_checked_at_load_and_set_like_any_other_key() {
+        let load = |url: &str| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("server.toml");
+            std::fs::write(&path, format!("public_url = \"{url}\"\n")).expect("write");
+            ServerConfig::load(&path)
+        };
+
+        let defaults = ServerConfig::load_layered(None, Vec::new())
+            .expect("the defaults")
+            .config;
+        assert!(defaults.public_url.is_none(), "no public URL yet");
+        for url in [
+            "https://fleet.example",
+            "https://neteye.example/neteye/classis",
+            "http://127.0.0.1:4320/classis",
+            "http://[::1]:4320",
+        ] {
+            assert_eq!(
+                load(url).expect(url).public_url.as_deref(),
+                Some(url),
+                "kept as written, prefix and all: {url}"
+            );
+        }
+
+        for (why, url) in [
+            ("plaintext off the loopback", "http://fleet.example"),
+            ("a name, not a loopback literal", "http://localhost:4320"),
+            ("no scheme", "fleet.example"),
+            ("a WebSocket scheme", "wss://fleet.example"),
+            ("a credential", "https://ops:s3cret@fleet.example"),
+            ("a query", "https://fleet.example/?space=acme"),
+            ("a fragment", "https://fleet.example#acme"),
+            ("no host", "https://"),
+            ("nothing", ""),
+            ("a single quote", "https://fleet.example'/"),
+        ] {
+            let err = load(url).expect_err(why);
+            assert!(err.contains("public_url"), "{why}: {err}");
+        }
+
+        // A control character comes from the environment, which carries the value raw: TOML would
+        // have to escape one, and the check runs on the text either way.
+        for (why, url) in [
+            ("a control character", "https://fleet.example\u{7}x"),
+            ("a tab", "https://fleet.example\t/x"),
+            ("a newline", "https://fleet.example/x\nsudo sh"),
+        ] {
+            let err =
+                ServerConfig::load_layered(None, variables(&[("CLASSIS_SERVER__PUBLIC_URL", url)]))
+                    .expect_err(why);
+            assert!(err.contains("public_url"), "{why}: {err}");
+            assert!(
+                !err.chars().any(|c| c.is_control()),
+                "{why}: the refusal quotes it escaped, never raw: {err}"
+            );
+        }
+
+        let from_environment = ServerConfig::load_layered(
+            None,
+            variables(&[(
+                "CLASSIS_SERVER__PUBLIC_URL",
+                "https://fleet.example/classis",
+            )]),
+        )
+        .expect("loads")
+        .config;
+        assert_eq!(
+            from_environment.public_url.as_deref(),
+            Some("https://fleet.example/classis")
+        );
+        let err = ServerConfig::load_layered(
+            None,
+            variables(&[("CLASSIS_SERVER__PUBLIC_URL", "fleet.example")]),
+        )
+        .expect_err("the file's rules hold on what the environment set");
+        assert!(err.contains("public_url"), "{err}");
     }
 
     #[test]

@@ -16,8 +16,9 @@
 #                  supervisor.toml.fragment naming the server CA
 #   server.toml / supervisor.toml
 #                  a Server and a Client configuration that use the set, every other key at its
-#                  default but one: server.toml serves the Agent plane on every interface, so
-#                  Clients on other machines reach it; it carries the offer of the fleet's own
+#                  default but two: server.toml serves the Agent plane on every interface, so
+#                  Clients on other machines reach it, and keeps its operator socket in this
+#                  directory; it carries the offer of the fleet's own
 #                  telemetry to a Collector on the loopback commented out
 #
 # Trust the server CA, offline/server-ca.pem, in curl and in the browser.
@@ -47,6 +48,9 @@ OUT="$(cd "$OUT" && pwd)"  # the configurations name the set by absolute path
   echo '# The Agent plane on every interface, for Clients on other machines (see config/server.toml).'
   echo 'listen = "0.0.0.0:4320"'
   echo
+  echo '# The operator Unix socket, always on (see config/server.toml).'
+  echo "admin_socket = \"$OUT/admin.sock\""
+  echo
   echo '# The fleet'"'"'s own telemetry, to a Collector on the loopback (see config/server.toml).'
   echo '# [telemetry_offer]'
   echo '# metrics_endpoint = "http://127.0.0.1:4318/v1/metrics"'
@@ -65,8 +69,12 @@ Created in $OUT, with a server.toml and a supervisor.toml that use the set:
 
   cargo run -p classis-server -- --config $OUT/server.toml
 
-A Client refuses to start until its host is enrolled with a Space's key. No command
-of the Server creates a Space yet. With a key, and the Server running, enrol the host
+A Client refuses to start until its host is enrolled with a Space's key. Create a Space
+first, while the Server runs, over its operator socket:
+
+  cargo run -p classis-admin -- --socket $OUT/admin.sock space create dev
+
+With a key, and the Server running, enrol the host
 before the first run, with the Server's base URL (the https:// form of the endpoint above):
 
   cargo run -p classis-agent -- --config $OUT/supervisor.toml enrol <base-url> <key>

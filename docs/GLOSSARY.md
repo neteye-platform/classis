@@ -42,6 +42,18 @@ terms below are the ones it uses without defining.
 - **Data directory** — the one directory, `data_dir`, under which the Server
   keeps all of its state, one subdirectory per domain. _Avoid:_ config
   directory, package directory, state directory (that is the Client's).
+- **Operator's socket** — the Server's local Unix socket through which
+  `classis-cli` administers Spaces and their enrolment keys.
+- **Public URL** — the Server's optional `public_url`: the base URL hosts reach
+  it at through its proxy, which `classis-cli enrol-command` prints its install
+  command against and an operator types into `classis enrol`. Absent, that command
+  refuses; the Server never guesses the address its proxy answers for. _Avoid:_
+  advertised URL, endpoint (the Client's own `supervisor.toml` key).
+- **Install script** — one of the two files (`install.sh`, `install.ps1`) the
+  Server serves on the Agent plane for a host that holds no credential to fetch
+  and run, installing the Client and enrolling it in one step — the same
+  install a native package does, not a second one. _Avoid:_ bootstrap script,
+  installer (that is the `.deb`, `.rpm` or `.msi`).
 - **Space** — a named grouping of Hosts on one Server, into which an enrolment
   key admits new Hosts. A Space is not a separate Fleet or a tenant-isolation
   boundary. _Avoid:_ tenant, fleet (for a Space).

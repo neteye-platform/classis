@@ -79,6 +79,7 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("packages", Core),
             ("space_store", Core),
             ("throttle", Core),
+            ("admin", Adapter),
             ("api", Adapter),
             ("bridge", Adapter),
             ("clock", Adapter),
@@ -185,6 +186,19 @@ const ROLES: &[(&str, &[(&str, Role)])] = &[
             ("package", Adapter),
             ("pki", Adapter),
             ("signing", Adapter),
+        ],
+    ),
+    (
+        "classis-admin",
+        &[
+            ("", Root),
+            ("cli", Root),
+            ("main", Root),
+            ("protocol", Core),
+            ("render", Core),
+            ("spaces", Core),
+            ("server", Adapter),
+            ("client", Adapter),
         ],
     ),
 ];

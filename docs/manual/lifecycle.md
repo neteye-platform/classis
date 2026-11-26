@@ -96,9 +96,9 @@ WebSocket sessions admitted with the old one.
 `enrol` is refused on a host that holds a `state.json`. A host without one runs
 nothing.
 
-This build has no operator command that makes a Space, shows its key or rotates
-it; [Setting up a fleet](setup.md#5-enrol-the-client) says so where the key is
-needed.
+The key comes from the Server: `classis-cli space create <name>` makes a Space
+and prints its key, over the Server's admin socket
+([The operator's socket](server.md#the-operators-socket)).
 
 Details: [Enrol the Client](setup.md#5-enrol-the-client).
 

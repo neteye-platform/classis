@@ -20,6 +20,7 @@
 # The Server's data directory holds the package artifacts too — programs of hundreds of megabytes
 # each; they belong in a store, never in the repository.
 fleet-data/
+fleet-run/
 client-state/
 
 # Environment files — never tracked, in any directory (they may hold secrets);

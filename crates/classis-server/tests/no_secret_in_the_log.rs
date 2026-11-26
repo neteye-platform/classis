@@ -56,10 +56,11 @@ async fn no_secret_reaches_the_log() {
     std::fs::write(
         &config,
         format!(
-            "listen = \"127.0.0.1:{agent_port}\"\ndata_dir = {}\n\n\
+            "listen = \"127.0.0.1:{agent_port}\"\ndata_dir = {}\nadmin_socket = {}\n\n\
              [rest]\nlisten = \"127.0.0.1:{operator_port}\"\n\n\
              [rest.auth.basic_users]\nops = {:?}\n",
             toml::Value::String(dir.path().join("data").display().to_string()),
+            toml::Value::String(dir.path().join("admin.sock").display().to_string()),
             classis_server::credentials::hash_basic(OPERATOR_PASSWORD).expect("hash"),
         ),
     )

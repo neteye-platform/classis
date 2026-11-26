@@ -74,11 +74,16 @@ nothing until it is enrolled.
 
 3. **Enrol a Client.** With no `[[supervisor]]` block it presents exactly one
    Agent: itself. It runs only once it holds a `state.json`, which `enrol`
-   writes from the enrolment key of a Space. This step needs that key, and this
-   build cannot give you one: it has no command that makes a Space or shows its
-   key, and the REST API and the Server's settings have none either ([Enrol the
-   Client](setup.md#5-enrol-the-client)). So the loop below cannot be closed
-   with this build's own programs alone. With a key in hand, the step is:
+   writes from the enrolment key of a Space. To get a key, ask the running
+   Server for one over its admin socket: `space create` makes a Space and prints
+   its key, and with the socket `config/server.toml` names that is
+   ([The operator's socket](server.md#the-operators-socket)):
+
+   ```sh
+   cargo run -p classis-admin -- --socket fleet-run/admin.sock space create lab
+   ```
+
+   With the key in hand, the step is:
 
    ```sh
    cargo run -p classis-agent -- --config supervisor.toml enrol http://127.0.0.1:4320 cle1_lab_…

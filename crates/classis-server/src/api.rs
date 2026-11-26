@@ -1,6 +1,7 @@
 //! The REST API v1 — the Server's integration contract — and the bundled
 //! rudimentary UI. Both belong to the Operator plane and are served on its own listener;
-//! the one exception, the Agent-facing artifact download, is [`download_router`].
+//! the exceptions, the Agent-facing artifact download and the routes a host installs the Client
+//! from, are [`download_router`] and [`install_router`].
 //!
 //! The OpenAPI document is generated code-first with `utoipa`: the same annotations that register
 //! a route describe it, so contract and behaviour cannot drift. Any external portal generates a
@@ -350,6 +351,92 @@ pub fn download_router(state: Arc<AppState>) -> Router {
             get(download_package),
         )
         .with_state(state)
+}
+
+/// The Agent type of the Client's own Package — the identity this project's release packs its
+/// archives under, and the only one the install route can read.
+const CLIENT_AGENT_TYPE: &str = "supervisor";
+
+/// The platforms a host installs the Client on: the Linux and Windows targets this project's
+/// release publishes. Every other token is `404` here whatever the store holds — the Client also
+/// ships for macOS, and a macOS host is not one this route installs onto. A new Linux or Windows
+/// target joins the release by joining this list.
+const CLIENT_PLATFORMS: [(&str, &str); 3] =
+    [("linux", "amd64"), ("linux", "arm64"), ("windows", "amd64")];
+
+/// The **install** routes of the Agent plane: what a host that holds no credential yet fetches to
+/// put the Client on itself — the two scripts, and the Client archive of the release this Server is
+/// built from. They stand beside `/v1/enrol` and `/v1/token`, outside bearer admission and for the
+/// same reason: the host that needs them has nothing to present yet.
+///
+/// What they give out is fixed by this build and never named by the caller — two compiled-in files
+/// and one Package identity — so a host without a token learns nothing of the fleet and cannot list
+/// the package store through them. Like [`download_router`], they are not in the OpenAPI document:
+/// that describes the Operator plane.
+pub fn install_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/v1/install.sh", get(install_sh))
+        .route("/v1/install.ps1", get(install_ps1))
+        .route("/v1/install/{os}/{arch}", get(install_archive))
+        .with_state(state)
+}
+
+/// The install script of a POSIX host, compiled into the Server: reaching it costs a host nothing
+/// but the Server's URL, and its bytes are the same for every host — no key, no Device ID, nothing
+/// the requester states enters them.
+async fn install_sh() -> Response {
+    script(include_str!("../install/install.sh"))
+}
+
+/// The install script of a Windows host.
+async fn install_ps1() -> Response {
+    script(include_str!("../install/install.ps1"))
+}
+
+fn script(text: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response()
+}
+
+/// The Client archive of the release this Server itself runs: `200` with its bytes, `404` for
+/// anything else — a platform this project ships no Client for, a platform this release holds no
+/// artifact for, an artifact with no signature that verifies up to the Package Roots, or a Server
+/// with no package store armed.
+///
+/// The identity is never the caller's to name: the Agent type is this project's Client and the
+/// version this build, so the route reads exactly one entry of one Package.
+async fn install_archive(
+    State(state): State<Arc<AppState>>,
+    Path((os, arch)): Path<(String, String)>,
+) -> Response {
+    // One answer for every case that gives nothing out, so the route says nothing about
+    // what the store holds.
+    let nothing = || error(StatusCode::NOT_FOUND, "no Client archive for that platform");
+    // Which release this is, in the identity a Package is stored under: the build metadata
+    // drops out, and a `-dev` build names itself.
+    let Some(version) = classis_core::version::identity(classis_core::version::current()) else {
+        return nothing();
+    };
+    let (Ok(id), Ok(platform)) = (
+        PackageId::new(CLIENT_AGENT_TYPE, version),
+        Platform::new(&os, &arch),
+    ) else {
+        return nothing();
+    };
+    if !CLIENT_PLATFORMS.contains(&(platform.os.as_str(), platform.arch.as_str())) {
+        return nothing();
+    }
+    let Some(store) = state.packages() else {
+        return nothing();
+    };
+    // `offerable` is the gate an offer is composed through, so an artifact no Agent may be
+    // offered reaches no host here either.
+    if store.offerable(&id, &platform).is_none() {
+        return nothing();
+    }
+    let Some((sha256, size)) = store.artifact(&id, &platform) else {
+        return nothing();
+    };
+    stream_artifact(state, &id, sha256, size).await
 }
 
 /// The bundled UI: one embedded page, no frontend toolchain.
@@ -1779,23 +1866,32 @@ async fn download_package(
     else {
         return not_found();
     };
-    // Streamed from the blob store, never buffered: a fleet updating at once means many concurrent
-    // downloads of the same artifact, and each one holding a copy of a program in memory is how a
-    // rollout takes the Server down with it.
-    //
-    // Opened off the async workers, as the bytes are read: the blob port is synchronous,
-    // and on a bucket the open waits for the store's answer — up to the
-    // limits of `s3.rs`, minutes on a store that stalls. A rollout opens as many artifacts at once
-    // as there are hosts updating, and each open held on a worker is a worker no Agent or operator
-    // is answered on.
-    let opened = tokio::task::spawn_blocking({
-        let state = state.clone();
-        move || {
-            state
-                .packages()
-                .map(|store| store.open_artifact(&sha256))
-                .unwrap_or_else(|| Err("package delivery is not configured".to_string()))
-        }
+    stream_artifact(state, &id, sha256, size).await
+}
+
+/// One artifact's bytes, streamed: what the Agent's download and a host's install both serve, so
+/// neither writes the streaming again.
+///
+/// Streamed from the blob store, never buffered: a fleet updating at once means many concurrent
+/// downloads of the same artifact, and each one holding a copy of a program in memory is how a
+/// rollout takes the Server down with it.
+///
+/// Opened off the async workers, as the bytes are read: the blob port is synchronous,
+/// and on a bucket the open waits for the store's answer — up to the
+/// limits of `s3.rs`, minutes on a store that stalls. A rollout opens as many artifacts at once
+/// as there are hosts updating, and each open held on a worker is a worker no Agent or operator
+/// is answered on.
+async fn stream_artifact(
+    state: Arc<AppState>,
+    id: &PackageId,
+    sha256: Vec<u8>,
+    size: u64,
+) -> Response {
+    let opened = tokio::task::spawn_blocking(move || {
+        state
+            .packages()
+            .map(|store| store.open_artifact(&sha256))
+            .unwrap_or_else(|| Err("package delivery is not configured".to_string()))
     })
     .await
     .unwrap_or_else(|e| Err(format!("the artifact could not be opened: {e}")));
