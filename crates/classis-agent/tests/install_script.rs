@@ -58,6 +58,17 @@ fn useradd_lines(script: &str) -> Vec<String> {
         .collect()
 }
 
+/// Windows PowerShell 5.1 reads a script without a byte-order mark as ANSI, so a multi-byte
+/// character (an em dash, whose bytes include a closing curly quote) can end a string early and
+/// break the parse of the whole file. The PowerShell script stays ASCII.
+#[test]
+fn the_powershell_script_is_ascii() {
+    let script = powershell();
+    if let Some((n, line)) = script.lines().enumerate().find(|(_, l)| !l.is_ascii()) {
+        panic!("install.ps1:{}: non-ASCII character: {line}", n + 1);
+    }
+}
+
 #[test]
 fn both_scripts_exist() {
     for name in [SHELL_SCRIPT, POWERSHELL_SCRIPT] {

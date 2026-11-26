@@ -8,7 +8,7 @@
   default, `%ProgramData%\classis`, and nothing is written into `Program Files`.
 
   TLS was settled before this ran: the host fetched this file over it. So nothing here provisions a
-  CA or relaxes a check — the Server is verified against the trust the host already has, at TLS 1.3,
+  CA or relaxes a check - the Server is verified against the trust the host already has, at TLS 1.3,
   with no redirect.
 
   The enrolment key is an argument to `enrol` and never part of a URL, so it cannot reach a proxy's
@@ -46,7 +46,7 @@ function Assert-Elevated {
 # because a host whose .NET has no Tls13 must refuse rather than quietly handshake at 1.2.
 function Assert-Tls13 {
     if ('Tls13' -notin [Net.SecurityProtocolType].GetEnumNames()) {
-        Stop-Install 'this PowerShell offers no TLS 1.3 — install .NET Framework 4.8'
+        Stop-Install 'this PowerShell offers no TLS 1.3 - install .NET Framework 4.8'
     }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls13
 }
@@ -69,7 +69,7 @@ function Assert-Url {
     # anywhere. Same rule as `opamp::endpoint::is_loopback_literal`.
     $hostName = $parsed.Host.TrimStart('[').TrimEnd(']')
     if ($parsed.Scheme -eq 'http' -and $hostName -notin @('127.0.0.1', '::1')) {
-        Stop-Install "${Url}: plaintext is for 127.0.0.1 and ::1 alone — use https://"
+        Stop-Install "${Url}: plaintext is for 127.0.0.1 and ::1 alone - use https://"
     }
     $script:Base = $Url.TrimEnd('/')
     # `https` becomes `wss` and `http` becomes `ws` under one anchored rule, and the OpAMP path is
@@ -148,7 +148,7 @@ if ($Base -like 'https://*') { Assert-Tls13 }
 # program: refusing here is what keeps this script from swinging the `current` pointer of a host an
 # operator already manages.
 if (Get-Service -Name 'classis' -ErrorAction SilentlyContinue) {
-    Stop-Install 'this host is registered already — run classis enrol, or remove the service first'
+    Stop-Install 'this host is registered already - run classis enrol, or remove the service first'
 }
 $arch = Get-Arch
 $tmp = Join-Path $env:TEMP ('classis-' + [Guid]::NewGuid().ToString('N'))

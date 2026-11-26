@@ -859,8 +859,9 @@ enrolled at once.
   already enrolled keep their client and their token.
 - **`classis-cli` creates a Space, lists them, and rotates a key**, over the
   operator's socket ([The operator's socket](#the-operators-socket)). No REST
-  route does any of it, and no command shows the key of a Space that already
-  exists: only `create` and `rotate-key` print one, which is the new key. The
+  route does any of it. `create` and `rotate-key` print a new key, and
+  `enrol-command` prints the current key of an existing Space (alone with
+  `--with-key`), so whoever the socket admits can read it again. The
   Server enrols a host only into a Space that exists in its records.
 
 ### `/v1/enrol`

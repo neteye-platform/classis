@@ -361,8 +361,9 @@ cle1_lab_…
 ```
 
 The key is all it prints. `space list` prints the Space names, and
-`space rotate-key lab` replaces a key and prints the new one; nothing shows the
-key of a Space that already exists. No REST route does any of this. Whoever runs
+`space rotate-key lab` replaces a key and prints the new one; `enrol-command`
+prints the current key of an existing Space, so it can be read again by whoever
+the socket admits. No REST route does any of this. Whoever runs
 the CLI must be able to open the socket, so root or the Server's own account
 ([The operator's socket](server.md#the-operators-socket)); the CLI ships inside
 the Server's image on Linux (`docker exec classis-server
