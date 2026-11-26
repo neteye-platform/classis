@@ -690,6 +690,8 @@ async fn the_second_service_closes_its_process_to_its_own_account() {
         .arg(&socket)
         .args(["--client-uid", &uid.wrapping_add(1).max(1).to_string()])
         .stdout(std::process::Stdio::piped())
+        // Log colour follows stderr's terminal status.
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .expect("start the second service");
