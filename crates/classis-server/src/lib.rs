@@ -320,6 +320,20 @@ pub fn agent_app_admitted_as_for_tests(state: Arc<AppState>, host: Option<&str>)
     agent_routes(state).layer(axum::Extension(proofs))
 }
 
+/// Serves the Agent plane `router` under `base_path`, the path the proxy in front of the Server
+/// publishes it under, so that the proxy forwards the path as it is. Empty leaves the plane at the
+/// root. The Operator plane is a listener of its own and does not move.
+///
+/// # Panics
+/// Panics when `base_path` is `/` or ends with `/`, which `config::ServerConfig` refuses at load.
+pub fn under_base_path(router: Router, base_path: &str) -> Router {
+    if base_path.is_empty() {
+        router
+    } else {
+        Router::new().nest(base_path, router)
+    }
+}
+
 /// The **Operator plane**: the REST API, its OpenAPI document and docs page, and the
 /// bundled UI — on their own listener, guarded as a whole by `[rest.auth]` when one is configured.
 /// Without it the plane is open, which is what its loopback default is for.

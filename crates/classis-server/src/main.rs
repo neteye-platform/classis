@@ -411,9 +411,11 @@ async fn main() {
     let packages =
         classis_server::packages::PackageStore::open_on(&records, &config.data_dir, &config.blobs)
             .map(|store| {
-                store.with_verifier(Box::new(
-                    classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
-                ))
+                store
+                    .with_verifier(Box::new(
+                        classis_server::config::RootsVerifier::new(roots).with_revoked(revoked),
+                    ))
+                    .with_base_path(config.base_path.clone())
             })
             .and_then(|store| {
                 if !store.is_empty() {
@@ -480,7 +482,10 @@ async fn main() {
     };
     // Two planes, two listeners: Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
-    let agents = classis_server::agent_app(state.clone(), enrolment);
+    let agents = classis_server::under_base_path(
+        classis_server::agent_app(state.clone(), enrolment),
+        &config.base_path,
+    );
     let operator_auth = match config
         .rest
         .auth
@@ -521,7 +526,7 @@ async fn main() {
         }
     });
 
-    info!(listen = %config.listen, "serving the OpAMP endpoint and package downloads over HTTP");
+    info!(listen = %config.listen, base_path = %config.base_path, "serving the OpAMP endpoint and package downloads over HTTP");
     info!(listen = %config.rest.listen, "serving the REST API, the API docs, and the UI over HTTP");
     let (agents, operators) = tokio::join!(
         listen::plane(agent_listener, config.max_connections, handle.clone()).serve(agents),
