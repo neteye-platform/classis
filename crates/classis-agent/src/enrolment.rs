@@ -208,7 +208,7 @@ fn replace_access_token(state_dir: &Path, access_token: &Zeroizing<String>) -> R
             .map(|before| (before.uid(), before.gid()))
             .map_err(failed)?
     };
-    dir.write(STATE_FILE, &encode(&credentials)?, 0o600)
+    dir.replace(STATE_FILE, &encode(&credentials)?, 0o600)
         .map_err(failed)?;
     // A renewal by an account other than the file's owner — a foreground run as root over a file
     // the service's account owns — leaves the file with the owner it had.

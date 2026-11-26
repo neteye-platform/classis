@@ -131,6 +131,19 @@ impl HeldDir {
         sys::write(self, name, &temporary, contents, mode)
     }
 
+    /// [`write`](Self::write) for a file that two runs may replace at once: each stages under a
+    /// name of its own that no other run can guess, so neither unlinks the other's half-written
+    /// file, and the later rename wins whole. A run killed between staging and renaming leaves
+    /// `<name>.<hex>~` behind, as [`write_new`](Self::write_new) does.
+    ///
+    /// # Errors
+    /// Returns an error when the file cannot be written or renamed into place.
+    pub fn replace(&self, name: &str, contents: &[u8], mode: u32) -> io::Result<()> {
+        check_name(name)?;
+        let temporary = format!("{name}.{}~", random_suffix()?);
+        sys::write(self, name, &temporary, contents, mode)
+    }
+
     /// Writes `contents` as the file `name`, with `mode` on Unix, only where nothing is at `name`:
     /// whole, to a new temporary name beside it, then linked to `name`, which refuses a name that
     /// exists — a file, or a link, which is never followed. Two runs that write the same name
@@ -857,6 +870,28 @@ mod tests {
             names_in(dir.path()),
             ["state.json", "state.json.0123456789abcdef~", "state.json~"]
         );
+    }
+
+    /// `replace` stages under a name of its own each time, so a leftover of the fixed name is
+    /// nobody's to clear and a second replace does not touch it.
+    #[test]
+    fn replace_stages_under_a_name_of_its_own_and_leaves_no_temporary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = HeldDir::open(dir.path()).expect("held");
+        std::fs::write(dir.path().join("entry"), b"old").expect("write");
+        std::fs::write(dir.path().join("entry~"), b"in flight").expect("write");
+
+        held.replace("entry", b"new", 0o600).expect("replace");
+        assert_eq!(
+            std::fs::read(dir.path().join("entry")).expect("read"),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("entry~")).expect("read"),
+            b"in flight",
+            "another run's staged file is left alone"
+        );
+        assert_eq!(names_in(dir.path()), ["entry", "entry~"]);
     }
 
     /// `write`, which replaces, still stages under its fixed name and clears a leftover there.
