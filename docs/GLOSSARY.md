@@ -48,8 +48,9 @@ terms below are the ones it uses without defining.
 - **Space** — a named grouping of Hosts on one Server, into which an enrolment
   key admits new Hosts. A Space is not a separate Fleet or a tenant-isolation
   boundary. _Avoid:_ tenant, fleet (for a Space).
-- **Enrolment key** — a reusable secret associated with one Space, presented
-  as the initial access token when registering a Host. _Avoid:_ bootstrap
+- **Enrolment key** — the one reusable initial registration key current to a
+  Space. Replacing it invalidates the old key for new registrations while
+  enrolled Hosts keep their client credentials and tokens. _Avoid:_ bootstrap
   certificate, access token (for the enrolment key).
 - **Enrolment** — the exchange in which a host uses its Space's enrolment key
   to register as an OAuth client and obtain client credentials and an access
@@ -63,12 +64,12 @@ terms below are the ones it uses without defining.
   authenticate to the Server's Agent plane. It is distinct from the enrolment
   key and client secret. _Avoid:_ enrolment key, client secret (for the token).
 - **State file** (`state.json`) — the file in the Client's state directory that
-  `enrol` writes once: the Server's base URL, the Space, the Device ID, the
-  client secret and the access token. A Host without it is not enrolled and
-  runs nothing. _Avoid:_ config, credentials file.
-- **Revoke** — the Client's local command that forgets the Host: it deletes the
-  State file and every other piece of host state, wherever configured, and
-  never contacts the Server. A new enrolment makes a new Host. _Avoid:_
+  `enrol` creates and token replacement updates: the Server's base URL, the
+  Space, the Device ID, the client secret and the access token. A Host without
+  it is not enrolled and runs nothing. _Avoid:_ config, credentials file.
+- **Reset** — the Client's local action that removes the Host's local identity
+  and state. It does not contact the Server, whose credentials for the Host
+  remain valid; a subsequent enrolment makes a new Host. _Avoid:_ Revoke,
   unenrol, deregister (nothing is removed at the Server).
 - **Rollout** — the explicit act that releases a Deployment to Agents and pins
   what each receives. _Avoid:_ publish, push, deploy.

@@ -60,10 +60,10 @@ outage.
 One Client binary **supervises** local processes — and because every supervisor
 also listens on loopback for OpAMP, a Collector carrying its own OpAMP client
 reports _to its own supervisor_ rather than being watched from the outside.
-Each Client connects directly to the Server; relaying other Clients through a
-Gateway is deferred. The Server sees only Agents distinguished by their
-identity, never by the connection that carried them, so several Agents can
-share an upstream connection without sharing their configuration or identity.
+Each Client connects directly to the Server. The Server sees only Agents
+distinguished by their identity, never by the connection that carried them, so
+several Agents can share an upstream connection without sharing their
+configuration or identity.
 
 The Server exposes a stable, OpenAPI-described REST API and carries only a
 rudimentary user interface of its own, so any external portal can integrate it
@@ -99,8 +99,7 @@ closes the loop and widens only as the protocol and its agents actually allow.
   **Supervisor Mode**, managing local processes and connecting directly to the
   Server. Serving a Collector that carries its own OpAMP client is intrinsic
   to supervision: a Supervisor always exposes a **Supervisor Endpoint** on
-  loopback, whether or not anything connects to it. Gateway Mode is deferred,
-  not a second role the current Client can enable.
+  loopback, whether or not anything connects to it.
 - **Hexagonal core, plugins at the edge.** The supervision domain sits at the
   centre; **Ports** abstract the Server-facing side and the managed-process
   side; **Plugins** are the adapters that implement concrete process types. A
@@ -127,18 +126,21 @@ closes the loop and widens only as the protocol and its agents actually allow.
   operator meets a refusal that says what to fix, not a warning. Every
   connection that leaves the host is TLS 1.3; plaintext is accepted on the
   loopback alone, and the Client verifies the certificate of the reverse proxy
-  in front of the Server. A host enrols
-  with its Space's reusable enrolment key through OAuth 2.0 dynamic client
-  registration (RFC 7591), without an approval window or individual operator
-  approval. Its client credentials obtain an opaque access token through the
-  client-credentials grant (RFC 6749), and its Agents authenticate with that
-  token using OpAMP's HTTP authorization header (RFC 6750). Fleet admission
-  uses no client certificates or CSR flow. Software is installed only when it
-  is signed with a key the operator holds and fetched from the Server. No
-  vulnerability can be ruled out, so the project shrinks the chance of one and
-  the damage it can do: every input from the network is bounded before it is
-  parsed, the parsers are fuzzed, and the dependencies are checked before they
-  are merged.
+  in front of the Server. Each Space has one current reusable enrolment key,
+  shared by the hosts enrolling into it, valid for a new registration only
+  while it is that Space's current key; replacing it invalidates the old key
+  for future registrations and leaves enrolled Hosts' client credentials and
+  tokens untouched. A host enrols with that key through OAuth 2.0 dynamic
+  client registration (RFC 7591), without an approval window or individual
+  operator approval; afterwards its own client credentials obtain an opaque
+  access token through the client-credentials grant (RFC 6749), and its
+  Agents authenticate with that token using OpAMP's HTTP authorization header
+  (RFC 6750). Fleet admission uses no client certificates or CSR flow.
+  Software is installed only when it is signed with a key the operator holds
+  and fetched from the Server. No vulnerability can be ruled out, so the
+  project shrinks the chance of one and the damage it can do: every input
+  from the network is bounded before it is parsed, the parsers are fuzzed,
+  and the dependencies are checked before they are merged.
 - **Close the loop before widening it.** A working control loop — configure,
   apply, report back — for one managed process comes first. Targeting a subset
   of the fleet and updating an agent's software are core goals, built on top of
@@ -219,8 +221,7 @@ Use these exact words in code, comments, and documentation.
 - **Supervisor Mode** — the Client runs **Supervisor** instances that manage
   local processes and reports their Agents directly to the Server. Every
   Supervisor also exposes a **Supervisor Endpoint** — that is part of what a
-  Supervisor _is_, not a separate mode to enable. Gateway Mode is not available
-  in the current enrolment model.
+  Supervisor _is_, not a separate mode to enable.
 - **Supervisor Endpoint** — the OpAMP endpoint a Supervisor exposes on the
   loopback interface so that a Managed Process carrying an OpAMP client of its
   own can report to it. It exists because such a client — notably the
@@ -410,12 +411,16 @@ Use these exact words in code, comments, and documentation.
     observation, is what makes it visible in the fleet. What the host is stays
     the Supervisor's and the operator's to state.
 17. **G-17** — **The connection is secured and the Host is identified.** A Host
-    enrols with its Space's valid enrolment key, obtains client credentials
+    enrols with its Space's current enrolment key, obtains client credentials
     and an opaque bearer access token, and authenticates its Client-to-Server
     requests with that token over TLS 1.3. The Server verifies the token at
     admission and identifies the Host by its `client_id`; each Agent retains
-    its own `instance_uid`. Replacing the token invalidates the previous one
-    and ends sessions admitted with it without changing the Host's identity.
+    its own `instance_uid`. A token admits only as the one currently issued
+    to that Host and, where a lifetime was configured at issue, unexpired; a
+    lifetime is optional and defaults to none. Expiry is checked at admission
+    and does not by itself close an established WebSocket session. Replacing
+    the token invalidates the previous one and ends sessions admitted with it
+    without changing the Host's identity.
 18. **G-18** — **One Configuration serves many hosts.** A Configuration declares
     parameters and blocks. The Server fills in its Server-side parameters per
     Agent and validates every value against its declared type, so a value that
@@ -433,10 +438,11 @@ Use these exact words in code, comments, and documentation.
 1. **Q-1** — **Secure by default.** The Server speaks plain HTTP and is reached
    only through a reverse proxy that terminates TLS 1.3; a Server configuration
    that carries TLS settings is refused at startup, naming the setting. The
-   Server admits an Agent only under its Host's active, unexpired access token.
-   Whatever its configuration, a Client sends no credential, configuration or
-   package unencrypted beyond the loopback, and an Agent installs no package
-   without a valid signature.
+   Server admits an Agent only under the access token currently issued to its
+   Host, unexpired where a lifetime was configured; a lifetime is optional
+   and defaults to none. Whatever its configuration, a Client sends no
+   credential, configuration or package unencrypted beyond the loopback, and
+   an Agent installs no package without a valid signature.
 2. **Q-2** — **Untrusted input is bounded and fuzzed.** Every parser that reads
    bytes from the network or from a downloaded artifact enforces its size limit
    before it allocates, and has a fuzz target that runs in CI.
@@ -471,3 +477,7 @@ Use these exact words in code, comments, and documentation.
   are real needs deferred rather than half-built. On the Agent plane one bound
   holds: a Host receives only the configurations and packages released to an
   Agent it speaks for. Authenticating another Host never grants that access.
+- **Incident response.** Replacing a Space enrolment key is a product
+  capability. Investigating and remediating Clients already enrolled with a
+  leaked key, and remediating a compromised Host State file, are manual
+  incident response outside product support.
