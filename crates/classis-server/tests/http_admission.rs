@@ -95,6 +95,7 @@ async fn post(
 /// Over plain HTTP no report is admitted without a token the Server issued: none at all, a token it
 /// never issued, or another scheme is refused `401` with a Bearer challenge. Nothing admits an
 /// unauthenticated Agent.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn the_agent_plane_refuses_a_request_without_a_valid_token() {
     let served = served(None).await;
@@ -120,6 +121,7 @@ async fn the_agent_plane_refuses_a_request_without_a_valid_token() {
 
 /// The package download is on the same plane and is refused the same way: without a token nothing
 /// is served, and the refusal does not say whether the package exists.
+/// Verifies: Q-1
 #[tokio::test]
 async fn the_package_download_asks_for_a_token_too() {
     let served = served(None).await;

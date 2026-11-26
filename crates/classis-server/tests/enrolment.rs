@@ -298,6 +298,7 @@ const NOT_ADMITTED: &str = "Bearer error=\"invalid_token\"";
 /// A valid key enrols at once; an unknown key, a key of an unknown Space and text that is no key
 /// do not; a rotated key stops enrolling and the new one enrols, and a host enrolled under the old
 /// key keeps its client and its token.
+/// Verifies: G-17
 #[tokio::test]
 async fn a_valid_key_enrols_and_an_unknown_or_replaced_key_does_not() {
     let rig = rig(Setup::default()).await;
@@ -368,6 +369,7 @@ fn uuid_v7(id: &str) {
 // ---- Tokens ----
 
 /// A new token makes the previous one invalid, on every route.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn a_new_token_makes_the_previous_one_invalid() {
     let rig = rig(Setup::default()).await;
@@ -394,6 +396,7 @@ async fn a_new_token_makes_the_previous_one_invalid() {
 }
 
 /// With `token_lifetime_secs` unset a token has no `expires_in`, and with a finite one it has.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn a_token_expires_in_what_the_lifetime_says_and_never_by_default() {
     let never = rig(Setup::default()).await;
@@ -426,6 +429,7 @@ async fn a_token_expires_in_what_the_lifetime_says_and_never_by_default() {
 
 /// An expired token and a replaced one are refused on `/v1/opamp` over both transports and on the
 /// download route, each time with `invalid_token`.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn an_expired_or_replaced_token_is_refused_on_every_admitted_route() {
     let rig = rig(Setup {
@@ -474,6 +478,7 @@ async fn an_expired_or_replaced_token_is_refused_on_every_admitted_route() {
 
 /// An open WebSocket session outlives its token's expiry, and is closed with 1008 when the token is
 /// replaced; another host's session is not touched.
+/// Verifies: G-17
 #[tokio::test]
 async fn an_open_session_outlives_its_tokens_expiry_and_ends_with_1008_when_it_is_replaced() {
     let rig = rig(Setup {
@@ -536,6 +541,7 @@ async fn an_open_session_outlives_its_tokens_expiry_and_ends_with_1008_when_it_i
 
 /// The Agent plane completes an OpAMP exchange on both transports with a bearer token and no
 /// client certificate: the Server speaks plain HTTP and reads none.
+/// Verifies: G-17
 #[tokio::test]
 async fn the_agent_plane_completes_an_exchange_without_a_client_certificate() {
     let rig = rig(Setup::default()).await;
@@ -1077,6 +1083,7 @@ async fn the_routes_send_the_bearer_challenges_of_clauses_2_and_6() {
 /// limit, no back-off, no package offering — answers a request without a credential at the OpAMP
 /// endpoint (both transports) and at the download with `401` and the realm's challenge: there is no
 /// open path, whatever else the state carries.
+/// Verifies: Q-1
 #[tokio::test]
 async fn the_agent_plane_as_built_for_production_has_no_open_path() {
     opamp::tls::install_ring_provider();
