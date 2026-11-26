@@ -414,7 +414,10 @@ that alters one edits its line here ([`AGENTS.md`
   `/v1/enrol`), obtains an opaque access token with the client-credentials
   grant (at `/v1/token`), and every Agent-plane request is admitted by that
   bearer token alone; nothing admits an Agent without one. The Server keeps
-  only hashes of client secrets and tokens.
+  only hashes of client secrets and tokens. It keeps each Space's enrolment key
+  whole, so that the enrol command can be printed again later; a stored Space
+  is therefore a secret, held in owner-only files or behind the database's
+  own access control.
 - There are no client certificates: `[tls]`, `[rest.tls]`, `[client_ca]` and
   `[enrolment]` are refused at startup.
 - The Client speaks TLS 1.3 alone and plaintext only to the loopback; a
