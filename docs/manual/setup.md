@@ -134,6 +134,8 @@ proxy](server.md#plain-http-behind-a-reverse-proxy)): the Server holds no
 certificate. Keep the
 Server's ports reachable by the proxy alone: the Server counts a peer by the
 left-most `X-Forwarded-For` entry, which anyone who reaches the port can write.
+Configure the proxy to discard the incoming header and set it to the verified
+client address, not append to it, so a client cannot bypass peer limits.
 Then write `/etc/classis-server/server.toml`, giving every path absolutely:
 
 ```toml
@@ -146,6 +148,11 @@ data_dir = "/var/lib/classis-server/data"
 # How long an access token is accepted, in seconds. 0, the default, is for ever: a token
 # ends only when its host is issued a new one.
 token_lifetime_secs = 0
+
+# Optional. The base URL hosts reach the Server at through its proxy; classis-cli's
+# enrol-command prints its install command against it. Without it, enrol-command refuses and
+# every host is enrolled by hand. https:// anywhere, http:// only to 127.0.0.1 or ::1.
+# public_url = "https://fleet.example.com"
 
 # The Operator plane: REST API, API docs and UI. On the loopback it needs no password.
 [rest]
@@ -355,14 +362,15 @@ cle1_lab_…
 
 The key is all it prints. `space list` prints the Space names, and
 `space rotate-key lab` replaces a key and prints the new one; nothing shows the
-key of a Space that already exists. No REST route does any of this. The CLI is
-not in the Server's image — build it from a checkout with
-`cargo build --release -p classis-admin` — and whoever runs it must be able to
-open the socket, so root or the Server's own account
-([The operator's socket](server.md#the-operators-socket)). `enrol-command`,
-which would print the install-and-enrol command for a new host, refuses on this
-Server: where the public endpoint hosts reach it at is undecided. The rest of
-this step is what `enrol` does with a key.
+key of a Space that already exists. No REST route does any of this. Whoever runs
+the CLI must be able to open the socket, so root or the Server's own account
+([The operator's socket](server.md#the-operators-socket)); the CLI ships inside
+the Server's image on Linux (`docker exec classis-server
+/usr/local/bin/classis-cli …`), and from a checkout build it with `cargo build
+--release -p classis-admin`. `enrol-command` prints the one command that installs
+a host and enrols it, but only when `public_url` names the address hosts reach
+the Server at (see [step 2](#2-configure-and-start-the-server)); without it the
+command refuses. The rest of this step enrols by hand, which needs neither.
 
 A key reads `cle1_<space>_<secret>`: the prefix, the Space's name, and a secret
 of 43 characters. The name is 1 to 32 letters, digits and underscores, starting

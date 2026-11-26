@@ -68,6 +68,14 @@ data_dir = "fleet-data"
 # root-owned /run; this development path beside data_dir is writable without root.
 admin_socket = "fleet-run/admin.sock"
 
+# The public URL hosts reach the Server at — the base classis-cli's enrol-command prints its install
+# command against, and what an operator types into `classis enrol <url> <key>` on a new host.
+# Optional; without it enrol-command refuses and every host is enrolled by hand. https:// anywhere,
+# http:// only to 127.0.0.1 or ::1, and keep the path a proxy mounts the Server under. No user,
+# password, query or fragment. The Server itself still speaks plain HTTP: the proxy at that address
+# terminates TLS.
+# public_url = "https://fleet.example/classis"
+
 # The largest OpAMP message accepted or sent, on either transport and in either direction. The
 # protocol requires the limit and recommends this default; a fleet of small status reports runs
 # comfortably on far less. An oversized request is answered 413, an oversized WebSocket message

@@ -458,6 +458,7 @@ fn the_sbom_job_writes_one_sbom_per_program_and_target_with_a_pinned_tool() {
         "keep crates/classis-agent supervisor \"${ARTIFACT}_${v}_${os}_${arch}\"",
         "if [ \"$tool\" = true ]; then\n              \
          keep crates/classis-tools classisctl \"${OPERATOR_TOOL}_${v}_${os}_${arch}\"",
+        "keep crates/classis-admin classis-cli \"classis-cli_${v}_${os}_${arch}\"",
         "git diff --exit-code Cargo.lock",
     ] {
         assert!(write.contains(line), "{line} in {write}");
@@ -485,7 +486,9 @@ fn the_sbom_job_writes_one_sbom_per_program_and_target_with_a_pinned_tool() {
     assert_eq!(rows, matrix);
     let tools = matrix.iter().filter(|row| row.ends_with(" true")).count();
     let servers = matrix.iter().filter(|row| row.contains(" linux ")).count();
-    assert_eq!(matrix.len() + tools + servers, 11, "eleven SBOMs");
+    // The Server and the CLI each add one on the two Linux rows alone, the rows whose image ships
+    // them both.
+    assert_eq!(matrix.len() + tools + 2 * servers, 13, "thirteen SBOMs");
 
     // Uploaded with their checksums, which publish folds into SHA256SUMS.
     let upload = sbom
@@ -599,13 +602,16 @@ fn the_containerfile_copies_the_release_binary_onto_a_pinned_distroless_base_and
         "not a SHA-256 digest: {digest}"
     );
 
-    // Clause 1: nothing runs, and the one thing copied is the binary the release built.
+    // Clause 1: nothing runs, and what is copied is the pair of binaries the release built.
     for absent in ["RUN", "ADD", "HEALTHCHECK", "SHELL", "ONBUILD"] {
         assert!(all(&instructions, absent).is_empty(), "{absent} in {text}");
     }
     assert_eq!(
         all(&instructions, "COPY"),
-        ["--chmod=0755 server-linux-${TARGETARCH} /usr/local/bin/server"]
+        [
+            "--chmod=0755 server-linux-${TARGETARCH} /usr/local/bin/server",
+            "--chmod=0755 classis-cli-linux-${TARGETARCH} /usr/local/bin/classis-cli",
+        ]
     );
     assert_eq!(
         all(&instructions, "ENTRYPOINT"),
@@ -716,7 +722,7 @@ fn both_linux_rows_build_the_server_and_assert_its_version() {
     assert!(agrees.contains("exit 1"), "{agrees}");
 
     // Uploaded under the name the Containerfile copies, with no checksum: it is not an asset.
-    let stage = step(&workflow, "Stage the Server for the image");
+    let stage = step(&workflow, "Stage the Server and the CLI for the image");
     assert!(
         stage.contains(
             "cp \"target/${{ matrix.target }}/release/server\" \"server-linux-${{ matrix.arch }}\""
@@ -732,14 +738,84 @@ fn both_linux_rows_build_the_server_and_assert_its_version() {
     assert!(!upload.contains(".sha256"), "{upload}");
 }
 
+/// The CLI ships the way the Server does and nowhere else: built on each Linux row, its version
+/// asserted where it ran, staged into the Server's own artifact so one download carries both into
+/// the image, and asked its version again from the built image.
 #[test]
-fn the_sbom_job_describes_the_server_for_both_linux_targets() {
+fn the_cli_ships_in_the_server_image_beside_the_server() {
+    let workflow = workflow();
+    let build = step(&workflow, "Build the CLI");
+    assert!(build.contains("if: matrix.os == 'linux'"), "{build}");
+    assert!(
+        build.contains(
+            "cargo build --release -p classis-admin --bin classis-cli --target ${{ matrix.target }} --locked"
+        ),
+        "{build}"
+    );
+
+    let agrees = step(&workflow, "The CLI agrees with the release");
+    assert!(agrees.contains("if: matrix.os == 'linux'"), "{agrees}");
+    assert!(
+        agrees.contains("./target/${{ matrix.target }}/release/classis-cli --version"),
+        "{agrees}"
+    );
+    assert!(
+        agrees.contains("${{ needs.version.outputs.full }}"),
+        "{agrees}"
+    );
+    assert!(agrees.contains("exit 1"), "{agrees}");
+
+    let stage = step(&workflow, "Stage the Server and the CLI for the image");
+    assert!(
+        stage.contains(
+            "cp \"target/${{ matrix.target }}/release/classis-cli\" \"classis-cli-linux-${{ matrix.arch }}\""
+        ),
+        "{stage}"
+    );
+    let upload = workflow
+        .split("- uses: actions/upload-artifact@")
+        .find(|block| block.contains("name: server-linux-"))
+        .and_then(|block| block.split("\n      - ").next())
+        .expect("an upload of the Server");
+    assert!(
+        upload.contains("            classis-cli-linux-${{ matrix.arch }}\n"),
+        "{upload}"
+    );
+
+    let text = containerfile();
+    let instructions = instructions(&text);
+    assert!(
+        all(&instructions, "COPY")
+            .contains(&"--chmod=0755 classis-cli-linux-${TARGETARCH} /usr/local/bin/classis-cli"),
+        "{text}"
+    );
+
+    // The image's own CLI, at the release's version, with no Server in front of it.
+    let check = step(job(&workflow, "image"), "The image checks out");
+    let run = "docker run --rm --entrypoint /usr/local/bin/classis-cli \"$img\" --version";
+    assert!(check.contains(run), "{check}");
+    assert!(
+        check.contains("if [ \"$cli\" != \"$expected\" ]"),
+        "{check}"
+    );
+}
+
+#[test]
+fn the_sbom_job_describes_the_server_and_the_cli_for_both_linux_targets() {
     let workflow = workflow();
     let write = step(job(&workflow, "sbom"), "Write the SBOMs");
     assert!(
         write.contains(
             "if [ \"$os\" = linux ]; then\n              \
              keep crates/classis-server server \"server_${v}_${os}_${arch}\""
+        ),
+        "{write}"
+    );
+    // The CLI's SBOM rides the same branch: the image is where it ships, on Linux alone.
+    assert!(
+        write.contains(
+            "keep crates/classis-server server \"server_${v}_${os}_${arch}\"\n              \
+             keep crates/classis-admin classis-cli \"classis-cli_${v}_${os}_${arch}\""
         ),
         "{write}"
     );
@@ -970,9 +1046,13 @@ fn the_notes_provision_the_operator_socket_and_terminate_tls_at_the_proxy() {
     assert!(notes.contains("-v /var/lib/classis-run:/run/classis"));
     assert!(notes.contains("reverse proxy that terminates TLS"));
     assert!(!notes.contains("the Server requires TLS"));
-    assert!(notes.contains("is not included in the Server image or release"));
-    assert!(notes
-        .contains("sudo ./target/release/classis-cli --socket /var/lib/classis-run/admin.sock"));
+    // The CLI ships inside the image, so the notes run it there, on the socket mounted above: no
+    // host build and no host path.
+    assert!(notes.contains("ships in the image beside the Server"));
+    assert!(
+        notes.contains("docker exec classis-server /usr/local/bin/classis-cli space create lab")
+    );
+    assert!(!notes.contains("./target/release/classis-cli"), "{notes}");
     assert!(notes.contains("user-namespace remapping"));
 }
 

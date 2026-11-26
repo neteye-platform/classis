@@ -1,6 +1,7 @@
 //! `classis-admin` — the operator's commands for Spaces: the program `classis-cli`, and
-//! the socket server the Server answers its requests on. The crate depends on no other Classis
-//! crate; the Server reaches it through the `Spaces` port.
+//! the socket server the Server answers its requests on. Its only other Classis dependency is
+//! `classis-core`, for the version this build reports; the Server reaches it through the `Spaces`
+//! port.
 
 #![forbid(unsafe_code)]
 

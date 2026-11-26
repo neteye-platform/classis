@@ -15,13 +15,30 @@ its tag exists.
 
 - **`classis-cli`, the operator's commands for Spaces**, which the Server
   answers over a local Unix socket: `space create`, `space list` and
-  `space rotate-key`; `enrol-command` refuses until where hosts reach the Server
-  publicly is decided. The Server binds that socket on every start, at the new
-  `server.toml` key `admin_socket`, default `/run/classis/admin.sock`. **Before
-  upgrading:** where the Server does not run as root, set `admin_socket` to a
-  path its account can write or provision that directory, or the Server exits at
-  startup naming the socket. The program is in no release asset and not in the
-  Server's image.
+  `space rotate-key`, and `enrol-command`, which prints the one command that
+  installs a host and enrols it (against `public_url`; it refuses while that key
+  is unset). `--version` prints this build's version with no Server in front of
+  it. The Server binds that socket on every start, at the new `server.toml` key
+  `admin_socket`, default `/run/classis/admin.sock`. **Before upgrading:** where
+  the Server does not run as root, set `admin_socket` to a path its account can
+  write or provision that directory, or the Server exits at startup naming the
+  socket. `classis-cli` ships inside the Server's image on Linux
+  (`/usr/local/bin/classis-cli`, run with `docker exec`); it is in no release
+  asset.
+- **`server.toml` key `public_url`** — the base URL hosts reach the Server at
+  through its proxy, which `enrol-command` prints its install command against.
+  Optional; without it that command refuses, as the Server never guesses its own
+  public address. `https://` anywhere, `http://` only to a loopback IP
+  literal; a reverse-proxy path prefix is kept, user, password, query and
+  fragment refused. The Server still speaks plain HTTP; its proxy terminates
+  TLS.
+- **A host can install the Client from a URL.** On the Agent plane, outside
+  bearer admission, the Server serves `GET /v1/install.sh` and `/v1/install.ps1`
+  (compiled-in scripts) and `GET /v1/install/{os}/{arch}` — the Client archive of
+  the release this Server is built from, served only when that signed `supervisor`
+  package is in the store. **Before bootstrapping a host this way:** upload this
+  release's Client archive and its verified `.sig` to
+  `supervisor@<server-version>`, or the archive route answers `404`.
 
 ### Changed
 

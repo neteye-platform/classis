@@ -209,11 +209,11 @@ here).
   runs only once it is enrolled (`supervisor enrol <base-url> <key>`, with the
   enrolment key of a Space); create one and print its key with `cargo run -p
   classis-admin -- --socket .dev-pki/admin.sock space create lab`. Its
-  `enrol-command` refuses: the public endpoint hosts reach the Server at is
-  undecided. The VS Code launch configurations run the script when
-  `.dev-pki/` has no configuration yet. An older `.dev-pki/server.toml` needs
-  `admin_socket` set to the absolute path of `.dev-pki/admin.sock` before the
-  Server can use that socket.
+  `enrol-command` prints the install one-liner only when that `server.toml` sets
+  `public_url`; unset, it refuses. The VS Code launch configurations run the
+  script when `.dev-pki/` has no configuration yet. An older
+  `.dev-pki/server.toml` needs `admin_socket` set to the absolute path of
+  `.dev-pki/admin.sock` before the Server can use that socket.
 - **Run the Server:**
   `cargo run -p classis-server -- --config .dev-pki/server.toml`
 - **Run the Client:**
@@ -274,12 +274,13 @@ The **Server** ships as a container image and nowhere else:
 `ghcr.io/neteye-platform/classis-server:<version>` for `linux/amd64` and
 `linux/arm64`, built by
 [`packaging/container/Containerfile`](packaging/container/Containerfile) from
-the Server binaries the release built and checked, on a distroless base pinned
-by digest, with no shell, running as UID 65532. The release pushes it by digest,
-attests the digest, verifies it, and only then tags it with the version; there
-is no `latest` tag, and the release notes name the digest to deploy. Its SBOMs
-are `server_<version>_linux_<arch>.cdx.json` beside the other assets. Check an
-image with `gh attestation verify
+the Server binary and the operator's `classis-cli` the release built and checked,
+on a distroless base pinned by digest, with no shell, running as UID 65532. The
+release pushes it by digest, attests the digest, verifies it, and only then tags
+it with the version; there is no `latest` tag, and the release notes name the
+digest to deploy. Its SBOMs — `server_<version>_linux_<arch>.cdx.json` and
+`classis-cli_<version>_linux_<arch>.cdx.json` — sit beside the other assets.
+Check an image with `gh attestation verify
 oci://ghcr.io/neteye-platform/classis-server@<digest> --repo
 neteye-platform/classis --signer-workflow
 neteye-platform/classis/.github/workflows/release.yml`; running it is in [the

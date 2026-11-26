@@ -263,8 +263,9 @@ impl PackageOffering {
 }
 
 /// The **Agent plane**: the OpAMP endpoint and the package download route beside it,
-/// the routes that enrol a host and issue its token, and the bearer admission that guards the first
-/// two, with the back-off round all of them.
+/// the routes that enrol a host and issue its token, the routes a host installs the Client from
+/// before it has one, and the bearer admission that guards the first two, with the back-off round
+/// all of them.
 ///
 /// The download lives here rather than with the rest of `/api/v1` because the split between the
 /// two planes is by *audience*, not by path: this route is the one an Agent calls, and its
@@ -272,11 +273,17 @@ impl PackageOffering {
 ///
 /// The plane never fails open: it is built from an [`Enrolment`](enrolment::Enrolment) or not at
 /// all, and every request to the OpAMP endpoint or the download route is admitted by its Bearer
-/// credential.
+/// credential. What stands outside that admission answers only by what it carries — an enrolment
+/// key, a client secret — or by nothing at all, which is the install routes: a host that has not
+/// enrolled yet has no token, and they give out only what this build fixes. They are no cheaper to
+/// serve than a package download, so they draw on the same rate limit — with no token to name a
+/// host, on the bucket of the peer address.
 pub fn agent_app(state: Arc<AppState>, enrolment: Arc<enrolment::Enrolment>) -> Router {
-    // `/v1/enrol` and `/v1/token` authenticate by what they carry (a key, a client secret), so
-    // they are not behind bearer admission; the back-off round all of them counts the refusals.
-    let routes = transport::admit(agent_routes(state), enrolment.clone())
+    // `/v1/enrol`, `/v1/token` and the install routes authenticate by what they carry (a key, a
+    // client secret) or by nothing, so they are not behind bearer admission; the back-off round all
+    // of them counts the refusals.
+    let install_rate = state.agent_rate().cloned();
+    let routes = transport::admit(agent_routes(state.clone()), enrolment.clone())
         .route(
             enrolment::ENROL_PATH,
             oauth_registration::server::endpoint(enrolment.clone(), enrolment::REALM)
@@ -285,7 +292,11 @@ pub fn agent_app(state: Arc<AppState>, enrolment: Arc<enrolment::Enrolment>) -> 
         .route(
             enrolment::TOKEN_PATH,
             oauth_token::server::endpoint(enrolment.clone(), enrolment.lifetime()),
-        );
+        )
+        .merge(transport::limit_downloads(
+            api::install_router(state),
+            install_rate,
+        ));
     transport::back_off(routes, enrolment.throttle().clone())
 }
 

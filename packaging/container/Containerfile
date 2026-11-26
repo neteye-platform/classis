@@ -1,18 +1,22 @@
-# The Server's image: the binary the release built and checked, on a distroless glibc
-# base, and nothing else.
+# The Server's image: the binary the release built and checked, the operator's `classis-cli`
+# beside it, on a distroless glibc base, and nothing else.
 #
-# No `RUN`: the image copies a binary that already exists, so a multi-architecture build needs no
+# No `RUN`: the image copies binaries that already exist, so a multi-architecture build needs no
 # emulation and the image holds exactly the bytes the release tested for its version and described
-# by its SBOM. The build context is a directory holding `server-linux-<arch>` for each platform
-# built, `amd64` and `arm64`, as `docker buildx` names them. A developer builds it the same way:
+# by its SBOMs. The build context is a directory holding `server-linux-<arch>` and
+# `classis-cli-linux-<arch>` for each platform built, `amd64` and `arm64`, as `docker buildx` names
+# them. A developer builds it the same way:
 #
 #     cargo build --release -p classis-server --bin server
-#     mkdir -p image && cp target/release/server image/server-linux-amd64
+#     cargo build --release -p classis-admin --bin classis-cli
+#     mkdir -p image
+#     cp target/release/server image/server-linux-amd64
+#     cp target/release/classis-cli image/classis-cli-linux-amd64
 #     docker buildx build --platform linux/amd64 --load -t classis-server:dev \
 #       -f packaging/container/Containerfile image
 #
 # The base carries glibc, libgcc_s, CA certificates and time zone data, and no shell and no package
-# manager. Debian 13's glibc is newer than the build runner's, so the binary built there loads. The
+# manager. Debian 13's glibc is newer than the build runner's, so a binary built there loads. The
 # tag is named for the reader and the digest is what is pulled; a new digest arrives by a reviewed
 # commit.
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de
@@ -33,6 +37,7 @@ LABEL org.opencontainers.image.title="classis-server" \
 # Owned by root and not writable by the account the Server runs as. `--chmod`, because a binary
 # that travelled as a workflow artifact has lost its executable mode.
 COPY --chmod=0755 server-linux-${TARGETARCH} /usr/local/bin/server
+COPY --chmod=0755 classis-cli-linux-${TARGETARCH} /usr/local/bin/classis-cli
 
 # Numeric, so nothing is looked up. Both planes listen above 1024, so no capability is needed.
 USER 65532:65532
@@ -50,6 +55,10 @@ WORKDIR /
 # its bearer token: reach the Agent port through the proxy alone. Off the loopback it refuses to
 # start without `[rest.auth]`, so this image started with nothing mounted names what is missing
 # and stops.
+#
+# `classis-cli` is run inside this container, not beside it: its default socket,
+# `/run/classis/admin.sock`, is the path the Server binds, so that directory needs a writable mount.
+
 ENV CLASSIS_SERVER__DATA_DIR=/var/lib/classis \
     CLASSIS_SERVER__LISTEN=0.0.0.0:4320 \
     CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321

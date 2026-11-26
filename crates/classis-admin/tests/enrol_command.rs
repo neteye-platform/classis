@@ -14,14 +14,14 @@ fn key() -> String {
 
 fn linux() -> String {
     format!(
-        "curl --proto '=https' --tlsv1.2 -fsSL {ENDPOINT}/install.sh | sudo sh -s -- --token '{}'",
+        "curl --proto '=https' --tlsv1.3 -fsS '{ENDPOINT}/v1/install.sh' | sudo sh -s -- --url '{ENDPOINT}' --key '{}'",
         key()
     )
 }
 
 fn windows() -> String {
     format!(
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm {ENDPOINT}/install.ps1))) -Token '{}'",
+        "[Net.ServicePointManager]::SecurityProtocol = 12288; & ([scriptblock]::Create((Invoke-RestMethod -Uri '{ENDPOINT}/v1/install.ps1' -MaximumRedirection 0))) -Url '{ENDPOINT}' -Key '{}'",
         key()
     )
 }
@@ -77,6 +77,25 @@ async fn the_command_carries_the_key_and_never_a_space() {
                 outcome.out
             );
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_key_is_an_argument_never_part_of_the_script_url() {
+    for os in ["linux", "windows"] {
+        let outcome = with_acme(&["enrol-command", "--space", "acme", "--os", os]).await;
+
+        assert_eq!(outcome.code, 0);
+        assert_eq!(outcome.out.matches(&key()).count(), 1, "{}", outcome.out);
+        let script_url = outcome
+            .out
+            .split_whitespace()
+            .find(|word| word.contains("/v1/install."))
+            .expect("the script URL");
+        assert!(
+            script_url.starts_with(&format!("'{ENDPOINT}/v1/install.")),
+            "{script_url}"
+        );
     }
 }
 

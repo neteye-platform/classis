@@ -235,11 +235,6 @@ The manual documents what runs today. These are designed, or partly built, and
 named here so you do not go looking for a setting that does not exist.
 [`docs/CONFORMANCE.md`](../CONFORMANCE.md) is the authority on all of it.
 
-- **`classis-cli enrol-command`** — the CLI's `space` commands answer over the
-  Server's admin socket
-  ([The operator's socket](server.md#the-operators-socket)), but
-  `enrol-command` refuses on this Server: where the public endpoint hosts reach
-  it at is undecided, so it has nothing to state in the command it prints.
 - **`tls` and `proxy` in connection settings** — a Server offering either is
   told, in its status report, that the Client dropped them.
 - **Custom messages** (`CustomCapabilities` / `CustomMessage`) — planned, not

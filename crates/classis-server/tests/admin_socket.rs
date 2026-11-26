@@ -16,6 +16,9 @@ use classis_server::Records;
 const NO_ENDPOINT: &str =
     "classis-cli: the public endpoint hosts reach the Server at is not configured yet\n";
 
+/// What `public_url` holds in a Server configured with one, path prefix and all.
+const PUBLIC_URL: &str = "https://neteye.example/neteye/classis";
+
 struct Outcome {
     code: u8,
     out: String,
@@ -30,6 +33,12 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    rig_at_endpoint(None)
+}
+
+/// The same, with the public URL its configuration was loaded with — `None` being a Server whose
+/// operator wrote no `public_url`.
+fn rig_at_endpoint(public_url: Option<&str>) -> Rig {
     let dir = tempfile::tempdir().expect("tempdir");
     let data = dir.path().join("data");
     classis_server::fs::open_data_dir(&data, true).expect("the data directory");
@@ -55,7 +64,10 @@ fn rig() -> Rig {
     let listener = bind(&socket).expect("the operator's socket");
     tokio::spawn(classis_admin::server::serve(
         listener,
-        Arc::new(AdminSpaces::new(enrolment.clone())),
+        Arc::new(AdminSpaces::new(
+            enrolment.clone(),
+            public_url.map(str::to_string),
+        )),
     ));
     Rig {
         enrolment,
@@ -176,6 +188,28 @@ async fn enrol_command_refuses_while_the_public_endpoint_is_not_configured() {
     assert_eq!(outcome.err, NO_ENDPOINT);
 }
 
+/// The configured `public_url`, prefix and all, reaches the printed command of the Server's own
+/// adapter over the real socket. The wording of the line is `classis-admin`'s to pin; what this
+/// pins is whose URL it carries.
+#[tokio::test(flavor = "multi_thread")]
+async fn enrol_command_prints_the_command_of_the_configured_public_url() {
+    let rig = rig_at_endpoint(Some(PUBLIC_URL));
+    assert_eq!(rig.cli(&["space", "create", "acme"]).await.code, 0);
+
+    let outcome = rig
+        .cli(&["enrol-command", "--space", "acme", "--os", "linux"])
+        .await;
+
+    assert_eq!(outcome.code, 0, "{}", outcome.err);
+    assert_eq!(outcome.err, "");
+    assert!(
+        outcome.out.contains(PUBLIC_URL),
+        "the base an operator wrote, prefix and all: {}",
+        outcome.out
+    );
+    assert!(outcome.out.contains(&rig.key_of("acme")), "{}", outcome.out);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn bind_creates_a_missing_parent_directory_owner_only() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -196,6 +230,47 @@ async fn bind_leaves_an_existing_directory_as_it_is() {
     let _listener = bind(&dir.path().join("admin.sock")).expect("binds");
 
     assert_eq!(mode(dir.path()), 0o755);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bind_refuses_a_directory_writable_by_other_accounts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).expect("chmod");
+    let socket = dir.path().join("admin.sock");
+
+    let error = bind(&socket).expect_err("an untrusted account can replace the socket");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(!socket.exists());
+    assert_eq!(mode(dir.path()), 0o777);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bind_refuses_a_private_directory_under_an_untrusted_ancestor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).expect("chmod");
+    let parent = dir.path().join("private");
+    std::fs::create_dir(&parent).expect("mkdir");
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    let socket = parent.join("admin.sock");
+
+    let error = bind(&socket).expect_err("an untrusted account can replace the directory");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(!socket.exists());
+    assert_eq!(mode(&parent), 0o700);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bind_does_not_create_directories_beneath_an_untrusted_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).expect("chmod");
+    let parent = dir.path().join("missing");
+
+    let error = bind(&parent.join("admin.sock")).expect_err("the ancestor is untrusted");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(!parent.exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]

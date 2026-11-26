@@ -27,9 +27,9 @@ name: Release
 # beside its archive.
 #
 # The Server ships as a multi-architecture image, `ghcr.io/neteye-platform/classis-server:<version>`,
-# built from packaging/container/Containerfile by copying the Server binaries the Linux rows built
-# and checked. `image` pushes it untagged; `publish` attests it, verifies it, and only then tags it
-# with the version.
+# built from packaging/container/Containerfile by copying the Server binary and the operator's
+# `classis-cli` that the Linux rows built and checked. `image` pushes it untagged; `publish` attests
+# it, verifies it, and only then tags it with the version.
 
 on:
   # A dry run: builds and packs every target, and neither signs nor publishes.
@@ -243,8 +243,9 @@ jobs:
           # The rows of the build matrix: target, os, arch, operator_tool. One run per target
           # writes `<bin>_bin.cdx.json` beside the Cargo.toml of every workspace member, one per
           # binary, with the default features the release builds with; the ones that ship are kept
-          # and the rest (the test stubs) are removed before the next target. The Server ships on
-          # Linux alone, in its image, and its SBOM is named after the binary in the image.
+          # and the rest (the test stubs) are removed before the next target. The Server and the
+          # operator's `classis-cli` ship on Linux alone, side by side in the image, and each SBOM
+          # is named after the binary it describes.
           while read -r triple os arch tool; do
             cargo cyclonedx --describe binaries --target "$triple" --format json --spec-version 1.5
             keep crates/classis-agent supervisor "${ARTIFACT}_${v}_${os}_${arch}"
@@ -253,6 +254,7 @@ jobs:
             fi
             if [ "$os" = linux ]; then
               keep crates/classis-server server "server_${v}_${os}_${arch}"
+              keep crates/classis-admin classis-cli "classis-cli_${v}_${os}_${arch}"
             fi
             rm -f crates/*/*_bin.cdx.json
           done <<'EOF'
@@ -320,6 +322,11 @@ jobs:
       - name: Build the Server
         if: matrix.os == 'linux'
         run: cargo build --release -p classis-server --bin server --target ${{ matrix.target }} --locked
+      # A target build: the operator's CLI, which ships in the image beside the Server and nowhere
+      # else.
+      - name: Build the CLI
+        if: matrix.os == 'linux'
+        run: cargo build --release -p classis-admin --bin classis-cli --target ${{ matrix.target }} --locked
       - name: The binary agrees with the name it will be given
         if: matrix.native
         run: |
@@ -348,16 +355,30 @@ jobs:
             echo "::error::this target's Server reports $reported, the release is $expected"
             exit 1
           fi
-      # Named as the Containerfile copies it, `server-linux-<arch>`. Not a release asset: no checksum
-      # joins SHA256SUMS, and the image is how it ships.
-      - name: Stage the Server for the image
+      - name: The CLI agrees with the release
         if: matrix.os == 'linux'
-        run: cp "target/${{ matrix.target }}/release/server" "server-linux-${{ matrix.arch }}"
+        run: |
+          reported=$(./target/${{ matrix.target }}/release/classis-cli --version | awk '{print $NF}')
+          expected='${{ needs.version.outputs.full }}'
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::this target's CLI reports $reported, the release is $expected"
+            exit 1
+          fi
+      # Named as the Containerfile copies them, `server-linux-<arch>` and `classis-cli-linux-<arch>`.
+      # Not release assets: no checksum joins SHA256SUMS, and the image is how they ship. One
+      # artifact per architecture, so the image job's download puts both binaries in its context.
+      - name: Stage the Server and the CLI for the image
+        if: matrix.os == 'linux'
+        run: |
+          cp "target/${{ matrix.target }}/release/server" "server-linux-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/classis-cli" "classis-cli-linux-${{ matrix.arch }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.os == 'linux'
         with:
           name: server-linux-${{ matrix.arch }}
-          path: server-linux-${{ matrix.arch }}
+          path: |
+            server-linux-${{ matrix.arch }}
+            classis-cli-linux-${{ matrix.arch }}
           if-no-files-found: error
       - name: Pack
         id: pack
@@ -526,12 +547,12 @@ jobs:
           path: ${{ env.STEM }}.tar.gz.sha256
           if-no-files-found: error
 
-  # The Server's image, built from the two binaries the Linux rows built and
-  # checked, by the Containerfile, which runs nothing — so neither platform needs emulation. The
-  # `amd64` image is checked here, on its own architecture; the `arm64` binary's version was
-  # asserted on its native runner, and the image copies it unchanged. A dry run stops after the
-  # check. A release pushes the image by digest and without a tag, and hands the index digest to
-  # `publish`, which tags it only once its attestation has verified.
+  # The Server's image, built from the Server binary and the operator's `classis-cli` that each
+  # Linux row built and checked, by the Containerfile, which runs nothing — so neither platform
+  # needs emulation. The `amd64` image is checked here, on its own architecture; the `arm64`
+  # binaries' versions were asserted on their native runner, and the image copies them unchanged.
+  # A dry run stops after the check. A release pushes the image by digest and without a tag, and
+  # hands the index digest to `publish`, which tags it only once its attestation has verified.
   image:
     needs: [version, build]
     runs-on: ubuntu-latest
@@ -591,6 +612,13 @@ jobs:
             exit 1
           fi
 
+          # The operator's CLI ships beside the Server, the same version and no Server needed.
+          cli=$(docker run --rm --entrypoint /usr/local/bin/classis-cli "$img" --version | awk '{print $NF}')
+          if [ "$cli" != "$expected" ]; then
+            echo "::error::the image's classis-cli reports $cli, the release is $expected"
+            exit 1
+          fi
+
           user=$(inspect '{{.Config.User}}')
           if [ "$user" != "65532:65532" ]; then
             echo "::error::the image runs as '$user', not 65532:65532"
@@ -618,7 +646,7 @@ jobs:
             echo "::error::/var/lib/classis is not owned by 65532"
             exit 1
           fi
-          echo "the image runs the Server ${reported} as 65532, with no shell"
+          echo "the image runs the Server ${reported} and classis-cli ${cli} as 65532, with no shell"
       - name: Push the image by digest
         id: push
         if: needs.version.outputs.publish == 'true'
@@ -922,8 +950,9 @@ jobs:
           ## The Server
 
           The Server ships as an image and nowhere else: the binary the release built and checked for
-          this version, on \`gcr.io/distroless/cc-debian13:nonroot\`, with no shell, running as UID
-          and GID 65532. Deploy it by its digest, not by its tag:
+          this version and the operator's \`classis-cli\` beside it, on
+          \`gcr.io/distroless/cc-debian13:nonroot\`, with no shell, running as UID and GID 65532.
+          Deploy it by its digest, not by its tag:
 
           \`\`\`console
           sudo install -d -m 0700 -o 65532 -g 65532 /var/lib/classis-run
@@ -943,16 +972,18 @@ jobs:
           \`[rest.auth]\` off the loopback. Mount every secret as a file. There is no
           \`HEALTHCHECK\`: probe \`4320\` over TCP. \`<stem>.cdx.json\` for
           \`server_${{ needs.version.outputs.version }}_linux_<arch>\` is the SBOM of the binary in
-          the image of that architecture; the base is named by its digest in the image's
+          the image of that architecture, and
+          \`classis-cli_${{ needs.version.outputs.version }}_linux_<arch>\` that of the CLI beside it;
+          the base is named by its digest in the image's
           \`org.opencontainers.image.base.digest\` annotation.
 
           The mount example assumes rootful Docker without user-namespace remapping. With a rootless
           or remapped runtime, create the socket directory with the mapped UID and GID instead.
-          \`classis-cli\` is not included in the Server image or release. Build it from a checkout
-          as described in \`docs/manual/server.md\`, then use the mounted socket from the host:
+          \`classis-cli\` ships in the image beside the Server, and the socket mount above puts the
+          socket at the path it looks for by default, so run it inside the container:
 
           \`\`\`console
-          sudo ./target/release/classis-cli --socket /var/lib/classis-run/admin.sock space create lab
+          docker exec classis-server /usr/local/bin/classis-cli space create lab
           \`\`\`
 
           ## Verifying a download

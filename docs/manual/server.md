@@ -108,11 +108,15 @@ is one deliberate line, `listen = "0.0.0.0:4320"`.
 | `/v1/token`                                    | Where a registered host asks for its access token, with its client credentials. `POST` only.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `/v1/opamp`                                    | The OpAMP endpoint. `GET` upgrades to WebSocket, `POST` is the plain-HTTP exchange — the same path serves both. Needs `Authorization: Bearer <access token>`.                                                                                                                                                                                                                                                                                                                                                   |
 | `/api/v1/packages/{agent_type}/{version}/file` | An artifact's bytes: the one `/api/v1` route that belongs to the Agents, because the `download_url` in a package offer is a path the Client resolves against _its own_ endpoint. It sits outside the Operator plane's `[rest.auth]` and, like `/v1/opamp`, needs the host's access token. A host is served only the artifact offered to one of its own Agents, and every other request is answered `404` ([A host fetches only what its Agents are offered](#a-host-fetches-only-what-its-agents-are-offered)). |
+| `/v1/install.sh`, `/v1/install.ps1`            | The two install scripts, served to a host that holds no credential yet — a host fetches one and pipes it to `sh`/PowerShell to install the Client and enrol it ([How a host joins the fleet](#how-a-host-joins-the-fleet)). `GET`; no token. Their bytes are compiled into the Server and identical for every host.                                                                                                                                                                                             |
+| `/v1/install/{os}/{arch}`                      | The Client archive of the release this Server is built from, fetched by those scripts. `GET`; no token. The platform is fixed by this build, never named by the caller; only the signed `supervisor` package the operator has uploaded for this version is served, and every other request — an unknown platform, no such artifact, an unsigned entry, no store — is one identical `404`.                                                                                                                       |
 
-The Agent plane asks no peer for a client certificate. `/v1/enrol` and
-`/v1/token` authenticate by what they carry, an enrolment key and a client
-secret; `/v1/opamp` and the download route admit a request by its access token,
-and answer one without a valid token `401` ([How a host joins the
+The Agent plane asks no peer for a client certificate. `/v1/enrol`, `/v1/token`
+and the install routes stand outside bearer admission — a host that has not
+enrolled has nothing to present — and authenticate by what they carry (an
+enrolment key, a client secret) or by nothing at all; `/v1/opamp` and the
+download route admit a request by its access token, and answer one without a
+valid token `401` ([How a host joins the
 fleet](#how-a-host-joins-the-fleet)).
 
 **The Operator plane** — `[rest] listen`, `127.0.0.1:4321` by default:
@@ -154,16 +158,19 @@ $ gh attestation verify oci://ghcr.io/neteye-platform/classis-server@sha256:<dig
     --signer-workflow neteye-platform/classis/.github/workflows/release.yml
 ```
 
-The image holds the binary the release built and checked for its version, on
+The image holds the binaries the release built and checked for its version — the
+Server and the operator's `classis-cli`, Linux only — on
 `gcr.io/distroless/cc-debian13:nonroot` pinned by digest: glibc, CA certificates
-and time zone data, and no shell and no package manager. Its SBOM is the release
-asset `server_<version>_linux_<arch>.cdx.json` for the image's architecture; the
-base's own packages are not in it and are named by the
+and time zone data, and no shell and no package manager. Its SBOMs are the
+release assets `server_<version>_linux_<arch>.cdx.json` and
+`classis-cli_<version>_linux_<arch>.cdx.json` for the image's architecture; the
+base's own packages are not in them and are named by the
 `org.opencontainers.image.base.digest` annotation.
 
 | Property                     | Value                                                                                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Entrypoint                   | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                      |
+| Operator CLI                 | `/usr/local/bin/classis-cli`, the same release build, Linux only; run it with `docker exec`                                                       |
 | User                         | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                  |
 | Data directory               | `/var/lib/classis`, a volume owned by `65532`                                                                                                     |
 | Operator's socket            | `/run/classis/admin.sock`, the default `admin_socket`; on a read-only root filesystem its directory must be a writable mount owned by `65532`     |
@@ -197,8 +204,18 @@ $ docker run -d --name classis-server --read-only \
 A bind mount for the data directory must be writable by UID `65532`; so must the
 one at `/run/classis`. The example assumes rootful Docker without user-namespace
 remapping. With a rootless or remapped runtime, create the socket directory with
-the mapped UID and GID instead. The image carries no `classis-cli`. To reach the
-socket from the host, build the CLI from a checkout and name the host path:
+the mapped UID and GID instead. The image carries `classis-cli` beside the
+Server, at `/usr/local/bin/classis-cli` (Linux only). Because the socket mount
+puts the socket at the path the CLI looks for by default, run it inside the
+container, where it speaks as UID `65532`, the Server's own account and the
+socket's owner:
+
+```sh
+docker exec classis-server /usr/local/bin/classis-cli space create lab
+```
+
+To reach the socket from the host instead, build the CLI from a checkout and name
+the host path:
 
 ```sh
 cargo build --release -p classis-admin
@@ -216,11 +233,14 @@ of the base, which has a shell, is for inspecting a problem locally; it is not
 published.
 
 To build the image yourself from a checkout, on a system whose glibc is no newer
-than Debian 13's, copy the binary under the name the Containerfile expects:
+than Debian 13's, copy both binaries under the names the Containerfile expects:
 
 ```console
 $ cargo build --release -p classis-server --bin server
-$ mkdir -p image && cp target/release/server image/server-linux-amd64
+$ cargo build --release -p classis-admin --bin classis-cli
+$ mkdir -p image
+$ cp target/release/server image/server-linux-amd64
+$ cp target/release/classis-cli image/classis-cli-linux-amd64
 $ docker buildx build --platform linux/amd64 --load -t classis-server:dev \
     -f packaging/container/Containerfile image
 ```
@@ -281,11 +301,17 @@ other variable configures the Server.
 | `max_agents`              | `100000`               | The most Agent records the fleet holds at once. A report bearing a **new** `instance_uid` past this ceiling is answered `Unavailable` rather than admitted, so an admitted peer minting fresh self-asserted UIDs cannot exhaust memory and disk; Agents already known keep reporting. The defence against an anonymous flood is [admission](#authentication) by client certificate; this is the backstop behind it. `0` is refused at startup.                                                                   |
 | `stale_after_secs`        | `90`                   | How long an Agent that declares `ReportsHeartbeat` may be silent before the fleet view marks it **stale**. Ignored when `[connection_offer]` names a heartbeat interval — then the budget is three of those. Only heartbeating Agents can go stale: one that promised no periodic report is never late.                                                                                                                                                                                                          |
 | `token_lifetime_secs`     | `0`                    | How long an access token is accepted after it is issued, in seconds. `0` — the default — means it never expires. A token ends when its client is issued a new one all the same ([How a host joins the fleet](#how-a-host-joins-the-fleet)).                                                                                                                                                                                                                                                                      |
+| `public_url`              | _(none)_               | The base URL hosts reach the Server at through its proxy — what `classis-cli enrol-command` prints its install command against, and what an operator types into `classis enrol <url> <key>`. Optional; without it `enrol-command` refuses, since the Server never guesses the address its proxy answers for.                                                                                                                                                                                                     |
 
 **`admin_socket`** defaults to `/run/classis/admin.sock`. It names the Unix
 socket used by `classis-cli`; a relative path resolves against the Server's
 working directory. See [The operator's socket](#the-operators-socket) for its
 permissions and startup behavior.
+
+**`public_url`** accepts `https://` anywhere, `http://` only to a loopback IP
+literal; a reverse-proxy path prefix is kept, and user, password, query and
+fragment are refused. The Server itself still speaks plain HTTP: the proxy at
+that address terminates TLS.
 
 ### `[rest]`
 
@@ -773,6 +799,40 @@ of it:
 On the host, `supervisor enrol <base-url> <key>` makes the first two requests
 and keeps what it receives in `state.json` ([the Client](client.md)). Nothing on
 the host states which Space it joins: the key names it.
+
+### The install one-liner
+
+`classis-cli enrol-command --space <name> --os <linux|windows>` prints a single
+command that installs the Client on a host and enrols it, so an operator pastes
+one line instead of fetching a package by hand. It prints the host's `curl`
+(Linux) or PowerShell one-liner that fetches `/v1/install.sh` or `/v1/install.ps1`
+from the Server's public endpoint and runs it with `--url <base>` and `--key
+<enrolment-key>`; the key is passed as an argument to `enrol`, never part of a
+URL, so it reaches no access log. `--with-key` prints the key alone on the line
+before the command.
+
+Two things stand behind it:
+
+- **`public_url` must be set** in `server.toml`. `enrol-command` prints its
+  command against the configured public URL; with `public_url` absent it refuses,
+  because the Server never guesses the address its proxy answers for. The `space`
+  commands answer regardless.
+- **The Server's own Client package must be uploaded first.** The scripts fetch
+  `/v1/install/{os}/{arch}`, which serves only the signed `supervisor` package of
+  the release this Server is built from. Upload that release's Client archive and
+  its verified `.sig` to `supervisor@<server-version>` before the first host
+  bootstraps, or the archive route answers `404` and no host installs.
+
+TLS is settled before the script runs: the host fetched it over TLS, verifying
+the Server against the trust the host already holds (a preprovisioned CA or the
+system roots), and the script neither provisions a CA nor relaxes a check. The
+install itself is the Client's own `service install` and `enrol`, identical to a
+native-package install — a host installed from a URL and one installed from a
+`.deb`/`.rpm`/`.msi` end up the same. It refuses a host that already has the
+service, where re-registration is `classis service install` and `classis enrol`,
+not a second delivery. The Client's later self-updates are verified by their
+signature against the compiled-in Package Roots, as always
+([Updating the Client itself](client.md#updating-the-client-itself)).
 
 ### The enrolment key
 
@@ -1761,12 +1821,21 @@ Beside the two listeners the Server answers the operator's `classis-cli` on a
 Unix domain socket: `admin_socket`, `/run/classis/admin.sock` by default, bound
 on every start. The Server targets Linux; a Windows build binds no socket.
 
-Whoever can open the socket **is** the operator; it has no password. The Server
-sets the socket to `0600`, owned by its own account, and creates a missing parent
-directory `0700`; an existing parent keeps its mode. The socket is created before
-its mode is set: with a permissive umask, another local user may connect in that
-interval if the parent is accessible. Use an owner-only `0700` parent directory
-or a restrictive umask such as `0077`.
+The Server sets the socket to `0600`, owned by its own account, and creates
+missing parent directories `0700`. An existing directory keeps its mode: the
+socket's parent must be owned by the Server's account or root and not writable
+by group or others. Its ancestors must also be owned by one of those accounts
+and not writable by group or others, except for sticky directories such as
+`/tmp`. Unsafe paths refuse startup rather than changing an existing directory.
+
+Before a byte of a request is read, the peer's account is taken from the
+connection's credentials and must be the Server's account or root — whose
+`sudo classis-cli` is how an operator who is not the Server's account reaches
+it; any other account is refused. The socket has no password of its own.
+
+The socket is created before its mode is set, so binding and `chmod` are not one
+atomic step. The protected directory prevents another account replacing the
+path, and the peer check refuses any connection from an unauthorized account.
 
 A socket an earlier run left at the path is replaced; a live socket is refused.
 Anything else standing there — a file, a directory, a symlink — is not the
@@ -1775,10 +1844,11 @@ also the answer a Server gets whose `admin_socket` it cannot write, in a
 container with a read-only root filesystem for one: no plane keeps running
 behind a refused socket, because the socket is how its Spaces are managed.
 
-Do not start two Servers with the same socket path: simultaneous replacement of
-a stale socket can race and leave one Server unreachable. If accepting a
-connection fails after startup, the socket stops answering while the two planes
-continue running; restart the Server to restore operator access.
+Do not start two Servers on the same socket path: simultaneous replacement of a
+stale socket can race and leave one unreachable. Once bound, a failed `accept` is
+logged and retried, so a transient error (running out of descriptors, typically)
+neither ends the loop nor leaves the operator without a socket while both planes
+run.
 
 ```console
 $ classis-cli space create lab
@@ -1801,15 +1871,17 @@ directory of whichever process reads it. In development, where
 cargo run -p classis-admin -- --socket fleet-run/admin.sock space create lab
 ```
 
-`enrol-command`, which would print the command that installs a host and enrols
-it, **refuses on this Server**: where the Server's public endpoint — the address
-a host dials — comes from is undecided, so the CLI has nothing to state in the
-command. The `space` commands answer.
+`enrol-command` prints the one command that installs a host and enrols it,
+against the Server's `public_url` ([the install
+one-liner](#the-install-one-liner)). With `public_url` unset it refuses — the
+Server never guesses the address its proxy answers for — and the `space` commands
+answer regardless.
 
 None of this is on the Operator plane: no REST route creates a Space or touches
 its key, `[rest.auth]` does not reach the socket, and the socket answers no
-HTTP. The CLI comes from a checkout
-(`cargo build --release -p classis-admin`), not from the Server's image.
+HTTP. The CLI ships inside the Server's image on Linux
+(`/usr/local/bin/classis-cli`, run with `docker exec`); from a checkout, build it
+with `cargo build --release -p classis-admin`.
 
 ## Plain HTTP behind a reverse proxy
 
@@ -1827,7 +1899,9 @@ share — a NetworkPolicy that lets only the proxy reach the Server's ports.
   connection's address. **The header is trusted from any source**: whoever can
   reach the port can write it, name any address, and so keep their own failures
   from filling the throttle or put another host's address in back-off. Keep the
-  Server's ports closed to everything but the proxy.
+  Server's ports closed to everything but the proxy. The proxy must discard any
+  incoming `X-Forwarded-For` and set it to the verified client address, not
+  append to the incoming header; otherwise clients can bypass peer limits.
 - **Outbound connections stay TLS 1.3**: to PostgreSQL and to S3.
 
 An Agent that still presents a client certificate is not refused for it: the

@@ -152,6 +152,20 @@ another partition's attributes under a fresh `instance_uid` is assigned by that
 partition's next rollout, and the fleet view shows such an Agent waiting before
 the press.
 
+**Installing the Client is a pre-enrolment surface, bounded by what the build
+fixes.** A host that holds no credential fetches the two install scripts and
+this build's Client archive on the Agent plane; what they serve is fixed by the
+Server's own build — two compiled-in scripts and one signed `supervisor`
+package — and never named by the caller, so the route leaks nothing of the
+fleet and every refusal is one identical `404`. On first install the trust is
+the transport: the host fetched the script over TLS, verifying the Server
+against the trust it already holds (a preprovisioned CA or the system roots),
+and the script runs the
+Client's own install without re-checking the archive's signature — the Server
+serves that archive only after verifying its signature up to the compiled-in
+Package Roots. A Client's later self-updates are checked client-side against
+those same Package Roots, as always.
+
 **What this means for operators:** treat one fleet (one Server, one shared
 set of Spaces) as a single trust domain, and do not place mutually distrusting
 hosts in one fleet; isolate them by separate Server instance or network
@@ -160,8 +174,10 @@ segment. A new token cuts the old one off, but the client secret in the same
 revoking the host and enrolling it again, which makes a new client; the old
 client's record stays on the Server, which has no command to remove it. A leaked
 enrolment key is replaced with `classis-cli space rotate-key <name>` on the
-Server's operator socket. Anyone who can open that socket can create Spaces and
-obtain or rotate their keys; keep its parent directory private, as described in
+Server's operator socket. That socket serves the Server's account and root
+alone — the peer's account is read from the connection before a byte of its
+request — so either can create Spaces and obtain or rotate their keys. The
+Server refuses an unprotected socket directory, as described in
 [The operator's socket](manual/server.md#the-operators-socket).
 
 ## Supported versions

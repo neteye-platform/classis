@@ -15,7 +15,8 @@ use crate::render::{self, Os};
 #[command(
     name = "classis-cli",
     about = "Administer the Spaces of a running Classis Server",
-    disable_version_flag = true
+    // Never clap's default, which reports the static crate version.
+    version = classis_core::version::current()
 )]
 struct Cli {
     /// The Server's admin socket.

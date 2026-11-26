@@ -105,14 +105,17 @@ Eight crates in one workspace:
   certificate the reverse proxy in front of the Server presents, and the package
   signing key.
 - **`classis-admin`** — the operator's commands for Spaces, the program
-  `classis-cli`, on no other Classis crate: `protocol`, the portable wire — one
-  bounded JSON object each way per connection, with the socket path both ends
-  default to; `spaces`, the `Spaces` port those commands ask through, which the
-  Server implements through an adapter and which must not become the enrolment
-  key's storage interface; `cli`, `client` and `render`, the CLI adapter — the
-  arguments, the one request, the answer printed; `server`, the socket server
-  that answers one request per connection through the port, its blocking calls
-  off the runtime. Only `cli`, `client` and `server` are Unix.
+  `classis-cli`, whose only other Classis crate is `classis-core` (for the
+  version `--version` reports): `protocol`, the portable wire — one bounded JSON
+  object each way per connection, with the socket path both ends default to;
+  `spaces`, the `Spaces` port those commands ask through, which the Server
+  implements through an adapter and which must not become the enrolment key's
+  storage interface; `cli`, `client` and `render`, the CLI adapter — the
+  arguments, the one request, the answer printed, and the install command
+  `enrol-command` prints against the Server's public URL; `server`, the socket
+  server that answers one request per connection through the port, its blocking
+  calls off the runtime, admitting a peer by its account. Only `cli`, `client`
+  and `server` are Unix.
 
 Inside the Server and the Client the code is ports and adapters: a **core** that
 holds the domain and owns its **ports**, **adapters** that bind a port to a
@@ -165,13 +168,17 @@ module has no role.
   both planes on one handle with one drain and a connection cap each.
 - **Server operator socket** — `admin` binds, on every Unix start, the socket
   `admin_socket` names, `/run/classis/admin.sock` by default, owner-only and
-  beside the two planes: it creates a missing parent owner-only, replaces the
-  socket an earlier run left, and the Server exits when the bind fails — a
-  Server that does not run as root needs a path its account can write.
+  beside the two planes: it creates missing parents owner-only, refuses an
+  unprotected directory path, replaces the socket an earlier run left, and the
+  Server exits when the bind fails. A Server that does not run as root needs a
+  path its account can write, and two Servers must not share a socket.
+  `classis-admin`'s socket server admits a peer by the account read from its
+  connection (the Server's account, or root) before a byte of its request, and
+  retries a failed accept rather than ending.
   `admin::AdminSpaces` implements `classis-admin`'s `Spaces` over the running
   Server's `Enrolment`, asking it for its `Spaces` on every request so the one
   instance's lock orders a key rotation against the registrations in flight; its
-  `endpoint` refuses until the public endpoint hosts reach is decided.
+  `endpoint` answers with `public_url`, refusing while that key is unset.
 - **Server admission** — `transport::admit` is a layer round `/v1/opamp` and the
   package download. It reads the `Authorization: Bearer` credential with
   `oauth-token`'s `bearer`, asks `enrolment::Enrolment` which client holds the
@@ -183,11 +190,17 @@ module has no role.
   the records are. It also tracks the WebSocket sessions admitted with each
   token and ends them, with close code 1008, when the token is replaced. The
   core module `throttle` is the per-address back-off: `transport::back_off`
-  counts the refused authentications of the Agent plane's three routes in one
-  table, and the Operator plane keeps its own. `agent_rate` holds the token
+  counts the refused authentications of the Agent plane's routes in one table,
+  and the Operator plane keeps its own. `api::install_router` merges the two
+  compiled-in install scripts and this build's Client archive onto the plane
+  outside `admit` — a host with no token yet fetches them — inside `back_off`;
+  what they hand out is fixed by the build, two scripts and one signed package,
+  so they leak nothing of the fleet and every refusal is one identical `404`.
+  `agent_rate` holds the token
   buckets that bound how often a host, or a peer address where no host is named,
   is heard; `transport` takes a token for each message before the handler does
-  anything else and for each download in the guard.
+  anything else and for each download in the guard — the install routes among
+  them, counted by peer address, since no token names a host for them.
 - **Security decisions** — each admission and refusal, enrolment, token
   issuance, session end, operator act and package outcome is a `tracing` event
   on the Server's log, which goes to standard error; its `event` field names it
@@ -431,13 +444,16 @@ that alters one edits its line here ([`AGENTS.md`
   Connections, bodies and messages are bounded, and Agents are rate-limited.
 - A host enrols with its Space's reusable enrolment key (RFC 7591, at
   `/v1/enrol`), obtains an opaque access token with the client-credentials
-  grant (at `/v1/token`), and every Agent-plane request is admitted by that
-  bearer token alone; nothing admits an Agent without one. The Server keeps
+  grant (at `/v1/token`), and authenticates OpAMP and package downloads with
+  that bearer token; nothing admits an Agent without one. The Server keeps
   only hashes of client secrets and tokens. It keeps each Space's enrolment key
   whole, so that the enrol command can be printed again later; a stored Space
   is therefore a secret, held in owner-only files or behind the database's
-  own access control. Stopping enrolment by removing the key comes with the
-  command-line administration.
+  own access control. The CLI can rotate the key but cannot remove it.
+- A host with no token yet installs the Client from the Server itself: two
+  compiled-in install scripts and this build's signed `supervisor` archive, on
+  the Agent plane outside bearer admission and rate-limited by peer address,
+  what they serve fixed by the build.
 - There are no client certificates: `[tls]`, `[rest.tls]`, `[client_ca]` and
   `[enrolment]` are refused at startup.
 - The Client speaks TLS 1.3 alone and plaintext only to the loopback; a
@@ -496,14 +512,17 @@ that alters one edits its line here ([`AGENTS.md`
 - `classisctl` is the operator's program for packages and for the server CA and
   the certificate the reverse proxy presents; `classis-cli` is the operator's
   program for Spaces, answered over the Server's always-on local admin socket,
-  `admin_socket`, default `/run/classis/admin.sock`.
+  `admin_socket`, default `/run/classis/admin.sock`. Its `enrol-command`
+  prints a host's install-and-enrol one-liner against `public_url`, refusing
+  while that key is unset.
 
 ### Release and repository
 
 - The release run signs every entry of the Client's own package with a key only
   a reviewed `v<version>` tag reaches. Every release asset carries a
   build-provenance attestation, and every program a CycloneDX SBOM.
-- The Server ships as a container image built from its attested release binary.
+- The Server ships as a container image built from its attested release binary,
+  carrying `classis-cli` beside it on Linux.
 - Every GitHub Action is pinned to a commit SHA, and Renovate keeps it and every
   Cargo dependency current.
 - The Dev Container mounts no host Docker socket, and its Features are locked.

@@ -479,9 +479,13 @@ async fn main() {
         }
     };
     // The operator's socket: `classis-cli` administers the Spaces through the Server's own
-    // enrolment, so a key it replaces holds in this process at once.
+    // enrolment, so a key it replaces holds in this process at once, and prints its command against
+    // the public URL this Server was configured with.
     #[cfg(unix)]
-    let admin_spaces = Arc::new(classis_server::admin::AdminSpaces::new(enrolment.clone()));
+    let admin_spaces = Arc::new(classis_server::admin::AdminSpaces::new(
+        enrolment.clone(),
+        config.public_url.clone(),
+    ));
     // Two planes, two listeners: Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
     let agents = classis_server::agent_app(state.clone(), enrolment);
