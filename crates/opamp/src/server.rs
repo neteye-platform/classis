@@ -253,6 +253,24 @@ fn peer_of(extensions: &Extensions) -> Option<SocketAddr> {
         .map(|ConnectInfo(peer)| *peer)
 }
 
+/// Whether any line of the header `name` lists `token`, comma-separated and case-insensitive
+/// (RFC 9110 §5.6.1): `Upgrade: h2c, websocket` lists `websocket`. A caller that decides on the
+/// transport before the endpoint does must read the header the way the endpoint reads it.
+#[must_use]
+pub fn header_has_token(
+    headers: &header::HeaderMap,
+    name: &header::HeaderName,
+    token: &str,
+) -> bool {
+    headers.get_all(name).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case(token))
+        })
+    })
+}
+
 /// The WebSocket upgrade, answered here and taken over through hyper, so that `opamp` reads the
 /// frames itself and can judge a message by its data.
 async fn upgrade<H: Handler>(
@@ -269,19 +287,12 @@ async fn upgrade<H: Handler>(
             .into_response();
     }
     let headers = request.headers();
-    let has_token = |name: &header::HeaderName, token: &str| {
-        headers.get_all(name).iter().any(|value| {
-            value.to_str().is_ok_and(|value| {
-                value
-                    .split(',')
-                    .any(|part| part.trim().eq_ignore_ascii_case(token))
-            })
-        })
-    };
     if request.version() != Version::HTTP_11 {
         return refuse("a WebSocket upgrade needs HTTP/1.1");
     }
-    if !has_token(&header::CONNECTION, "upgrade") || !has_token(&header::UPGRADE, "websocket") {
+    if !header_has_token(headers, &header::CONNECTION, "upgrade")
+        || !header_has_token(headers, &header::UPGRADE, "websocket")
+    {
         return refuse("expected a WebSocket upgrade");
     }
     if header_str(headers, &header::SEC_WEBSOCKET_VERSION) != "13" {

@@ -539,6 +539,49 @@ async fn an_open_session_outlives_its_tokens_expiry_and_ends_with_1008_when_it_i
     rig.renew(&mut bystander).await;
 }
 
+/// A request whose `Upgrade` header lists `websocket` among other protocols is upgraded by the
+/// endpoint, so it is admitted as a WebSocket session and ends with 1008 when its token is
+/// replaced, as a plain `Upgrade: websocket` one does.
+/// Verifies: G-17
+#[tokio::test]
+async fn an_upgrade_listing_websocket_among_others_ends_when_the_token_is_replaced() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rig = rig(Setup::default()).await;
+    let mut host = rig.enrol().await;
+    let mut stream = tokio::net::TcpStream::connect(rig.addr)
+        .await
+        .expect("connect");
+    let request = format!(
+        "GET /v1/opamp HTTP/1.1\r\nHost: {}\r\nConnection: Upgrade\r\n\
+         Upgrade: h2c, websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Authorization: Bearer {}\r\n\r\n",
+        rig.addr, host.token
+    );
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut byte))
+            .await
+            .expect("an answer within five seconds")
+            .expect("read");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&head);
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+
+    rig.renew(&mut host).await;
+    // A server frame is unmasked: FIN and the close opcode, a length, then the status code.
+    let mut frame = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut frame))
+        .await
+        .expect("the session is ended within five seconds")
+        .expect("a close frame");
+    assert_eq!(frame[0], 0x88, "a close frame");
+    assert_eq!(u16::from_be_bytes([frame[2], frame[3]]), 1008);
+}
+
 /// The Agent plane completes an OpAMP exchange on both transports with a bearer token and no
 /// client certificate: the Server speaks plain HTTP and reads none.
 /// Verifies: G-17

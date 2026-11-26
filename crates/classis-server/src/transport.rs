@@ -76,11 +76,9 @@ async fn admit_request(
     next: Next,
 ) -> Response {
     let peer = peer_ip(&request);
-    let websocket = request
-        .headers()
-        .get(header::UPGRADE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    // Read as the endpoint reads it, so that no request it upgrades is admitted as plain HTTP.
+    let websocket =
+        opamp::server::header_has_token(request.headers(), &header::UPGRADE, "websocket");
     match enrolment
         .admit(request.headers(), request.uri(), websocket)
         .await
