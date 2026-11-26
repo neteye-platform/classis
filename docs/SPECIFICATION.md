@@ -203,12 +203,12 @@ Use these exact words in code, comments, and documentation.
   distinct from the Host whose credential it uses; several Agents may belong
   to one Host and share its connections without losing their own identities.
 - **Host** — one Client installation registered with the Server as an OAuth
-  client. Its identity is the `client_id`, also called its Device ID, not an
-  Agent's `instance_uid`. A Host belongs to exactly one Space. Its Client Agent
-  and Supervisor Agents share its access token, and each Agent is bound to
-  that Host. Replacing the token preserves the Host's identity and its Agent
-  bindings; a Deployment still aims at Agents, not Hosts. Certificate subject
-  values are not part of a Host's identity or description.
+  client. Its identity is the `client_id`, not an Agent's `instance_uid`. A Host
+  belongs to exactly one Space. Its Client Agent and Supervisor Agents share its
+  access token, and each Agent is bound to that Host. Replacing the token
+  preserves the Host's identity and its Agent bindings; a Deployment still aims
+  at Agents, not Hosts. Certificate subject values are not part of a Host's
+  identity or description.
 - **REST API** — the Server's stable HTTP interface for reading fleet state and
   reading and changing configuration, described by an **OpenAPI** specification
   so clients and portals can be generated from it rather than hand-written. It

@@ -52,7 +52,7 @@ terms below are the ones it uses without defining.
 - **Enrolment** — the exchange in which a host uses its Space's enrolment key
   to register as an OAuth client and obtain client credentials and an access
   token, without individual operator approval. _Avoid:_ enrollment, onboarding.
-- **Device ID** — the OAuth `client_id` assigned at enrolment, identifying one
+- **`client_id`** — the OAuth identifier assigned at enrolment, identifying one
   Host rather than one Agent. _Avoid:_ instance UID (for a Host's identity).
 - **Client credentials** — the Host's `client_id` and `client_secret` pair, used
   to obtain or replace an access token without changing the Host's identity.
@@ -62,7 +62,7 @@ terms below are the ones it uses without defining.
   key and client secret. _Avoid:_ enrolment key, client secret (for the token).
 - **State file** (`state.json`) — the file in the Client's state directory that
   `enrol` creates and token replacement updates: the Server's base URL, the
-  Space, the Device ID, the client secret and the access token. A Host without
+  Space, the `client_id`, the client secret and the access token. A Host without
   it is not enrolled and runs nothing. _Avoid:_ config, credentials file.
 - **Reset** — the Client's local action that removes the Host's local identity
   and state. It does not contact the Server, whose credentials for the Host
