@@ -135,7 +135,9 @@ closes the loop and widens only as the protocol and its agents actually allow.
   operator approval; afterwards its own client credentials obtain an opaque
   access token through the client-credentials grant (RFC 6749), and its
   Agents authenticate with that token using OpAMP's HTTP authorization header
-  (RFC 6750). Fleet admission uses no client certificates or CSR flow.
+  (RFC 6750). The Server stores the Space's enrolment key in recoverable form
+  and stores only SHA-256 hashes of each Host's client secret and access token.
+  Fleet admission uses no client certificates or CSR flow.
   Software is installed only when it is signed with a key the operator holds
   and fetched from the Server. No vulnerability can be ruled out, so the
   project shrinks the chance of one and the damage it can do: every input
