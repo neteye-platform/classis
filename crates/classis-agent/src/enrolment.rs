@@ -89,6 +89,29 @@ pub fn load(state_dir: &Path) -> Result<Option<Credentials>, String> {
     }))
 }
 
+/// Refuses an endpoint that would carry the access token in cleartext although the host enrolled
+/// over TLS: `enrol` records where the host enrolled but not the OpAMP endpoint, which stays at
+/// its default, a plaintext loopback address that anything on the machine may be listening on.
+///
+/// # Errors
+/// Returns an error naming `endpoint` when the host enrolled at an `https://` address and
+/// `endpoint` is `ws://` or `http://`.
+pub fn check_endpoint_matches_enrolment(
+    credentials: &Credentials,
+    endpoint: &str,
+) -> Result<(), String> {
+    let plaintext = endpoint.starts_with("ws://") || endpoint.starts_with("http://");
+    if credentials.endpoint.starts_with("https://") && plaintext {
+        return Err(format!(
+            "endpoint {endpoint} is plaintext, but this host enrolled at {} and would send its \
+             access token there unencrypted; set `endpoint` to the Server's `wss://` or `https://` \
+             address",
+            credentials.endpoint
+        ));
+    }
+    Ok(())
+}
+
 /// What `state.json` holds, for a host that must have enrolled before it runs.
 ///
 /// # Errors
@@ -449,6 +472,29 @@ pub async fn renew(config: &mut ClientConfig) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A host that enrolled over TLS is not left sending its token in cleartext to the default
+    /// loopback endpoint; one that enrolled in plaintext, or whose endpoint is TLS, is untouched.
+    /// Verifies: Q-1
+    #[test]
+    fn a_tls_enrolment_refuses_a_plaintext_endpoint() {
+        let tls = credentials();
+        let err = check_endpoint_matches_enrolment(&tls, "ws://127.0.0.1:4320/v1/opamp")
+            .expect_err("plaintext after a TLS enrolment");
+        assert!(
+            err.contains("endpoint ws://127.0.0.1:4320/v1/opamp"),
+            "{err}"
+        );
+        assert!(!err.contains("the-access-token"), "{err}");
+        assert!(check_endpoint_matches_enrolment(&tls, "http://127.0.0.1:4320/v1/opamp").is_err());
+        assert!(check_endpoint_matches_enrolment(&tls, "wss://fleet.example/v1/opamp").is_ok());
+        assert!(check_endpoint_matches_enrolment(&tls, "https://fleet.example/v1/opamp").is_ok());
+        let local = Credentials {
+            endpoint: "http://127.0.0.1:4320".to_string(),
+            ..credentials()
+        };
+        assert!(check_endpoint_matches_enrolment(&local, "ws://127.0.0.1:4320/v1/opamp").is_ok());
+    }
 
     fn credentials() -> Credentials {
         Credentials {

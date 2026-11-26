@@ -1533,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_endpoint_is_wss_on_the_loopback() {
+    fn the_default_endpoint_is_plain_ws_on_the_loopback() {
         assert_eq!(
             ClientConfig::default().endpoint,
             "ws://127.0.0.1:4320/v1/opamp"
