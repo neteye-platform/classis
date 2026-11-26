@@ -144,15 +144,16 @@ Selector, Package, Deployment, …) are defined in
 ## Build, Test & Run
 
 The toolchain is **Rust stable**, provided by the Dev Container; the code is one
-Cargo workspace with seven crates — `opamp` (the OpAMP communication layer,
+Cargo workspace with eight crates — `opamp` (the OpAMP communication layer,
 publishable on its own, with an Agent's client and a server endpoint with their
 TLS and listener behind the `client` and `server` features),
 `classis-core` (what both ends share beyond the protocol), `classis-server` (the
 Server), `classis-agent` (the Client, in all its modes), `classis-tools` (the
-operator command-line tools), `oauth-token` (the client-credentials
-grant and bearer parsing), and `oauth-registration` (dynamic
-registration). This section is the single source for
-build/test/run commands — both humans and agents rely on it (AGENTS.md links
+operator command-line tools), `classis-admin` (the operator's commands for
+Spaces, the program `classis-cli`, answered by the Server over its local admin
+socket), `oauth-token` (the client-credentials grant and bearer parsing), and
+`oauth-registration` (dynamic registration). This section is the single source
+for build/test/run commands — both humans and agents rely on it (AGENTS.md links
 here).
 
 - **Build:** `cargo build --workspace`
@@ -206,9 +207,13 @@ here).
   `classisctl pki init`, no other tool, and writes the set and a `server.toml`
   and `supervisor.toml` to `.dev-pki/`. A Client
   runs only once it is enrolled (`supervisor enrol <base-url> <key>`, with the
-  enrolment key of a Space); this build has no command that creates a Space or
-  shows its key. The VS Code launch configurations run the script when
-  `.dev-pki/` has no configuration yet
+  enrolment key of a Space); create one and print its key with `cargo run -p
+  classis-admin -- --socket .dev-pki/admin.sock space create lab`. Its
+  `enrol-command` refuses: the public endpoint hosts reach the Server at is
+  undecided. The VS Code launch configurations run the script when
+  `.dev-pki/` has no configuration yet. An older `.dev-pki/server.toml` needs
+  `admin_socket` set to the absolute path of `.dev-pki/admin.sock` before the
+  Server can use that socket.
 - **Run the Server:**
   `cargo run -p classis-server -- --config .dev-pki/server.toml`
 - **Run the Client:**
@@ -304,8 +309,9 @@ A minimal closed control loop on one machine:
 2. **Enrol and start a Client:** a Client runs only once it is enrolled.
    `cargo run -p classis-agent -- --config config/supervisor.toml enrol
    <base-url> <key>` registers the host with the Server using the enrolment
-   key of a Space and writes `state.json` in the state directory; this build
-   has no command that creates a Space or shows its key. Then
+   key of a Space and writes `state.json` in the state directory; create the
+   Space first with `cargo run -p classis-admin -- --socket
+   fleet-run/admin.sock space create lab`, which prints its key. Then
    `cargo run -p classis-agent -- --config config/supervisor.toml` — it
    connects over WebSocket with its access token, reports its description and
    health, and appears in the fleet. On one machine the endpoint is
@@ -472,7 +478,7 @@ docs/ARCHITECTURE.md  # the system as it currently stands
 docs/CONFORMANCE.md   # OpAMP Protocol Baseline + capability conformance matrix
 docs/SECURITY-MODEL.md # the Dev Container, secrets, pinned actions, the fleet trust model, supported versions
 docs/HARDENING.md     # candidate hardening measures for the Client-Server link (a backlog, not decisions)
-crates/               # Cargo workspace: opamp (shared) · classis-core · classis-server · classis-agent · classis-tools (operator CLIs)
+crates/               # Cargo workspace: opamp (shared) · classis-core · classis-server · classis-agent · classis-tools (operator CLIs) · classis-admin (operator's Spaces commands, the program classis-cli, over the Server's admin socket)
 config/               # annotated example configuration files (server.toml, supervisor.toml)
 packaging/            # what release.yml packs with: Linux maintainer scripts, the WiX sources, the Server's Containerfile
 scripts/              # consistency checks and sensors (check-all.sh runs them all), run in CI

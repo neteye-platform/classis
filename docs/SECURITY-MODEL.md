@@ -159,8 +159,10 @@ segment. A new token cuts the old one off, but the client secret in the same
 `state.json` can obtain another, so a leaked `state.json` is only left behind by
 revoking the host and enrolling it again, which makes a new client; the old
 client's record stays on the Server, which has no command to remove it. A leaked
-enrolment key is replaced by rotating the Space's key, and this build has no
-operator command for that either.
+enrolment key is replaced with `classis-cli space rotate-key <name>` on the
+Server's operator socket. Anyone who can open that socket can create Spaces and
+obtain or rotate their keys; keep its parent directory private, as described in
+[The operator's socket](manual/server.md#the-operators-socket).
 
 ## Supported versions
 

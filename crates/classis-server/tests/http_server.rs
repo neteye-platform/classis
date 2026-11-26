@@ -31,8 +31,10 @@ fn server_toml(dir: &Path, extra: &str) -> (std::path::PathBuf, u16, u16) {
     std::fs::write(
         &config,
         format!(
-            "listen = \"127.0.0.1:{}\"\n[rest]\nlisten = \"127.0.0.1:{}\"\n{extra}",
-            ports.0, ports.1,
+            "listen = \"127.0.0.1:{}\"\nadmin_socket = {:?}\n[rest]\nlisten = \"127.0.0.1:{}\"\n{extra}",
+            ports.0,
+            dir.join("admin.sock"),
+            ports.1,
         ),
     )
     .expect("write server.toml");

@@ -926,22 +926,34 @@ jobs:
           and GID 65532. Deploy it by its digest, not by its tag:
 
           \`\`\`console
-          docker run -d --name classis-server \\
+          sudo install -d -m 0700 -o 65532 -g 65532 /var/lib/classis-run
+          docker run -d --name classis-server --read-only \\
             -p 4320:4320 -p 4321:4321 \\
             -v classis-data:/var/lib/classis \\
+            -v /var/lib/classis-run:/run/classis \\
             -v /etc/classis:/etc/classis:ro \\
             ${{ env.IMAGE }}@${{ needs.image.outputs.digest }} \\
             --config /etc/classis/server.toml
           \`\`\`
 
-          Its data directory is the volume \`/var/lib/classis\`, and both planes listen on
-          \`0.0.0.0\` inside the container, \`4320\` for the fleet and \`4321\` for operators. Off
-          the loopback the Server requires TLS and \`[rest.auth]\`, so an image started with nothing
-          mounted names what is missing and stops. Certificates, keys and every secret are mounted as
-          files. There is no \`HEALTHCHECK\`: probe \`4320\` over TCP. \`<stem>.cdx.json\` for
+          The writable \`/run/classis\` mount holds the operator's socket; its directory belongs to UID
+          65532. The data directory is the volume \`/var/lib/classis\`. Both planes listen on
+          \`0.0.0.0\` inside the container, \`4320\` for the fleet and \`4321\` for operators.
+          The Server speaks plain HTTP behind a reverse proxy that terminates TLS, and requires
+          \`[rest.auth]\` off the loopback. Mount every secret as a file. There is no
+          \`HEALTHCHECK\`: probe \`4320\` over TCP. \`<stem>.cdx.json\` for
           \`server_${{ needs.version.outputs.version }}_linux_<arch>\` is the SBOM of the binary in
           the image of that architecture; the base is named by its digest in the image's
           \`org.opencontainers.image.base.digest\` annotation.
+
+          The mount example assumes rootful Docker without user-namespace remapping. With a rootless
+          or remapped runtime, create the socket directory with the mapped UID and GID instead.
+          \`classis-cli\` is not included in the Server image or release. Build it from a checkout
+          as described in \`docs/manual/server.md\`, then use the mounted socket from the host:
+
+          \`\`\`console
+          sudo ./target/release/classis-cli --socket /var/lib/classis-run/admin.sock space create lab
+          \`\`\`
 
           ## Verifying a download
 

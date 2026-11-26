@@ -478,6 +478,10 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // The operator's socket: `classis-cli` administers the Spaces through the Server's own
+    // enrolment, so a key it replaces holds in this process at once.
+    #[cfg(unix)]
+    let admin_spaces = Arc::new(classis_server::admin::AdminSpaces::new(enrolment.clone()));
     // Two planes, two listeners: Agents reach the OpAMP endpoint and the package
     // downloads their offers point at; operators reach the REST API, its docs, and the UI.
     let agents = classis_server::agent_app(state.clone(), enrolment);
@@ -508,6 +512,30 @@ async fn main() {
 
     let agent_listener = bind(config.listen, "the Agent plane");
     let operator_listener = bind(config.rest.listen, "the Operator plane");
+    // Bound after both planes: a TCP port that cannot be bound must not leave the operator with a
+    // socket removed and no Server behind it.
+    #[cfg(unix)]
+    {
+        let admin_listener = match classis_server::admin::bind(&config.admin_socket) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!(
+                    "cannot bind the operator's socket at {}: {e}",
+                    config.admin_socket.display()
+                );
+                std::process::exit(1);
+            }
+        };
+        tokio::spawn(async move {
+            if let Err(e) = classis_admin::server::serve(admin_listener, admin_spaces).await {
+                tracing::error!("the operator's socket stopped answering: {e}");
+            }
+        });
+        info!(
+            socket = %config.admin_socket.display(),
+            "serving the operator's commands on the socket"
+        );
+    }
     // One signal, both planes: the interrupt is watched once, and the handle both servers hold
     // drains them together within a bounded window.
     let handle = Handle::new();

@@ -203,11 +203,13 @@ Wants=network-online.target
 User=classis-server
 ExecStart=/usr/local/bin/server --config /etc/classis-server/server.toml
 StateDirectory=classis-server
+RuntimeDirectory=classis
+RuntimeDirectoryMode=0700
 UMask=0077
 Restart=on-failure
 
-# The Server writes under data_dir and nowhere else, binds ports above 1024,
-# and needs no privilege, device or kernel interface.
+# The Server writes under data_dir and at its admin socket, binds ports above
+# 1024, and needs no privilege, device or kernel interface.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -237,7 +239,11 @@ WantedBy=multi-user.target
 `ProtectSystem=strict` leaves the whole file system read-only to the Server
 except its `StateDirectory`, `/var/lib/classis-server`, which holds `data_dir`
 in the configuration above. A `data_dir` anywhere else needs a `ReadWritePaths=`
-line naming it. A `listen` or `[rest] listen` port below 1024 needs
+line naming it. `RuntimeDirectory=classis` gives it `/run/classis`, owned by
+`classis-server`, which is where the default `admin_socket` lives: without that
+line the Server cannot bind the socket and stops at startup
+([The operator's socket](server.md#the-operators-socket)). A `listen` or
+`[rest] listen` port below 1024 needs
 `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` and
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` instead of the empty lines.
 `systemd-analyze security classis-server` rates what the unit leaves open.
@@ -339,13 +345,24 @@ The service is installed but not running. It starts when the host is enrolled.
 
 ## 5. Enrol the Client
 
-**You need the enrolment key of a Space.** This build has no command that makes
-a Space, and none that shows or rotates its key: the Operator plane's REST API
-has no route for either, `classisctl` has no command for either, and the Server
-reads no setting that creates one. A Space exists in this build only where the
-Server's library makes it, as its tests do, so there is nothing an operator can
-run to get the key this step takes. The rest of this step describes what `enrol`
-does with a key once you hold one.
+**You need the enrolment key of a Space.** Make one on the Server host with the
+operator CLI, which asks the running Server over its admin socket:
+
+```console
+$ sudo classis-cli space create lab
+cle1_lab_…
+```
+
+The key is all it prints. `space list` prints the Space names, and
+`space rotate-key lab` replaces a key and prints the new one; nothing shows the
+key of a Space that already exists. No REST route does any of this. The CLI is
+not in the Server's image — build it from a checkout with
+`cargo build --release -p classis-admin` — and whoever runs it must be able to
+open the socket, so root or the Server's own account
+([The operator's socket](server.md#the-operators-socket)). `enrol-command`,
+which would print the install-and-enrol command for a new host, refuses on this
+Server: where the public endpoint hosts reach it at is undecided. The rest of
+this step is what `enrol` does with a key.
 
 A key reads `cle1_<space>_<secret>`: the prefix, the Space's name, and a secret
 of 43 characters. The name is 1 to 32 letters, digits and underscores, starting

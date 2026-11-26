@@ -11,6 +11,18 @@ its tag exists.
 
 ## [Unreleased]
 
+### Added
+
+- **`classis-cli`, the operator's commands for Spaces**, which the Server
+  answers over a local Unix socket: `space create`, `space list` and
+  `space rotate-key`; `enrol-command` refuses until where hosts reach the Server
+  publicly is decided. The Server binds that socket on every start, at the new
+  `server.toml` key `admin_socket`, default `/run/classis/admin.sock`. **Before
+  upgrading:** where the Server does not run as root, set `admin_socket` to a
+  path its account can write or provision that directory, or the Server exits at
+  startup naming the socket. The program is in no release asset and not in the
+  Server's image.
+
 ### Changed
 
 - **A host is admitted by a bearer access token, not a client certificate**.

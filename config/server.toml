@@ -64,6 +64,10 @@ max_connections = 10000
 # moves it here once, while the Server is stopped.
 data_dir = "fleet-data"
 
+# The operator Unix socket, always on. The compiled default, /run/classis/admin.sock, sits in
+# root-owned /run; this development path beside data_dir is writable without root.
+admin_socket = "fleet-run/admin.sock"
+
 # The largest OpAMP message accepted or sent, on either transport and in either direction. The
 # protocol requires the limit and recommends this default; a fleet of small status reports runs
 # comfortably on far less. An oversized request is answered 413, an oversized WebSocket message

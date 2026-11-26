@@ -62,7 +62,7 @@ vocabulary of [`GLOSSARY.md`](GLOSSARY.md). One level deep, deeper only where
 the size of a part earns it. The golden path and the test pattern an agent
 copies from are named here.
 
-Seven crates in one workspace:
+Eight crates in one workspace:
 
 - **`opamp`** — the OpAMP communication layer, publishable on its own. Always
   the generated types, framing and the endpoint's body rules. Behind `client`,
@@ -104,6 +104,15 @@ Seven crates in one workspace:
   Package's signing file — its `pki` commands make the server CA, the
   certificate the reverse proxy in front of the Server presents, and the package
   signing key.
+- **`classis-admin`** — the operator's commands for Spaces, the program
+  `classis-cli`, on no other Classis crate: `protocol`, the portable wire — one
+  bounded JSON object each way per connection, with the socket path both ends
+  default to; `spaces`, the `Spaces` port those commands ask through, which the
+  Server implements through an adapter and which must not become the enrolment
+  key's storage interface; `cli`, `client` and `render`, the CLI adapter — the
+  arguments, the one request, the answer printed; `server`, the socket server
+  that answers one request per connection through the port, its blocking calls
+  off the runtime. Only `cli`, `client` and `server` are Unix.
 
 Inside the Server and the Client the code is ports and adapters: a **core** that
 holds the domain and owns its **ports**, **adapters** that bind a port to a
@@ -154,6 +163,15 @@ module has no role.
   `[enrolment]` by name, and the peer a request is counted for is the left-most
   valid `X-Forwarded-For` entry, else the connection's address. `listen` serves
   both planes on one handle with one drain and a connection cap each.
+- **Server operator socket** — `admin` binds, on every Unix start, the socket
+  `admin_socket` names, `/run/classis/admin.sock` by default, owner-only and
+  beside the two planes: it creates a missing parent owner-only, replaces the
+  socket an earlier run left, and the Server exits when the bind fails — a
+  Server that does not run as root needs a path its account can write.
+  `admin::AdminSpaces` implements `classis-admin`'s `Spaces` over the running
+  Server's `Enrolment`, asking it for its `Spaces` on every request so the one
+  instance's lock orders a key rotation against the registrations in flight; its
+  `endpoint` refuses until the public endpoint hosts reach is decided.
 - **Server admission** — `transport::admit` is a layer round `/v1/opamp` and the
   package download. It reads the `Authorization: Bearer` credential with
   `oauth-token`'s `bearer`, asks `enrolment::Enrolment` which client holds the
@@ -392,11 +410,12 @@ that alters one edits its line here ([`AGENTS.md`
 
 ### Shape
 
-- Seven crates in one Cargo workspace on tokio and axum: `opamp` (the whole
+- Eight crates in one Cargo workspace on tokio and axum: `opamp` (the whole
   OpAMP layer, publishable, reading WebSocket frames itself), `classis-core`,
-  `classis-server`, `classis-agent`, `classis-tools`, and the standalone
-  `oauth-token` and `oauth-registration`, with no word of Classis in them.
-  Configuration is TOML, and the Server's may also come from its environment.
+  `classis-server`, `classis-agent`, `classis-tools`, `classis-admin`, and the
+  standalone `oauth-token` and `oauth-registration`, with no word of Classis in
+  them. Configuration is TOML, and the Server's may also come from its
+  environment.
 - Ports and adapters: every dependency points at the core, decided by the
   `dependency_direction` test.
 - The protocol is pinned to a released OpAMP Baseline, compiled from the
@@ -474,8 +493,10 @@ that alters one edits its line here ([`AGENTS.md`
   moved by the offline `server migrate`.
 - The REST API is described by OpenAPI, and the bundled UI uses it alone; the UI
   colours configurations with a vendored Shiki whose hash is pinned.
-- `classisctl` is the one operator program: among its commands, it makes the
-  server CA and the certificate the reverse proxy presents for the Server.
+- `classisctl` is the operator's program for packages and for the server CA and
+  the certificate the reverse proxy presents; `classis-cli` is the operator's
+  program for Spaces, answered over the Server's always-on local admin socket,
+  `admin_socket`, default `/run/classis/admin.sock`.
 
 ### Release and repository
 

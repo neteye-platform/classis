@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(unix)]
+pub mod admin;
 pub mod agent_rate;
 pub mod agent_store;
 pub mod api;

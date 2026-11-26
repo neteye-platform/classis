@@ -42,6 +42,8 @@ terms below are the ones it uses without defining.
 - **Data directory** — the one directory, `data_dir`, under which the Server
   keeps all of its state, one subdirectory per domain. _Avoid:_ config
   directory, package directory, state directory (that is the Client's).
+- **Operator's socket** — the Server's local Unix socket through which
+  `classis-cli` administers Spaces and their enrolment keys.
 - **Space** — a named grouping of Hosts on one Server, into which an enrolment
   key admits new Hosts. A Space is not a separate Fleet or a tenant-isolation
   boundary. _Avoid:_ tenant, fleet (for a Space).

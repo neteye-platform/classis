@@ -32,12 +32,14 @@ fn sigterm_shuts_the_server_down_gracefully() {
             concat!(
                 "listen = \"127.0.0.1:{agent}\"\n",
                 "data_dir = {data:?}\n",
+                "admin_socket = {socket:?}\n",
                 "[rest]\n",
                 "listen = \"127.0.0.1:{operator}\"\n",
             ),
             agent = agent.local_addr().expect("addr").port(),
             operator = operator.local_addr().expect("addr").port(),
             data = dir.path().join("data"),
+            socket = dir.path().join("admin.sock"),
         ),
     )
     .expect("write server.toml");

@@ -18,6 +18,7 @@ foreground process — unlike the Client, it does not install itself as a servic
 - [Packages and Deployments: distributing software](#packages-and-deployments-distributing-software)
 - [The REST API](#the-rest-api)
 - [Authentication](#authentication)
+- [The operator's socket](#the-operators-socket)
 - [Plain HTTP behind a reverse proxy](#plain-http-behind-a-reverse-proxy)
 - [The fleet's own telemetry](#the-fleets-own-telemetry)
 - [Moving the fleet: connection settings](#moving-the-fleet-connection-settings)
@@ -62,7 +63,8 @@ foreground process — unlike the Client, it does not install itself as a servic
 - **Serves two listeners over plain HTTP**, behind a proxy that terminates TLS:
   OpAMP over both transports, the package download and the enrolment routes on
   one, the REST API, the OpenAPI document and its docs page, and a rudimentary
-  UI on the other.
+  UI on the other. Beside them it answers the operator's `classis-cli` on a
+  Unix socket ([The operator's socket](#the-operators-socket)).
 
 ## Running it
 
@@ -164,6 +166,7 @@ base's own packages are not in it and are named by the
 | Entrypoint                   | `/usr/local/bin/server`; arguments after the image name are the Server's, such as `--config`                                                      |
 | User                         | UID and GID `65532`, numeric; no capability is needed, both ports are above 1024                                                                  |
 | Data directory               | `/var/lib/classis`, a volume owned by `65532`                                                                                                     |
+| Operator's socket            | `/run/classis/admin.sock`, the default `admin_socket`; on a read-only root filesystem its directory must be a writable mount owned by `65532`     |
 | Working directory            | `/`, which `65532` cannot write, so the `server.toml` read without `--config` is never one on the volume                                          |
 | Ports                        | `4320` (Agent plane) and `4321` (Operator plane)                                                                                                  |
 | Environment it sets          | `CLASSIS_SERVER__DATA_DIR=/var/lib/classis`, `CLASSIS_SERVER__LISTEN=0.0.0.0:4320`, `CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321`, and nothing else |
@@ -176,21 +179,38 @@ without authentication. Put the image behind the reverse proxy that terminates
 TLS; the Server admits the Agents by their access tokens. Mount every password
 or credential file read-only, and name their paths in the configuration. The
 image works with a read-only root filesystem; the Server writes under its data
-directory alone.
+directory and at its admin socket alone, and a socket cannot be created on a
+read-only filesystem: give `/run/classis` a writable mount owned by `65532`, or
+the Server cannot bind its socket and stops at startup.
 
 ```console
+$ sudo install -d -m 0700 -o 65532 -g 65532 /var/lib/classis-run
 $ docker run -d --name classis-server --read-only \
     -p 4320:4320 -p 4321:4321 \
     -v classis-data:/var/lib/classis \
+    -v /var/lib/classis-run:/run/classis \
     -v /etc/classis:/etc/classis:ro \
     ghcr.io/neteye-platform/classis-server@sha256:<digest> \
     --config /etc/classis/server.toml
 ```
 
-A bind mount for the data directory must be writable by UID `65532`. There is no
-`HEALTHCHECK` — the image has no shell to run one. An orchestrator probes over
-HTTP on the Operator plane: `GET /livez` and `GET /readyz` on `4321`, which
-answer without a credential ([Liveness and readiness](#liveness-and-readiness)).
+A bind mount for the data directory must be writable by UID `65532`; so must the
+one at `/run/classis`. The example assumes rootful Docker without user-namespace
+remapping. With a rootless or remapped runtime, create the socket directory with
+the mapped UID and GID instead. The image carries no `classis-cli`. To reach the
+socket from the host, build the CLI from a checkout and name the host path:
+
+```sh
+cargo build --release -p classis-admin
+sudo ./target/release/classis-cli --socket /var/lib/classis-run/admin.sock space create lab
+```
+
+The caller must be root or the account that owns the socket.
+
+There is no `HEALTHCHECK` — the image has no shell to run one. An orchestrator
+probes over HTTP on the Operator plane: `GET /livez` and `GET /readyz` on
+`4321`, which answer without a credential
+([Liveness and readiness](#liveness-and-readiness)).
 A TCP connection to `4320` only shows that the port is open. The `debug` variant
 of the base, which has a shell, is for inspecting a problem locally; it is not
 published.
@@ -222,7 +242,7 @@ upper-cased:
 
 ```console
 CLASSIS_SERVER__DATA_DIR=/var/lib/classis
-CLASSIS_SERVER__TLS__CERT_FILE=/run/secrets/server.pem
+CLASSIS_SERVER__ADMIN_SOCKET=/run/classis/admin.sock
 CLASSIS_SERVER__REST__LISTEN=0.0.0.0:4321
 CLASSIS_SERVER__CONNECTION_OFFER__HEARTBEAT_INTERVAL_SECS=30
 CLASSIS_SERVER__REST__AUTH__BASIC_USERS_FILE=/run/secrets/basic-users.toml
@@ -261,6 +281,11 @@ other variable configures the Server.
 | `max_agents`              | `100000`               | The most Agent records the fleet holds at once. A report bearing a **new** `instance_uid` past this ceiling is answered `Unavailable` rather than admitted, so an admitted peer minting fresh self-asserted UIDs cannot exhaust memory and disk; Agents already known keep reporting. The defence against an anonymous flood is [admission](#authentication) by client certificate; this is the backstop behind it. `0` is refused at startup.                                                                   |
 | `stale_after_secs`        | `90`                   | How long an Agent that declares `ReportsHeartbeat` may be silent before the fleet view marks it **stale**. Ignored when `[connection_offer]` names a heartbeat interval — then the budget is three of those. Only heartbeating Agents can go stale: one that promised no periodic report is never late.                                                                                                                                                                                                          |
 | `token_lifetime_secs`     | `0`                    | How long an access token is accepted after it is issued, in seconds. `0` — the default — means it never expires. A token ends when its client is issued a new one all the same ([How a host joins the fleet](#how-a-host-joins-the-fleet)).                                                                                                                                                                                                                                                                      |
+
+**`admin_socket`** defaults to `/run/classis/admin.sock`. It names the Unix
+socket used by `classis-cli`; a relative path resolves against the Server's
+working directory. See [The operator's socket](#the-operators-socket) for its
+permissions and startup behavior.
 
 ### `[rest]`
 
@@ -772,9 +797,11 @@ enrolled at once.
 - **Reading the key, enrolling a host and restarting the Server never change
   it.** Only a rotation does. The old key then enrols nothing, and the hosts
   already enrolled keep their client and their token.
-- **This build has no command, and no REST route, that creates a Space, shows
-  its key or rotates it.** The Server enrols a host only into a Space that
-  exists in its records, and none of the Server's commands or routes writes one.
+- **`classis-cli` creates a Space, lists them, and rotates a key**, over the
+  operator's socket ([The operator's socket](#the-operators-socket)). No REST
+  route does any of it, and no command shows the key of a Space that already
+  exists: only `create` and `rotate-key` print one, which is the new key. The
+  Server enrols a host only into a Space that exists in its records.
 
 ### `/v1/enrol`
 
@@ -1727,6 +1754,62 @@ Server still manages one fleet. And Basic sends a reusable password on **every**
 request. The Server serves no TLS: the password is protected only as far as the
 proxy's TLS reaches, crosses the hop between the proxy and the Server in the
 clear, and `server.toml` holds only its Argon2id hash.
+
+## The operator's socket
+
+Beside the two listeners the Server answers the operator's `classis-cli` on a
+Unix domain socket: `admin_socket`, `/run/classis/admin.sock` by default, bound
+on every start. The Server targets Linux; a Windows build binds no socket.
+
+Whoever can open the socket **is** the operator; it has no password. The Server
+sets the socket to `0600`, owned by its own account, and creates a missing parent
+directory `0700`; an existing parent keeps its mode. The socket is created before
+its mode is set: with a permissive umask, another local user may connect in that
+interval if the parent is accessible. Use an owner-only `0700` parent directory
+or a restrictive umask such as `0077`.
+
+A socket an earlier run left at the path is replaced; a live socket is refused.
+Anything else standing there — a file, a directory, a symlink — is not the
+Server's to remove, and the start stops with a message naming the path. That is
+also the answer a Server gets whose `admin_socket` it cannot write, in a
+container with a read-only root filesystem for one: no plane keeps running
+behind a refused socket, because the socket is how its Spaces are managed.
+
+Do not start two Servers with the same socket path: simultaneous replacement of
+a stale socket can race and leave one Server unreachable. If accepting a
+connection fails after startup, the socket stops answering while the two planes
+continue running; restart the Server to restore operator access.
+
+```console
+$ classis-cli space create lab
+cle1_lab_…
+$ classis-cli space list
+lab
+prod
+$ classis-cli space rotate-key lab
+cle1_lab_…
+```
+
+`create` prints the Space's new enrolment key, `list` one name per line,
+`rotate-key` the replacement; the old key enrols nothing from then on.
+`--socket <path>` names another socket and must name the one the Server's
+`admin_socket` names, since a relative path resolves against the working
+directory of whichever process reads it. In development, where
+`config/server.toml` puts the socket beside `fleet-data`:
+
+```sh
+cargo run -p classis-admin -- --socket fleet-run/admin.sock space create lab
+```
+
+`enrol-command`, which would print the command that installs a host and enrols
+it, **refuses on this Server**: where the Server's public endpoint — the address
+a host dials — comes from is undecided, so the CLI has nothing to state in the
+command. The `space` commands answer.
+
+None of this is on the Operator plane: no REST route creates a Space or touches
+its key, `[rest.auth]` does not reach the socket, and the socket answers no
+HTTP. The CLI comes from a checkout
+(`cargo build --release -p classis-admin`), not from the Server's image.
 
 ## Plain HTTP behind a reverse proxy
 

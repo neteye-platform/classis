@@ -123,6 +123,10 @@ pub struct ServerConfig {
     /// The Package Signers the Server refuses.
     #[serde(default)]
     pub packages: PackagesConfig,
+    /// The path of the Unix socket `classis-cli` administers the Spaces over. The Server creates it
+    /// owner-only, and its directory too when that is missing.
+    #[serde(default = "default_admin_socket")]
+    pub admin_socket: PathBuf,
 }
 
 /// The `[log]` section: the format of every line the Server writes to standard error. The level is
@@ -937,6 +941,10 @@ fn default_data_dir() -> PathBuf {
     PathBuf::from("fleet-data")
 }
 
+fn default_admin_socket() -> PathBuf {
+    PathBuf::from(classis_admin::protocol::DEFAULT_SOCKET)
+}
+
 fn default_max_message_size() -> usize {
     opamp::frame::DEFAULT_MAX_MESSAGE_SIZE
 }
@@ -993,6 +1001,7 @@ impl Default for ServerConfig {
             log: LogConfig::default(),
             packages: PackagesConfig::default(),
             token_lifetime_secs: 0,
+            admin_socket: default_admin_socket(),
         }
     }
 }
@@ -1762,6 +1771,36 @@ mod tests {
         let err = toml::from_str::<ServerConfig>("token_lifetime_secs = \"soon\"")
             .expect_err("not a number");
         assert!(err.to_string().contains("token_lifetime_secs"), "{err}");
+    }
+
+    /// The operator's socket defaults to the path `classis-cli` looks at, and the file and the
+    /// environment set it like any other key.
+    #[test]
+    fn the_admin_socket_defaults_to_the_clis_path_and_is_configurable() {
+        let default: ServerConfig = toml::from_str("").expect("parse");
+        assert_eq!(
+            default.admin_socket,
+            PathBuf::from(classis_admin::protocol::DEFAULT_SOCKET)
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("server.toml");
+        std::fs::write(&path, "admin_socket = \"/var/run/classis.sock\"\n").expect("write");
+        assert_eq!(
+            ServerConfig::load(&path).expect("loads").admin_socket,
+            PathBuf::from("/var/run/classis.sock")
+        );
+
+        let from_environment = ServerConfig::load_layered(
+            None,
+            variables(&[("CLASSIS_SERVER__ADMIN_SOCKET", "/srv/classis/admin.sock")]),
+        )
+        .expect("loads")
+        .config;
+        assert_eq!(
+            from_environment.admin_socket,
+            PathBuf::from("/srv/classis/admin.sock")
+        );
     }
 
     #[test]

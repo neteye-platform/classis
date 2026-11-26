@@ -962,6 +962,20 @@ fn the_notes_name_the_image_by_its_digest_and_say_how_to_verify_it() {
     }
 }
 
+#[test]
+fn the_notes_provision_the_operator_socket_and_terminate_tls_at_the_proxy() {
+    let workflow = workflow();
+    let notes = step(&workflow, "Publish the release");
+    assert!(notes.contains("install -d -m 0700 -o 65532 -g 65532 /var/lib/classis-run"));
+    assert!(notes.contains("-v /var/lib/classis-run:/run/classis"));
+    assert!(notes.contains("reverse proxy that terminates TLS"));
+    assert!(!notes.contains("the Server requires TLS"));
+    assert!(notes.contains("is not included in the Server image or release"));
+    assert!(notes
+        .contains("sudo ./target/release/classis-cli --socket /var/lib/classis-run/admin.sock"));
+    assert!(notes.contains("user-namespace remapping"));
+}
+
 /// The shell of a step's `run: |` block, dedented: what the runner executes.
 fn run_script(step: &str) -> String {
     let body = step
