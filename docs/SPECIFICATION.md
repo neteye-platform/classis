@@ -5,9 +5,6 @@
 > is the **constitution** — the architecture in
 > [`ARCHITECTURE.md`](ARCHITECTURE.md) derives from it and must not contradict
 > it.
->
-> **Draft enrolment amendment — awaiting human review.** This working copy
-> reflects the proposed bearer-token enrolment. No approval is implied.
 
 ## Problem
 
