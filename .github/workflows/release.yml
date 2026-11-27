@@ -27,7 +27,7 @@ name: Release
 # beside its archive.
 #
 # The Windows Client program and installer are Authenticode-signed through DigiCert Software Trust
-# in the GitHub environment `Signing`: `windows-exe` builds the program, `sign-exe` signs it, `build`
+# in the GitHub environment `Package Signing`: `windows-exe` builds the program, `sign-exe` signs it, `build`
 # packs the signed bytes into the `.tar.gz` and the `.msi`, and `sign-msi` signs the installer.
 # A dry run skips both signing jobs and never reaches the environment.
 #
@@ -311,7 +311,7 @@ jobs:
           if-no-files-found: error
 
   # Authenticode-signs the Client program with the certificate held by DigiCert Software Trust.
-  # One of the two jobs that name the environment `Signing`; the other signs the installer. It
+  # One of the two Authenticode jobs, beside `sign`, in the environment `Package Signing`. It
   # checks out no code and builds nothing: it downloads one `.exe`, signs it through DigiCert
   # (the private key never leaves their HSM) and hands the signed file back.
   sign-exe:
@@ -319,7 +319,7 @@ jobs:
     if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
     needs: [version, windows-exe]
     runs-on: windows-latest
-    environment: Signing
+    environment: Package Signing
     permissions:
       contents: read
     defaults:
@@ -336,7 +336,7 @@ jobs:
           SM_API_KEY: ${{ secrets.SM_API_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not $env:SM_API_KEY) { throw 'the environment Signing holds no SM_API_KEY' }
+          if (-not $env:SM_API_KEY) { throw 'the environment Package Signing holds no SM_API_KEY' }
           $msi = Join-Path $env:RUNNER_TEMP 'smtools-windows-x64.msi'
           $uri = 'https://one.digicert.com/signingmanager/api-ui/v1/releases/smtools-windows-x64.msi/download'
           Invoke-WebRequest -Uri $uri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msi
@@ -356,7 +356,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$SM_CLIENT_CERT_FILE_B64" ]; then
-            echo "::error::the environment Signing holds no SM_CLIENT_CERT_FILE_B64"
+            echo "::error::the environment Package Signing holds no SM_CLIENT_CERT_FILE_B64"
             exit 1
           fi
           umask 077
@@ -371,7 +371,7 @@ jobs:
         run: |
           set -euo pipefail
           for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
-            if [ -z "${!v}" ]; then echo "::error::the environment Signing holds no $v"; exit 1; fi
+            if [ -z "${!v}" ]; then echo "::error::the environment Package Signing holds no $v"; exit 1; fi
           done
           smctl healthcheck
           smctl sign --fingerprint "$FINGERPRINT" --input exe/supervisor.exe
@@ -808,9 +808,10 @@ jobs:
           echo "pushed $IMAGE@$digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-  # Signs every entry of the Client's own Package. The only job that names the environment
-  # `Package Signing`, whose secret it receives once a second person with write access approves
-  # it. It checks out no code and builds nothing: it downloads the archives' checksums and the
+  # Signs every entry of the Client's own Package. The only job that receives the
+  # package signing key, from the environment `Package Signing`, once a second person with write
+  # access approves it (`sign-exe` and `sign-msi` share the environment for DigiCert's secrets).
+  # It checks out no code and builds nothing: it downloads the archives' checksums and the
   # tracked certificate, writes the statement each entry's signature covers, signs it with the
   # runner's OpenSSL, and writes the PackageSignature that carries both.
   sign:
@@ -928,13 +929,13 @@ jobs:
           if-no-files-found: error
 
   # Authenticode-signs the Windows installer, whose program `sign-exe` already signed. The second
-  # job that names the environment `Signing`; like the first it checks out no code and builds
+  # job that names the environment `Package Signing`; like the first it checks out no code and builds
   # nothing. Its artifact carries the name `publish` collects, with the checksum of the signed file.
   sign-msi:
     if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
     needs: [version, build]
     runs-on: windows-latest
-    environment: Signing
+    environment: Package Signing
     permissions:
       contents: read
     defaults:
@@ -955,7 +956,7 @@ jobs:
           SM_API_KEY: ${{ secrets.SM_API_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not $env:SM_API_KEY) { throw 'the environment Signing holds no SM_API_KEY' }
+          if (-not $env:SM_API_KEY) { throw 'the environment Package Signing holds no SM_API_KEY' }
           $msi = Join-Path $env:RUNNER_TEMP 'smtools-windows-x64.msi'
           $uri = 'https://one.digicert.com/signingmanager/api-ui/v1/releases/smtools-windows-x64.msi/download'
           Invoke-WebRequest -Uri $uri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msi
@@ -975,7 +976,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$SM_CLIENT_CERT_FILE_B64" ]; then
-            echo "::error::the environment Signing holds no SM_CLIENT_CERT_FILE_B64"
+            echo "::error::the environment Package Signing holds no SM_CLIENT_CERT_FILE_B64"
             exit 1
           fi
           umask 077
@@ -990,7 +991,7 @@ jobs:
         run: |
           set -euo pipefail
           for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
-            if [ -z "${!v}" ]; then echo "::error::the environment Signing holds no $v"; exit 1; fi
+            if [ -z "${!v}" ]; then echo "::error::the environment Package Signing holds no $v"; exit 1; fi
           done
           if [ ! -f "msi/$MSI" ]; then
             echo "::error::the artifact msi-unsigned holds no $MSI"

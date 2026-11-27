@@ -1069,6 +1069,10 @@ fn each_signing_job_alone_names_its_environment_and_secrets_and_runs_nothing_of_
         .collect()
     };
     assert_eq!(names("environment:"), ["sign-exe", "sign", "sign-msi"]);
+    assert_eq!(
+        workflow.matches("environment: Package Signing\n").count(),
+        3
+    );
     assert_eq!(names("secrets."), ["sign-exe", "sign", "sign-msi"]);
     assert_eq!(names("SM_"), ["sign-exe", "sign-msi"]);
     assert_eq!(workflow.matches("secrets.PACKAGE_SIGNING_KEY").count(), 1);
@@ -1424,7 +1428,7 @@ fn the_authenticode_jobs_run_on_a_release_alone_and_run_nothing_of_the_repositor
     let workflow = workflow();
     for name in ["sign-exe", "sign-msi"] {
         let j = job(&workflow, name);
-        assert!(j.contains("    environment: Signing\n"), "{name}");
+        assert!(j.contains("    environment: Package Signing\n"), "{name}");
         assert!(
             j.contains(
                 "    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'\n"
