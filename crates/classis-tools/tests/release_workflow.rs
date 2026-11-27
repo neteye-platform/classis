@@ -1531,11 +1531,8 @@ fn the_two_authenticode_jobs_share_their_setup_steps_word_for_word() {
     ] {
         assert_eq!(step(exe, name), step(msi, name), "{name} drifted apart");
     }
-    // Only the file differs between the two signing steps; the tool, the certificate and the checks do not.
-    for (name, file) in [(
-        "The signature is valid and is this certificate's",
-        ["exe/supervisor.exe", "msi/$env:MSI"],
-    )] {
-        assert!(step(exe, name).contains(file[0]) && step(msi, name).contains(file[1]));
-    }
+    // Only the file differs between the two signature checks.
+    let check = "The signature is valid and is this certificate's";
+    assert!(step(exe, check).contains("exe/supervisor.exe"));
+    assert!(step(msi, check).contains("msi/$env:MSI"));
 }
