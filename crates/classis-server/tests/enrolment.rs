@@ -64,6 +64,7 @@ struct Setup {
     limits: Limits,
     operator_auth: Option<classis_server::api::OperatorAuth>,
     agent_rate: Option<classis_server::agent_rate::Limits>,
+    max_agents: Option<usize>,
 }
 
 impl Default for Setup {
@@ -73,6 +74,7 @@ impl Default for Setup {
             limits: GENEROUS,
             operator_auth: None,
             agent_rate: None,
+            max_agents: None,
         }
     }
 }
@@ -109,14 +111,16 @@ async fn rig(setup: Setup) -> Rig {
         .create("lab")
         .expect("a space")
         .to_string();
-    let state = Arc::new(
-        support::state_on(dir.path()).with_agent_rate(setup.agent_rate.map(|limits| {
-            Arc::new(classis_server::agent_rate::AgentRate::new(
-                limits,
-                clock.clone(),
-            ))
-        })),
-    );
+    let mut state = support::state_on(dir.path());
+    if let Some(max) = setup.max_agents {
+        state = state.with_max_agents(max);
+    }
+    let state = Arc::new(state.with_agent_rate(setup.agent_rate.map(|limits| {
+        Arc::new(classis_server::agent_rate::AgentRate::new(
+            limits,
+            clock.clone(),
+        ))
+    })));
     let (addr, rest_addr) =
         support::serve_enrolled(state.clone(), enrolment.clone(), setup.operator_auth).await;
     Rig {
@@ -582,6 +586,52 @@ async fn an_upgrade_listing_websocket_among_others_ends_when_the_token_is_replac
     assert_eq!(u16::from_be_bytes([frame[2], frame[3]]), 1008);
 }
 
+/// A peer that never stops sending still has its session closed with 1008 when its token is
+/// replaced: what it sent first does not keep the close waiting.
+/// Verifies: G-17
+#[tokio::test]
+async fn a_session_that_keeps_sending_ends_when_its_token_is_replaced() {
+    let rig = rig(Setup::default()).await;
+    let mut host = rig.enrol().await;
+    let mut socket = websocket(&rig, Some(&host.token)).await.expect("admitted");
+    let uid = InstanceUid::default();
+    send(&mut socket, &report(&uid, 1)).await;
+    recv(&mut socket).await;
+
+    let (mut sink, mut stream) = socket.split();
+    // The peer sends without pause, and reads what it is answered with.
+    let writer = tokio::spawn(async move {
+        let mut sequence = 2;
+        loop {
+            let frame = frame::encode_within(&support::compressed_report(&uid, sequence), LIMIT)
+                .expect("a frame");
+            if sink.send(Message::Binary(frame.into())).await.is_err() {
+                break;
+            }
+            sequence += 1;
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    rig.renew(&mut host).await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(Message::Close(frame))) => break frame,
+                Some(Ok(_)) => continue,
+                // The server closed with the peer's frames still unread, which the transport may
+                // report as a reset instead of the close frame: the session has ended all the same.
+                Some(Err(_)) | None => break None,
+            }
+        }
+    })
+    .await
+    .expect("the session is ended within five seconds");
+    writer.abort();
+    if let Some(frame) = closed {
+        assert_eq!(frame.code, CloseCode::Policy, "1008");
+    }
+}
+
 /// The Agent plane completes an OpAMP exchange on both transports with a bearer token and no
 /// client certificate: the Server speaks plain HTTP and reads none.
 /// Verifies: G-17
@@ -995,6 +1045,45 @@ async fn messages_and_downloads_are_counted_for_the_admitted_client() {
         ),
         "another client has a bucket of its own"
     );
+}
+
+/// A message refused for the rate limit, and a new Agent refused at the record ceiling, are each
+/// answered `Unavailable` and name the Agent they answer, so its Client can match the refusal to
+/// its request.
+/// Verifies: G-17
+#[tokio::test]
+async fn a_refusal_names_the_agent_it_answers() {
+    let rig = rig(Setup {
+        agent_rate: Some(classis_server::agent_rate::Limits {
+            messages_per_sec: 1,
+            burst: 3,
+        }),
+        max_agents: Some(1),
+        ..Setup::default()
+    })
+    .await;
+    let host = rig.enrol().await;
+    let (first, newcomer) = (InstanceUid::default(), InstanceUid::default());
+    let unavailable = |reply: &ServerToAgent| {
+        reply
+            .error_response
+            .as_ref()
+            .is_some_and(|error| error.r#type == ServerErrorResponseType::Unavailable as i32)
+    };
+    assert!(!unavailable(
+        &rig.report(&host.token, &report(&first, 1)).await
+    ));
+
+    let at_ceiling = rig.report(&host.token, &report(&newcomer, 1)).await;
+    assert!(unavailable(&at_ceiling), "the fleet is full");
+    assert_eq!(at_ceiling.instance_uid, newcomer.as_bytes());
+
+    assert!(!unavailable(
+        &rig.report(&host.token, &report(&first, 2)).await
+    ));
+    let throttled = rig.report(&host.token, &report(&first, 3)).await;
+    assert!(unavailable(&throttled), "the bucket is empty");
+    assert_eq!(throttled.instance_uid, first.as_bytes());
 }
 
 // ---- The challenges ----
