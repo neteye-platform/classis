@@ -16,8 +16,10 @@ its tag exists.
 - **The Server can be published under a path.** `base_path` in `server.toml`,
   such as `"/classis"`, makes the Agent plane answer under that path and offer
   its package downloads under it, for a reverse proxy that forwards the path as
-  it is. Point the Agents at `wss://<host>/classis/v1/opamp`. Nothing changes
-  while it is empty, and the Operator plane does not move.
+  it is. Point the Agents at `wss://<host>/classis/v1/opamp` and enrol hosts
+  against `https://<host>/classis` (`supervisor enrol <base-url> <key>`): the
+  root answers `404`. Nothing changes while it is empty, and the Operator plane
+  does not move.
 
 ### Changed
 
