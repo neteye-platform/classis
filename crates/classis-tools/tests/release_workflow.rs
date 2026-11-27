@@ -334,11 +334,15 @@ fn only_the_publish_job_may_attest() {
         [
             "package-signer",
             "sbom",
+            "supervisor-exe-unsigned",
+            "supervisor-exe-signed",
             "server-linux-${{ matrix.arch }}",
             "${{ steps.pack_tool.outputs.name }}",
             "${{ steps.pack.outputs.name }}",
+            "msi-unsigned",
             "sha256_${{ steps.pack.outputs.name }}",
-            "signatures"
+            "signatures",
+            "${{ env.MSI }}"
         ]
     );
 
@@ -354,7 +358,7 @@ fn the_publish_job_attests_and_verifies_every_asset_before_it_publishes() {
     let workflow = workflow();
     let publish = job(&workflow, "publish");
     assert!(
-        publish.contains("    needs: [version, build, sbom, image, sign]\n"),
+        publish.contains("    needs: [version, build, sbom, image, sign, sign-msi]\n"),
         "{publish}"
     );
 
@@ -1044,14 +1048,15 @@ fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_re
     let sign = job(&workflow, "sign");
     assert_eq!(
         workflow.matches("environment:").count(),
-        1,
-        "one environment"
+        3,
+        "Package Signing, and Signing twice: the Client program and the installer"
     );
     assert!(
         sign.contains("    environment: Package Signing\n"),
         "{sign}"
     );
-    assert_eq!(workflow.matches("secrets.").count(), 1, "one secret");
+    // The Package Signing key once; DigiCert's API key (twice), client certificate and its password, in each of the two Authenticode jobs.
+    assert_eq!(workflow.matches("secrets.").count(), 9, "nine secret uses");
     assert!(
         sign.contains("${{ secrets.PACKAGE_SIGNING_KEY }}"),
         "{sign}"
