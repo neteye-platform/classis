@@ -29,7 +29,7 @@ name: Release
 # The Windows Client program and installer are Authenticode-signed through DigiCert Software Trust
 # in the GitHub environment `Package Signing`: `windows-exe` builds the program, `sign-exe` signs it, `build`
 # packs the signed bytes into the `.tar.gz` and the `.msi`, and `sign-msi` signs the installer.
-# A dry run skips both signing jobs and never reaches the environment.
+# A dry run skips both signing jobs, unless it is started with `sign`, which signs and publishes nothing.
 #
 # The Server ships as a multi-architecture image, `ghcr.io/neteye-platform/classis-server:<version>`,
 # built from packaging/container/Containerfile by copying the Server binaries the Linux rows built
@@ -37,8 +37,15 @@ name: Release
 # with the version.
 
 on:
-  # A dry run: builds and packs every target, and neither signs nor publishes.
+  # A dry run: builds and packs every target and publishes nothing. It signs the Windows program and
+  # installer only when asked to (`sign`), so the Authenticode setup can be tried before a tag costs a version;
+  # the environment's reviewer approves that run like a release's.
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Authenticode-sign the Windows program and installer (publishes nothing)
+        type: boolean
+        default: false
   # A release: the tag a person pushed on a commit of `main`.
   push:
     # `v` and three numbers: `v0.1.0`. Any other tag, `very-old` included, starts nothing.
@@ -296,6 +303,7 @@ jobs:
         run: rustup target add x86_64-pc-windows-msvc
       - name: Build the Client
         run: cargo build --release -p classis-agent --bin supervisor --target x86_64-pc-windows-msvc --locked
+      # Fails before the signing approval is asked for. `build` asks again of the signed bytes.
       - name: The binary agrees with the name it will be given
         run: |
           reported=$(./target/x86_64-pc-windows-msvc/release/supervisor.exe --version | awk '{print $NF}')
@@ -315,8 +323,11 @@ jobs:
   # checks out no code and builds nothing: it downloads one `.exe`, signs it through DigiCert
   # (the private key never leaves their HSM) and hands the signed file back.
   sign-exe:
-    # Only a release; a dry run never reaches the environment and `build` takes the unsigned file.
-    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
+    # A release, or a dry run asked to sign; any other run never reaches the environment and `build`
+    # takes the unsigned file.
+    if: >-
+      ${{ (github.event_name == 'push' && needs.version.outputs.publish == 'true')
+      || (github.event_name == 'workflow_dispatch' && inputs.sign) }}
     needs: [version, windows-exe]
     runs-on: windows-latest
     environment: Package Signing
@@ -340,9 +351,9 @@ jobs:
           $msi = Join-Path $env:RUNNER_TEMP 'smtools-windows-x64.msi'
           $uri = 'https://one.digicert.com/signingmanager/api-ui/v1/releases/smtools-windows-x64.msi/download'
           Invoke-WebRequest -Uri $uri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msi
-          # What was downloaded must be a DigiCert-signed installer before it is run.
+          # What was downloaded must be signed by DigiCert, Inc. itself before it is run.
           $sig = Get-AuthenticodeSignature $msi
-          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'DigiCert') {
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O="?DigiCert, Inc\."?(,|$)') {
             throw "the tools installer is not signed by DigiCert: $($sig.Status)"
           }
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow -PassThru
@@ -447,7 +458,7 @@ jobs:
           path: target/${{ matrix.target }}/release
       # A release never ships the program unsigned: if `sign-exe` was skipped by mistake, this fails.
       - name: The Client program is signed on a release
-        if: matrix.os == 'windows' && github.event_name == 'push' && needs.version.outputs.publish == 'true'
+        if: matrix.os == 'windows' && ((github.event_name == 'push' && needs.version.outputs.publish == 'true') || inputs.sign)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -464,6 +475,8 @@ jobs:
       - name: Build the Server
         if: matrix.os == 'linux'
         run: cargo build --release -p classis-server --bin server --target ${{ matrix.target }} --locked
+      # On Windows this runs the program `sign-exe` signed, which `windows-exe` checked as built: the
+      # bytes differ, so the check is kept.
       - name: The binary agrees with the name it will be given
         if: matrix.native
         run: |
@@ -932,7 +945,9 @@ jobs:
   # job that names the environment `Package Signing`; like the first it checks out no code and builds
   # nothing. Its artifact carries the name `publish` collects, with the checksum of the signed file.
   sign-msi:
-    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'
+    if: >-
+      ${{ (github.event_name == 'push' && needs.version.outputs.publish == 'true')
+      || (github.event_name == 'workflow_dispatch' && inputs.sign) }}
     needs: [version, build]
     runs-on: windows-latest
     environment: Package Signing
@@ -960,9 +975,9 @@ jobs:
           $msi = Join-Path $env:RUNNER_TEMP 'smtools-windows-x64.msi'
           $uri = 'https://one.digicert.com/signingmanager/api-ui/v1/releases/smtools-windows-x64.msi/download'
           Invoke-WebRequest -Uri $uri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msi
-          # What was downloaded must be a DigiCert-signed installer before it is run.
+          # What was downloaded must be signed by DigiCert, Inc. itself before it is run.
           $sig = Get-AuthenticodeSignature $msi
-          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'DigiCert') {
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O="?DigiCert, Inc\."?(,|$)') {
             throw "the tools installer is not signed by DigiCert: $($sig.Status)"
           }
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow -PassThru

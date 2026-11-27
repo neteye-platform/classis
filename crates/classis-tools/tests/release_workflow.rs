@@ -995,7 +995,7 @@ fn actions(job: &str) -> Vec<&str> {
 #[test]
 fn a_release_starts_only_from_a_tag_a_person_pushed() {
     let workflow = workflow();
-    // Two triggers: the pushed tag, and a dry run by hand that takes no input.
+    // Two triggers: the pushed tag, and a dry run by hand whose one input asks it to sign.
     let on = workflow
         .split_once("\non:\n")
         .and_then(|(_, rest)| rest.split_once("\n\n"))
@@ -1009,12 +1009,27 @@ fn a_release_starts_only_from_a_tag_a_person_pushed() {
         triggers,
         [
             "  workflow_dispatch:",
+            "    inputs:",
+            "      sign:",
+            "        description: Authenticode-sign the Windows program and installer (publishes nothing)",
+            "        type: boolean",
+            "        default: false",
             "  push:",
             "    tags: [\"v[0-9]+.[0-9]+.[0-9]+\"]"
         ],
         "{on}"
     );
-    assert!(!workflow.contains("inputs."), "a run reads no input");
+    // The one input only decides whether the Authenticode jobs and their check run.
+    let readers: Vec<&str> = workflow
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter(|line| line.contains("inputs."))
+        .filter(|line| !line.contains("inputs.sign"))
+        .collect();
+    assert!(
+        readers.is_empty(),
+        "a run reads no other input: {readers:?}"
+    );
 
     // The workflow pushes no tag, so no job needs write access to the contents for one.
     assert!(!workflow.contains("git push"), "the workflow pushes");
@@ -1051,22 +1066,24 @@ fn each_signing_job_alone_names_its_environment_and_secrets_and_runs_nothing_of_
         "{sign}"
     );
     // Every job that names an environment or reads a secret, and nothing besides them.
+    let all_jobs: Vec<&str> = workflow
+        .split_once("\njobs:\n")
+        .expect("a jobs: block")
+        .1
+        .lines()
+        .filter_map(|line| line.strip_prefix("  ")?.strip_suffix(':'))
+        .filter(|name| !name.is_empty() && !name.contains([' ', '#']))
+        .collect();
+    assert!(
+        all_jobs.contains(&"sign-msi") && all_jobs.len() >= 10,
+        "{all_jobs:?}"
+    );
     let names = |needle: &str| -> Vec<&str> {
-        [
-            "advisories",
-            "version",
-            "sbom",
-            "windows-exe",
-            "sign-exe",
-            "build",
-            "image",
-            "sign",
-            "sign-msi",
-            "publish",
-        ]
-        .into_iter()
-        .filter(|j| job(&workflow, j).contains(needle))
-        .collect()
+        all_jobs
+            .iter()
+            .copied()
+            .filter(|j| job(&workflow, j).contains(needle))
+            .collect()
     };
     assert_eq!(names("environment:"), ["sign-exe", "sign", "sign-msi"]);
     assert_eq!(
@@ -1074,6 +1091,9 @@ fn each_signing_job_alone_names_its_environment_and_secrets_and_runs_nothing_of_
         3
     );
     assert_eq!(names("secrets."), ["sign-exe", "sign", "sign-msi"]);
+    // And across the whole file, so a job nobody listed cannot read one unseen.
+    assert_eq!(workflow.matches("environment:").count(), 3);
+    assert_eq!(workflow.matches("secrets.").count(), 9);
     assert_eq!(names("SM_"), ["sign-exe", "sign-msi"]);
     assert_eq!(workflow.matches("secrets.PACKAGE_SIGNING_KEY").count(), 1);
     assert!(
@@ -1431,9 +1451,9 @@ fn the_authenticode_jobs_run_on_a_release_alone_and_run_nothing_of_the_repositor
         assert!(j.contains("    environment: Package Signing\n"), "{name}");
         assert!(
             j.contains(
-                "    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'\n"
+                "    if: >-\n      ${{ (github.event_name == 'push' && needs.version.outputs.publish == 'true')\n      || (github.event_name == 'workflow_dispatch' && inputs.sign) }}\n"
             ),
-            "{name}: a dry run must never reach the environment"
+            "{name}: only a release, or a dry run asked to sign, reaches the environment"
         );
         assert!(!j.contains("actions/checkout"), "{name}");
         assert!(!j.contains("cargo "), "{name}");
@@ -1497,4 +1517,25 @@ fn the_signed_installer_is_named_as_build_names_it_and_publish_collects_it() {
         assert!(!glob("supervisor_*", name), "{name} would be published");
     }
     assert!(glob("supervisor_*", "supervisor_1.2.3_windows_amd64.msi"));
+}
+
+#[test]
+fn the_two_authenticode_jobs_share_their_setup_steps_word_for_word() {
+    let workflow = workflow();
+    let exe = job(&workflow, "sign-exe");
+    let msi = job(&workflow, "sign-msi");
+    for name in [
+        "Install the Software Trust tools",
+        "Write the client certificate",
+        "Remove the client certificate",
+    ] {
+        assert_eq!(step(exe, name), step(msi, name), "{name} drifted apart");
+    }
+    // Only the file differs between the two signing steps; the tool, the certificate and the checks do not.
+    for (name, file) in [(
+        "The signature is valid and is this certificate's",
+        ["exe/supervisor.exe", "msi/$env:MSI"],
+    )] {
+        assert!(step(exe, name).contains(file[0]) && step(msi, name).contains(file[1]));
+    }
 }
