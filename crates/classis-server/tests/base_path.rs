@@ -16,7 +16,9 @@ use tokio_tungstenite::tungstenite::Message as Frame;
 const PROTOBUF: &str = "application/x-protobuf";
 
 /// The Agent plane alone, without admission, wrapped as the binary wraps it for `base_path`.
-async fn serve_under(base_path: &str) -> std::net::SocketAddr {
+/// Answers with the address and the state's directory, which the caller keeps for as long as it
+/// uses the Server.
+async fn serve_under(base_path: &str) -> (std::net::SocketAddr, tempfile::TempDir) {
     opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(state_on(dir.path()));
@@ -28,10 +30,7 @@ async fn serve_under(base_path: &str) -> std::net::SocketAddr {
         classis_server::listen::plane(listener, 1024, opamp::server::listen::Handle::new())
             .serve(agents),
     );
-    // The state's directory lives as long as the test process: the Server under test is dropped
-    // with it.
-    std::mem::forget(dir);
-    addr
+    (addr, dir)
 }
 
 async fn post(client: &reqwest::Client, url: &str, message: &AgentToServer) -> reqwest::Response {
@@ -46,7 +45,7 @@ async fn post(client: &reqwest::Client, url: &str, message: &AgentToServer) -> r
 
 #[tokio::test]
 async fn the_opamp_endpoint_answers_under_the_base_path_and_nowhere_else() {
-    let addr = serve_under("/classis").await;
+    let (addr, _dir) = serve_under("/classis").await;
     let client = reqwest::Client::new();
     let report = full_report(&InstanceUid::default(), "itest", 1);
 
@@ -60,7 +59,7 @@ async fn the_opamp_endpoint_answers_under_the_base_path_and_nowhere_else() {
 
 #[tokio::test]
 async fn the_package_download_is_routed_under_the_base_path() {
-    let addr = serve_under("/classis").await;
+    let (addr, _dir) = serve_under("/classis").await;
     let client = reqwest::Client::new();
     let query = "none/1.0.0/file?os=linux&arch=amd64";
     // No such package. Under the prefix the download handler answers, and says so in its body;
@@ -88,17 +87,120 @@ async fn the_package_download_is_routed_under_the_base_path() {
 
 #[tokio::test]
 async fn without_a_base_path_the_plane_is_at_the_root() {
-    let addr = serve_under("").await;
+    let (addr, _dir) = serve_under("").await;
     let client = reqwest::Client::new();
     let report = full_report(&InstanceUid::default(), "itest", 1);
     let reply = post(&client, &format!("http://{addr}/v1/opamp"), &report).await;
     assert_eq!(reply.status(), 200);
 }
 
+/// The `download_url` the Server offers, fetched as the Agent resolves it against the origin of
+/// its endpoint, is a route: the URL and the route share one prefix, they do not agree by chance.
+#[tokio::test]
+async fn the_offered_download_url_is_fetched_under_the_base_path() {
+    use classis_server::fleet::{AppState, PackageOffering};
+    use classis_server::packages::{PackageId, Platform};
+    use opamp::proto::{AgentCapabilities, AgentDescription};
+
+    const OTELCOL: &str = "otelcol";
+    opamp::tls::install_ring_provider();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let packages =
+        support::open_store(&dir.path().join("packages")).with_base_path("/classis".to_string());
+    let state = Arc::new(
+        AppState::new(dir.path().join("fleet-configs"))
+            .expect("open the configuration store")
+            .with_packages(Some(
+                PackageOffering::new(&dir.path().join("packages"), packages).expect("deployments"),
+            )),
+    );
+    let agents = classis_server::under_base_path(
+        classis_server::agent_app_open_for_tests(state.clone()),
+        "/classis",
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(
+        classis_server::listen::plane(listener, 1024, opamp::server::listen::Handle::new())
+            .serve(agents),
+    );
+
+    // One Agent that accepts packages reports.
+    let attr = opamp::attributes::string_attr;
+    let report = AgentToServer {
+        instance_uid: InstanceUid([1; 16]).as_bytes().to_vec(),
+        sequence_num: 1,
+        agent_description: Some(AgentDescription {
+            identifying_attributes: vec![attr("service.name", OTELCOL)],
+            non_identifying_attributes: vec![attr("os.type", "linux"), attr("host.arch", "amd64")],
+        }),
+        capabilities: AgentCapabilities::ReportsStatus as u64
+            | AgentCapabilities::AcceptsPackages as u64,
+        ..Default::default()
+    };
+    let client = reqwest::Client::new();
+    let opamp_url = format!("http://{addr}/classis/v1/opamp");
+    assert_eq!(post(&client, &opamp_url, &report).await.status(), 200);
+
+    // A Package is saved, signed, and released to it.
+    let id = PackageId::new(OTELCOL, "1.0.0").expect("id");
+    let linux = Platform::new("linux", "amd64").expect("platform");
+    let artifact = b"the-binary";
+    let store = state.packages().expect("package delivery");
+    store.create(&id).expect("create");
+    store
+        .put_entry(&id, &linux, artifact.to_vec())
+        .expect("entry");
+    store
+        .put_signature(
+            &id,
+            &linux,
+            support::test_root().1.sign_artifact(
+                OTELCOL,
+                "1.0.0",
+                &<sha2::Sha256 as sha2::Digest>::digest(artifact),
+            ),
+        )
+        .expect("signature");
+    state
+        .deployment_store()
+        .expect("deployments")
+        .put(
+            "stable",
+            [("service.name".to_string(), OTELCOL.to_string())].into(),
+        )
+        .expect("deployment");
+    state
+        .put_deployment_package("stable", &id, true)
+        .expect("package");
+    assert_eq!(state.rollout_deployment("stable").expect("the press"), 1);
+
+    let reply = post(&client, &opamp_url, &report).await;
+    let reply = ServerToAgent::decode(reply.bytes().await.expect("body").as_ref()).expect("reply");
+    let url = reply.packages_available.expect("an offer").packages[OTELCOL]
+        .file
+        .as_ref()
+        .expect("file")
+        .download_url
+        .clone();
+    assert!(
+        url.starts_with("/classis/"),
+        "offered under the prefix: {url}"
+    );
+
+    let download = client
+        .get(format!("http://{addr}{url}"))
+        .send()
+        .await
+        .expect("get");
+    assert_eq!(download.status(), 200, "the offered URL is a route");
+    assert_eq!(download.bytes().await.expect("bytes").as_ref(), artifact);
+}
+
 /// The WebSocket upgrade, which the Agents use, goes through the prefix as the plain exchange does.
 #[tokio::test]
 async fn the_websocket_upgrade_is_answered_under_the_base_path() {
-    let addr = serve_under("/classis").await;
+    let (addr, _dir) = serve_under("/classis").await;
     let limit = frame::DEFAULT_MAX_MESSAGE_SIZE;
     let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/classis/v1/opamp"))
         .await
