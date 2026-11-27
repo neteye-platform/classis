@@ -336,6 +336,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      SIGN_FILE: exe/supervisor.exe
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -373,7 +375,7 @@ jobs:
           umask 077
           printf '%s' "$SM_CLIENT_CERT_FILE_B64" | base64 -d > "$RUNNER_TEMP/sm-client-cert.p12"
           echo "SM_CLIENT_CERT_FILE=$(cygpath -w "$RUNNER_TEMP/sm-client-cert.p12")" >> "$GITHUB_ENV"
-      - name: Sign the Client program
+      - name: Sign the file
         env:
           SM_HOST: ${{ vars.SM_HOST }}
           SM_API_KEY: ${{ secrets.SM_API_KEY }}
@@ -384,16 +386,22 @@ jobs:
           for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
             if [ -z "${!v}" ]; then echo "::error::the environment Package Signing holds no $v"; exit 1; fi
           done
+          if [ ! -f "$SIGN_FILE" ]; then
+            echo "::error::the unsigned artifact holds no $SIGN_FILE"
+            exit 1
+          fi
           smctl healthcheck
-          smctl sign --fingerprint "$FINGERPRINT" --input exe/supervisor.exe
+          # Signing by fingerprint reads the certificate from the Windows store; a fresh runner has none.
+          smctl windows certsync
+          smctl sign --fingerprint "$FINGERPRINT" --input "$SIGN_FILE"
       - name: The signature is valid and is this certificate's
         shell: pwsh
         env:
           FINGERPRINT: ${{ vars.SM_CERT_FINGERPRINT }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $sig = Get-AuthenticodeSignature exe/supervisor.exe
-          if ($sig.Status -ne 'Valid') { throw "supervisor.exe: $($sig.Status)" }
+          $sig = Get-AuthenticodeSignature $env:SIGN_FILE
+          if ($sig.Status -ne 'Valid') { throw "$env:SIGN_FILE`: $($sig.Status)" }
           if ($sig.SignerCertificate.Thumbprint -ne $env:FINGERPRINT) { throw "signed by $($sig.SignerCertificate.Thumbprint), not $env:FINGERPRINT" }
           if (-not $sig.TimeStamperCertificate) { throw 'no timestamp on the signature' }
       - name: Remove the client certificate
@@ -960,6 +968,7 @@ jobs:
       # The `env` context does not exist at the job level, so the artifact's name is spelled out:
       # `${ARTIFACT}_<version>_windows_amd64`, the Windows row's STEM in `build`.
       MSI: supervisor_${{ needs.version.outputs.version }}_windows_amd64.msi
+      SIGN_FILE: msi/supervisor_${{ needs.version.outputs.version }}_windows_amd64.msi
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -997,7 +1006,7 @@ jobs:
           umask 077
           printf '%s' "$SM_CLIENT_CERT_FILE_B64" | base64 -d > "$RUNNER_TEMP/sm-client-cert.p12"
           echo "SM_CLIENT_CERT_FILE=$(cygpath -w "$RUNNER_TEMP/sm-client-cert.p12")" >> "$GITHUB_ENV"
-      - name: Sign the installer
+      - name: Sign the file
         env:
           SM_HOST: ${{ vars.SM_HOST }}
           SM_API_KEY: ${{ secrets.SM_API_KEY }}
@@ -1008,20 +1017,22 @@ jobs:
           for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
             if [ -z "${!v}" ]; then echo "::error::the environment Package Signing holds no $v"; exit 1; fi
           done
-          if [ ! -f "msi/$MSI" ]; then
-            echo "::error::the artifact msi-unsigned holds no $MSI"
+          if [ ! -f "$SIGN_FILE" ]; then
+            echo "::error::the unsigned artifact holds no $SIGN_FILE"
             exit 1
           fi
           smctl healthcheck
-          smctl sign --fingerprint "$FINGERPRINT" --input "msi/$MSI"
+          # Signing by fingerprint reads the certificate from the Windows store; a fresh runner has none.
+          smctl windows certsync
+          smctl sign --fingerprint "$FINGERPRINT" --input "$SIGN_FILE"
       - name: The signature is valid and is this certificate's
         shell: pwsh
         env:
           FINGERPRINT: ${{ vars.SM_CERT_FINGERPRINT }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $sig = Get-AuthenticodeSignature "msi/$env:MSI"
-          if ($sig.Status -ne 'Valid') { throw "$env:MSI`: $($sig.Status)" }
+          $sig = Get-AuthenticodeSignature $env:SIGN_FILE
+          if ($sig.Status -ne 'Valid') { throw "$env:SIGN_FILE`: $($sig.Status)" }
           if ($sig.SignerCertificate.Thumbprint -ne $env:FINGERPRINT) { throw "signed by $($sig.SignerCertificate.Thumbprint), not $env:FINGERPRINT" }
           if (-not $sig.TimeStamperCertificate) { throw 'no timestamp on the signature' }
       - name: Checksum the signed installer
@@ -1324,7 +1335,7 @@ jobs:
           ./supervisor service start
           \`\`\`
 
-          The installers carry no code signature: Windows will show an unknown publisher, and \`rpm\` reports no
+          The Windows program and installer are Authenticode-signed. The \`rpm\` package carries no
           signature. Every asset is attested, and \`SHA256SUMS\` covers every asset above; the image
           is attested by its digest.
           EOF

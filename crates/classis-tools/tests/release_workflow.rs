@@ -1524,15 +1524,17 @@ fn the_two_authenticode_jobs_share_their_setup_steps_word_for_word() {
     let workflow = workflow();
     let exe = job(&workflow, "sign-exe");
     let msi = job(&workflow, "sign-msi");
+    // The file comes from the job's `SIGN_FILE`, so every one of the five steps is word for word.
     for name in [
         "Install the Software Trust tools",
         "Write the client certificate",
+        "Sign the file",
+        "The signature is valid and is this certificate's",
         "Remove the client certificate",
     ] {
         assert_eq!(step(exe, name), step(msi, name), "{name} drifted apart");
     }
-    // Only the file differs between the two signature checks.
-    let check = "The signature is valid and is this certificate's";
-    assert!(step(exe, check).contains("exe/supervisor.exe"));
-    assert!(step(msi, check).contains("msi/$env:MSI"));
+    assert!(exe.contains("SIGN_FILE: exe/supervisor.exe"));
+    assert!(msi.contains("SIGN_FILE: msi/supervisor_"));
+    assert!(step(exe, "Sign the file").contains("smctl windows certsync"));
 }
