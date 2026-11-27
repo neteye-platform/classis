@@ -85,7 +85,7 @@ zeroize.workspace = true
 libc.workspace = true
 
 # The SCM runtime shim, so the daemon runs under the Windows Service Control Manager.
-# Not compiled on Linux/macOS.
+# Not compiled on Linux.
 [target.'cfg(windows)'.dependencies]
 windows-service.workspace = true
 
@@ -161,9 +161,6 @@ classis-core = { workspace = true, features = ["test-support"] }
 # Virtual time, so a bound measured in minutes is tested in milliseconds.
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
-# A test reads the process account back from a plist as `service-manager` writes it,
-# through the crate it writes with.
-plist = "1"
 # A test holds a TLS connection open mid-headers on the Gateway (H18), below what a client library
 # would let it do.
 rustls.workspace = true

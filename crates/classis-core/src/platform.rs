@@ -11,8 +11,6 @@
 /// name, a foreign build system, an Agent that predates the convention — not as a general
 /// vocabulary. Everything this project produces is already canonical.
 const OS_ALIASES: &[(&str, &str)] = &[
-    ("macos", "darwin"),
-    ("osx", "darwin"),
     ("win", "windows"),
     ("win32", "windows"),
     ("win64", "windows"),
@@ -64,8 +62,6 @@ mod tests {
     /// artifact's platform against the right.
     #[test]
     fn folds_the_spellings_this_project_does_not_control() {
-        assert_eq!(canonical_os("macos"), "darwin");
-        assert_eq!(canonical_os("osx"), "darwin");
         for win in ["win", "win32", "win64"] {
             assert_eq!(canonical_os(win), "windows");
         }
@@ -89,7 +85,13 @@ mod tests {
             canonical_arch("amd64"),
             "rustc's spelling and the convention's are one machine"
         );
-        assert_eq!(canonical_os("macos"), canonical_os("darwin"));
+        for os in ["linux", "windows"] {
+            assert_eq!(
+                canonical_os(os),
+                os,
+                "rustc's name for {os} is the convention's"
+            );
+        }
     }
 
     /// A system the table has never heard of is served under its own name rather than refused: a
@@ -100,11 +102,21 @@ mod tests {
         assert_eq!(canonical_arch("riscv64"), "riscv64");
         assert_eq!(canonical_os(""), "");
         // Already canonical stays put — the table never folds a token onto another canonical one.
-        for os in ["linux", "darwin", "windows"] {
+        for os in ["linux", "windows"] {
             assert_eq!(canonical_os(os), os);
         }
         for arch in ["amd64", "arm64"] {
             assert_eq!(canonical_arch(arch), arch);
         }
+    }
+
+    /// No program of the product is built for macOS, so the table keeps no alias for it: each of
+    /// its spellings is an unknown token, served under its own name and folded onto no other.
+    #[test]
+    fn the_macos_spellings_pass_through_unchanged() {
+        for os in ["macos", "osx", "darwin"] {
+            assert_eq!(canonical_os(os), os);
+        }
+        assert_ne!(canonical_os("macos"), canonical_os("darwin"));
     }
 }

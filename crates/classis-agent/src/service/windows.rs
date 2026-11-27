@@ -1,6 +1,6 @@
 //! The Windows Service Control Manager (SCM) runtime shim, compiled only on Windows.
 //!
-//! Unlike systemd and launchd — which supervise an ordinary foreground process — the Windows SCM
+//! Unlike systemd — which supervises an ordinary foreground process — the Windows SCM
 //! launches the service and then expects it to register a control handler and report `Running`
 //! within a bounded time, or it kills the process with error 1053. This shim does exactly that:
 //! it reports `StartPending` → `Running`, runs the same daemon body as the foreground path, and

@@ -1,5 +1,5 @@
-//! A stub Managed Process for tests: pure Rust so it behaves identically on Linux,
-//! macOS, and Windows CI — no shell scripts.
+//! A stub Managed Process for tests: pure Rust so it behaves identically on Linux and Windows CI —
+//! no shell scripts.
 //!
 //! Behaviour, driven entirely by arguments:
 //! - `--version` — print a version line the way real agents do (free text around a SemVer),

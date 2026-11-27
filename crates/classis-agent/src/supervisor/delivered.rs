@@ -166,7 +166,7 @@ const LOADING_NAMES: &[&str] = &[
 ];
 
 /// Prefixes of the same kind: the loaders' own and the .NET profilers'.
-const LOADING_PREFIXES: &[&str] = &["LD_", "DYLD_", "COR_PROFILER", "CORECLR_PROFILER"];
+const LOADING_PREFIXES: &[&str] = &["LD_", "COR_PROFILER", "CORECLR_PROFILER"];
 
 fn steers_loading(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();

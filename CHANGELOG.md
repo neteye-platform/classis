@@ -11,6 +11,16 @@ its tag exists.
 
 ## [Unreleased]
 
+### Removed
+
+- **Support for macOS.** No release carries a macOS build of the Client or of
+  `classisctl`. The Server no longer reads the platform spellings `macos` and
+  `osx` as `darwin`, and the upload form no longer fills in a macOS platform
+  from a file name. `classisctl package fetch` no longer offers or accepts a
+  `darwin` archive, a Collector's included. A delivered block's `env` may now
+  set a `DYLD_*` variable where `delivered_env` allows it, since no Client runs
+  where one is read.
+
 ## [0.2.0]
 
 ### Added

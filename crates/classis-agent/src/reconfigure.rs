@@ -928,7 +928,6 @@ mod tests {
         for name in [
             "LD_PRELOAD",
             "LD_LIBRARY_PATH",
-            "DYLD_INSERT_LIBRARIES",
             "PATH",
             "Path",
             "GLIBC_TUNABLES",

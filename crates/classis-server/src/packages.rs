@@ -2290,23 +2290,23 @@ mod tests {
         );
     }
 
-    /// Both sides of the platform comparison are canonicalised: an artifact uploaded
-    /// as `macos`/`x86_64` reaches an Agent reporting `darwin`/`amd64`.
+    /// Both sides of the platform comparison are canonicalised: an artifact uploaded as
+    /// `win64`/`x86_64` reaches an Agent reporting `windows`/`amd64`.
     #[test]
     fn both_sides_of_the_comparison_are_canonicalised() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = open_store(dir.path()).expect("open");
         let set = id("otelcol", "1.0.0");
         store.create(&set).expect("create");
-        let mac = Platform::new("macos", "x86_64").expect("canonicalised");
-        assert_eq!((mac.os.as_str(), mac.arch.as_str()), ("darwin", "amd64"));
-        store.put_entry(&set, &mac, b"mac".to_vec()).expect("entry");
+        let win = Platform::new("win64", "x86_64").expect("canonicalised");
+        assert_eq!((win.os.as_str(), win.arch.as_str()), ("windows", "amd64"));
+        store.put_entry(&set, &win, b"win".to_vec()).expect("entry");
         assert_eq!(
-            candidates(&store, &agent("darwin", "amd64", &[])),
+            candidates(&store, &agent("windows", "amd64", &[])),
             [("otelcol".to_string(), "1.0.0".to_string())]
         );
         assert_eq!(
-            offered(&store, Some(&set), &agent("darwin", "amd64", &[])),
+            offered(&store, Some(&set), &agent("windows", "amd64", &[])),
             [("otelcol".to_string(), "1.0.0".to_string())]
         );
     }

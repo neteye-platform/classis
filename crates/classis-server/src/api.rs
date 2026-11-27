@@ -1258,7 +1258,7 @@ struct PackageSetView {
 /// One platform's entry of a Package: an uploaded artifact and its signature.
 #[derive(Serialize, ToSchema)]
 struct PackageEntryView {
-    /// The operating system, as `os.type` reports it: `linux`, `darwin`, `windows`.
+    /// The operating system, as `os.type` reports it: `linux`, `windows`.
     os: String,
     /// The architecture, as `host.arch` reports it: `amd64`, `arm64`.
     arch: String,
@@ -1331,8 +1331,8 @@ impl PackageSetView {
 /// request naming bytes names the Platform they are for.
 #[derive(Deserialize)]
 struct PlatformQuery {
-    /// The operating system, as `os.type`: `linux`, `darwin`, `windows`. Other spellings — `macos`
-    /// off a release file name — are accepted and answered canonically.
+    /// The operating system, as `os.type`: `linux`, `windows`. Other spellings — `win64` off a
+    /// release file name — are accepted and answered canonically.
     os: String,
     /// The architecture, as `host.arch`: `amd64`, `arm64`. Other spellings — `x86_64`, `aarch64` —
     /// are accepted and answered canonically.
@@ -1534,7 +1534,7 @@ async fn delete_package_set(
     params(
         ("agent_type" = String, Path, description = "The Agent type"),
         ("version" = String, Path, description = "The version"),
-        ("os" = String, Path, description = "The operating system this artifact is built for, as `os.type`: `linux`, `darwin`, `windows`"),
+        ("os" = String, Path, description = "The operating system this artifact is built for, as `os.type`: `linux`, `windows`"),
         ("arch" = String, Path, description = "The architecture, as `host.arch`: `amd64`, `arm64`")
     ),
     request_body(content = Vec<u8>, description = "The artifact bytes", content_type = "application/octet-stream"),

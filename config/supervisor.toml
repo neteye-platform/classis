@@ -43,7 +43,7 @@ state_dir = "client-state"
 # The Client's own log on disk, written **only while it runs as a service** — in the
 # foreground it goes to stderr alone, because somebody is reading it there. It exists because the
 # Windows SCM discards a service's stderr, so a Client installed there had no readable log at all;
-# on Linux and macOS it duplicates what journalctl and `log show` already keep, so that "where are
+# on Linux it duplicates what journalctl already keeps, so that "where are
 # the logs" has one answer on every platform. This is not the Client's own telemetry: that needs
 # a Server it can already reach, which is exactly what a start-up failure does not have.
 # It is the machine's — nothing here ever arrives from the Server.
@@ -189,7 +189,7 @@ state_dir = "client-state"
 # apply_grace_secs = 3     # how long a restarted process must survive before a received
 #                          # configuration is acknowledged APPLIED (0 = acknowledge on start)
 # delivered_env = []       # environment names a Server-delivered block may set ("OTEL_*" for a
-#                          # prefix); never PATH, LD_* or DYLD_*
+#                          # prefix); never PATH or LD_*
 # delivered_args = false   # whether a Server-delivered block may state its own arguments
 # remote_config_disabled = []   # Supervisor names whose Agents take no remote configuration and
 #                               # run only on the files placed in <supervisor_dir>/<name>/config/,

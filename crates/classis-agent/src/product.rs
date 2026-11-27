@@ -19,8 +19,8 @@
 /// The product's name: the install directory, the service, the package, the `PATH` symlink.
 ///
 /// Lowercase `[a-z0-9-]`, 1–32 characters, never a Windows reserved device name — the intersection
-/// of the systemd-unit, launchd-label, SCM service-name and directory-name grammars, which is the
-/// same grammar as instance names and for the same reason.
+/// of the systemd-unit, SCM service-name and directory-name grammars, which is the same grammar as
+/// instance names and for the same reason.
 pub const PRODUCT_NAME: &str = env!("OPAMP_PRODUCT_NAME");
 
 /// The product's display name: prose, for the three places prose belongs — the Add/Remove Programs

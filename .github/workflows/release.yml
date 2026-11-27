@@ -1,8 +1,8 @@
 name: Release
 
 # Builds the Client for every target it ships on and publishes one `.tar.gz` per target
-# (the container and the artifact name included), and the operator tool `classisctl`
-# for Linux and macOS beside it.
+# (the container and the artifact name included), and the operator tool `classisctl` for Linux
+# beside it.
 #
 # The version comes from `[workspace.package] version` in Cargo.toml. A release starts only when a
 # person pushes the `v<version>` tag for it on a commit of `main`; the run checks that the tag and
@@ -258,8 +258,6 @@ jobs:
           done <<'EOF'
           x86_64-unknown-linux-gnu linux amd64 true
           aarch64-unknown-linux-gnu linux arm64 true
-          aarch64-apple-darwin darwin arm64 true
-          x86_64-apple-darwin darwin amd64 true
           x86_64-pc-windows-msvc windows amd64 false
           EOF
           # The SBOMs describe the committed lockfile, not one cargo rewrote on the way.
@@ -286,16 +284,11 @@ jobs:
         include:
           # `operator_tool`: this row also builds and publishes `classisctl` for its target.
           # Every row builds it for its runner as the packer.
-          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, os: linux, arch: amd64, suffix: "", native: true, operator_tool: true }
-          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, os: linux, arch: arm64, suffix: "", native: true, operator_tool: true }
-          - { target: aarch64-apple-darwin, runner: macos-latest, os: darwin, arch: arm64, suffix: "", native: true, operator_tool: true }
-          # Cross-compiled from the arm64 runner, which Apple's toolchain does natively — steadier
-          # than depending on an Intel macOS runner label. Nothing here can run it, so
-          # the version assertions below are skipped for this one row.
-          - { target: x86_64-apple-darwin, runner: macos-latest, os: darwin, arch: amd64, suffix: "", native: false, operator_tool: true }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, os: linux, arch: amd64, suffix: "", operator_tool: true }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, os: linux, arch: arm64, suffix: "", operator_tool: true }
           # No operator tool for Windows: it would need its own way to keep a key readable by its
           # owner alone.
-          - { target: x86_64-pc-windows-msvc, runner: windows-latest, os: windows, arch: amd64, suffix: ".exe", native: true, operator_tool: false }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest, os: windows, arch: amd64, suffix: ".exe", operator_tool: false }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -321,7 +314,6 @@ jobs:
         if: matrix.os == 'linux'
         run: cargo build --release -p classis-server --bin server --target ${{ matrix.target }} --locked
       - name: The binary agrees with the name it will be given
-        if: matrix.native
         run: |
           reported=$(./target/${{ matrix.target }}/release/supervisor${{ matrix.suffix }} --version | awk '{print $NF}')
           expected='${{ needs.version.outputs.full }}'
@@ -330,7 +322,7 @@ jobs:
             exit 1
           fi
       - name: The operator tool agrees with the name it will be given
-        if: matrix.native && matrix.operator_tool
+        if: matrix.operator_tool
         run: |
           reported=$(./target/${{ matrix.target }}/release/classisctl --version | awk '{print $NF}')
           expected='${{ needs.version.outputs.full }}'
@@ -882,8 +874,8 @@ jobs:
         run: |
           cd artifacts
           cat > notes.md <<EOF
-          Client ${{ needs.version.outputs.version }} for Linux, macOS and Windows, the operator tool
-          \`${{ env.OPERATOR_TOOL }}\` for Linux and macOS, and the Server as the image
+          Client ${{ needs.version.outputs.version }} for Linux and Windows, the operator tool
+          \`${{ env.OPERATOR_TOOL }}\` for Linux, and the Server as the image
           \`${{ env.IMAGE }}@${{ needs.image.outputs.digest }}\`, tagged
           \`${{ needs.version.outputs.version }}\`, for \`linux/amd64\` and \`linux/arm64\`.
 
@@ -900,7 +892,7 @@ jobs:
           ## The operator tool
 
           \`${{ env.OPERATOR_TOOL }}_${{ needs.version.outputs.version }}_<os>_<arch>.tar.gz\` holds one program,
-          \`${{ env.OPERATOR_TOOL }}\`, for the machine you operate the fleet from — Linux or macOS, amd64 or
+          \`${{ env.OPERATOR_TOOL }}\`, for the Linux machine you operate the fleet from, amd64 or
           arm64. It is downloaded, never uploaded to a Server: it is not a package of the fleet, and
           no Client installs it. \`${{ env.OPERATOR_TOOL }} pki\` makes the fleet's certificates and
           \`${{ env.OPERATOR_TOOL }} package\` fetches, packs and signs packages; the keys they make belong
@@ -952,7 +944,7 @@ jobs:
           \`\`\`console
           gh attestation verify SHA256SUMS --repo ${{ github.repository }} \\
             --signer-workflow ${{ github.repository }}/.github/workflows/release.yml
-          sha256sum -c --ignore-missing SHA256SUMS   # shasum -a 256 -c on macOS
+          sha256sum -c --ignore-missing SHA256SUMS
           \`\`\`
 
           The same \`gh attestation verify <file>\`, with the same two options, checks any single asset
@@ -1051,9 +1043,8 @@ jobs:
           Each Client archive holds the Client under the name it is installed as, so it needs no repacking:
           the SHA-256 in \`SHA256SUMS\` is the one an Agent verifies.
 
-          Unpacking one by hand gives a binary that runs — the Linux and macOS archives carry an
-          executable mode, so there is no \`chmod +x\` step. This is also the install path on macOS,
-          which has no native installer here:
+          Unpacking one by hand gives a binary that runs — the Linux archives carry an executable
+          mode, so there is no \`chmod +x\` step:
 
           \`\`\`console
           tar xzf ${{ env.ARTIFACT }}_${{ needs.version.outputs.version }}_linux_amd64.tar.gz

@@ -347,7 +347,7 @@ fn install(
     };
 
     // The account, decided and resolved with the same before-anything-is-written rule: `--run-as`,
-    // else the account the existing unit or plist names, else the owner of
+    // else the account the existing unit names, else the owner of
     // a data root that unit lost its account on, else root. A name that does not exist, or a
     // Windows form that would need a password, fails here.
     let registered = manager::registration(level)?;
@@ -574,12 +574,12 @@ fn install(
             ),
         })?;
     }
-    // On Linux and macOS an install that changes an account — the process account named anew or
-    // dropped, or another account for the Client — stops the Client and then the second service
-    // first, and waits until their processes have ended, so nothing runs under an account whose
-    // files it re-owns. Where one cannot be stopped, what was stopped is
-    // started again and nothing more is changed. Unix keeps no record: what ran is started again
-    // once the install has succeeded, and an install that fails leaves it stopped, and says so.
+    // On Linux an install that changes an account — the process account named anew or dropped,
+    // or another account for the Client — stops the Client and then the second service first, and
+    // waits until their processes have ended, so nothing runs under an account whose files it
+    // re-owns. Where one cannot be stopped, what was stopped is started again and nothing more is
+    // changed. Unix keeps no record: what ran is started again once the install has succeeded, and
+    // an install that fails leaves it stopped, and says so.
     #[cfg(unix)]
     let halted = if manager::account_changes(
         registered.as_ref(),
@@ -736,8 +736,8 @@ fn install(
         };
         format!("{e}\nNow {}. {back}", manager::describe_activity())
     });
-    // On Linux and macOS an install that fails after a stop for an account change names what it
-    // stopped, which stays stopped: nothing records it for a later install.
+    // On Linux an install that fails after a stop for an account change names what it stopped,
+    // which stays stopped: nothing records it for a later install.
     #[cfg(unix)]
     let finished = finished.map_err(|e| match halted.map(manager::describe_halted) {
         Some(Some(stopped)) => format!(
@@ -775,8 +775,7 @@ fn install(
             manager::agents_service_name()
         );
     }
-    // Since service-manager 0.10, launchd installs do not auto-start; say the next step instead
-    // of pretending.
+    // The install does not start the service; say the next step instead of pretending.
     let user = if args.scope.user { " --user" } else { "" };
     println!("start it with: supervisor service start{user}");
     Ok(())

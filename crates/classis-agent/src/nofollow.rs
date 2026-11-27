@@ -48,10 +48,10 @@ impl HeldDir {
     /// Opens a root the operator named — the data root or the layout root — and holds it.
     ///
     /// On Unix the path is followed: the root's name lies in a directory only root writes
-    /// (`/var/lib`, `/opt`, `/Library/Application Support`). On Windows it does not: the account
-    /// holds Modify, delete included, on the root itself, and Users may create folders in
-    /// `%ProgramData%`, so a root that is a reparse point is refused, and the held handle keeps it
-    /// from being renamed or replaced while it is held.
+    /// (`/var/lib`, `/opt`). On Windows it does not: the account holds Modify, delete included, on
+    /// the root itself, and Users may create folders in `%ProgramData%`, so a root that is a
+    /// reparse point is refused, and the held handle keeps it from being renamed or replaced while
+    /// it is held.
     ///
     /// # Errors
     /// Returns an error when `path` names no directory, or on Windows a reparse point.

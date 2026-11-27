@@ -54,13 +54,13 @@ terms below are the ones it uses without defining.
   what each receives. _Avoid:_ publish, push, deploy.
 - **Process account** — the account the operator names at a Client's
   registration for every program its Supervisors start; never root or
-  `LocalSystem`, and never the Client's own account. On Linux and macOS its
-  primary group, the _process account's group_, is its own: the Client's account
-  is its one member, and no other account's primary group it is. What the Client
-  shares with the Managed Processes belongs to that group, and nothing else
-  does; on Windows the same share is made by grants to the account's SID.
-  _Avoid:_ agent user, run-as account (that is the Client's), process group
-  (that is a Unix process group, which a Managed Process may lead).
+  `LocalSystem`, and never the Client's own account. On Linux its primary group,
+  the _process account's group_, is its own: the Client's account is its one
+  member, and no other account's primary group it is. What the Client shares
+  with the Managed Processes belongs to that group, and nothing else does; on
+  Windows the same share is made by grants to the account's SID. _Avoid:_ agent
+  user, run-as account (that is the Client's), process group (that is a Unix
+  process group, which a Managed Process may lead).
 - **Second service** — the service `<PRODUCT_NAME>-agents`, registered beside
   the Client where a process account is named, which runs under that account and
   starts, signals and stops those programs on the Client's request, over a
@@ -70,9 +70,9 @@ terms below are the ones it uses without defining.
   held for the whole of a `service install`, `uninstall`, `start` or `stop` so
   that one runs at a time. _Avoid:_ install mutex, global mutex.
 - **Withdrawal** — what an install takes from a former account, a process
-  account dropped or replaced or a Client's account replaced: on Linux and macOS
-  by giving what it owns, and what is in its group, to the Client; on Windows by
-  removing every entry that allows it anything and giving what it owns to the
+  account dropped or replaced or a Client's account replaced: on Linux by giving
+  what it owns, and what is in its group, to the Client; on Windows by removing
+  every entry that allows it anything and giving what it owns to the
   Administrators. _Avoid:_ revocation (that is a certificate's), cleanup.
 - **Record of what an install left to finish** (_the record_) — on Windows, the
   value `Pending` of `HKLM\SOFTWARE\<PRODUCT_NAME>\WithdrawalPending`: what an

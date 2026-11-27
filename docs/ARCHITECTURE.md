@@ -30,7 +30,7 @@ true.
    │     it, started by the second service over a Unix socket or named pipe
    ├── package downloads: the Server's own origin, and no other
    ├── own-telemetry destinations: OTLP/HTTP, as the Server offers them
-   └── service manager: systemd, launchd or the Windows SCM
+   └── service manager: systemd or the Windows SCM
 ```
 
 - **Operators** drive the fleet through the REST API on the Operator plane,
@@ -184,7 +184,7 @@ module has no role.
   dependency offers — the SIDs, the pipe's security descriptor and its two ends'
   identities, the job objects — are declared in `win32`. The registry hands
   every plugin the one `Spawner` of the run, which `service::runtime` chooses
-  once from the Client's command line — the unit or plist `service install
+  once from the Client's command line — the unit `service install
   --process-account` writes names the second service's socket there — and hands
   `build_engine`. The Engine keeps that registry behind the port
   `PluginRegistry` of `supervisor::ports`, so a Supervisor a Supervisor-set
@@ -330,11 +330,11 @@ peer's credentials or the pipe client's token, and stops every program it
 started — by process group on Unix, by job object on Windows — when that
 connection closes. Before it writes anything, the Client accepts the connection
 only from the process the service manager runs as the second service, which
-`service::manager::agents_process` asks of systemd, launchd or the SCM. Both
-ends refuse a peer of another build, and the one that `current` no longer names
-exits so its service manager starts it from the new version. While the second
-service is away, a delivered package is staged and waits, and the Supervisor
-retries with backoff.
+`service::manager::agents_process` asks of systemd or the SCM. Both ends refuse
+a peer of another build, and the one that `current` no longer names exits so its
+service manager starts it from the new version. While the second service is
+away, a delivered package is staged and waits, and the Supervisor retries with
+backoff.
 
 **Where state lives.** The Server keeps all of its state under one `data_dir`,
 one directory per domain and owner-only: `configurations/`, `deployments/`,
@@ -371,6 +371,8 @@ that alters one edits its line here ([`AGENTS.md`
 - `Cargo.toml` decides the product's version; the internal crate's build stamps
   it with git's provenance. The product is named Classis in every name it gives
   itself.
+- The Client is built for Linux and Windows, the Server and `classisctl` for
+  Linux; no program of the product is built for macOS.
 
 ### Transport and admission
 
@@ -400,11 +402,11 @@ that alters one edits its line here ([`AGENTS.md`
   the destinations the Server names.
 - Managed Processes run under a process account, started by a second service
   that runs under it.
-- The Client installs itself as a native service (systemd, launchd, SCM) from a
-  versioned layout (`versions/<version>/` and `current`; programs under `/opt`
-  on Linux), takes the fleet's files it finds beside its program, and ships as
-  `.tar.gz` archives and native installers. The Linux packages run it under its
-  own account.
+- The Client installs itself as a native service (systemd, SCM) from a versioned
+  layout (`versions/<version>/` and `current`; programs under `/opt` on Linux),
+  takes the fleet's files it finds beside its program, and ships as `.tar.gz`
+  archives and native installers. The Linux packages run it under its own
+  account.
 - No privileged install step follows a link the service's account placed, and a
   repack follows no link out of its tree.
 - The Client updates itself only from a signed package, as its own Agent under

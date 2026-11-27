@@ -248,20 +248,19 @@ pub trait AgentStorage: Send + Sync {
 }
 
 /// What the operating system says about itself — the Baseline's `os.*`. Read **once** per process
-/// and as one answer: two of the three platforms have to be asked by running a program, and asking
-/// them once per attribute would start three processes to learn what one printout already holds.
+/// and as one answer: Windows has to be asked by running a program, and asking it once per
+/// attribute would start three processes to learn what one printout already holds.
 /// A field the platform does not answer stays `None` and is then not reported at all.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OsInfo {
     /// `os.description` — the human-readable line: "Ubuntu 24.04.2 LTS".
     pub description: Option<String>,
-    /// `os.name` — the system's own name, without a version: "Ubuntu", "macOS", "Windows".
+    /// `os.name` — the system's own name, without a version: "Ubuntu", "Windows".
     pub name: Option<String>,
-    /// `os.version` — the version that name is at: "24.04", "15.5", "10.0.26100.2033".
+    /// `os.version` — the version that name is at: "24.04", "10.0.26100.2033".
     pub version: Option<String>,
     /// `os.build_id` — the build behind that version, where the platform stamps one: os-release's
-    /// `BUILD_ID`, `sw_vers`' BuildVersion ("24F74"), the build components of Windows' version
-    /// line ("26100.2033").
+    /// `BUILD_ID`, the build components of Windows' version line ("26100.2033").
     pub build_id: Option<String>,
 }
 

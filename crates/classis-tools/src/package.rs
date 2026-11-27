@@ -336,14 +336,14 @@ fn pack_7z(
     // `mut` is used only by the Unix block below; on Windows there is nothing to set.
     #[cfg_attr(not(unix), allow(unused_mut))]
     let mut entry = sevenz_rust2::ArchiveEntry::new_file(member);
-    // The member is a program, so it is marked executable — `7z x` on Linux or macOS then yields
-    // something that runs, without a `chmod +x` nobody documented. The tar path has always done
+    // The member is a program, so it is marked executable — `7z x` on Linux then yields something
+    // that runs, without a `chmod +x` nobody documented. The tar path has always done
     // this; a `.7z` says it through 7-Zip's Unix-attribute convention instead of a tar mode field.
     //
     // Only off Windows, which is 7-Zip's own rule: bit 15 means `FILE_ATTRIBUTE_INTEGRITY_STREAM`
     // there, and the Windows build neither writes nor expects the Unix extension. It costs the
-    // release nothing — each artifact is packed on a runner of its own platform, so the
-    // Linux and macOS ones carry the mode and `client.exe`, which has no use for it, does not.
+    // release nothing — each artifact is packed on a runner of its own platform, so the Linux ones
+    // carry the mode and `client.exe`, which has no use for it, does not.
     #[cfg(unix)]
     {
         entry.has_windows_attributes = true;

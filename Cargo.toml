@@ -153,8 +153,8 @@ tracing-opentelemetry = "0.34"
 opentelemetry-http = { version = "0.33", default-features = false, features = ["reqwest"] }
 async-trait = "0.1"
 
-# Process CPU and memory for a pid on Linux, macOS, and Windows — the one gap the SDK leaves, and
-# three platform APIs not worth hand-rolling. Pure Rust over libc.
+# Process CPU and memory for a pid on Linux and Windows — the one gap the SDK leaves, and two
+# platform APIs not worth hand-rolling. Pure Rust over libc.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # The built-in root store, for the one case the transports' own defaults cannot cover: a Client
 # presenting a client certificate to a Server with a publicly trusted one, which needs
@@ -194,8 +194,8 @@ git2 = { version = "0.21", default-features = false }
 # The Client's subcommand CLI. No `env` feature: the Client is file-configured,
 # never configured through environment variables.
 clap = { version = "4", features = ["derive"] }
-# Cross-platform service lifecycle — systemd, launchd, and the Windows SCM behind one API.
-# Pulls no TLS/crypto backends, so the rustls/ring-only constraint holds.
+# Cross-platform service lifecycle — systemd and the Windows SCM behind one API. Pulls no
+# TLS/crypto backends, so the rustls/ring-only constraint holds.
 service-manager = "0.11"
 # The questionnaire of `service install --interactive` and `service config`: validated answers,
 # defaults and a yes/no confirmation, the same on three operating systems.

@@ -358,11 +358,11 @@ pub struct InstallArgs {
     /// to it.
     ///
     /// Without it, a re-registration keeps the account the existing registration names, and a
-    /// first one runs as root (`LocalSystem` on Windows). `--run-as root` chooses root on Linux
-    /// and macOS, and the unit records it.
+    /// first one runs as root (`LocalSystem` on Windows). `--run-as root` chooses root on Linux,
+    /// and the unit records it.
     ///
-    /// System scope only: a `--user` service already runs as its user. On Linux and macOS the
-    /// account must exist. On Windows only passwordless account forms are accepted — the
+    /// System scope only: a `--user` service already runs as its user. On Linux the account must
+    /// exist. On Windows only passwordless account forms are accepted — the
     /// service's own virtual account (`NT SERVICE\<service name>`), a gMSA (`name$`), or
     /// `NT AUTHORITY\LocalService`/`NetworkService`; a password is never taken here — it would
     /// stand in the process list and in the installer log.
@@ -371,12 +371,12 @@ pub struct InstallArgs {
     /// Run every Managed Process under this account, through a second service,
     /// `<PRODUCT_NAME>-agents`, that runs under it and starts them on the Client's request.
     ///
-    /// System scope only: under systemd on Linux, launchd on macOS and the SCM on Windows. On Linux
-    /// and macOS the account must exist, must be neither root nor the account the Client runs as,
-    /// and its primary group must be its own and a supplementary group of the Client's account,
-    /// with no other member; the Client must not run as root. On Windows it is a passwordless
-    /// form — `NT SERVICE\<PRODUCT_NAME>-agents`, a gMSA, or `LocalService` / `NetworkService` —
-    /// and the Client runs under an account of its own. A re-registration without the flag keeps
+    /// System scope only: under systemd on Linux and the SCM on Windows. On Linux the account must
+    /// exist, must be neither root nor the account the Client runs as, and its primary group must
+    /// be its own and a supplementary group of the Client's account, with no other member; the
+    /// Client must not run as root. On Windows it is a passwordless form —
+    /// `NT SERVICE\<PRODUCT_NAME>-agents`, a gMSA, or `LocalService` / `NetworkService` — and the
+    /// Client runs under an account of its own. A re-registration without the flag keeps
     /// the account the second service's registration names.
     #[arg(long, value_name = "ACCOUNT", conflicts_with = "user")]
     pub process_account: Option<String>,

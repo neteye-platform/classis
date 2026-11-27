@@ -25,8 +25,8 @@ pub const SERVICE_INSTANCE_NAME: &str = "service.instance.name";
 pub const SERVICE_NAMESPACE: &str = "service.namespace";
 /// The version the Agent reports for itself.
 pub const SERVICE_VERSION: &str = "service.version";
-/// The operating system in the semantic-convention spelling (`linux`, `darwin`, `windows`) — half
-/// of the platform a package artifact is chosen by.
+/// The operating system in the semantic-convention spelling (`linux`, `windows`) — half of the
+/// platform a package artifact is chosen by.
 pub const OS_TYPE: &str = "os.type";
 /// The human-readable operating system description, e.g. `Ubuntu 26.04 LTS`.
 pub const OS_DESCRIPTION: &str = "os.description";
