@@ -10,7 +10,7 @@ use serde::de::IgnoredAny;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::fleet::{ConnectionOffer, TelemetryOffer};
+use crate::fleet::{ConnectionOffer, TelemetryOffer, AGENTS_PER_HOST};
 
 /// The default Agent-plane address: the Baseline's port, on the loopback. Serving the
 /// estate is a line an operator writes deliberately, together with the TLS it needs.
@@ -43,7 +43,7 @@ pub struct ServerConfig {
     pub config_dir: Option<IgnoredAny>,
     /// Refused at startup: the Server speaks plain HTTP behind a reverse proxy that terminates TLS.
     /// Read only so that a leftover section can be named.
-    pub tls: Option<TlsConfig>,
+    pub tls: Option<IgnoredAny>,
     /// Refused at startup: the Agent plane has no credential of its own, and a top-level `[auth]`
     /// was never one. Read only so that a leftover section can be named.
     pub auth: Option<IgnoredAny>,
@@ -54,7 +54,7 @@ pub struct ServerConfig {
     pub connection_offer: Option<ConnectionOfferConfig>,
     /// Refused at startup: the Server speaks no mutual TLS, so it signs no client certificate.
     /// Read only so that a leftover section can be named.
-    pub client_ca: Option<ClientCaConfig>,
+    pub client_ca: Option<IgnoredAny>,
     /// Optional destinations for the Agents' own telemetry; absent means none is
     /// offered and no Agent reports any.
     pub telemetry_offer: Option<TelemetryOfferConfig>,
@@ -94,11 +94,9 @@ pub struct ServerConfig {
     #[serde(default = "default_stale_after_secs")]
     pub stale_after_secs: u64,
     /// The most Agent records the fleet holds at once. A report bearing a new `instance_uid` past
-    /// this ceiling is refused `Unavailable`, so a peer minting fresh self-asserted UIDs
-    /// cannot exhaust memory or disk; existing Agents keep reporting. The real defence against an
-    /// anonymous flood is admission by client certificate — this is the backstop behind
-    /// it. `0` is refused at load: a fleet that can hold no Agent is a misconfiguration, not a
-    /// limit.
+    /// this ceiling is refused `Unavailable`, so a peer minting fresh self-asserted UIDs cannot
+    /// exhaust memory or disk; existing Agents keep reporting. `0` is refused at load: a fleet that
+    /// can hold no Agent is a misconfiguration, not a limit.
     #[serde(default = "default_max_agents")]
     pub max_agents: usize,
     /// The connections the Agent plane holds at once. Past it a connection is closed on
@@ -106,15 +104,19 @@ pub struct ServerConfig {
     /// with the process's file-descriptor limit. `0` is refused at load.
     #[serde(default = "default_agent_max_connections")]
     pub max_connections: usize,
-    /// Refused at startup: enrolment with a bootstrap certificate is mutual TLS, and
-    /// NEAG-34 reimplements it. Read only so that a leftover section can be named.
-    pub enrolment: Option<EnrolmentConfig>,
+    /// Refused at startup: enrolment with a bootstrap certificate is gone: a host
+    /// enrols with its Space's key. Read only so that a leftover section can be named.
+    pub enrolment: Option<IgnoredAny>,
     /// How repeated admission failures from one peer address are throttled.
     #[serde(default)]
     pub admission_throttle: AdmissionThrottleConfig,
     /// How often an admitted peer may be heard on the Agent plane.
     #[serde(default)]
     pub agent_rate_limit: AgentRateLimitConfig,
+    /// How long an access token is accepted after it is issued, in seconds; `0` — the default —
+    /// means it never expires. A token ends when it is replaced all the same.
+    #[serde(default)]
+    pub token_lifetime_secs: u64,
     /// How the log is written on standard error.
     #[serde(default)]
     pub log: LogConfig,
@@ -147,14 +149,10 @@ pub enum LogFormat {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AgentRateLimitConfig {
-    /// Tokens a host's or an Agent's bucket gains per second.
+    /// Tokens a host's bucket gains per second.
     pub messages_per_sec: u32,
     /// That bucket's capacity; a new bucket starts full.
     pub burst: u32,
-    /// Tokens the aggregate bucket of a host marked as a Gateway gains per second.
-    pub gateway_messages_per_sec: u32,
-    /// The aggregate bucket's capacity.
-    pub gateway_burst: u32,
 }
 
 impl Default for AgentRateLimitConfig {
@@ -163,8 +161,6 @@ impl Default for AgentRateLimitConfig {
         AgentRateLimitConfig {
             messages_per_sec: limits.messages_per_sec,
             burst: limits.burst,
-            gateway_messages_per_sec: limits.gateway_messages_per_sec,
-            gateway_burst: limits.gateway_burst,
         }
     }
 }
@@ -176,8 +172,6 @@ impl AgentRateLimitConfig {
         crate::agent_rate::Limits {
             messages_per_sec: self.messages_per_sec,
             burst: self.burst,
-            gateway_messages_per_sec: self.gateway_messages_per_sec,
-            gateway_burst: self.gateway_burst,
         }
     }
 
@@ -185,8 +179,6 @@ impl AgentRateLimitConfig {
         for (key, value) in [
             ("messages_per_sec", self.messages_per_sec),
             ("burst", self.burst),
-            ("gateway_messages_per_sec", self.gateway_messages_per_sec),
-            ("gateway_burst", self.gateway_burst),
         ] {
             if value == 0 {
                 return Err(format!(
@@ -198,10 +190,6 @@ impl AgentRateLimitConfig {
         Ok(())
     }
 }
-
-/// The Agents a host may speak for at most, which the limit has to carry at
-/// the fleet's heartbeat.
-const AGENTS_PER_HOST: u64 = 256;
 
 /// The heartbeat the Baseline uses when none is offered.
 const BASELINE_HEARTBEAT_SECS: u64 = 30;
@@ -687,27 +675,6 @@ impl crate::packages::SignatureVerifier for RootsVerifier {
     }
 }
 
-/// The `[enrolment]` section.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnrolmentConfig {
-    /// PEM certificate of the CA that issues bootstrap certificates. A certificate from it can
-    /// only enrol: it needs an open enrolment window and an operator's approval.
-    pub bootstrap_ca_file: PathBuf,
-    /// PEM PKCS#8 key of that CA. With it the Server issues bootstrap certificates on an
-    /// operator's request; without it enrolment works with bootstrap certificates made elsewhere.
-    #[serde(default)]
-    pub bootstrap_ca_key_file: Option<PathBuf>,
-    /// The most requests of one bootstrap certificate the pending queue holds at once, 1 to
-    /// [`MAX_PENDING`](crate::enrolment::MAX_PENDING).
-    #[serde(default = "default_max_pending_per_bootstrap")]
-    pub max_pending_per_bootstrap: usize,
-}
-
-fn default_max_pending_per_bootstrap() -> usize {
-    crate::enrolment::DEFAULT_MAX_PENDING_PER_BOOTSTRAP
-}
-
 /// The `[admission_throttle]` section.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -758,19 +725,7 @@ pub struct RestConfig {
     pub max_connections: usize,
     /// Refused at startup, like `[tls]`. Read only so that a leftover section can be
     /// named.
-    pub tls: Option<RestTlsConfig>,
-}
-
-/// The `[rest.tls]` section: the certificate the Operator plane serves in place of
-/// `[tls]`'s, typically from the operator's own PKI so that browsers trust it as they are. Nothing
-/// else: the Operator plane asks for no client certificate, so a `client_ca_file` here is refused.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RestTlsConfig {
-    /// PEM certificate chain, the leaf first.
-    pub cert_file: PathBuf,
-    /// PEM private key of the leaf.
-    pub key_file: PathBuf,
+    pub tls: Option<IgnoredAny>,
 }
 
 impl Default for RestConfig {
@@ -846,8 +801,7 @@ impl RestAuthConfig {
 
 /// The `[connection_offer]` section: what every Agent declaring
 /// `AcceptsOpAMPConnectionSettings` is offered — a heartbeat interval, an endpoint. Either or both,
-/// but never neither. It carries no credential: the Agent plane admits by client certificate alone,
-/// so an offered credential would be one nothing reads.
+/// but never neither. It carries no credential: an offered credential would be one nothing reads.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionOfferConfig {
@@ -877,8 +831,8 @@ impl ConnectionOfferConfig {
         ] {
             if value.is_some() {
                 return Err(format!(
-                    "[connection_offer] {key} is refused — the Agent plane admits by client \
-                     certificate alone, so no credential is offered; remove the key"
+                    "[connection_offer] {key} is refused — no credential is offered; remove the \
+                     key"
                 ));
             }
         }
@@ -961,41 +915,6 @@ impl TelemetryOfferConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TlsConfig {
-    /// PEM certificate chain.
-    pub cert_file: PathBuf,
-    /// PEM private key.
-    pub key_file: PathBuf,
-    /// PEM bundle of the certificate authorities a **client** certificate must chain to, required.
-    /// The Agent plane asks for the certificate in the TLS handshake, so a peer without
-    /// one, or with one this bundle (or the bootstrap CA of `[enrolment]`) does not verify, never
-    /// reaches a route — the package download included. An `Option` only so its absence can be
-    /// named at startup.
-    pub client_ca_file: Option<PathBuf>,
-}
-
-/// The `[client_ca]` section: the certificate authority this Server signs Agent CSRs
-/// with. Present is what arms the CSR flow — `AcceptsConnectionSettingsRequest` is declared only
-/// while it is, the same "declare what is actually armed" rule `[connection_offer]` follows.
-///
-/// It is deliberately *not* the listener's own certificate and key. The Baseline's own schema warns
-/// against storing a CA's private key where the server certificate lives, because compromising the
-/// Server would then mint fleet members at will.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClientCaConfig {
-    /// PEM certificate of the issuing CA.
-    pub cert_file: PathBuf,
-    /// PEM private key of the issuing CA.
-    pub key_file: PathBuf,
-    /// How long an issued certificate is valid. Short is the point: validity plus renewal bounds a
-    /// certificate nobody noticed was stolen, and revocation ends one that was.
-    #[serde(default = "default_validity_days")]
-    pub validity_days: u32,
-}
-
 fn default_agent_max_connections() -> usize {
     opamp::server::listen::DEFAULT_MAX_CONNECTIONS
 }
@@ -1022,18 +941,10 @@ fn default_max_message_size() -> usize {
     opamp::frame::DEFAULT_MAX_MESSAGE_SIZE
 }
 
-/// Long enough that a host offline over a holiday still comes back on a valid certificate, short
-/// enough that a certificate is not a permanent grant.
 /// Three times the Baseline's own default heartbeat of 30 seconds: one missed beat is a
 /// lost packet, and a fleet view that flickers is one nobody trusts.
 fn default_stale_after_secs() -> u64 {
     90
-}
-
-/// A month: short enough that a certificate stolen unnoticed is good for weeks, not a quarter;
-/// long enough that a host offline for a fortnight still renews on its own.
-fn default_validity_days() -> u32 {
-    30
 }
 
 /// Roomy enough for the real thing: an `otelcol-contrib` binary is a few hundred megabytes.
@@ -1081,6 +992,7 @@ impl Default for ServerConfig {
             agent_rate_limit: AgentRateLimitConfig::default(),
             log: LogConfig::default(),
             packages: PackagesConfig::default(),
+            token_lifetime_secs: 0,
         }
     }
 }
@@ -1323,6 +1235,16 @@ impl ServerConfig {
             );
         }
         self.check_secure()
+    }
+
+    /// The lifetime of the tokens this Server issues: `token_lifetime_secs`,
+    /// with `0` for a token that never expires.
+    #[must_use]
+    pub fn token_lifetime(&self) -> oauth_token::server::Lifetime {
+        std::num::NonZeroU64::new(self.token_lifetime_secs).map_or(
+            oauth_token::server::Lifetime::Never,
+            oauth_token::server::Lifetime::Seconds,
+        )
     }
 
     /// A warning when one host cannot report for all the Agents it may speak for at the fleet's
@@ -1671,21 +1593,16 @@ mod tests {
             r#"
             listen = "127.0.0.1:9999"
             data_dir = "state"
-            [tls]
-            cert_file = "cert.pem"
-            key_file = "key.pem"
             "#,
         )
         .expect("parse");
         assert_eq!(cfg.listen.port(), 9999);
-        assert!(cfg.tls.is_some());
     }
 
     #[test]
     fn defaults_apply_to_an_empty_file() {
         let cfg: ServerConfig = toml::from_str("").expect("parse");
         assert_eq!(cfg.listen.port(), 4320);
-        assert!(cfg.tls.is_none());
     }
 
     /// The Operator plane is a second listener, and by default it is on loopback — the
@@ -1701,28 +1618,6 @@ mod tests {
         let opened: ServerConfig =
             toml::from_str("[rest]\nlisten = \"0.0.0.0:8080\"").expect("parse");
         assert_eq!(opened.rest.listen.to_string(), "0.0.0.0:8080");
-    }
-
-    /// `[rest.tls]` takes a certificate and its key and nothing else: the Operator plane asks for
-    /// no client certificate, so a `client_ca_file` there is refused, and so is a missing key.
-    #[test]
-    fn rest_tls_takes_a_certificate_and_its_key_and_nothing_else() {
-        let cfg: ServerConfig =
-            toml::from_str("[rest.tls]\ncert_file = \"ui.pem\"\nkey_file = \"ui-key.pem\"\n")
-                .expect("parse");
-        let tls = cfg.rest.tls.expect("[rest.tls]");
-        assert_eq!(tls.cert_file, PathBuf::from("ui.pem"));
-        assert_eq!(tls.key_file, PathBuf::from("ui-key.pem"));
-        let refused = toml::from_str::<ServerConfig>(
-            "[rest.tls]\ncert_file = \"ui.pem\"\nkey_file = \"ui-key.pem\"\nclient_ca_file = \"ca.pem\"\n",
-        )
-        .expect_err("a client CA on the Operator plane");
-        assert!(refused.to_string().contains("client_ca_file"), "{refused}");
-        let refused = toml::from_str::<ServerConfig>("[rest.tls]\ncert_file = \"ui.pem\"\n")
-            .expect_err("a certificate without its key");
-        assert!(refused.to_string().contains("key_file"), "{refused}");
-        let cfg: ServerConfig = toml::from_str("").expect("parse");
-        assert!(cfg.rest.tls.is_none(), "the section is optional");
     }
 
     /// Two planes, two sockets: an address that cannot be bound twice is a configuration mistake,
@@ -1840,6 +1735,33 @@ mod tests {
         std::fs::write(&path, "max_total_package_bytes = 0\n").expect("write");
         let err = ServerConfig::load(&path).expect_err("zero must fail startup");
         assert!(err.contains("max_total_package_bytes"), "{err}");
+    }
+
+    /// The token lifetime is the Server setting of `0`, the default, is a token
+    /// that never expires, anything else is its life in seconds, and the environment sets it like
+    /// any other key.
+    #[test]
+    fn the_token_lifetime_defaults_to_never_and_is_configurable() {
+        use oauth_token::server::Lifetime;
+        let default: ServerConfig = toml::from_str("").expect("parse");
+        assert_eq!(default.token_lifetime_secs, 0);
+        assert_eq!(default.token_lifetime(), Lifetime::Never);
+        let finite: ServerConfig = toml::from_str("token_lifetime_secs = 3600").expect("parse");
+        assert_eq!(
+            finite.token_lifetime(),
+            Lifetime::Seconds(std::num::NonZeroU64::new(3600).expect("non-zero"))
+        );
+
+        let from_environment = ServerConfig::load_layered(
+            None,
+            variables(&[("CLASSIS_SERVER__TOKEN_LIFETIME_SECS", "90")]),
+        )
+        .expect("loads")
+        .config;
+        assert_eq!(from_environment.token_lifetime_secs, 90);
+        let err = toml::from_str::<ServerConfig>("token_lifetime_secs = \"soon\"")
+            .expect_err("not a number");
+        assert!(err.to_string().contains("token_lifetime_secs"), "{err}");
     }
 
     #[test]
@@ -2022,6 +1944,10 @@ mod tests {
             std::fs::write(&path, format!("{auth}{TLS}")).expect("write");
             let err = ServerConfig::load(&path).expect_err(auth);
             assert!(err.contains("[auth]"), "names the section: {err}");
+            assert!(
+                err.contains("has no credential of its own"),
+                "says why: {err}"
+            );
             assert!(!err.contains("plain-"), "never echoes a value: {err}");
         }
         std::fs::write(&path, TLS).expect("write");
@@ -2175,7 +2101,7 @@ mod tests {
         for (section, body) in [
             (
                 "[tls]",
-                "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\nclient_ca_file = \"ca.pem\"\n",
+                "[tls]\ncert_file = \"c.pem\"\nkey_file = \"k.pem\"\n",
             ),
             (
                 "[rest.tls]",
@@ -2233,18 +2159,11 @@ mod tests {
             crate::agent_rate::Limits {
                 messages_per_sec: 10,
                 burst: 300,
-                gateway_messages_per_sec: 500,
-                gateway_burst: 10_000,
             }
         );
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("server.toml");
-        for key in [
-            "messages_per_sec",
-            "burst",
-            "gateway_messages_per_sec",
-            "gateway_burst",
-        ] {
+        for key in ["messages_per_sec", "burst"] {
             std::fs::write(&path, format!("{TLS}[agent_rate_limit]\n{key} = 0\n")).expect("write");
             let err = ServerConfig::load(&path).expect_err("zero must fail startup");
             assert!(err.contains(&format!("[agent_rate_limit] {key}")), "{err}");

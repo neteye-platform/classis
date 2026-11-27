@@ -15,8 +15,7 @@
 //! artifact an Agent is offered and `service.name` decides which packages fit it at all,
 //! so a label that outranked them would let a typo hand a Windows binary to a Linux
 //! host. Labels annotate; they do not correct. **And nothing an Agent reports or an operator
-//! labels can speak in the Server's name**: `fleet.*` is the Server's own, filled from the Host's
-//! certificate.
+//! labels can speak in the Server's name**: `fleet.*` is the Server's own.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,8 +52,7 @@ pub fn check_pairs(set: &BTreeMap<String, String>) -> Result<(), String> {
         if key.starts_with(RESERVED_PREFIX) {
             return Err(format!(
                 "label {key:?} is in the Server's reserved {RESERVED_PREFIX:?} space — the Server \
-                 fills those keys from the certificate of the Host an Agent arrives over; choose \
-                 another key"
+                 reserves those keys; choose another key"
             ));
         }
         if value.trim().is_empty() {
@@ -80,13 +78,10 @@ pub fn reported_keys(description: Option<&AgentDescription>) -> Vec<&str> {
         .collect()
 }
 
-/// What an Agent's effective description is built from, in order of
-/// precedence: for each key the first source that has it.
+/// What an Agent's effective description is built from, in order of precedence: for each key the
+/// first source that has it.
 #[derive(Clone, Copy)]
 pub struct Sources<'a> {
-    /// The `fleet.host.*` values of the Host the Agent arrived over directly; empty behind a
-    /// Gateway and without `[client_ca]`.
-    pub host: &'a BTreeMap<String, String>,
     /// What the Agent reported: identifying attributes, then non-identifying ones.
     pub reported: Option<&'a AgentDescription>,
     /// The Agent's own labels.
@@ -96,12 +91,11 @@ pub struct Sources<'a> {
 }
 
 impl Sources<'_> {
-    /// Whether the effective description is exactly what the Agent reported — no Host value, no
-    /// label, and no reported attribute left out. The overwhelming majority of Agents, so the
-    /// fleet view borrows rather than builds for them.
+    /// Whether the effective description is exactly what the Agent reported — no label, and no
+    /// reported attribute left out. The overwhelming majority of Agents, so the fleet view
+    /// borrows rather than builds for them.
     pub fn adds_nothing(&self) -> bool {
-        self.host.is_empty()
-            && self.own.is_empty()
+        self.own.is_empty()
             && self.inherited.is_empty()
             && !self.reported.is_some_and(|description| {
                 description
@@ -113,14 +107,13 @@ impl Sources<'_> {
     }
 }
 
-/// The description a Selector is matched against: the Host's values, what the
-/// Agent reported without its `fleet.*` attributes, its own labels and then its Client Agent's —
-/// each key from the first source that has it.
+/// The description a Selector is matched against: what the Agent reported
+/// without its `fleet.*` attributes, its own labels and then its Client Agent's — each key from
+/// the first source that has it.
 ///
 /// Reported wins over every label. The API refuses a colliding key up front, so this is the second
 /// line rather than the first — but it is the one that holds when an Agent *starts* reporting a
-/// key that was labelled earlier, which no up-front check can prevent. A Host value wins over
-/// everything: an Agent cannot claim another Host's subject values.
+/// key that was labelled earlier, which no up-front check can prevent.
 pub fn effective_description(sources: &Sources<'_>) -> Option<AgentDescription> {
     if sources.adds_nothing() {
         return sources.reported.cloned();
@@ -133,16 +126,10 @@ pub fn effective_description(sources: &Sources<'_>) -> Option<AgentDescription> 
             .into_iter()
             .filter(|kv| !ours(&kv.key))
             .collect(),
-        non_identifying_attributes: sources
-            .host
-            .iter()
-            .map(|(key, value)| opamp::attributes::string_attr(key, value))
-            .chain(
-                reported
-                    .non_identifying_attributes
-                    .into_iter()
-                    .filter(|kv| !ours(&kv.key)),
-            )
+        non_identifying_attributes: reported
+            .non_identifying_attributes
+            .into_iter()
+            .filter(|kv| !ours(&kv.key))
             .collect(),
     };
     let mut taken: BTreeSet<String> = reported_keys(Some(&effective))
@@ -196,23 +183,6 @@ pub fn is_client_agent(description: Option<&AgentDescription>) -> bool {
     })
 }
 
-/// The machine an Agent behind a Gateway says it runs on: its `host.id`, or
-/// its `host.name` where it reports no `host.id`. Kept apart, so a `host.id` never equals a
-/// `host.name` that happens to be spelled alike. `None` when it reports neither.
-pub fn machine(description: Option<&AgentDescription>) -> Option<String> {
-    let description = description?;
-    let reported = |key: &str| {
-        opamp::attributes::string_value(&description.identifying_attributes, key)
-            .or_else(|| {
-                opamp::attributes::string_value(&description.non_identifying_attributes, key)
-            })
-            .filter(|value| !value.is_empty())
-    };
-    reported("host.id")
-        .map(|id| format!("host.id={id}"))
-        .or_else(|| reported("host.name").map(|name| format!("host.name={name}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,14 +206,13 @@ mod tests {
 
     static NONE: BTreeMap<String, String> = BTreeMap::new();
 
-    /// The description of an Agent that arrived over no Host and has no Client Agent: what it
-    /// reported plus its own labels.
+    /// The description of an Agent that has no Client Agent: what it reported plus its own
+    /// labels.
     fn with_labels(
         description: Option<&AgentDescription>,
         own: &BTreeMap<String, String>,
     ) -> Option<AgentDescription> {
         effective_description(&Sources {
-            host: &NONE,
             reported: description,
             own,
             inherited: &NONE,
@@ -312,19 +281,17 @@ mod tests {
         assert!(check_pairs(&labels(&[("fleetwide", "1")])).is_ok());
     }
 
-    /// The Host's values come first, a reported `fleet.*` attribute is left out and listed, the
-    /// Agent's own label wins over its Client Agent's, and a reported attribute wins over both.
+    /// A reported `fleet.*` attribute is left out and listed, the Agent's own label wins over its
+    /// Client Agent's, and a reported attribute wins over both.
     #[test]
     fn the_effective_description_takes_each_key_from_the_first_source_that_has_it() {
         let reported = described(&[
             ("fleet.host.organization", "Mitbewerber AG"),
             ("os.type", "linux"),
         ]);
-        let host = labels(&[("fleet.host.organization", "Kunde GmbH")]);
         let own = labels(&[("ring", "early")]);
         let inherited = labels(&[("ring", "late"), ("site", "wien"), ("os.type", "windows")]);
         let sources = Sources {
-            host: &host,
             reported: Some(&reported),
             own: &own,
             inherited: &inherited,
@@ -332,7 +299,6 @@ mod tests {
         let effective = effective_description(&sources).expect("some");
         let matches =
             |pairs: &[(&str, &str)]| crate::deployments::matches(&labels(pairs), Some(&effective));
-        assert!(matches(&[("fleet.host.organization", "Kunde GmbH")]));
         assert!(!matches(&[("fleet.host.organization", "Mitbewerber AG")]));
         assert!(matches(&[("ring", "early")]), "its own label wins");
         assert!(
@@ -341,32 +307,15 @@ mod tests {
         );
         assert!(matches(&[("os.type", "linux")]), "reported wins over both");
         assert_eq!(ignored(Some(&reported)), ["fleet.host.organization"]);
-
-        // Without a Host, a reported `fleet.*` attribute is still left out.
-        let alone = effective_description(&Sources {
-            host: &NONE,
-            ..sources
-        })
-        .expect("some");
-        assert!(!crate::deployments::matches(
-            &labels(&[("fleet.host.organization", "Mitbewerber AG")]),
-            Some(&alone)
-        ));
     }
 
-    /// The Client Agent is the one reporting `supervisor.kind.*`, and the machine behind a Gateway
-    /// is its `host.id`, else its `host.name`.
+    /// The Client Agent is the one reporting `supervisor.kind.*`.
     #[test]
-    fn a_client_agent_and_its_machine_are_read_from_the_report() {
+    fn a_client_agent_is_read_from_the_report() {
         let client = described(&[("supervisor.kind.collector", "true"), ("host.id", "m-1")]);
         let supervisor = described(&[("host.name", "edge-01")]);
         assert!(is_client_agent(Some(&client)));
         assert!(!is_client_agent(Some(&supervisor)));
-        assert_eq!(machine(Some(&client)).as_deref(), Some("host.id=m-1"));
-        assert_eq!(
-            machine(Some(&supervisor)).as_deref(),
-            Some("host.name=edge-01")
-        );
-        assert_eq!(machine(Some(&described(&[]))), None);
+        assert!(!is_client_agent(None));
     }
 }

@@ -32,3 +32,9 @@ query-filters:
   # hit is the test of that rule, whose refused `http://` endpoint flows into the probe.
   - exclude:
       id: rust/non-https-url
+  # Excludes the rule repository-wide, not one file. The oauth-token crate hashes 256-bit
+  # CSPRNG-generated client secrets and access tokens with SHA-256; these are not
+  # human passwords, which remain Argon2id-hashed. The exclusion also disables this automated
+  # check for future password-hashing code; that protection is left to review.
+  - exclude:
+      id: rust/weak-sensitive-data-hashing

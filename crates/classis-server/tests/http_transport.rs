@@ -503,8 +503,6 @@ async fn a_poller_past_its_burst_is_answered_unavailable_in_the_body() {
     let (server, _clock) = support::spawn_with_agent_rate(classis_server::agent_rate::Limits {
         messages_per_sec: 1,
         burst: 2,
-        gateway_messages_per_sec: 1,
-        gateway_burst: 2,
     })
     .await;
     let url = format!("http://{}/v1/opamp", server.addr);

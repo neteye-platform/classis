@@ -1,9 +1,10 @@
-//! No secret reaches the Server's log: the `server` binary, logging at `trace`,
-//! is sent a random string in an Agent's `Authorization` header (the credential the proxy in front
-//! of the Server checks, which the Server itself ignores) and a wrong and a right password on the
-//! Operator plane — and none of the values, nor a hash of them, is in what it wrote to standard
-//! error.
+//! No secret reaches the Server's log: the `server` binary, logging at `trace`, enrols a host with
+//! its Space's key, hands it a token, admits it with the token, is sent a token it never issued, a
+//! wrong password on the Operator plane, and the right one for an act — and none of the values, nor
+//! a hash of them, is in what it wrote to standard error.
 #![cfg(unix)]
+
+mod support;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -34,14 +35,22 @@ fn free_ports() -> (u16, u16) {
     (port(&first), port(&second))
 }
 
+fn sha256_hex(text: &str) -> String {
+    hex::encode(sha2::Sha256::digest(text.as_bytes()))
+}
+
 #[tokio::test]
 async fn no_secret_reaches_the_log() {
     const OPERATOR_PASSWORD: &str = "the operator's own password";
     const WRONG_PASSWORD: &str = "a guess that does not sign in";
-    opamp::tls::install_ring_provider();
+    let unissued = "an-old-fleet-token-of-32-characters";
+    let unissued_authorization = format!("Bearer {unissued}");
 
+    // What main() does at startup: without a process provider, reqwest refuses to build a client.
+    opamp::tls::install_ring_provider();
     let dir = tempfile::tempdir().expect("tempdir");
-    let token = "an-agent-credential-of-32-random-characters";
+    // The Space an operator's tooling made before the Server started.
+    let key = support::create_space(&dir.path().join("data"), "lab");
     let (agent_port, operator_port) = free_ports();
     let config = dir.path().join("server.toml");
     std::fs::write(
@@ -61,6 +70,7 @@ async fn no_secret_reaches_the_log() {
             .arg("--config")
             .arg(&config)
             .env("RUST_LOG", "trace")
+            .env("NO_COLOR", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -87,62 +97,97 @@ async fn no_secret_reaches_the_log() {
         }
     }
 
-    // An Agent reports with a credential for the proxy in front: the Server admits the request and
-    // ignores the header.
-    let client = reqwest::Client::new();
+    // A host enrols with the key, asks for its token, and is admitted with it.
+    let agent = reqwest::Client::new();
+    let registered = oauth_registration::client::register(
+        &agent,
+        format!("http://127.0.0.1:{agent_port}/v1/enrol"),
+        &key,
+    )
+    .await
+    .expect("enrolled");
+    let issued = oauth_token::client::request_token(
+        &agent,
+        format!("http://127.0.0.1:{agent_port}/v1/token"),
+        &registered.client_id,
+        &registered.client_secret,
+    )
+    .await
+    .expect("a token");
+    let token = issued.access_token.to_string();
+    let secret = registered.client_secret.to_string();
     let report = AgentToServer {
         instance_uid: InstanceUid::default().as_bytes().to_vec(),
         sequence_num: 1,
         ..Default::default()
     };
-    let post = |authorization: String| {
-        client
-            .post(format!("http://127.0.0.1:{agent_port}/v1/opamp"))
-            .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
-            .header(reqwest::header::AUTHORIZATION, authorization)
-            .body(report.encode_to_vec())
-            .send()
-    };
-    let response = post(format!("Bearer {token}")).await.expect("report");
-    assert!(response.status().is_success(), "{:?}", response.status());
+    let admitted = agent
+        .post(format!("http://127.0.0.1:{agent_port}/v1/opamp"))
+        .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
+        .bearer_auth(&token)
+        .body(report.encode_to_vec())
+        .send()
+        .await
+        .expect("report");
+    assert!(admitted.status().is_success(), "{:?}", admitted.status());
 
-    // A wrong password on the Operator plane, and the right one for the acts after it.
+    // A token the Server never issued, and a key that is not any Space's: both refused.
+    let refused = agent
+        .post(format!("http://127.0.0.1:{agent_port}/v1/opamp"))
+        .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
+        .header(reqwest::header::AUTHORIZATION, &unissued_authorization)
+        .body(report.encode_to_vec())
+        .send()
+        .await
+        .expect("report");
+    assert_eq!(refused.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let wrong_key = format!("cle1_lab_{}", "A".repeat(43));
+    let refused = oauth_registration::client::register(
+        &agent,
+        format!("http://127.0.0.1:{agent_port}/v1/enrol"),
+        &wrong_key,
+    )
+    .await;
+    assert!(refused.is_err(), "a key that is no Space's enrolled a host");
+
+    // A wrong password on the Operator plane, and the right one for every act after it.
+    let operator = reqwest::Client::new();
     let url = |path: &str| format!("http://127.0.0.1:{operator_port}{path}");
-    let refused = client
+    let refused = operator
         .get(url("/api/v1/agents"))
         .basic_auth("ops", Some(WRONG_PASSWORD))
         .send()
         .await
         .expect("refused sign-in");
     assert_eq!(refused.status(), reqwest::StatusCode::UNAUTHORIZED);
-    let listed = client
-        .get(url("/api/v1/agents"))
+
+    // An act under the right password.
+    let acted = operator
+        .put(url("/api/v1/configurations/base"))
         .basic_auth("ops", Some(OPERATOR_PASSWORD))
-        .send()
-        .await
-        .expect("list");
-    assert_eq!(listed.status(), reqwest::StatusCode::OK);
-    // An act: the Agent is unknown, and the act is logged all the same, with who made it.
-    let act = client
-        .post(url(&format!(
-            "/api/v1/agents/{}/restart",
-            InstanceUid::default()
-        )))
-        .basic_auth("ops", Some(OPERATOR_PASSWORD))
+        .json(&serde_json::json!({ "body": "receivers: {}\n", "service_name": "otelcol" }))
         .send()
         .await
         .expect("act");
-    assert!(act.status().is_client_error(), "{:?}", act.status());
+    assert_eq!(acted.status(), reqwest::StatusCode::OK);
 
-    // What it logged meanwhile: the events of the requests are written by the time their answers
-    // are read, and whatever follows within a moment is read too.
+    // What it logged meanwhile: the events of the download are written by the time its answer is
+    // read, and whatever follows within a moment is read too.
     while let Ok(line) = logged.recv_timeout(Duration::from_millis(500)) {
         log.push(line);
     }
     drop(running);
     let log = log.join("\n");
     // Every event of the run is there, the `debug` ones too, so the absence below means something.
-    for event in ["admission.admitted", "operator.refused", "operator.act"] {
+    for event in [
+        "operator.refused",
+        "operator.act",
+        "enrolment.registered",
+        "token.issued",
+        "admission.admitted",
+        "admission.refused",
+        "enrolment.refused",
+    ] {
         assert!(log.contains(event), "no {event} in the log: {log}");
     }
     // An act names the operator who made it.
@@ -155,16 +200,43 @@ async fn no_secret_reaches_the_log() {
     let basic = |password: &str| {
         base64::engine::general_purpose::STANDARD.encode(format!("ops:{password}"))
     };
+    // The secret's alphabet contains `_`, so only the key format reads it right.
+    let key_secret = classis_core::enrolment_key::EnrolmentKey::parse(&key)
+        .expect("a well-formed key")
+        .secret()
+        .to_string();
     let secrets = [
-        ("the Agent's credential", token.to_string()),
+        ("the enrolment key", key.clone()),
+        ("the enrolment key's secret", key_secret.clone()),
+        ("a hash of the enrolment key", sha256_hex(&key)),
         (
-            "a hash of the credential",
-            hex::encode(sha2::Sha256::digest(token.as_bytes())),
+            "a hash of the enrolment key's secret",
+            sha256_hex(&key_secret),
+        ),
+        ("the rejected enrolment key", wrong_key.clone()),
+        ("the client secret", secret.clone()),
+        ("a hash of the client secret", sha256_hex(&secret)),
+        ("the access token", token.clone()),
+        ("a hash of the access token", sha256_hex(&token)),
+        (
+            "a hash of the access token's Authorization value",
+            sha256_hex(&format!("Bearer {token}")),
+        ),
+        ("the unissued token", unissued.to_string()),
+        ("a hash of the unissued token", sha256_hex(unissued)),
+        (
+            "a hash of the Authorization value",
+            sha256_hex(&unissued_authorization),
         ),
         ("the wrong password", WRONG_PASSWORD.to_string()),
         ("the wrong Basic credential", basic(WRONG_PASSWORD)),
         ("the operator's password", OPERATOR_PASSWORD.to_string()),
         ("the operator's Basic credential", basic(OPERATOR_PASSWORD)),
+        (
+            "the client's Basic credential",
+            base64::engine::general_purpose::STANDARD
+                .encode(format!("{}:{secret}", registered.client_id)),
+        ),
     ];
     for (what, secret) in secrets {
         assert!(!log.contains(&secret), "{what} is in the log");

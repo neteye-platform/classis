@@ -5,13 +5,12 @@
 // The harness reports what opamp-go sees as one JSON object per line on stdout, and takes
 // commands as one JSON object per line on stdin.
 //
-//	opamp-go-harness client [--request-uid] [--tls ca,cert,key [--force-cert]] <url>
-//	    opamp-go's Client, connected to <url>; with --tls it trusts the CA file and offers the
-//	    certificate (none when cert and key are empty), over TLS 1.3 alone. Go offers a certificate
-//	    only when the Server names its CA as acceptable; --force-cert offers it regardless
-//	opamp-go-harness server [--tls cert,key,client-ca]
-//	    opamp-go's Server, on 127.0.0.1, any port; with --tls it serves TLS 1.3 alone and requires
-//	    a client certificate the client CA issued
+//	opamp-go-harness client [--request-uid] [--tls ca] <url>
+//	    opamp-go's Client, connected to <url>; with --tls it trusts the CA file, over TLS 1.3
+//	    alone
+//	opamp-go-harness server [--tls cert,key]
+//	    opamp-go's Server, on 127.0.0.1, any port; with --tls it serves the certificate over
+//	    TLS 1.3 alone
 package main
 
 import (
@@ -91,19 +90,19 @@ func main() {
 	case "client":
 		flags := flag.NewFlagSet("client", flag.ExitOnError)
 		requestUid := flags.Bool("request-uid", false, "ask the Server for an instance_uid")
-		files := flags.String("tls", "", "ca,cert,key")
-		force := flags.Bool("force-cert", false, "offer the certificate whatever the Server accepts")
+		files := flags.String("tls", "", "ca")
+		bearer := flags.String("bearer", "", "access token sent as Authorization: Bearer")
 		_ = flags.Parse(os.Args[2:])
 		if flags.NArg() != 1 {
 			usage()
 		}
 		var config *tls.Config
-		if config, err = clientTLS(*files, *force); err == nil {
-			err = runClient(flags.Arg(0), *requestUid, config)
+		if config, err = clientTLS(*files); err == nil {
+			err = runClient(flags.Arg(0), *requestUid, *bearer, config)
 		}
 	case "server":
 		flags := flag.NewFlagSet("server", flag.ExitOnError)
-		files := flags.String("tls", "", "cert,key,client-ca")
+		files := flags.String("tls", "", "cert,key")
 		_ = flags.Parse(os.Args[2:])
 		var config *tls.Config
 		if config, err = serverTLS(*files); err == nil {
@@ -119,19 +118,19 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: opamp-go-harness client [--request-uid] [--tls ca,cert,key [--force-cert]] <url>")
-	fmt.Fprintln(os.Stderr, "       opamp-go-harness server [--tls cert,key,client-ca]")
+	fmt.Fprintln(os.Stderr, "usage: opamp-go-harness client [--request-uid] [--bearer token] [--tls ca] <url>")
+	fmt.Fprintln(os.Stderr, "       opamp-go-harness server [--tls cert,key]")
 	os.Exit(2)
 }
 
-// tlsFiles splits a comma-separated list of exactly three paths; empty means no TLS.
-func tlsFiles(list string) ([]string, error) {
+// tlsFiles splits a comma-separated list of exactly count paths; empty means no TLS.
+func tlsFiles(list string, count int) ([]string, error) {
 	if list == "" {
 		return nil, nil
 	}
 	files := strings.Split(list, ",")
-	if len(files) != 3 {
-		return nil, fmt.Errorf("--tls takes three comma-separated files, got %q", list)
+	if len(files) != count {
+		return nil, fmt.Errorf("--tls takes %d comma-separated files, got %q", count, list)
 	}
 	return files, nil
 }
@@ -149,10 +148,10 @@ func pool(file string) (*x509.CertPool, error) {
 	return certs, nil
 }
 
-// clientTLS trusts the CA and offers the certificate, on TLS 1.3 alone, as this project's own
-// endpoint requires of every peer. Without a certificate it offers none.
-func clientTLS(list string, force bool) (*tls.Config, error) {
-	files, err := tlsFiles(list)
+// clientTLS trusts the CA, on TLS 1.3 alone, as this project's own endpoint requires of every
+// peer.
+func clientTLS(list string) (*tls.Config, error) {
+	files, err := tlsFiles(list, 1)
 	if files == nil {
 		return nil, err
 	}
@@ -160,30 +159,12 @@ func clientTLS(list string, force bool) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	config := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}
-	if files[1] == "" && files[2] == "" {
-		return config, nil
-	}
-	identity, err := tls.LoadX509KeyPair(files[1], files[2])
-	if err != nil {
-		return nil, err
-	}
-	if force {
-		// Offered whatever the Server names as acceptable: without this Go sends nothing for a
-		// certificate another CA issued, and the refusal of a foreign certificate goes untested.
-		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return &identity, nil
-		}
-	} else {
-		// What a real opamp-go agent configures: Go picks it only if the Server accepts its CA.
-		config.Certificates = []tls.Certificate{identity}
-	}
-	return config, nil
+	return &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}, nil
 }
 
-// serverTLS serves the certificate and requires one the client CA issued, on TLS 1.3 alone.
+// serverTLS serves the certificate, on TLS 1.3 alone.
 func serverTLS(list string) (*tls.Config, error) {
-	files, err := tlsFiles(list)
+	files, err := tlsFiles(list, 2)
 	if files == nil {
 		return nil, err
 	}
@@ -191,14 +172,8 @@ func serverTLS(list string) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	clients, err := pool(files[2])
-	if err != nil {
-		return nil, err
-	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{identity},
-		ClientCAs:    clients,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS13,
 		// Every handshake attempt is reported, so a test can tell a refused peer from one that
 		// never tried.
@@ -223,7 +198,7 @@ const agentCapabilities = protobufs.AgentCapabilities_AgentCapabilities_ReportsS
 	protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig |
 	protobufs.AgentCapabilities_AgentCapabilities_ReportsHeartbeat
 
-func runClient(url string, requestUid bool, tlsConfig *tls.Config) error {
+func runClient(url string, requestUid bool, bearer string, tlsConfig *tls.Config) error {
 	var uid clienttypes.InstanceUid
 	if _, err := rand.Read(uid[:]); err != nil {
 		return err
@@ -259,8 +234,15 @@ func runClient(url string, requestUid bool, tlsConfig *tls.Config) error {
 
 	heartbeat := time.Second
 	ctx := context.Background()
+	// The credential of a Server that admits by bearer token: sent with the WebSocket
+	// upgrade and with every plain-HTTP request.
+	var header http.Header
+	if bearer != "" {
+		header = http.Header{"Authorization": []string{"Bearer " + bearer}}
+	}
 	settings := clienttypes.StartSettings{
 		OpAMPServerURL:    url,
+		Header:            header,
 		Client:            httpClient,
 		TLSConfig:         websocketTLS(httpClient, tlsConfig),
 		InstanceUid:       uid,

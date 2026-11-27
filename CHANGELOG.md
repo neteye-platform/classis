@@ -11,6 +11,38 @@ its tag exists.
 
 ## [Unreleased]
 
+### Changed
+
+- **A host is admitted by a bearer access token, not a client certificate**.
+  A host enrols with the enrolment key of its Space
+  (`supervisor enrol <base-url> <key>`), which writes `state.json` in its state
+  directory and starts its service; every OpAMP exchange and package download
+  then carries the token. Nothing is migrated: a host enrolled under the old
+  model is enrolled again, and no old certificate or key is read.
+  `service install` registers the service but starts nothing, and a Client
+  without `state.json` refuses to start. New `server.toml` key:
+  `token_lifetime_secs` (default `0`, a token never expires). New
+  `supervisor revoke [--force] [--keep-cache]` deletes a host's state
+  directory locally.
+- **The Client's default endpoint is `ws://127.0.0.1:4320/v1/opamp`**, plain
+  HTTP to a Server on the same machine. A Server on another machine is reached
+  through the reverse proxy in front of it: set `endpoint` to its `wss://` or
+  `https://` URL.
+
+### Removed
+
+- **Client certificates and everything built on them**: the client and
+  bootstrap CAs, the CSR flow, certificate renewal, bootstrap certificates and
+  their PKCS#12 files, the enrolment window and its approval, the certificate
+  register and the revocation list, the Hosts and `/api/v1/hosts`, the
+  `fleet.host.*` values Selectors could match, and the `classisctl pki`
+  commands that made the two CAs. `[client_ca]` and `[enrolment]` in
+  `server.toml` are refused at startup, naming the section.
+- **Gateway Mode**, with its package cache and its bindings.
+- **`server.toml.fragment` and `--server-path` of `classisctl pki init`**: the
+  Server holds no certificate. `--server-dir` receives the certificate and key
+  of the reverse proxy in front of it.
+
 ## [0.2.0]
 
 ### Added

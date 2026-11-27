@@ -131,6 +131,53 @@ impl HeldDir {
         sys::write(self, name, &temporary, contents, mode)
     }
 
+    /// [`write`](Self::write) for a file that two runs may replace at once: each stages under a
+    /// name of its own that no other run can guess, so neither unlinks the other's half-written
+    /// file, and the later rename wins whole. A run killed between staging and renaming leaves
+    /// `<name>.<hex>~` behind, as [`write_new`](Self::write_new) does.
+    ///
+    /// # Errors
+    /// Returns an error when the file cannot be written or renamed into place.
+    pub fn replace(&self, name: &str, contents: &[u8], mode: u32) -> io::Result<()> {
+        check_name(name)?;
+        let temporary = format!("{name}.{}~", random_suffix()?);
+        sys::write(self, name, &temporary, contents, mode)
+    }
+
+    /// Writes `contents` as the file `name`, with `mode` on Unix, only where nothing is at `name`:
+    /// whole, to a new temporary name beside it, then linked to `name`, which refuses a name that
+    /// exists — a file, or a link, which is never followed. Two runs that write the same name
+    /// cannot both succeed, and neither replaces what the other wrote: each stages under a name
+    /// of its own that no other run can guess, created exclusively, and never removes another
+    /// file's, so the run that loses the link finds the name taken and is refused with
+    /// `AlreadyExists`.
+    ///
+    /// No clean-up of an earlier run's temporary file is attempted: a name that is random per
+    /// call cannot be told from the in-flight file of a run that is still writing, and unlinking it
+    /// is what let one run publish another's half-written file. A run killed between staging and
+    /// linking leaves `<name>.<hex>~` behind, mode as asked.
+    ///
+    /// # Errors
+    /// Returns an error of kind `AlreadyExists` when something is at `name`, and another when the
+    /// file cannot be written.
+    pub fn write_new(&self, name: &str, contents: &[u8], mode: u32) -> io::Result<()> {
+        self.write_new_between(name, contents, mode, || {})
+    }
+
+    /// [`write_new`](Self::write_new), running `after_staging` once the data is staged and before
+    /// it is linked to `name`: the instant another run can overlap with this one.
+    fn write_new_between(
+        &self,
+        name: &str,
+        contents: &[u8],
+        mode: u32,
+        after_staging: impl FnOnce(),
+    ) -> io::Result<()> {
+        check_name(name)?;
+        let temporary = format!("{name}.{}~", random_suffix()?);
+        sys::write_new(self, name, &temporary, contents, mode, after_staging)
+    }
+
     /// Makes what was created, renamed or removed in this directory durable. On Windows NTFS
     /// journals the directory's entries itself, and a directory handle opened for reading cannot be
     /// flushed, so nothing is done.
@@ -158,6 +205,54 @@ impl HeldDir {
     pub fn remove(&self, name: &str) -> io::Result<()> {
         check_name(name)?;
         sys::remove(self, name)
+    }
+
+    /// The names of everything in this directory, read through its handle.
+    ///
+    /// # Errors
+    /// Returns an error when the directory cannot be read.
+    pub fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+            Ok(crate::storage::handle::entries(&self.fd)?
+                .into_iter()
+                .map(|name| std::ffi::OsString::from_vec(name.into_bytes()))
+                .collect())
+        }
+        #[cfg(windows)]
+        {
+            std::fs::read_dir(&self.path)?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect()
+        }
+    }
+
+    /// Removes the entry `name` with everything beneath it. A link is removed as a link and never
+    /// followed, in this directory or in any directory beneath it.
+    ///
+    /// # Errors
+    /// Returns the first entry that cannot be removed.
+    pub fn remove_all(&self, name: &std::ffi::OsStr) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let entry = std::ffi::CString::new(name.as_bytes())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            crate::storage::handle::remove_tree_at(&self.fd, &entry, &self.path.join(name))
+        }
+        #[cfg(windows)]
+        {
+            let path = self.path.join(name);
+            let kind = std::fs::symlink_metadata(&path)?.file_type();
+            // A real directory is emptied without following a link or a junction in it; a link
+            // is removed as itself, a file link or a directory link as each needs.
+            if kind.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
+            }
+        }
     }
 }
 
@@ -212,6 +307,22 @@ fn split(path: &Path) -> io::Result<(&Path, &std::ffi::OsStr)> {
         _ => Path::new("."),
     };
     Ok((parent, name))
+}
+
+/// Sixteen hex digits from the system's secure random source: the part of a temporary name that
+/// no other run can guess.
+fn random_suffix() -> io::Result<String> {
+    use ring::rand::SecureRandom as _;
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 8];
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| io::Error::other("no secure random source for a temporary file name"))?;
+    let mut suffix = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(suffix, "{byte:02x}").expect("writing to a String");
+    }
+    Ok(suffix)
 }
 
 /// A name within a held directory is one plain component: never a path, `.` or `..`.
@@ -367,20 +478,16 @@ mod sys {
         Ok(file)
     }
 
-    pub(super) fn write(
+    /// Writes `contents` to a new file `temporary` in `dir`, which `finish` then puts at its name.
+    fn staged(
         held: &HeldDir,
-        name: &str,
         temporary: &str,
         contents: &[u8],
         mode: u32,
+        finish: impl FnOnce(RawFd, &CString) -> io::Result<()>,
     ) -> io::Result<()> {
         let dir = held.fd.as_raw_fd();
         let temporary = c_name(OsStr::new(temporary))?;
-        // A leftover from an interrupted run would make `O_EXCL` refuse; a link there goes as a link.
-        match unlinkat(dir, &temporary) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-            _ => {}
-        }
         let written = openat(
             dir,
             &temporary,
@@ -394,11 +501,50 @@ mod sys {
             file.write_all(contents)?;
             file.sync_all()
         })
-        .and_then(|()| renameat(dir, &temporary, &c_name(OsStr::new(name))?));
+        .and_then(|()| finish(dir, &temporary));
         if written.is_err() {
             let _ = unlinkat(dir, &temporary);
         }
         written
+    }
+
+    pub(super) fn write(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        mode: u32,
+    ) -> io::Result<()> {
+        let name = c_name(OsStr::new(name))?;
+        // A leftover from an interrupted run would make `O_EXCL` refuse; a link there goes as a link.
+        match unlinkat(held.fd.as_raw_fd(), &c_name(OsStr::new(temporary))?) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        staged(held, temporary, contents, mode, |dir, temporary| {
+            renameat(dir, temporary, &name)
+        })
+    }
+
+    pub(super) fn write_new(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        mode: u32,
+        after_staging: impl FnOnce(),
+    ) -> io::Result<()> {
+        let name = c_name(OsStr::new(name))?;
+        staged(held, temporary, contents, mode, |dir, temporary| {
+            after_staging();
+            // SAFETY: a valid descriptor and two NUL-terminated names; `linkat(2)` without
+            // `AT_SYMLINK_FOLLOW` follows no link, and fails with `EEXIST` where `name` exists.
+            if unsafe { libc::linkat(dir, temporary.as_ptr(), dir, name.as_ptr(), 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // The data is at `name` now; the temporary name is only what is left of the staging.
+            unlinkat(dir, temporary)
+        })
     }
 
     fn unlinkat(dir: RawFd, name: &CString) -> io::Result<()> {
@@ -535,19 +681,14 @@ mod sys {
         Ok(file)
     }
 
-    pub(super) fn write(
+    /// Writes `contents` to a new file `temporary` in `held`, which `finish` then puts at its name.
+    fn staged(
         held: &HeldDir,
-        name: &str,
         temporary: &str,
         contents: &[u8],
-        _mode: u32,
+        finish: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<()> {
         let temporary = held.path.join(temporary);
-        // A leftover from an interrupted run would make `create_new` refuse; a link goes as a link.
-        match std::fs::remove_file(&temporary) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-            _ => {}
-        }
         let written = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -556,11 +697,44 @@ mod sys {
                 file.write_all(contents)?;
                 file.sync_all()
             })
-            .and_then(|()| std::fs::rename(&temporary, held.path.join(name)));
+            .and_then(|()| finish(&temporary));
         if written.is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
         written
+    }
+
+    pub(super) fn write(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        _mode: u32,
+    ) -> io::Result<()> {
+        // A leftover from an interrupted run would make `create_new` refuse; a link goes as a link.
+        match std::fs::remove_file(held.path.join(temporary)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        staged(held, temporary, contents, |temporary| {
+            std::fs::rename(temporary, held.path.join(name))
+        })
+    }
+
+    pub(super) fn write_new(
+        held: &HeldDir,
+        name: &str,
+        temporary: &str,
+        contents: &[u8],
+        _mode: u32,
+        after_staging: impl FnOnce(),
+    ) -> io::Result<()> {
+        staged(held, temporary, contents, |temporary| {
+            after_staging();
+            // A hard link is made only where nothing is at `name`; the temporary name goes after.
+            std::fs::hard_link(temporary, held.path.join(name))?;
+            std::fs::remove_file(temporary)
+        })
     }
 
     pub(super) fn rename(held: &HeldDir, from: &str, to: &str) -> io::Result<()> {
@@ -574,5 +748,165 @@ mod sys {
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn sync(_: &HeldDir) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `write_new` writes a name nothing is at, and never replaces what is: a file stands as it
+    /// was, a link is no name to take and is not followed, and no temporary name is left behind.
+    #[test]
+    fn write_new_refuses_a_name_that_exists_and_follows_no_link() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = HeldDir::open(dir.path()).expect("held");
+
+        held.write_new("new", b"first", 0o600).expect("a new name");
+        assert_eq!(
+            std::fs::read(dir.path().join("new")).expect("read"),
+            b"first"
+        );
+        let again = held
+            .write_new("new", b"second", 0o600)
+            .expect_err("a name taken");
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(dir.path().join("new")).expect("read"),
+            b"first"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(dir.path().join("new"))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+
+            let outside = tempfile::tempdir().expect("outside");
+            std::os::unix::fs::symlink(outside.path().join("target"), dir.path().join("link"))
+                .expect("link");
+            let linked = held
+                .write_new("link", b"x", 0o600)
+                .expect_err("a link at the name");
+            assert_eq!(linked.kind(), io::ErrorKind::AlreadyExists);
+            assert!(
+                !outside.path().join("target").exists(),
+                "the link was followed"
+            );
+        }
+
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert!(
+            !names.iter().any(|name| name.ends_with('~')),
+            "a temporary name was left: {names:?}"
+        );
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Two runs that overlap — the second writes the name between the first's staging and its
+    /// link — leave one complete file, the second's, and the first is refused as a name taken:
+    /// not "cannot write", and not the other run's half-written file published under its name.
+    #[test]
+    fn a_writer_that_overlaps_another_is_refused_and_replaces_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = HeldDir::open(dir.path()).expect("held");
+        let second = HeldDir::open(dir.path()).expect("held");
+
+        let loser = first
+            .write_new_between("state.json", b"first run", 0o600, || {
+                second
+                    .write_new("state.json", b"second run", 0o600)
+                    .expect("the second run takes the name");
+            })
+            .expect_err("the first run lost the name");
+        assert_eq!(loser.kind(), io::ErrorKind::AlreadyExists, "{loser}");
+        assert_eq!(
+            std::fs::read(dir.path().join("state.json")).expect("read"),
+            b"second run"
+        );
+        assert_eq!(names_in(dir.path()), ["state.json"]);
+
+        let again = second
+            .write_new_between("state.json", b"third run", 0o600, || {})
+            .expect_err("a name taken");
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(names_in(dir.path()), ["state.json"]);
+    }
+
+    /// A run never removes another run's staged file: with a temporary file of the same stem
+    /// already standing, `write_new` leaves it, and publishes only its own contents.
+    #[test]
+    fn a_writer_leaves_another_runs_staged_file_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = HeldDir::open(dir.path()).expect("held");
+        std::fs::write(dir.path().join("state.json~"), b"in flight").expect("write");
+        std::fs::write(
+            dir.path().join("state.json.0123456789abcdef~"),
+            b"in flight",
+        )
+        .expect("write");
+
+        held.write_new("state.json", b"mine", 0o600).expect("new");
+        assert_eq!(
+            std::fs::read(dir.path().join("state.json")).expect("read"),
+            b"mine"
+        );
+        assert_eq!(
+            names_in(dir.path()),
+            ["state.json", "state.json.0123456789abcdef~", "state.json~"]
+        );
+    }
+
+    /// `replace` stages under a name of its own each time, so a leftover of the fixed name is
+    /// nobody's to clear and a second replace does not touch it.
+    #[test]
+    fn replace_stages_under_a_name_of_its_own_and_leaves_no_temporary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = HeldDir::open(dir.path()).expect("held");
+        std::fs::write(dir.path().join("entry"), b"old").expect("write");
+        std::fs::write(dir.path().join("entry~"), b"in flight").expect("write");
+
+        held.replace("entry", b"new", 0o600).expect("replace");
+        assert_eq!(
+            std::fs::read(dir.path().join("entry")).expect("read"),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("entry~")).expect("read"),
+            b"in flight",
+            "another run's staged file is left alone"
+        );
+        assert_eq!(names_in(dir.path()), ["entry", "entry~"]);
+    }
+
+    /// `write`, which replaces, still stages under its fixed name and clears a leftover there.
+    #[test]
+    fn write_replaces_the_name_and_clears_its_own_leftover() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = HeldDir::open(dir.path()).expect("held");
+        std::fs::write(dir.path().join("entry"), b"old").expect("write");
+        std::fs::write(dir.path().join("entry~"), b"interrupted").expect("write");
+
+        held.write("entry", b"new", 0o600).expect("write");
+        assert_eq!(
+            std::fs::read(dir.path().join("entry")).expect("read"),
+            b"new"
+        );
+        assert_eq!(names_in(dir.path()), ["entry"]);
     }
 }

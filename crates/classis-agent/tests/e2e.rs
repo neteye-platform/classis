@@ -40,8 +40,8 @@ async fn wait_until<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
 async fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = Arc::new(common::fleet_state(dir.path()));
-    let app =
-        classis_server::agent_app(state.clone(), classis_server::transport::Admission::open());
+    let admission = common::Admission::new(dir.path());
+    let app = admission.app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the server");
@@ -49,6 +49,11 @@ async fn spawn_server() -> (std::net::SocketAddr, Arc<AppState>, tempfile::TempD
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
+    // The Client is a host of the Server's Space: the `state.json` of the state directory every
+    // test below names.
+    admission
+        .enrol(addr, &dir.path().join("client-state"))
+        .await;
     (addr, state, dir)
 }
 
@@ -165,8 +170,7 @@ async fn a_config_change_reaches_both_supervised_agents_over_one_connection() {
         stub_block = stub_block,
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-        .expect("write supervisor.toml");
+    std::fs::write(&config_path, toml).expect("write supervisor.toml");
 
     // Both owned Supervisors have their program staged before the Client starts, so they run at
     // once rather than waiting for a package (the delivery path is owned-only).
@@ -308,8 +312,18 @@ async fn a_config_change_reaches_both_supervised_agents_over_one_connection() {
     // Tagging *one* Agent among several is the fleet's job now: one label, keyed by the Agent's
     // uid, matched by the same Selectors — and it takes effect without touching the host's file.
     let uid = opamp::uid::InstanceUid::parse(&stub.instance_uid).expect("the uid the Server holds");
+    // The Client's own Agent is in the fleet-wide channel, and a Supervisor's Agent inherits the
+    // labels of the Client Agent on its host below its own: to leave the channel the
+    // stub states a channel of its own beside the role, which wins over the inherited one.
     assert!(state
-        .set_labels(&uid, [("role".to_string(), "edge".to_string())].into())
+        .set_labels(
+            &uid,
+            [
+                ("role".to_string(), "edge".to_string()),
+                (common::CHANNEL.0.to_string(), "edge-only".to_string()),
+            ]
+            .into()
+        )
         .is_ok());
     let agents = state.snapshot();
     assert_eq!(
@@ -545,7 +559,7 @@ async fn a_refused_supervisor_set_leaves_the_running_supervisors_untouched() {
         marker = marker.to_string_lossy(),
     );
     let config_path = dir.path().join("supervisor.toml");
-    std::fs::write(&config_path, toml + &common::client_identity(dir.path())).expect("write");
+    std::fs::write(&config_path, toml).expect("write");
     let written = std::fs::read(&config_path).expect("read");
     stage_owned_program(&state_dir, "stub", &program);
     let _client = spawn_client(&config_path);
@@ -629,8 +643,7 @@ async fn a_server_offers_no_configuration_to_a_listed_supervisor() {
             closed = block("closed"),
         );
         let path = dir.path().join("supervisor.toml");
-        std::fs::write(&path, toml + &common::client_identity(dir.path()))
-            .expect("write supervisor.toml");
+        std::fs::write(&path, toml).expect("write supervisor.toml");
         path
     };
     stage_owned_program(&state_dir, "open", &program);
@@ -744,8 +757,7 @@ async fn a_server_offers_no_supervisor_set_to_a_host_that_keeps_it() {
             program = program,
             marker = marker.to_string_lossy(),
         );
-        std::fs::write(&config_path, toml + &common::client_identity(dir.path()))
-            .expect("write supervisor.toml");
+        std::fs::write(&config_path, toml).expect("write supervisor.toml");
         std::fs::read(&config_path).expect("read")
     };
     let written = write_config(false);

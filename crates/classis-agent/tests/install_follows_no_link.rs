@@ -5,23 +5,16 @@
 //! each case here plants one and checks that the install refused it or replaced it, and that what
 //! it pointed at is as it was.
 
+mod common;
+
 use std::path::Path;
 
-use classis_agent::config::ClientConfig;
 use classis_agent::connection::{self, SETTINGS_FILE};
-use classis_agent::csr;
 use classis_agent::service::layout::{self, Layout};
 use classis_agent::storage::Storage;
 use opamp::proto::ConnectionSettingsOffers;
 
 const UNTOUCHED: &[u8] = b"what the link points at\n";
-
-fn config(state_dir: &Path) -> ClientConfig {
-    ClientConfig {
-        state_dir: state_dir.to_path_buf(),
-        ..ClientConfig::default()
-    }
-}
 
 /// Whether `path` is a link of any kind.
 fn is_link(path: &Path) -> bool {
@@ -33,29 +26,12 @@ mod unix {
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::PathBuf;
 
+    use classis_agent::config_init::SERVER_CA_FILE;
     use classis_agent::service::layout::BINARY_FILENAME;
     use classis_agent::storage::UID_FILE;
     use classis_agent::supervisor::ports::AgentStorage as _;
-    use classis_agent::tls::{
-        ISSUED_CERT_FILE, ISSUED_KEY_FILE, PENDING_CERT_FILE, PENDING_CSR_FILE, PENDING_KEY_FILE,
-    };
 
     use super::*;
-
-    /// Signs `csr` the way a Server does.
-    fn sign(csr: &[u8]) -> String {
-        let ca_key = rcgen::KeyPair::generate().expect("ca key");
-        let mut ca_params =
-            rcgen::CertificateParams::new(vec!["test-ca".to_string()]).expect("ca params");
-        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        let ca_cert = ca_params.self_signed(&ca_key).expect("ca");
-        let issuer = rcgen::Issuer::from_ca_cert_pem(&ca_cert.pem(), ca_key).expect("issuer");
-        rcgen::CertificateSigningRequestParams::from_pem(std::str::from_utf8(csr).expect("utf-8"))
-            .expect("csr")
-            .signed_by(&issuer)
-            .expect("signed")
-            .pem()
-    }
 
     /// A file outside the account's directories, with a mode the install would change.
     fn victim(outside: &Path, name: &str) -> PathBuf {
@@ -83,60 +59,8 @@ mod unix {
         victim
     }
 
-    /// The pending key and the request, each written over a link at its name: the link is
-    /// replaced by the file, and the file it pointed at keeps its bytes and its mode.
-    #[test]
-    fn a_certificate_request_writes_through_no_link() {
-        for name in [PENDING_KEY_FILE, PENDING_CSR_FILE] {
-            let state = tempfile::tempdir().expect("state");
-            let outside = tempfile::tempdir().expect("outside");
-            let victim = plant(state.path(), outside.path(), name);
-
-            let request = csr::request(&config(state.path()));
-
-            assert_untouched(&victim);
-            assert!(request.is_some(), "a request is made beside {name}");
-            assert!(
-                !is_link(&state.path().join(name)),
-                "{name} is the file now, not the link"
-            );
-        }
-    }
-
-    /// An issued certificate is staged and put in force over links at every name it passes
-    /// through, its temporary names included; nothing they point at changes, and the pair in
-    /// force is the one issued.
-    #[test]
-    fn an_issued_certificate_is_stored_through_no_link() {
-        let state = tempfile::tempdir().expect("state");
-        let outside = tempfile::tempdir().expect("outside");
-        let request = csr::request(&config(state.path())).expect("a request");
-        let names = [
-            PENDING_CERT_FILE,
-            "client-cert.pending.tmp",
-            "client-cert.pending.pem.tmp",
-            "client-cert.pending.pem~",
-            ISSUED_CERT_FILE,
-            ISSUED_KEY_FILE,
-        ];
-        let victims: Vec<PathBuf> = names
-            .iter()
-            .map(|name| plant(state.path(), outside.path(), name))
-            .collect();
-
-        csr::accept(state.path(), sign(&request).as_bytes()).expect("accept");
-
-        for victim in &victims {
-            assert_untouched(victim);
-        }
-        assert!(config(state.path()).is_enrolled());
-        for name in [ISSUED_CERT_FILE, ISSUED_KEY_FILE] {
-            assert!(!is_link(&state.path().join(name)), "{name} is a file");
-        }
-    }
-
-    /// The instance identity and the connection settings, the other two files an enrolment
-    /// writes into the state directory.
+    /// The instance identity and the connection settings, the files the Client writes into the
+    /// state directory.
     #[test]
     fn the_identity_and_the_connection_settings_are_written_through_no_link() {
         let state = tempfile::tempdir().expect("state");
@@ -157,7 +81,111 @@ mod unix {
         assert!(!is_link(&state.path().join(SETTINGS_FILE)));
     }
 
-    /// A state directory the account replaced with a link is refused by everything an enrolment
+    /// The Server an `enrol` of these tests asks, and the base URL and key to enrol with.
+    async fn a_server(dir: &Path) -> (String, String) {
+        let state = std::sync::Arc::new(common::fleet_state(dir));
+        let admission = common::Admission::new(dir);
+        let app = admission.app(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+        (format!("http://{addr}"), admission.key.clone())
+    }
+
+    async fn enrol(base: &str, key: &str, state: &Path) -> Result<(), String> {
+        classis_agent::enrolment::enrol(
+            base,
+            key,
+            state,
+            opamp::client::ClientTls::default(),
+            &common::NoService,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// `enrol` runs as root or an Administrator over a state directory the service's account
+    /// owns, and its write of `state.json` follows no link: it stages under a name of its own that
+    /// no account can guess, so a link at the old fixed staging name is neither followed
+    /// nor removed, and what it points at is as it was; a link at `state.json` itself is refused; a
+    /// state directory that is a link is refused and nothing is created behind it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enrol_writes_state_json_through_no_link() {
+        let server = tempfile::tempdir().expect("server");
+        let (base, key) = a_server(server.path()).await;
+
+        // The name `state.json` was once staged under, now only a name the write does not use.
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).expect("state directory");
+        let staged = plant(&state, outside.path(), "state.json~");
+        enrol(&base, &key, &state).await.expect("enrolled");
+        assert_untouched(&staged);
+        assert!(
+            is_link(&state.join("state.json~")),
+            "the planted link is left as it was"
+        );
+        let mut staging: Vec<String> = std::fs::read_dir(&state)
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with('~'))
+            .collect();
+        staging.sort();
+        assert_eq!(staging, ["state.json~"], "no temporary name is left");
+        assert!(!is_link(&state.join("state.json")), "the file is no link");
+        assert_eq!(
+            std::fs::metadata(state.join("state.json"))
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        // A link at `state.json` is no host that has not enrolled: it is refused, not followed.
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).expect("state directory");
+        let linked = plant(&state, outside.path(), "state.json");
+        enrol(&base, &key, &state).await.expect_err("a link");
+        assert_untouched(&linked);
+        assert!(is_link(&state.join("state.json")), "the link is as it was");
+
+        // A state directory that is a link.
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o750))
+            .expect("mode");
+        let state = root.path().join("state");
+        std::os::unix::fs::symlink(outside.path(), &state).expect("plant the link");
+        enrol(&base, &key, &state)
+            .await
+            .expect_err("a linked state directory");
+        let entries: Vec<_> = std::fs::read_dir(outside.path())
+            .expect("list")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "nothing is written behind it: {entries:?}"
+        );
+        assert_eq!(
+            outside
+                .path()
+                .metadata()
+                .expect("meta")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
+        );
+    }
+
+    /// A state directory the account replaced with a link is refused by everything an install
     /// does there: nothing is created behind the link, and the directory it points at keeps its
     /// mode.
     #[test]
@@ -169,14 +197,9 @@ mod unix {
         let state = root.path().join("state");
         std::os::unix::fs::symlink(outside.path(), &state).expect("plant the link");
 
-        assert!(csr::recover(&state).is_err(), "recovery refuses it");
         assert!(
             Storage::new(state.clone()).is_err(),
             "the storage refuses it"
-        );
-        assert!(
-            csr::request(&config(&state)).is_none(),
-            "no request is made"
         );
         assert!(
             connection::store(&state, None, &ConnectionSettingsOffers::default()).is_err(),
@@ -244,11 +267,11 @@ mod unix {
         let outside = tempfile::tempdir().expect("outside");
         let like = root.path().join("supervisor.toml");
         std::fs::write(&like, "").expect("config");
-        victim(outside.path(), ISSUED_KEY_FILE);
+        victim(outside.path(), SERVER_CA_FILE);
         let state = root.path().join("state");
         std::os::unix::fs::symlink(outside.path(), &state).expect("plant");
 
-        let through = state.join(ISSUED_KEY_FILE);
+        let through = state.join(SERVER_CA_FILE);
         assert!(
             classis_agent::service::run_as::match_owner(&like, root.path(), &[&through]).is_err(),
             "a file behind a linked state directory is refused"
@@ -256,8 +279,8 @@ mod unix {
 
         std::fs::remove_file(&state).expect("unplant");
         std::fs::create_dir(&state).expect("state");
-        let linked = state.join(ISSUED_CERT_FILE);
-        std::fs::hard_link(outside.path().join(ISSUED_KEY_FILE), &linked).expect("hard link");
+        let linked = state.join("linked.pem");
+        std::fs::hard_link(outside.path().join(SERVER_CA_FILE), &linked).expect("hard link");
         let skipped =
             classis_agent::service::run_as::match_owner(&like, root.path(), &[&state, &linked])
                 .expect("handed over");
@@ -308,7 +331,7 @@ mod windows {
     }
 
     /// A state directory the account replaced with a junction is refused by everything an
-    /// enrolment does there, and nothing is created behind it.
+    /// install does there, and nothing is created behind it.
     #[test]
     fn a_state_directory_that_is_a_junction_is_refused() {
         let root = tempfile::tempdir().expect("data root");
@@ -316,14 +339,9 @@ mod windows {
         let state = root.path().join("state");
         junction(&state, outside.path());
 
-        assert!(csr::recover(&state).is_err(), "recovery refuses it");
         assert!(
             Storage::new(state.clone()).is_err(),
             "the storage refuses it"
-        );
-        assert!(
-            csr::request(&config(&state)).is_none(),
-            "no request is made"
         );
         assert!(
             connection::store(&state, None, &ConnectionSettingsOffers::default()).is_err(),
@@ -361,7 +379,7 @@ mod windows {
         std::fs::remove_dir(&root).expect("remove the junction");
     }
 
-    /// A file symbolic link at a name an enrolment writes is replaced, never written through.
+    /// A file symbolic link at a name the Client writes is replaced, never written through.
     /// Creating one needs the symbolic-link privilege or Developer Mode, which an elevated run —
     /// a GitHub-hosted Windows runner — holds; without it the test fails rather than deciding
     /// nothing.

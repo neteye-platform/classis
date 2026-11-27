@@ -1,8 +1,8 @@
 //! Server-offered packages: resolving a download URL, downloading the artifact from this
 //! Client's own Server origin over TLS 1.3, and **verifying it before it is applied** —
 //! the content hash and the Ed25519 signature, both always. What protects an installed binary is
-//! verification; what the origin rule protects is what a download exposes — the offered headers and
-//! this Client's certificate — and that a host never reaches past its Server for software.
+//! verification; what the origin rule protects is what a download exposes — the offered headers —
+//! and that a host never reaches past its Server for software.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -112,6 +112,69 @@ pub async fn download_and_verify_patiently(
     progress: &Progress,
     patience: Patience,
 ) -> Result<PathBuf, String> {
+    download(package, config, staging_dir, progress, patience)
+        .await
+        .map_err(Failure::into_message)
+}
+
+/// Why a download failed: the Server refused the access token the Client sent, which a new token
+/// answers, or any other reason, which it does not.
+#[derive(Debug)]
+pub(crate) enum Failure {
+    /// `401` with a Bearer challenge that says `error="invalid_token"`.
+    InvalidToken(String),
+    Other(String),
+}
+
+impl Failure {
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Failure::InvalidToken(message) | Failure::Other(message) => message,
+        }
+    }
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Failure::Other(message)
+    }
+}
+
+/// [`download_and_verify`] for a host that is enrolled: a download the Server refuses with
+/// `invalid_token` asks for a new token, as an OpAMP connection does, and goes once more with it.
+/// Answers whether a new token was had, beside how the download ended, since a new token ends the
+/// sessions the old one admitted and the caller reconnects.
+pub(crate) async fn download_and_verify_renewing(
+    package: &PackageDownload,
+    config: &mut ClientConfig,
+    staging_dir: &Path,
+    progress: &Progress,
+) -> (Result<PathBuf, String>, bool) {
+    let first = download(package, config, staging_dir, progress, Patience::default()).await;
+    let refused = match first {
+        Ok(path) => return (Ok(path), false),
+        Err(Failure::Other(message)) => return (Err(message), false),
+        Err(Failure::InvalidToken(message)) => message,
+    };
+    tracing::warn!(package = %package.name, "the Server refused the access token (invalid_token); requesting a new one");
+    if let Err(e) = crate::enrolment::renew(config).await {
+        return (
+            Err(format!("{refused}; no new token could be had: {e}")),
+            false,
+        );
+    }
+    tracing::info!("a new access token is in force");
+    let second = download(package, config, staging_dir, progress, Patience::default()).await;
+    (second.map_err(Failure::into_message), true)
+}
+
+async fn download(
+    package: &PackageDownload,
+    config: &ClientConfig,
+    staging_dir: &Path,
+    progress: &Progress,
+    patience: Patience,
+) -> Result<PathBuf, Failure> {
     // First, before any URL is resolved or a byte is written: the staged path is built from this
     // name, and a name that could escape the staging directory is refused outright.
     ensure_safe_package_name(&package.name)?;
@@ -120,9 +183,8 @@ pub async fn download_and_verify_patiently(
     let roots = package_roots(config)?;
     let url = resolve_url(&package.download_url, &config.endpoint)?;
     let origin = ServerOrigin::new(config)?;
-    // Every request goes to this Client's own Server origin, which is where its
-    // certificate belongs: the download route sits behind the Agent plane's handshake.
-    let identified = download_client(crate::tls::client_tls(config)?)?;
+    // Every request goes to this Client's own Server origin.
+    let client = download_client(crate::tls::trust(config)?)?;
     // A count, never a key and never a value — and the source without whatever authorises reaching
     // it. This line goes to the log file, and through the bridge to the destination the Server
     // named, which is the same reason the span below carries the redacted form: a pre-signed URL
@@ -130,11 +192,16 @@ pub async fn download_and_verify_patiently(
     let source = source_of(&url);
     info!(package = %package.name, url = %source, headers = package.headers.len(), "downloading package");
     let download = tracing::info_span!("download", source = %source);
-    let mut response = send_patiently(&origin, &identified, &url, &package.headers, patience)
+    let mut response = send_patiently(&origin, &client, &url, &package.headers, patience)
         .instrument(download.clone())
         .await?;
     if !response.status().is_success() {
-        return Err(format!("{url} answered {}", response.status()));
+        let answered = format!("{url} answered {}", response.status());
+        return Err(if refused_the_token(&response) {
+            Failure::InvalidToken(answered)
+        } else {
+            Failure::Other(answered)
+        });
     }
 
     std::fs::create_dir_all(staging_dir)
@@ -168,7 +235,7 @@ pub async fn download_and_verify_patiently(
         Ok(hash) => hash,
         Err(e) => {
             let _ = std::fs::remove_file(&path);
-            return Err(e);
+            return Err(e.into());
         }
     };
     // The bytes are in; what remains is deciding whether they are the right ones. Its own phase of
@@ -178,7 +245,7 @@ pub async fn download_and_verify_patiently(
     let verify = tracing::info_span!("verify", bytes = staged.len).entered();
     if let Err(e) = verify_staged(&path, &staged, package, &roots) {
         let _ = std::fs::remove_file(&path);
-        return Err(e);
+        return Err(e.into());
     }
     drop(verify);
     info!(package = %package.name, version = %package.version, bytes = staged.len, "package verified");
@@ -197,7 +264,7 @@ pub(crate) fn download_client(tls: opamp::client::ClientTls) -> Result<reqwest::
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(60));
-    tls.apply(builder)?
+    tls.trust(builder)?
         .build()
         .map_err(|e| format!("cannot build the download client: {e}"))
 }
@@ -207,6 +274,9 @@ pub(crate) fn download_client(tls: opamp::client::ClientTls) -> Result<reqwest::
 /// may only be on the loopback) — and nowhere else. Every URL is held to the transport rule first.
 pub struct ServerOrigin {
     server: reqwest::Url,
+    /// The `Authorization` the host presents to its Server, where it is enrolled: what every
+    /// request to this origin carries and nothing sent anywhere else does.
+    authorization: Option<zeroize::Zeroizing<String>>,
 }
 
 impl ServerOrigin {
@@ -216,11 +286,26 @@ impl ServerOrigin {
         let server = resolve_url("/", &config.endpoint)?;
         let server =
             reqwest::Url::parse(&server).map_err(|e| format!("cannot parse {server}: {e}"))?;
-        Ok(ServerOrigin { server })
+        Ok(ServerOrigin {
+            server,
+            authorization: config
+                .credentials
+                .as_ref()
+                .map(crate::credentials::Credentials::authorization),
+        })
     }
 
     fn is_server(&self, url: &reqwest::Url) -> bool {
         same_origin(&self.server, url)
+    }
+
+    /// The Server's credential, when `destination` has the Server's origin and the host is
+    /// enrolled: for a request to the Server's own origin, never for another's.
+    pub(crate) fn authorization_for(&self, destination: &str) -> Option<&str> {
+        let url = reqwest::Url::parse(destination).ok()?;
+        self.is_server(&url)
+            .then(|| self.authorization.as_ref().map(|a| a.as_str()))
+            .flatten()
     }
 
     /// Whether a download may go to `url`, and why not when it may not: the message names the
@@ -250,7 +335,7 @@ fn origin_label(url: &reqwest::Url) -> String {
 /// Each hop is checked against [`ServerOrigin`] before it is requested, so nothing — not the offer,
 /// not a redirect — takes the download to another host or onto plaintext, and nothing is fetched
 /// from a refused one. Every hop is therefore the Server's own origin, the one the offered headers
-/// and this Client's certificate (the `client`) are for.
+/// are for.
 pub(crate) async fn send_download(
     origin: &ServerOrigin,
     client: &reqwest::Client,
@@ -261,7 +346,11 @@ pub(crate) async fn send_download(
         reqwest::Url::parse(url).map_err(|e| format!("cannot parse {}: {e}", source_of(url)))?;
     for _ in 0..=MAX_REDIRECTS {
         origin.permit(&current)?;
-        let request = with_headers(client.get(current.clone()), headers)?;
+        let request = with_headers(
+            client.get(current.clone()),
+            headers,
+            origin.authorization_for(current.as_str()),
+        )?;
         let response = request
             .send()
             .await
@@ -283,9 +372,8 @@ pub(crate) async fn send_download(
 }
 
 /// [`send_download`], waiting out a `429` or `503` with `Retry-After` in seconds from the Server's
-/// own origin — a Gateway behind one, whose cache is still fetching, or the Server's rate limit —
-/// within `patience`. Anything else is returned as it came, for the caller to
-/// fail on.
+/// own origin — the Server's rate limit, for one — within `patience`. Anything
+/// else is returned as it came, for the caller to fail on.
 pub(crate) async fn send_patiently(
     origin: &ServerOrigin,
     client: &reqwest::Client,
@@ -375,14 +463,22 @@ fn retry_after(response: &reqwest::Response) -> Option<std::time::Duration> {
 /// silently dropped credential comes back as an opaque `401` that nothing explains. The message
 /// names the **key only** — it travels to the Server as `PackageStatuses.error_message` and into
 /// the log file, and the value is the secret.
+///
+/// Where the host is enrolled, `authorization` is the Server's credential and it is the one the
+/// request carries: a header the offer names `Authorization` is dropped, so that nothing offered
+/// replaces it.
 fn with_headers(
     mut request: reqwest::RequestBuilder,
     headers: &[(String, String)],
+    authorization: Option<&str>,
 ) -> Result<reqwest::RequestBuilder, String> {
     for (key, value) in headers {
         let name = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|_| {
             format!("the offered download header {key:?} is not a valid header name")
         })?;
+        if authorization.is_some() && name == reqwest::header::AUTHORIZATION {
+            continue;
+        }
         let mut value = reqwest::header::HeaderValue::from_str(value).map_err(|_| {
             format!(
                 "the offered download header {key:?} carries a value that is not a valid header"
@@ -392,7 +488,38 @@ fn with_headers(
         value.set_sensitive(true);
         request = request.header(name, value);
     }
+    if let Some(authorization) = authorization {
+        let mut value = reqwest::header::HeaderValue::from_str(authorization)
+            .map_err(|_| "the access token is not a valid header value".to_string())?;
+        value.set_sensitive(true);
+        request = request.header(reqwest::header::AUTHORIZATION, value);
+    }
     Ok(request)
+}
+
+/// Whether a refusal is the Server saying the access token it was sent is not valid: `401` and a
+/// `WWW-Authenticate` Bearer challenge whose error is `invalid_token` (RFC 6750 section 3.1). A
+/// bare `401` is not.
+pub(crate) fn refused_the_token(response: &reqwest::Response) -> bool {
+    response.status() == reqwest::StatusCode::UNAUTHORIZED
+        && invalid_token(
+            &response
+                .headers()
+                .get_all(reqwest::header::WWW_AUTHENTICATE)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+}
+
+/// Whether any of these `WWW-Authenticate` values holds a Bearer challenge with
+/// `error="invalid_token"`.
+pub(crate) fn invalid_token(challenges: &[String]) -> bool {
+    challenges
+        .iter()
+        .flat_map(|value| oauth_token::bearer::parse_challenges(value))
+        .any(|challenge| challenge.is_bearer() && challenge.error() == Some("invalid_token"))
 }
 
 /// Where an artifact is being fetched from, without whatever authorises the fetch.

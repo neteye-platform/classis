@@ -82,8 +82,9 @@ Two things this block gets right that are easy to get wrong:
   _name of the Configuration on the Server_, which is what the written entry
   file is called.
 
-**Nothing has to be installed on the host first.** Start the Client with the
-program absent and the Agent comes up, connects, and reports
+**Nothing has to be installed on the host first.** Start the Client, enrolled as
+[Setting up a fleet](setup.md#5-enrol-the-client) describes, with the program
+absent and the Agent comes up, connects, and reports
 `no process installed` — a Supervisor with no process, said plainly, rather than
 a spawn error. It declares `AcceptsPackages` all the same, so the first version
 arrives the same way every later one does.
@@ -205,7 +206,7 @@ Signing is not optional: an offer without a signature is refused before
 anything is downloaded, and the Server offers no entry that carries no
 signature.
 
-The download route requires the Client's certificate, and the content hash and
+The download route requires the Client's access token, and the content hash and
 this signature are what protect an installed binary.
 
 ## 4. Give it to the Server
@@ -216,10 +217,10 @@ artifact is uploaded: the Server holds what it offers, and a Client fetches from
 its own Server alone. Nothing in this step reaches any host, and nothing in the
 next one does either: a stored Package aims at nobody at all.
 
-The calls go to the Operator plane over TLS. `--cacert ca.pem` names the CA that
-signed the Server's certificate; off the loopback, add the operator credential
-with `-u`. Steps 4 to 6 and 9 can be done in the UI's **Packages** and
-**Deployments** tabs as well;
+The calls go to the Operator plane through its proxy, over TLS.
+`--cacert ca.pem` names the CA that signed the proxy's certificate; off the
+loopback, add the operator credential with `-u`. Steps 4 to 6 and 9 can be done
+in the UI's **Packages** and **Deployments** tabs as well;
 [A host's life](lifecycle.md#releasing-an-update-in-the-ui) shows how.
 
 ```console

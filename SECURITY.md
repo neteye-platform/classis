@@ -96,46 +96,39 @@ commit was on the branch, not which state of it was reviewed.
 
 ## Fleet trust model
 
-**Admission is a fleet-wide trust boundary; within it the host is the only bound
-between Agents**. A peer reaches the OpAMP endpoint by proving _fleet
-membership_ with a client certificate in the TLS handshake, the one proof the
-Agent plane admits by. The certificate also names the **host** it was issued to,
-and an `instance_uid` first reported with one host's certificate is not spoken
-for by another's: such a reporter is re-keyed to an identity of its own. A
-certificate is not bound to one `instance_uid`, which is self-asserted and which
-the Server may re-key, and a Gateway forwards many Agents' reports under its own
+**Admission is a fleet-wide trust boundary; within it the host is the bound
+between Agents**. A host registers with its Space's reusable enrolment key,
+obtains client credentials and uses them to obtain an access token. Each OpAMP
+HTTP request or WebSocket upgrade, and each package download, requires that
+active bearer token. The Server keeps only the token's SHA-256 hash and derives
+the host from its client's `client_id`, never from a report or a TLS client
 certificate.
 
-The consequence, which is a design property rather than a defect: **a host
-marked as a Gateway, or a peer behind one, can report under any `instance_uid`**
-and update that Agent's Server-side record (health, effective config,
-remote-config status, and so the Configuration offered to it). This is _not_ a
-cross-fleet or unauthenticated exposure: it is bounded by admission.
+An `instance_uid` recorded under one host cannot be reported by another: the
+Server refuses it, rather than re-keying the reporter. One host owns at most
+256 Agent identities. Gateway Mode and its admission exception are unavailable.
+Replacing a token invalidates the previous one and closes its admitted
+WebSocket sessions; expiry is checked on the next request or connection, not
+by ending an already admitted session. No client-certificate fallback is wired
+into the Server.
 
 **A host receives from the Server only what is released to an Agent it speaks
 for**. A composed configuration travels only to the Agent it was released to,
 and the package download serves an uploaded artifact only to a host one of whose
-Agents is offered it; every other request is answered `404`, as for an artifact
-the store does not hold, so a host can neither fetch another partition's builds
-nor list the store. A Gateway's certificate speaks for any Agent and may fetch
-what any Agent is offered; the Gateway passes an artifact on only to a
-downstream host whose Agent it relayed that offer to, and answers every other
-request `404` alike. Behind a Gateway an `instance_uid` belongs to the host of
-its first report since the Gateway started, so a host that reports another
-host's `instance_uid` first is served that Agent's offers until the Gateway
-restarts. A host binds at most `max_carried_agents` `instance_uid`s, and at the
-Gateway's cap of 1 000 000 a new binding replaces the least recently reported
-one that has neither a route nor an offer, so one host cannot keep another's
-Agents from being bound. The bound is no stronger than the partition: a host
-that reports another partition's attributes under a fresh `instance_uid` is
-assigned by that partition's next rollout, and the fleet view shows such an
-Agent waiting before the press.
+Agents is offered it. An artifact not offered to that host is answered `404`, as
+for an artifact the store does not hold, so a host can neither fetch another
+partition's builds nor list the store. The bound is no stronger than the
+partition: a host that reports another partition's attributes under a fresh
+`instance_uid` is assigned by that partition's next rollout, and the fleet view
+shows such an Agent waiting before the press. A Space groups registrations; it
+is not an authorization boundary between rollout Selectors.
 
 **What this means for operators:** treat one fleet (one Server, one shared
-admission) as a single trust domain, mark only real Gateways as such (`PUT
-/api/v1/hosts/{host}/gateway`), and do not place mutually distrusting Agents
-behind one Gateway or in one fleet; isolate them by separate Server instance or
-network segment.
+admission) as a single trust domain, and do not place mutually distrusting
+Agents in one fleet; isolate them by separate Server instance or network
+segment. Protect the Space's reusable enrolment key, the client's secret and
+its access token as credentials. The token authenticates a host, not the truth
+of the attributes its Agents report.
 
 ## Supported versions
 
@@ -145,7 +138,7 @@ remedy for a vulnerable version is an upgrade — through the fleet's own
 self-update where the Client is concerned. Each fix is listed in
 [`CHANGELOG.md`](CHANGELOG.md) under the release that carries it.
 
-| Version                          | Supported |
-| -------------------------------- | --------- |
-| the latest `v<version>` release  | ✅        |
-| any earlier release              | ❌        |
+| Version                         | Supported |
+| ------------------------------- | --------- |
+| the latest `v<version>` release | ✅        |
+| any earlier release             | ❌        |

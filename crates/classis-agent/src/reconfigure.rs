@@ -1532,10 +1532,9 @@ mod tests {
     }
 
     /// A delivered set reaches no key of `supervisor.toml` but the `[[supervisor]]` array: whatever
-    /// else it names — an `[auth]` section, trust, a removed key such as
-    /// `allowed_sources`, the
-    /// operator's consent in `[supervisors]`, self-update, Gateway Mode — the file keeps the
-    /// operator's values and gains none of the offered ones.
+    /// else it names — an `[auth]` section, trust, a removed key such as `allowed_sources` or a
+    /// removed section such as `[gateway]`, the operator's consent in `[supervisors]`, self-update —
+    /// the file keeps the operator's values and gains none of the offered ones.
     #[test]
     fn a_delivered_set_writes_nothing_beyond_the_supervisor_blocks() {
         let dir = tempfile::tempdir().expect("tempdir");

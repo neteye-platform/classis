@@ -8,7 +8,7 @@ use axum::http::{header, StatusCode};
 use axum::routing::post;
 use opamp::client::{AfterReply, ClientTls, Connection, Ended, ReportSink, Session, StopSignal};
 use opamp::proto::{AgentToServer, ServerToAgent};
-use opamp::server::listen::{ClientAuth, Handle, Listener, PeerCertificate, ServerTls};
+use opamp::server::listen::{Handle, Listener, ServerTls};
 use opamp::server::{Handler, NoOutbound, Rejection, Reply, RequestInfo, Settings};
 use opamp::tls::Identity;
 use rcgen::{CertificateParams, IsCa, Issuer, KeyPair};
@@ -43,8 +43,11 @@ impl Pki {
     }
 }
 
-/// Admits a connection that brings the credential and a client certificate, and answers every
-/// report with its own `instance_uid`.
+/// What the refusal of a connection without the credential says in `WWW-Authenticate`.
+const CHALLENGE: &str = "Bearer error=\"invalid_token\"";
+
+/// Admits a connection that brings the credential, and answers every report with its own
+/// `instance_uid`.
 struct Gate;
 
 impl Handler for Gate {
@@ -55,20 +58,19 @@ impl Handler for Gate {
         &self,
         request: &RequestInfo<'_>,
     ) -> Result<((), Option<NoOutbound>), Rejection> {
-        let certificate = request
-            .extensions
-            .get::<PeerCertificate>()
-            .is_some_and(PeerCertificate::present);
         let credential = request
             .headers
             .get(header::AUTHORIZATION)
             .is_some_and(|value| value == "Bearer secret");
-        if certificate && credential {
+        if credential {
             Ok(((), None))
         } else {
             Err(Rejection {
                 status: StatusCode::UNAUTHORIZED,
-                headers: Vec::new(),
+                headers: vec![(
+                    header::WWW_AUTHENTICATE,
+                    header::HeaderValue::from_static(CHALLENGE),
+                )],
                 message: "refused".to_string(),
             })
         }
@@ -86,14 +88,11 @@ impl Handler for Gate {
     }
 }
 
-/// The endpoint over TLS with an optional client certificate, plus a route that redirects.
+/// The endpoint over TLS, plus a route that redirects.
 fn serve(pki: &Pki) -> u16 {
     opamp::tls::install_ring_provider();
     let tls = ServerTls {
         identity: pki.issue("localhost"),
-        client_auth: ClientAuth::Optional {
-            ca_pem: pki.ca_pem.clone().into_bytes(),
-        },
     }
     .rustls_config()
     .expect("server config");
@@ -116,13 +115,12 @@ fn serve(pki: &Pki) -> u16 {
     port
 }
 
-fn connection(endpoint: String, pki: &Pki, identity: Option<Identity>) -> Connection {
+fn connection(endpoint: String, pki: &Pki) -> Connection {
     Connection {
         endpoint,
         authorization: Some("Bearer secret".to_string()),
         tls: ClientTls {
             ca_pem: Some(pki.ca_pem.clone().into_bytes()),
-            identity,
         },
         max_message_size: 4096,
         heartbeat: None,
@@ -138,24 +136,27 @@ fn report() -> Option<AgentToServer> {
     })
 }
 
-/// The probe proves a connection over either transport with the trust, the identity and the
-/// credential the description names — and fails without the identity the server asks for.
+/// The probe proves a connection over either transport with the trust and the credential the
+/// description names — and fails without the credential the server asks for.
 #[tokio::test]
 async fn the_probe_connects_with_the_described_material_on_both_transports() {
     let pki = Pki::new();
     let port = serve(&pki);
     for scheme in ["wss", "https"] {
         let endpoint = format!("{scheme}://localhost:{port}/v1/opamp");
-        let with = connection(endpoint.clone(), &pki, Some(pki.issue("agent")));
+        let with = connection(endpoint.clone(), &pki);
         opamp::client::connection::probe(&with, report)
             .await
             .unwrap_or_else(|e| panic!("{scheme}: {e}"));
-        let without = connection(endpoint, &pki, None);
+        let without = Connection {
+            authorization: None,
+            ..connection(endpoint, &pki)
+        };
         assert!(
             opamp::client::connection::probe(&without, report)
                 .await
                 .is_err(),
-            "{scheme}: a connection without the client certificate was admitted"
+            "{scheme}: a connection without the credential was admitted"
         );
     }
 }
@@ -165,11 +166,7 @@ async fn the_probe_connects_with_the_described_material_on_both_transports() {
 async fn a_redirect_is_not_followed() {
     let pki = Pki::new();
     let port = serve(&pki);
-    let moved = connection(
-        format!("https://localhost:{port}/moved"),
-        &pki,
-        Some(pki.issue("agent")),
-    );
+    let moved = connection(format!("https://localhost:{port}/moved"), &pki);
     let error = opamp::client::connection::probe(&moved, report)
         .await
         .expect_err("a redirect is a failure");
@@ -223,11 +220,7 @@ async fn a_run_carries_the_session_over_the_transport_the_scheme_names() {
     let pki = Pki::new();
     let port = serve(&pki);
     for scheme in ["wss", "https"] {
-        let described = connection(
-            format!("{scheme}://localhost:{port}/v1/opamp"),
-            &pki,
-            Some(pki.issue("agent")),
-        );
+        let described = connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki);
         let mut session = Once::default();
         let ended = tokio::time::timeout(
             Duration::from_secs(10),
@@ -273,14 +266,139 @@ async fn a_tls12_only_server_fails_the_handshake() {
             .serve(router),
     );
     for scheme in ["wss", "https"] {
-        let described = connection(
-            format!("{scheme}://localhost:{port}/v1/opamp"),
-            &pki,
-            Some(pki.issue("agent")),
-        );
+        let described = connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki);
         let error = opamp::client::connection::probe(&described, report)
             .await
             .expect_err("a TLS 1.2 server was reached");
         assert!(error.starts_with("cannot reach"), "{scheme}: {error}");
+    }
+}
+
+/// A session that is refused, notes what it was told of the refusal, and answers as it was made to
+/// whether the run ends on it.
+struct Refused {
+    ends_on_refusal: bool,
+    told: Vec<Vec<String>>,
+    lost: usize,
+}
+
+impl Refused {
+    fn new(ends_on_refusal: bool) -> Self {
+        Refused {
+            ends_on_refusal,
+            told: Vec::new(),
+            lost: 0,
+        }
+    }
+}
+
+impl Session for Refused {
+    fn connected(&mut self) -> Vec<AgentToServer> {
+        report().into_iter().collect()
+    }
+    fn routine(&mut self) -> Vec<AgentToServer> {
+        Vec::new()
+    }
+    fn owed(&mut self) -> Vec<AgentToServer> {
+        Vec::new()
+    }
+    fn on_reply(&mut self, _: &ServerToAgent) -> Option<Duration> {
+        None
+    }
+    async fn after_reply<S: ReportSink>(&mut self, _: &mut S) -> AfterReply {
+        AfterReply::Continue
+    }
+    async fn changed(&mut self) {
+        std::future::pending::<()>().await;
+    }
+    fn exchange_failed(&mut self) {
+        self.lost += 1;
+    }
+    async fn stop(&mut self) {}
+    fn goodbyes(&mut self) -> Vec<AgentToServer> {
+        Vec::new()
+    }
+    fn unauthorized(&mut self, challenges: &[String]) -> bool {
+        self.told.push(challenges.to_vec());
+        self.ends_on_refusal
+    }
+}
+
+/// Stops the run once the time given has passed since it was made.
+struct After(tokio::time::Instant);
+
+impl After {
+    fn new(after: Duration) -> Self {
+        After(tokio::time::Instant::now() + after)
+    }
+}
+
+impl StopSignal for After {
+    fn requested(&mut self) -> impl std::future::Future<Output = ()> + Send {
+        tokio::time::sleep_until(self.0)
+    }
+}
+
+/// A `401` that refuses a connection, and the `WWW-Authenticate` header it came with, reach the
+/// caller on both transports: the run ends with them, and the session is told of them first.
+#[tokio::test]
+async fn a_401_and_its_challenge_reach_the_caller_on_both_transports() {
+    let pki = Pki::new();
+    let port = serve(&pki);
+    for scheme in ["wss", "https"] {
+        let without = Connection {
+            authorization: None,
+            ..connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki)
+        };
+        let mut session = Refused::new(true);
+        let ended = tokio::time::timeout(
+            Duration::from_secs(10),
+            opamp::client::connection::run(&without, &mut session, &mut Never),
+        )
+        .await
+        .expect("within the bound")
+        .expect("run");
+        assert_eq!(
+            ended,
+            Ended::Unauthorized {
+                challenges: vec![CHALLENGE.to_string()]
+            },
+            "{scheme}"
+        );
+        assert_eq!(session.told, [[CHALLENGE.to_string()]], "{scheme}");
+    }
+}
+
+/// A session that does not end the run on a `401` keeps the driver's behaviour for it: the refusal
+/// is not the end of the run, a lost exchange on plain HTTP and a retry after a back-off on a
+/// WebSocket (Only an invalid token asks for a new one).
+#[tokio::test]
+async fn a_session_that_does_not_end_on_a_401_keeps_the_drivers_behaviour() {
+    let pki = Pki::new();
+    let port = serve(&pki);
+    for scheme in ["wss", "https"] {
+        let without = Connection {
+            authorization: None,
+            ..connection(format!("{scheme}://localhost:{port}/v1/opamp"), &pki)
+        };
+        let mut session = Refused::new(false);
+        let ended = tokio::time::timeout(
+            Duration::from_secs(10),
+            opamp::client::connection::run(
+                &without,
+                &mut session,
+                &mut After::new(Duration::from_millis(300)),
+            ),
+        )
+        .await
+        .expect("within the bound")
+        .expect("run");
+        assert_eq!(ended, Ended::Stopped, "{scheme}");
+        assert_eq!(session.told, [[CHALLENGE.to_string()]], "{scheme}");
+        assert_eq!(
+            session.lost,
+            usize::from(scheme == "https"),
+            "{scheme}: a refused exchange is a lost one on plain HTTP alone"
+        );
     }
 }

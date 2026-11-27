@@ -9,6 +9,10 @@
 # every feature any crate asks for, so only a build of each feature on its own shows that it
 # stands alone.
 #
+# The two OAuth crates are tested with all their features and linted once per feature: their
+# server and client tests require those features, which the workspace build alone does not turn
+# on for the crates' own test targets.
+#
 # classis-agent is linted without any wrapped Supervisor kind and with each one alone, and tested
 # without any: the default build carries every kind, so only these show that a build leaving one
 # out still compiles and refuses the kind as unknown.
@@ -31,6 +35,10 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 for feature in "" client server; do
   cargo clippy -p opamp --all-targets --locked --no-default-features --features "$feature" -- -D warnings
+done
+cargo test -p oauth-token -p oauth-registration --locked --all-features
+for feature in "" client server; do
+  cargo clippy -p oauth-token -p oauth-registration --all-targets --locked --no-default-features --features "$feature" -- -D warnings
 done
 cargo clippy -p classis-agent --all-targets --locked --no-default-features -- -D warnings
 cargo test -p classis-agent --locked --no-default-features

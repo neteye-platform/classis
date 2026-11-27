@@ -4,7 +4,7 @@
 # resolve the same compiler and dependency versions and cannot drift apart on the wire format.
 [workspace]
 resolver = "2"
-members = ["crates/opamp", "crates/classis-core", "crates/classis-server", "crates/classis-agent", "crates/classis-tools"]
+members = ["crates/opamp", "crates/classis-core", "crates/classis-server", "crates/classis-agent", "crates/classis-tools", "crates/oauth-token", "crates/oauth-registration"]
 
 [workspace.package]
 version = "0.2.0"
@@ -17,6 +17,8 @@ publish = false
 [workspace.dependencies]
 opamp = { path = "crates/opamp", version = "0.20" }
 classis-core = { path = "crates/classis-core" }
+oauth-token = { path = "crates/oauth-token", version = "0.1" }
+oauth-registration = { path = "crates/oauth-registration", version = "0.1" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "io-util", "process"] }
 axum = "0.8"
 prost = "0.14"
@@ -66,18 +68,28 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # which is what this build is kept free of; the Client extracts one member and
 # never writes a path the archive chose.
 tar = "0.4"
-# The secrets the application crates hold in memory — private keys, passwords, a `bootstrap.p12`
-# being read, the Supervisor Endpoint token — are wiped when they are dropped: `Zeroizing`
+# The secrets the application crates hold in memory — private keys, passwords, the Supervisor
+# Endpoint token — are wiped when they are dropped: `Zeroizing`
 # overwrites a buffer with volatile writes behind a compiler fence, which a hand-written overwrite
 # of memory about to be freed cannot promise. The default `alloc` feature and no derive. At least
 # 1.9.1, the first whose `Zeroizing` `Debug` shows no content. Already in the tree through
-# `dialoguer`, `der`, `pkcs8`, `pkcs12`, `rustls` and `rustls-pki-types`; it pulls no TLS or crypto
+# `dialoguer`, `rustls` and `rustls-pki-types`; it pulls no TLS or crypto
 # backend, so the rustls/ring-only constraint holds. `opamp` does not name it.
 zeroize = "1.9.1"
 # Encoding Basic credentials into their Authorization header value.
 base64 = "0.23"
 # Constant-time credential comparison on the Server.
 constant_time_eq = "0.6"
+# Header types for RFC 6750 parsing and challenges; `application/x-www-form-urlencoded` for
+# RFC 6749 requests and the form-encoded Basic credentials of §2.3.1; and the strict
+# percent-decoding of those credentials. All three are in the tree already as axum's own
+# dependencies.
+http = "1"
+form_urlencoded = "1.2"
+percent-encoding = "2.3"
+# `oneshot`, to drive an axum router with hand-built requests in tests. Already in the tree as
+# axum's own dependency.
+tower = { version = "0.5", default-features = false, features = ["util"] }
 # kill(2) for the graceful SIGTERM stop of Managed Processes. Unix-only.
 libc = "0.2"
 # The Client's WebSocket transport; rustls enables `wss://`.
@@ -100,29 +112,19 @@ rustls-pki-types = { version = "1", features = ["std"] }
 # Operators' Basic passwords are kept as Argon2id hashes, never in clear; the
 # RustCrypto implementation, pure Rust, no system library.
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "password-hash"] }
-# The client-certificate CSR flow: the Client produces the request, the Server signs it
-# as a local CA. Pinned to the `ring` backend — the TLS provider already installed, whose C is
-# already compiled in this build — rather than `aws_lc_rs`, which would add cmake and more C.
-# `x509-parser` is what reads a CSR back, and a certificate's validity for the renewal window.
+# The server CA and the server certificates `classisctl pki` makes, the test Package Roots, and the
+# certificates the TLS tests generate rather than paste. Pinned to the `ring` backend — the TLS
+# provider already installed, whose C is already compiled in this build — rather than `aws_lc_rs`,
+# which would add cmake and more C. `x509-parser` is what reads a certificate back.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem", "x509-parser"] }
 # The dates rcgen speaks in. It takes and returns `time::OffsetDateTime` for a certificate's
 # validity but re-exports none of it, so "now plus ninety days" needs the crate itself — already in
 # the tree as rcgen's own dependency, and preferable to hand-rolling calendar arithmetic.
 time = { version = "0.3", default-features = false, features = ["std"] }
-# Reading back the validity of the certificate the Client holds, which is what decides when to
-# renew. rcgen parses X.509 only behind a private, test-only path, so this is the
-# public way in — and it is the very parser rcgen itself uses, already in the tree.
+# Reading back the end of a certificate, which is what `pki status` reports. rcgen parses
+# X.509 only behind a private, test-only path, so this is the public way in — and it is the very
+# parser rcgen itself uses, already in the tree.
 x509-parser = "0.18"
-# The bootstrap certificate as a password-protected PKCS#12 file: the Server writes it,
-# the Client reads it. Pure Rust on the RustCrypto crates, for the password-based encryption only;
-# the TLS handshake stays on ring. Pinned exactly, and without its default `pbes1` feature, so the
-# legacy RC2 and 3DES schemes are not linked. `pkcs12`, `pkcs5` and `der` read the file's structure,
-# so the Client refuses what `p12-keystore` would accept beyond PBES2 with PBKDF2-HMAC-SHA-2 and
-# AES-CBC under a SHA-2 MAC — the same versions it already pulls in.
-p12-keystore = { version = "=0.4.1", default-features = false }
-pkcs12 = "=0.2.0-pre.0"
-pkcs5 = { version = "0.8", features = ["pbes2"] }
-der = "0.8"
 # The Agent's own telemetry: the standard's own implementation, not a second copy of its
 # schema. `http-proto` is the OTLP/HTTP protobuf encoding the Baseline's destination_endpoint
 # requires; `reqwest-client` replaces the default *blocking* client, which would stall a tokio
@@ -156,9 +158,8 @@ async-trait = "0.1"
 # Process CPU and memory for a pid on Linux, macOS, and Windows — the one gap the SDK leaves, and
 # three platform APIs not worth hand-rolling. Pure Rust over libc.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
-# The built-in root store, for the one case the transports' own defaults cannot cover: a Client
-# presenting a client certificate to a Server with a publicly trusted one, which needs
-# a rustls config built by hand. Data, not code — and already in the tree via the TLS stack.
+# The built-in root store, for the rustls configuration `opamp` builds by hand when the application
+# names no CA of its own. Data, not code — and already in the tree via the TLS stack.
 webpki-roots = "1"
 # Artifact bytes in an S3-compatible bucket. `aws-base`, `ring` and `reqwest` build the
 # S3 client on *ring*; the `aws` feature would pull `aws-lc-rs`, and so would the
@@ -199,23 +200,16 @@ clap = { version = "4", features = ["derive"] }
 service-manager = "0.11"
 # The questionnaire of `service install --interactive` and `service config`: validated answers,
 # defaults and a yes/no confirmation, the same on three operating systems.
-# `password` is the one feature: the password of a `bootstrap.p12` is asked with input hidden,
-# and its one dependency, `zeroize`, is already in the tree. It pulls no TLS/crypto
-# backend, so the rustls/ring-only constraint holds.
-dialoguer = { version = "0.12", default-features = false, features = ["password"] }
+# No default features: it pulls no TLS/crypto backend, so the rustls/ring-only constraint holds.
+dialoguer = { version = "0.12", default-features = false }
 # The Windows-only SCM runtime shim: status reporting and the stop control handler,
 # without which the SCM kills the service with error 1053. Compiled on Windows targets only.
 windows-service = "0.8"
 
-# The key derivations of the bootstrap PKCS#12 file run 600 000 iterations: unoptimized,
-# a test that seals and opens one file waits seconds. The crates their loops are compiled in are
-# optimized in the dev profile too; nothing else is.
+# The key derivation of an encrypted `.7z` package artifact is a SHA-256 loop of 2^n
+# rounds, so the crates it is compiled in are optimized in the dev profile, where a test that opens
+# one would otherwise wait; nothing else is.
 [profile.dev.package]
-p12-keystore.opt-level = 3
-pkcs12.opt-level = 3
-pkcs5.opt-level = 3
-pbkdf2.opt-level = 3
-hmac.opt-level = 3
 sha2.opt-level = 3
 digest.opt-level = 3
 block-buffer.opt-level = 3

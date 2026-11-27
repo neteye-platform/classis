@@ -78,7 +78,8 @@ impl Settings {
 pub struct RequestInfo<'a> {
     pub transport: Transport,
     pub headers: &'a HeaderMap,
-    /// The request's extensions — where a TLS acceptor puts the peer certificate.
+    /// The request's extensions — where a layer in front of the endpoint puts what it knows of the
+    /// request.
     pub extensions: &'a Extensions,
     /// The peer, when the listener was served with connect info.
     pub peer: Option<SocketAddr>,
@@ -208,7 +209,8 @@ pub struct Closing {
 }
 
 impl Closing {
-    /// `1008`: the connection violates the endpoint's policy — what a revoked proof does.
+    /// `1008`: the connection violates the endpoint's policy — what a refused credential does, a
+    /// replaced token for one.
     #[must_use]
     pub fn policy(reason: &str) -> Self {
         Closing {
@@ -251,6 +253,24 @@ fn peer_of(extensions: &Extensions) -> Option<SocketAddr> {
         .map(|ConnectInfo(peer)| *peer)
 }
 
+/// Whether any line of the header `name` lists `token`, comma-separated and case-insensitive
+/// (RFC 9110 §5.6.1): `Upgrade: h2c, websocket` lists `websocket`. A caller that decides on the
+/// transport before the endpoint does must read the header the way the endpoint reads it.
+#[must_use]
+pub fn header_has_token(
+    headers: &header::HeaderMap,
+    name: &header::HeaderName,
+    token: &str,
+) -> bool {
+    headers.get_all(name).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case(token))
+        })
+    })
+}
+
 /// The WebSocket upgrade, answered here and taken over through hyper, so that `opamp` reads the
 /// frames itself and can judge a message by its data.
 async fn upgrade<H: Handler>(
@@ -267,19 +287,12 @@ async fn upgrade<H: Handler>(
             .into_response();
     }
     let headers = request.headers();
-    let has_token = |name: &header::HeaderName, token: &str| {
-        headers.get_all(name).iter().any(|value| {
-            value.to_str().is_ok_and(|value| {
-                value
-                    .split(',')
-                    .any(|part| part.trim().eq_ignore_ascii_case(token))
-            })
-        })
-    };
     if request.version() != Version::HTTP_11 {
         return refuse("a WebSocket upgrade needs HTTP/1.1");
     }
-    if !has_token(&header::CONNECTION, "upgrade") || !has_token(&header::UPGRADE, "websocket") {
+    if !header_has_token(headers, &header::CONNECTION, "upgrade")
+        || !header_has_token(headers, &header::UPGRADE, "websocket")
+    {
         return refuse("expected a WebSocket upgrade");
     }
     if header_str(headers, &header::SEC_WEBSOCKET_VERSION) != "13" {
@@ -381,8 +394,11 @@ async fn serve_socket<H: Handler, S>(
     loop {
         tokio::select! {
             // A shutdown comes first, so a peer that keeps sending cannot hold its session past it.
-            // Then what has arrived is read before a check judges it, so bytes that waited on this
-            // side while the loop was busy count for the peer.
+            // The outbound side is next, for the same reason: it is what ends a session whose
+            // credential was replaced, and a peer that keeps sending must not keep that close
+            // waiting, or have its messages handled once it is due. Then what has arrived is read
+            // before a check judges it, so bytes that waited on this side while the loop was busy
+            // count for the peer.
             biased;
             () = next_closing(&mut sessions) => {
                 // The listener is shutting down: the peer is told so, and reconnects to whatever
@@ -394,6 +410,26 @@ async fn serve_socket<H: Handler, S>(
                     })))
                     .await;
                 break;
+            }
+            item = next_outbound(&mut outbound) => {
+                let Some(item) = item else {
+                    let frame = handler.closing(&connection).map(|closing| CloseFrame {
+                        code: CloseCode::from(closing.code),
+                        reason: closing.reason.into(),
+                    });
+                    let _ = socket.send(Message::Close(frame)).await;
+                    break;
+                };
+                let mut gone = false;
+                for message in handler.on_outbound(&mut connection, item) {
+                    if !send_framed(&mut socket, &message, limit).await {
+                        gone = true;
+                        break;
+                    }
+                }
+                if gone {
+                    break;
+                }
             }
             incoming = socket.next() => {
                 let message = match incoming {
@@ -433,26 +469,6 @@ async fn serve_socket<H: Handler, S>(
                     if !send_framed(&mut socket, &reply, limit).await {
                         break;
                     }
-                }
-            }
-            item = next_outbound(&mut outbound) => {
-                let Some(item) = item else {
-                    let frame = handler.closing(&connection).map(|closing| CloseFrame {
-                        code: CloseCode::from(closing.code),
-                        reason: closing.reason.into(),
-                    });
-                    let _ = socket.send(Message::Close(frame)).await;
-                    break;
-                };
-                let mut gone = false;
-                for message in handler.on_outbound(&mut connection, item) {
-                    if !send_framed(&mut socket, &message, limit).await {
-                        gone = true;
-                        break;
-                    }
-                }
-                if gone {
-                    break;
                 }
             }
             scheduled = next_check(&mut check) => {

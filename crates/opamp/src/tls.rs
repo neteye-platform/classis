@@ -59,7 +59,7 @@ pub fn client_builder() -> rustls::ConfigBuilder<rustls::ClientConfig, rustls::W
         .expect("the ring provider supports TLS 1.3")
 }
 
-/// A certificate chain and its private key, as PEM — what one side presents to the other.
+/// A certificate chain and its private key, as PEM — what the server presents to its peers.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Identity {
     /// The certificate, followed by any intermediates.

@@ -9,11 +9,11 @@ running system: nothing the Server or a Client does depends on it, and it
 belongs on the operator's own machine, not on the Server host — the keys it
 makes are the ones to keep off that host.
 
-| Command                                                                              | Use it to                                                                                                                                                                                 |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[`package fetch`](#package-fetch)**                                                | fetch a release of a known agent — the OpenTelemetry Collector or this fleet's own Client — verify it, and hand it to the Server with its default configuration                           |
-| **[`package pack`, `sha256`, `keygen`, `sign`, `public-key`](#packing-and-signing)** | build, hash, and sign a package artifact out of _any_ program you have, and make the package signing key; the Server and every Client refuse what `sign` signs                            |
-| **[`pki init`, `server-cert`, `bootstrap-ca`, `status`, `p12-extract`](#pki)**       | make the fleet's certificate authorities and the Server's or a Gateway's certificate, replace the bootstrap CA, say when the server CA ends, and turn a `bootstrap.p12` into its PEM pair |
+| Command                                                                              | Use it to                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[`package fetch`](#package-fetch)**                                                | fetch a release of a known agent — the OpenTelemetry Collector or this fleet's own Client — verify it, and hand it to the Server with its default configuration                    |
+| **[`package pack`, `sha256`, `keygen`, `sign`, `public-key`](#packing-and-signing)** | build, hash, and sign a package artifact out of _any_ program you have, and make the package signing key; the Server and every Client refuse what `sign` signs                     |
+| **[`pki init`, `server-cert`, `status`](#pki)**                                      | make the server CA, the certificate the reverse proxy in front of the Server presents, and the package signing key; make another such certificate, and say when the server CA ends |
 
 Reach for `package fetch` first: for the agents it knows, it replaces every step
 of building an artifact by hand. The other `package` commands serve everything
@@ -264,9 +264,9 @@ only the request that failed.
 - **Network egress** to `api.github.com` and to the release asset host.
 - **The upload speaks TLS to the Operator plane**, so the Server's URL is
   `https://`; type it so at the prompt, which suggests `http://`. The tool has
-  no CA option and trusts the Server's certificate through this machine's own
-  trust store, so a Server whose certificate comes from a private CA needs that
-  CA trusted here. Off the loopback, carry the
+  no CA option and trusts the certificate of the proxy in front of the Server
+  through this machine's own trust store, so a proxy whose certificate comes
+  from a private CA needs that CA trusted here. Off the loopback, carry the
   [`[rest.auth]`](server.md#the-operator-plane-restauth) credential in the URL:
   `https://fleet-admin:secret@fleet.example:4321`.
 - **GitHub rate-limits unauthenticated requests to 60 per hour** per address. A
@@ -347,20 +347,17 @@ does not define signs nothing.
 
 ## `pki`
 
-The fleet's certificates, made without `openssl` or any other tool.
-[Setting up a fleet](setup.md) walks through them in order; in short:
+The server CA, the certificate the reverse proxy in front of the Server
+presents, and the package signing key, made without `openssl` or any other
+tool. [Setting up a fleet](setup.md) walks
+through them in order; in short:
 
-| `pki` command                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init --server-dir <dir> --offline-dir <dir> --name <dns\|ip>…`    | makes the three CAs, the Server's certificate and the package signing key (whose signatures no Client or Server accepts any more), the certificates named for `--product` (default `Classis`) and, with `--organization` and `--organizational-unit`, for your organization, split into what the Server host needs — the bootstrap CA's key among it — and what stays offline — the server CA's key and the package signing key — with a configuration fragment for each side |
-| `server-cert --offline-dir <dir> --name <dns\|ip>… --out <dir>`    | makes another server certificate from the offline server CA, for the Server or a Gateway; it carries the CA's organization unless `--organization` or `--organizational-unit` replaces it                                                                                                                                                                                                                                                                                     |
-| `bootstrap-ca --product <name> --out <dir>`                        | makes a new bootstrap CA, valid for a year, to replace the Server's `[enrolment]` files                                                                                                                                                                                                                                                                                                                                                                                       |
-| `status --offline-dir <dir>`                                       | says when the server CA in the offline directory ends; exits `0`, `1` when it is ending, `2` when it has ended                                                                                                                                                                                                                                                                                                                                                                |
-| `p12-extract <bootstrap.p12> --out <dir> [--password-file <file>]` | writes the file's certificate as `bootstrap.pem` and its key, unencrypted and owner-only, as `bootstrap-key.pem`, the pair a Client's install takes; asks for the password with input hidden, or reads it from the first line of `--password-file`; overwrites neither file                                                                                                                                                                                                   |
+| `pki` command                                                   | What it does                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init --server-dir <dir> --offline-dir <dir> --name <dns\|ip>…` | makes the server CA, the proxy's certificate and the package signing key (whose signatures no Client or Server accepts any more), named for `--product` (default `Classis`) and, with `--organization` and `--organizational-unit`, for your organization, split into what the Server host needs and what stays offline — the server CA's key and the package signing key — with a configuration fragment for each side |
+| `server-cert --offline-dir <dir> --name <dns\|ip>… --out <dir>` | makes another proxy certificate from the offline server CA; it carries the CA's organization unless `--organization` or `--organizational-unit` replaces it                                                                                                                                                                                                                                                             |
+| `status --offline-dir <dir>`                                    | says when the server CA in the offline directory ends; exits `0`, `1` when it is ending, `2` when it has ended                                                                                                                                                                                                                                                                                                          |
 
-None of them makes a bootstrap certificate: the Server issues those, on
-`POST /api/v1/bootstrap-certificates`
-([Setting up a fleet](setup.md#4-configure-and-install-a-client)). The Server
-makes no CA and no server certificate. Its own
-`server pki status --config <server.toml>` says when the certificates of the
-Server host end, by the same rule.
+No command makes a certificate for a host: a host holds none. The Server makes
+no CA and no certificate, and serves none: the certificate `init` and
+`server-cert` make goes to the reverse proxy in front of it.

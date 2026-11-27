@@ -10,8 +10,10 @@ all-features = true
 [advisories]
 # Every advisory fails, the unmaintained and unsound kinds included, except those reviewed in
 # `ignore`. A new advisory against an ignored crate carries a new id and fails again. An ignore that
-# matches nothing fails the run that does not see it: audit.yml checks Cargo.lock and
-# fuzz/Cargo.lock against this one file, so an ignore here must match in both lockfiles.
+# matches nothing fails the main audit, which checks Cargo.lock against this one file. The fuzz
+# targets have a lockfile of their own and need not carry a root-only dependency, so audit.yml
+# relaxes only this unused-exception lint for that graph, after the main audit has enforced that
+# every exception here is still needed.
 unmaintained = "all"
 yanked = "deny"
 unused-ignored-advisory = "deny"
@@ -62,10 +64,9 @@ deny = [
     { name = "native-tls", reason = "TLS is rustls on ring" },
     { name = "aws-lc-rs", reason = "TLS is rustls on ring" },
     { name = "aws-lc-sys", reason = "TLS is rustls on ring" },
-    # The bootstrap PKCS#12 file is PBES2 with AES only; `p12-keystore`'s `pbes1`
-    # feature, which would link these, stays off.
-    { name = "rc2", reason = "no legacy PKCS#12 scheme" },
-    { name = "des", reason = "no legacy PKCS#12 scheme" },
+    # Legacy ciphers nothing here uses; a PKCS#12 reader's legacy scheme would link them.
+    { name = "rc2", reason = "a legacy cipher nothing here needs" },
+    { name = "des", reason = "a legacy cipher nothing here needs" },
 ]
 
 [sources]

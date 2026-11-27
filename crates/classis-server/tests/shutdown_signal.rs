@@ -119,12 +119,11 @@ fn sigterm_shuts_the_server_down_gracefully() {
         [
             "agents",
             "blobs",
-            "bootstrap",
-            "certificates",
+            "clients",
             "configurations",
             "deployments",
-            "hosts",
-            "packages"
+            "packages",
+            "spaces"
         ]
     );
     for name in std::iter::once(String::new()).chain(found) {

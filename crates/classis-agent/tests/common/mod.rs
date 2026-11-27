@@ -2,27 +2,107 @@
 
 use std::path::Path;
 
-/// Writes a throwaway self-signed client certificate and key into `dir` and returns the `[tls]`
-/// table that names them, to be appended at the end of a `supervisor.toml`.
-///
-/// The Client refuses to start without a client certificate. The test Servers serve
-/// plaintext with an open admission and do not check it, so the files only have to exist and
-/// parse.
-pub fn client_identity(dir: &Path) -> String {
-    let key = rcgen::KeyPair::generate().expect("generate a key");
-    let cert = rcgen::CertificateParams::new(vec!["test-agent".into()])
-        .expect("certificate parameters")
-        .self_signed(&key)
-        .expect("self-sign the certificate");
-    let cert_file = dir.join("test-client.pem");
-    let key_file = dir.join("test-client-key.pem");
-    std::fs::write(&cert_file, cert.pem()).expect("write the client certificate");
-    std::fs::write(&key_file, key.serialize_pem()).expect("write the client key");
-    format!(
-        "\n[tls]\ncert_file = {:?}\nkey_file = {:?}\n",
-        cert_file.display().to_string(),
-        key_file.display().to_string(),
+/// The Space every host of these tests enrols in.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub const SPACE: &str = "lab";
+
+/// What admits the hosts of a test to the Server under test: a real
+/// [`Enrolment`](classis_server::enrolment::Enrolment) over a Space of its own, behind the Agent
+/// plane exactly as the binary builds it. A test serves its Agent plane through [`app`](Self::app),
+/// and gives the Client a `state.json` with a token this Server issued through
+/// [`enrol`](Self::enrol) — the real `enrol`, over the loopback in plaintext.
+#[derive(Clone)]
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub struct Admission {
+    pub enrolment: std::sync::Arc<classis_server::enrolment::Enrolment>,
+    /// The Space's enrolment key.
+    pub key: String,
+}
+
+/// No service is registered for a test's state directory, whatever the machine has.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub struct NoService;
+
+impl classis_agent::enrolment::ServiceHost for NoService {
+    fn registered(&self, _: &Path) -> Result<Option<classis_agent::enrolment::Installed>, String> {
+        Ok(None)
+    }
+}
+
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+impl Admission {
+    /// An Enrolment over a data directory made under `dir`, with the Space [`SPACE`] and tokens
+    /// that never expire.
+    pub fn new(dir: &Path) -> Admission {
+        opamp::tls::install_ring_provider();
+        let data = dir.join("admission");
+        classis_server::fs::open_data_dir(&data, true).expect("the data directory");
+        let records = classis_server::Records::Files(data);
+        let clock = std::sync::Arc::new(classis_server::clock::SystemClock);
+        // No back-off: a test of a refusal is not to be answered with a wait.
+        let limits = classis_server::throttle::Limits {
+            max_failures: u32::MAX,
+            ..classis_server::throttle::Limits::default()
+        };
+        let enrolment = classis_server::enrolment::Enrolment::on(
+            &records,
+            oauth_token::server::Lifetime::Never,
+            clock.clone(),
+            std::sync::Arc::new(classis_server::throttle::Throttle::new(limits, clock)),
+        )
+        .expect("the enrolment");
+        let key = enrolment
+            .spaces()
+            .create(SPACE)
+            .expect("a space")
+            .to_string();
+        Admission {
+            enrolment: std::sync::Arc::new(enrolment),
+            key,
+        }
+    }
+
+    /// The Agent plane over `state`, admitting by this Enrolment alone.
+    pub fn app(&self, state: std::sync::Arc<classis_server::fleet::AppState>) -> axum::Router {
+        classis_server::agent_app(state, self.enrolment.clone())
+    }
+
+    /// Enrols a host at the Agent plane on `addr`, through the real `enrol`: `state.json` is
+    /// written in `state_dir`.
+    pub async fn enrol(
+        &self,
+        addr: std::net::SocketAddr,
+        state_dir: &Path,
+    ) -> classis_agent::enrolment::Enrolled {
+        classis_agent::enrolment::enrol(
+            &format!("http://{addr}"),
+            &self.key,
+            state_dir,
+            opamp::client::ClientTls::default(),
+            &NoService,
+        )
+        .await
+        .expect("enrol the host")
+    }
+}
+
+/// Writes a `state.json` for a host whose Server is not one of these tests' Servers — a stub that
+/// checks no token — with a token nobody issued.
+#[allow(dead_code)] // each integration-test binary uses a different subset of this support
+pub fn write_state_json(state_dir: &Path, base_url: &str) {
+    std::fs::create_dir_all(state_dir).expect("the state directory");
+    let state = serde_json::json!({
+        "endpoint": base_url,
+        "space": SPACE,
+        "device_id": "0193a6f0-0000-7000-8000-000000000000",
+        "client_secret": "a-client-secret-nobody-issued",
+        "access_token": "a-token-nobody-issued",
+    });
+    std::fs::write(
+        state_dir.join("state.json"),
+        serde_json::to_vec_pretty(&state).expect("json"),
     )
+    .expect("write state.json");
 }
 
 /// The fleet state on `dir` with the Deployments armed, as the binary wires it: the Configuration

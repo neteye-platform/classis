@@ -145,3 +145,27 @@ fn the_server_capability_matrix_matches_what_the_server_declares() {
         &source(&["crates/classis-server/src"]),
     );
 }
+
+/// Verifies: G-12
+#[test]
+fn own_telemetry_capabilities_document_bearer_authentication() {
+    let text = std::fs::read_to_string(workspace().join("docs/CONFORMANCE.md")).expect("read");
+    for capability in ["ReportsOwnTraces", "ReportsOwnMetrics", "ReportsOwnLogs"] {
+        let row = text
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{capability}`")))
+            .unwrap_or_else(|| panic!("no row for {capability}"));
+        assert!(
+            row.contains("certificate") && row.contains("ignored"),
+            "{capability} must describe ignored client certificates"
+        );
+        assert!(
+            row.contains("Server's own origin"),
+            "{capability} must bound the bearer token to the Server's origin"
+        );
+        assert!(
+            !row.contains("key this Client generated for its CSR"),
+            "{capability} still claims a CSR-derived identity"
+        );
+    }
+}

@@ -8,7 +8,8 @@ use crate::proto::{AgentToServer, ServerToAgent};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::{HeaderMap, StatusCode};
+use tokio_tungstenite::tungstenite::http::header::WWW_AUTHENTICATE;
+use tokio_tungstenite::tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
@@ -82,6 +83,16 @@ pub async fn run<S: Session, X: StopSignal>(
             Err(Connect::Refused(WsError::Http(response)))
                 if response.status() == StatusCode::UNAUTHORIZED =>
             {
+                let challenges = super::challenges(
+                    response
+                        .headers()
+                        .get_all(WWW_AUTHENTICATE)
+                        .iter()
+                        .map(HeaderValue::as_bytes),
+                );
+                if session.unauthorized(&challenges) {
+                    return Ok(Ended::Unauthorized { challenges });
+                }
                 warn!(
                     endpoint = %settings.endpoint,
                     "admission failed: the server refused this client (HTTP 401)"

@@ -6,9 +6,7 @@
 //! development defaults — a service that installs, starts, dials `127.0.0.1`, and manages nothing.
 //! This module is the way out of that state: it asks the handful of questions a fresh host cannot
 //! answer for itself, offering what the file already holds as each default, and writes the file
-//! or edits the keys it asked about. The bootstrap identity it asks for on a host not yet enrolled —
-//! a PEM pair, or a `bootstrap.p12` and its password — is handed back, not written:
-//! [`enrol`](crate::service::enrol) carries the host to its first certificate with it.
+//! or edits the keys it asked about.
 //!
 //! The split here is deliberate. [`ask`] is the only part that touches a terminal; [`render`] and
 //! [`edit`] are pure functions from answers to TOML, and [`write_new`] is the one that refuses to
@@ -19,28 +17,18 @@
 use std::io::{IsTerminal, Write as _};
 use std::path::{Path, PathBuf};
 
-use dialoguer::{Input, Password};
+use dialoguer::Input;
 
 use crate::config::ClientConfig;
 
-/// The file name written inside the install root when the operator named no `--config` path:
-/// one rule for systemd, launchd, and the SCM instead of an `/etc` vs `/Library` vs
-/// `%ProgramData%` policy per platform.
+/// The file name written inside the install root when the operator named no `--config` path: one
+/// rule for systemd, launchd, and the SCM instead of an `/etc` vs `/Library` vs `%ProgramData%`
+/// policy per platform.
 pub const FILE_NAME: &str = "supervisor.toml";
 
 /// The name the questionnaire copies the answered Server CA to, beside [`FILE_NAME`],
 /// and the name the install looks for beside its program.
 pub const SERVER_CA_FILE: &str = "server-ca.pem";
-
-/// The bootstrap certificate the install looks for beside its program.
-pub const BOOTSTRAP_CERT_FILE: &str = "bootstrap.pem";
-
-/// The bootstrap certificate's private key the install looks for beside its program.
-pub const BOOTSTRAP_KEY_FILE: &str = "bootstrap-key.pem";
-
-/// The bootstrap certificate and its key in one password-protected file, which the install looks
-/// for beside its program.
-pub const BOOTSTRAP_P12_FILE: &str = classis_core::pkcs12::FILE_NAME;
 
 /// The fleet's files that lie beside the program the install runs from, or in the directory
 /// `--fleet-files` names: the questionnaire's defaults, and what a
@@ -49,8 +37,6 @@ pub const BOOTSTRAP_P12_FILE: &str = classis_core::pkcs12::FILE_NAME;
 pub struct Beside {
     /// `server-ca.pem`.
     pub ca_file: Option<PathBuf>,
-    /// `bootstrap.pem` and `bootstrap-key.pem` only as a pair, or `bootstrap.p12` — never both.
-    pub bootstrap: Option<BootstrapFiles>,
     /// What was there and not taken, each said once by the install.
     pub warnings: Vec<String>,
 }
@@ -84,91 +70,9 @@ impl Beside {
     #[must_use]
     pub fn in_dir(dir: &Path) -> Self {
         let file = |name: &str| Some(dir.join(name)).filter(|path| path.is_file());
-        let mut warnings = Vec::new();
-        let pair = match (file(BOOTSTRAP_CERT_FILE), file(BOOTSTRAP_KEY_FILE)) {
-            (Some(cert), Some(key)) => Some(BootstrapFiles::Pair { cert, key }),
-            (Some(alone), None) | (None, Some(alone)) => {
-                warnings.push(format!(
-                    "{} lies there without the other half of the bootstrap pair \
-                     ({BOOTSTRAP_CERT_FILE} and {BOOTSTRAP_KEY_FILE}); not used",
-                    alone.display()
-                ));
-                None
-            }
-            (None, None) => None,
-        };
-        // Two identities would leave the install to guess which one is meant.
-        let bootstrap = match (file(BOOTSTRAP_P12_FILE), pair) {
-            (Some(p12), None)
-                if file(BOOTSTRAP_CERT_FILE).is_none() && file(BOOTSTRAP_KEY_FILE).is_none() =>
-            {
-                Some(BootstrapFiles::Pkcs12(p12))
-            }
-            (Some(p12), _) => {
-                warnings.push(format!(
-                    "{} lies beside {BOOTSTRAP_CERT_FILE} or {BOOTSTRAP_KEY_FILE}; neither bootstrap \
-                     identity is used — leave one",
-                    p12.display()
-                ));
-                None
-            }
-            (None, pair) => pair,
-        };
         Beside {
             ca_file: file(SERVER_CA_FILE),
-            bootstrap,
-            warnings,
-        }
-    }
-
-    /// The bootstrap identity a non-interactive install enrols with: the one
-    /// beside the program, when `config` reaches its Server over TLS and its state directory
-    /// holds no issued certificate. A `bootstrap.p12` is opened here, with `password` — what
-    /// `--bootstrap-password-file` read — so a file that does not open stops the install before
-    /// anything is written.
-    ///
-    /// # Errors
-    /// Returns an error naming `--bootstrap-password-file` when a `bootstrap.p12` would be taken
-    /// without it or does not open under it, and when it is given with no `bootstrap.p12` there.
-    pub fn unasked_enrolment(
-        &self,
-        config: &ClientConfig,
-        password: Option<&str>,
-    ) -> Result<Option<Bootstrap>, String> {
-        let p12 = match &self.bootstrap {
-            Some(BootstrapFiles::Pkcs12(file)) => Some(file),
-            _ => None,
-        };
-        if password.is_some() && p12.is_none() {
-            return Err(format!(
-                "--bootstrap-password-file names the password of a {BOOTSTRAP_P12_FILE}, and \
-                 there is none to open"
-            ));
-        }
-        if !is_tls_endpoint(&config.endpoint) || config.is_enrolled() {
-            return Ok(None);
-        }
-        match &self.bootstrap {
-            None => Ok(None),
-            Some(BootstrapFiles::Pair { cert, key }) => Ok(Some(Bootstrap::Pair {
-                cert: cert.clone(),
-                key: key.clone(),
-            })),
-            Some(BootstrapFiles::Pkcs12(file)) => {
-                let Some(password) = password else {
-                    return Err(format!(
-                        "{} is a bootstrap identity under a password: name a file holding it \
-                         with --bootstrap-password-file",
-                        file.display()
-                    ));
-                };
-                let identity = crate::tls::pkcs12_identity(file, password)
-                    .map_err(|e| format!("{}: {e} (--bootstrap-password-file)", file.display()))?;
-                Ok(Some(Bootstrap::Pkcs12 {
-                    file: file.clone(),
-                    identity,
-                }))
-            }
+            warnings: Vec::new(),
         }
     }
 
@@ -194,81 +98,28 @@ pub struct Answers {
     /// The questionnaire always asks for it there; `None` for a loopback `ws://` / `http://`
     /// endpoint, or where no question was put — a packaged install.
     pub ca_file: Option<PathBuf>,
-    /// `[packages] self_update`: whether the Server may replace this Client's own
-    /// binary. The questionnaire does not ask — a new file says `true`; only `--no-self-update` and the MSI's checkbox write
-    /// `false`. A new file says which of the two it is; an edited file keeps what it says.
+    /// `[packages] self_update`: whether the Server may replace this Client's own binary. The
+    /// questionnaire does not ask — a new file says `true`; only `--no-self-update` and the MSI's
+    /// checkbox write `false`. A new file says which of the two it is; an edited file keeps what it
+    /// says.
     pub self_update: bool,
-}
-
-/// A bootstrap identity found on this host, not yet opened.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BootstrapFiles {
-    /// `bootstrap.pem` and `bootstrap-key.pem`.
-    Pair { cert: PathBuf, key: PathBuf },
-    /// `bootstrap.p12`.
-    Pkcs12(PathBuf),
-}
-
-/// The bootstrap identity the Client enrols with. Asked for only while the Client is
-/// not enrolled, and never copied or written into the file: the questionnaire's enrolment presents
-/// it once, to obtain the certificate the Server issues.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Bootstrap {
-    /// The bootstrap certificate and its private key, PEM, where they lie on this host.
-    Pair { cert: PathBuf, key: PathBuf },
-    /// A `bootstrap.p12`, opened under its password: the identity is held in memory only.
-    Pkcs12 {
-        file: PathBuf,
-        identity: crate::config::BootstrapIdentity,
-    },
-}
-
-impl Bootstrap {
-    /// The files it was read from, for what the install prints.
-    #[must_use]
-    pub fn describe(&self) -> String {
-        match self {
-            Bootstrap::Pair { cert, key } => format!("{} and {}", cert.display(), key.display()),
-            Bootstrap::Pkcs12 { file, .. } => file.display().to_string(),
-        }
-    }
-}
-
-/// What the questionnaire left behind: the files it wrote beside the configuration, which an
-/// install hands over to the service account with the file, and the bootstrap identity to enrol
-/// with.
-#[derive(Debug, Default)]
-pub struct Written {
-    /// The copy of the answered Server CA, when one was answered.
-    pub copies: Vec<PathBuf>,
-    /// The identity to enrol with; `None` on an enrolled Client, which was not asked.
-    pub bootstrap: Option<Bootstrap>,
 }
 
 /// Ask, write, and report — the whole of `--interactive` and `service config`.
 ///
 /// `current` is what the file at `path` holds, or the defaults where there is none yet, and offers
-/// each question its default; where it holds nothing, what lies `beside` the program does.
-/// A new file is rendered whole; an existing one is edited in place,
-/// the asked keys changed and everything else — comments, `[[supervisor]]` blocks, the
-/// self-update consent — kept as written. `enrolled` says whether the state directory already
-/// holds an issued certificate, in which case no bootstrap identity is asked for. `password` is
-/// what `--bootstrap-password-file` read, which opens an answered `bootstrap.p12` instead of a
-/// question.
+/// each question its default; where it holds nothing, what lies `beside` the program does. A new
+/// file is rendered whole; an existing one is edited in place, the asked keys changed and
+/// everything else — comments, `[[supervisor]]` blocks, the self-update consent — kept as written.
 ///
 /// The answered CA is copied beside the file first, and the file names the copy
-/// ([`copy_ca_beside`]).
+/// ([`copy_ca_beside`]). What was copied is answered, so an install hands it over to the service
+/// account with the file.
 ///
 /// # Errors
 /// Returns an error when stdin is not a terminal, when a prompt fails, or when a file cannot be
 /// copied, created or replaced.
-pub fn run(
-    path: &Path,
-    current: &ClientConfig,
-    enrolled: bool,
-    beside: &Beside,
-    password: Option<&str>,
-) -> Result<Written, String> {
+pub fn run(path: &Path, current: &ClientConfig, beside: &Beside) -> Result<Vec<PathBuf>, String> {
     if !std::io::stdin().is_terminal() {
         return Err(format!(
             "the questionnaire needs a terminal on stdin, and there is none. Write {} by hand \
@@ -290,7 +141,7 @@ pub fn run(
         );
     }
     beside.report();
-    let (answers, bootstrap) = ask(current, enrolled, beside, password)?;
+    let answers = ask(current, beside)?;
     let (answers, copies) = copy_ca_beside(answers, path)?;
     for copy in &copies {
         println!("copied {}", copy.display());
@@ -307,7 +158,7 @@ pub fn run(
         write_new(path, &render(&answers))?;
     }
     println!("wrote {}", path.display());
-    Ok(Written { copies, bootstrap })
+    Ok(copies)
 }
 
 /// Copy the answered CA into the directory of the configuration at `config`, under
@@ -315,10 +166,10 @@ pub fn run(
 ///
 /// The configuration then depends on nothing outside its own directory for its trust: the copy
 /// survives the removal of wherever the operator brought the CA from, and it lives where the file
-/// and the state do — in the data root, which the install hands over and an uninstall keeps.
-/// It is written owner-only to a temporary name and renamed into place, so a later
-/// answer replaces a copy left by an earlier one, and an answer that already names the copy — the
-/// default an edit offers — is read before anything is written there.
+/// and the state do — in the data root, which the install hands over and an uninstall keeps. It is
+/// written owner-only to a temporary name and renamed into place, so a later answer replaces a copy
+/// left by an earlier one, and an answer that already names the copy — the default an edit offers —
+/// is read before anything is written there.
 ///
 /// # Errors
 /// Returns an error naming the file that could not be read or written.
@@ -454,10 +305,7 @@ fn table<'a>(
 ///
 /// The endpoint and the self-update consent are taken, and for a `wss://` / `https://` endpoint
 /// the Server CA that lies `beside` the program, copied beside the file as the questionnaire's
-/// answer would be. The client identity comes from
-/// an enrolment an operator approves, which the install runs with a bootstrap pair beside the
-/// program; a file written without one fails the install's validation and
-/// stays on disk to be completed.
+/// answer would be.
 ///
 /// # Errors
 /// Returns an error if the endpoint is not one the loader would accept, or if the file cannot be
@@ -509,18 +357,9 @@ fn keeping_existing(path: &Path) -> bool {
 /// Put the questions to the operator, each offering what `current` holds as its default. The only
 /// function here that reads a terminal.
 ///
-/// The bootstrap identity is asked for only when `enrolled` is `false`, and
-/// comes back beside the answers rather than in them: it is enrolled with, not written.
-///
 /// # Errors
-/// Returns an error if a prompt cannot be read, or an answered `bootstrap.p12` does not open under
-/// the `password` given.
-pub fn ask(
-    current: &ClientConfig,
-    enrolled: bool,
-    beside: &Beside,
-    password: Option<&str>,
-) -> Result<(Answers, Option<Bootstrap>), String> {
+/// Returns an error if a prompt cannot be read.
+pub fn ask(current: &ClientConfig, beside: &Beside) -> Result<Answers, String> {
     let defaults = Defaults::of(current, beside);
 
     let endpoint: String = Input::new()
@@ -554,127 +393,14 @@ pub fn ask(
         None
     };
 
-    // The bootstrap identity a host not yet enrolled enrols with: a PEM certificate and
-    // its key, or a PKCS#12 file and its password. There is no answer without
-    // one, and no question asks for a credential — the password opens a file on this
-    // host and is sent nowhere. An enrolled host renews what it was issued and is not asked.
-    let bootstrap = if enrolled {
-        println!("enrolled: this Client holds a certificate the Server issued");
-        None
-    } else {
-        Some(ask_bootstrap(
-            defaults.cert_file,
-            defaults.key_file,
-            password,
-        )?)
-    };
-
-    Ok((
-        Answers {
-            endpoint: endpoint.trim().to_string(),
-            name: name.trim().to_string(),
-            ca_file,
-            // Not asked: a new file writes the consent, and an edited file keeps
-            // the consent it states.
-            self_update: current.self_update_package().is_some(),
-        },
-        bootstrap,
-    ))
-}
-
-/// The bootstrap identity: its certificate first, then the key of a PEM certificate, or the
-/// password of a PKCS#12 file — asked with input hidden, and again until the file opens. A file
-/// that is no bootstrap identity sends the question back to its path.
-fn ask_bootstrap(
-    cert_default: Option<String>,
-    key_default: Option<String>,
-    password: Option<&str>,
-) -> Result<Bootstrap, String> {
-    use classis_core::pkcs12::file::OpenError;
-    let mut cert_default = cert_default;
-    loop {
-        let cert = ask_path(
-            "Bootstrap certificate this Client enrols with (PEM, or a PKCS#12 .p12 path)",
-            cert_default.clone(),
-        )?;
-        if !is_pkcs12_path(&cert) {
-            let key = ask_path(
-                "Private key of the bootstrap certificate (PEM path)",
-                key_default,
-            )?;
-            return Ok(Bootstrap::Pair { cert, key });
-        }
-        if let Some(password) = password {
-            let identity = crate::tls::pkcs12_identity(&cert, password)
-                .map_err(|e| format!("{}: {e} (--bootstrap-password-file)", cert.display()))?;
-            return Ok(Bootstrap::Pkcs12 {
-                file: cert,
-                identity,
-            });
-        }
-        loop {
-            // `dialoguer` hands back a plain copy of what it held wiped; it moves into a buffer
-            // wiped on drop here.
-            let typed = zeroize::Zeroizing::new(
-                Password::new()
-                    .with_prompt(format!("Password of {}", cert.display()))
-                    .interact()
-                    .map_err(prompt_failed)?,
-            );
-            match crate::tls::pkcs12_identity(&cert, &typed) {
-                Ok(identity) => {
-                    return Ok(Bootstrap::Pkcs12 {
-                        file: cert,
-                        identity,
-                    })
-                }
-                Err(OpenError::WrongPassword) => {
-                    println!("that password does not open {}", cert.display());
-                }
-                Err(OpenError::Invalid(why)) => {
-                    println!("{why}");
-                    cert_default = None;
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// Whether an answered path is read as PKCS#12: by its extension, `.p12` or `.pfx` in any case.
-#[must_use]
-pub fn is_pkcs12_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("p12") || e.eq_ignore_ascii_case("pfx"))
-}
-
-/// The password a password file holds: its first line, without its `\n` or `\r\n`. The file is read
-/// once, at most 4 KiB of it, and left as it is. `flag` is the option
-/// that named it, `--bootstrap-password-file` here, for the error. The file's bytes and the
-/// password are held in buffers wiped when they are dropped.
-///
-/// # Errors
-/// Returns an error naming the flag when the file cannot be read or its first line is empty.
-pub fn read_password_file(path: &Path, flag: &str) -> Result<zeroize::Zeroizing<String>, String> {
-    use std::io::Read as _;
-    const LIMIT: usize = 4096;
-    // Sized for all it may read, so it is never grown and left behind.
-    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(LIMIT));
-    std::fs::File::open(path)
-        .and_then(|file| file.take(LIMIT as u64).read_to_end(&mut bytes))
-        .map_err(|e| format!("{flag} {}: {e}", path.display()))?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| format!("{flag} {}: not UTF-8 text", path.display()))?;
-    let line = text.split('\n').next().unwrap_or_default();
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    if line.is_empty() {
-        return Err(format!(
-            "{flag} {}: its first line is empty",
-            path.display()
-        ));
-    }
-    Ok(zeroize::Zeroizing::new(line.to_string()))
+    Ok(Answers {
+        endpoint: endpoint.trim().to_string(),
+        name: name.trim().to_string(),
+        ca_file,
+        // Not asked: a new file writes the consent, and an edited file keeps the consent it
+        // states.
+        self_update: current.self_update_package().is_some(),
+    })
 }
 
 /// A path to a readable file, offering `default` when there is one.
@@ -697,33 +423,24 @@ fn ask_path(prompt: &str, default: Option<String>) -> Result<PathBuf, String> {
 
 /// The default of each question: what the configuration holds, else what
 /// lies beside the program. On a fresh host `current` is the loader's
-/// defaults, so the endpoint and name are suggested, and the files and the key are where the
-/// program found them.
+/// defaults, so the endpoint and name are suggested, and the files are where the program found
+/// them.
 #[derive(Debug, PartialEq, Eq)]
 struct Defaults {
     endpoint: String,
     name: String,
     ca_file: Option<String>,
-    cert_file: Option<String>,
-    key_file: Option<String>,
 }
 
 impl Defaults {
     fn of(current: &ClientConfig, beside: &Beside) -> Self {
         let tls = current.tls.as_ref();
         let path = |p: Option<&PathBuf>| p.map(|p| p.to_string_lossy().into_owned());
-        let (beside_cert, beside_key) = match &beside.bootstrap {
-            Some(BootstrapFiles::Pair { cert, key }) => (Some(cert), Some(key)),
-            Some(BootstrapFiles::Pkcs12(file)) => (Some(file), None),
-            None => (None, None),
-        };
         Defaults {
             endpoint: current.endpoint.clone(),
             name: current.name.clone(),
             ca_file: path(tls.and_then(|t| t.ca_file.as_ref()))
                 .or_else(|| path(beside.ca_file.as_ref())),
-            cert_file: path(tls.and_then(|t| t.cert_file.as_ref())).or_else(|| path(beside_cert)),
-            key_file: path(tls.and_then(|t| t.key_file.as_ref())).or_else(|| path(beside_key)),
         }
     }
 }
@@ -731,8 +448,8 @@ impl Defaults {
 /// Render the answers as `supervisor.toml`. Pure, so what lands on disk is testable without a tty.
 ///
 /// Values go through `toml`'s own string encoder rather than into `"{}"`: a name may contain a
-/// quote, and a Windows path is full of backslashes. The file has no `[auth]` section: the Client
-/// sends no credential.
+/// quote, and a Windows path is full of backslashes. The file has no `[auth]` section: the host's
+/// credential is the `state.json` that `enrol` writes in the state directory, never this file.
 #[must_use]
 pub fn render(answers: &Answers) -> String {
     let mut out = String::new();
@@ -747,9 +464,7 @@ pub fn render(answers: &Answers) -> String {
 
     if let Some(ca) = &answers.ca_file {
         out.push_str(
-            "\n# TLS toward the Server. ca_file *replaces* the built-in webpki roots. This\n\
-             # Client's identity is the certificate the Server issued it, which the state\n\
-             # directory holds; `supervisor service config` enrols a host that has none.\n[tls]\n",
+            "\n# TLS toward the Server. ca_file *replaces* the built-in webpki roots.\n[tls]\n",
         );
         out.push_str(&format!(
             "ca_file = {}\n",
@@ -801,9 +516,9 @@ fn commented_top_level_keys() -> &'static str {
 /// Create the file, never replacing one that is there, and never wider than its owner on Unix.
 ///
 /// `create_new` is what makes "do not overwrite" a property of the syscall rather than of a check
-/// that raced. The mode is set in the same call for the same reason: the file names where the
-/// private key lies and may hold `[packages] archive_key`, before any later
-/// `set_permissions` could narrow it.
+/// that raced. The mode is set in the same call for the same reason: the file may hold
+/// `[packages] archive_key`, before any later `set_permissions` could narrow
+/// it.
 ///
 /// # Errors
 /// Returns an error if the parent cannot be created or the file already exists.
@@ -869,56 +584,44 @@ mod tests {
         }
     }
 
-    /// What the questionnaire writes names no client identity — the bootstrap pair is enrolled
-    /// with, not written — and the Client starts with it once the enrolment has put the issued
-    /// certificate into the state directory, which an install does before it registers the
-    /// service.
+    /// What the questionnaire writes loads, passes the validation the Client applies at startup,
+    /// names no CA when none was answered, and — beside the `state.json` an `enrol` leaves — is
+    /// what the Client starts with.
     #[test]
     fn a_complete_answer_writes_a_file_the_client_starts_with() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(FILE_NAME);
         write_new(&path, &render(&answers())).expect("write");
         let mut loaded = ClientConfig::load(&path).expect("the written file loads");
-        assert!(loaded.tls.is_none(), "no identity and no CA was written");
+        assert!(loaded.tls.is_none(), "no CA was written");
 
         loaded.state_dir = dir.path().join("state");
+        assert!(
+            crate::enrolment::required(&loaded.state_dir).is_err(),
+            "a host that has not enrolled starts nothing"
+        );
         std::fs::create_dir_all(&loaded.state_dir).expect("state dir");
-        for file in [crate::tls::ISSUED_CERT_FILE, crate::tls::ISSUED_KEY_FILE] {
-            std::fs::write(loaded.state_dir.join(file), "issued").expect("write");
-        }
+        std::fs::write(
+            crate::enrolment::state_path(&loaded.state_dir),
+            r#"{"endpoint":"https://fleet.example","space":"lab","device_id":"d",
+               "client_secret":"s","access_token":"t"}"#,
+        )
+        .expect("state.json");
+        crate::enrolment::required(&loaded.state_dir).expect("the Client would start with it");
         loaded
-            .check_admission()
-            .expect("the Client would start with it");
+            .checked(&path)
+            .expect("the written file is a valid Client configuration");
     }
 
     /// The questionnaire suggests the loader's default, and that default is one its own endpoint
-    /// rule accepts: TLS, to the loopback literal — never a plaintext or a host-name answer.
+    /// rule accepts: plain HTTP to the loopback literal, where a Server on the same machine listens
+    /// without a proxy — never plaintext to a host name.
     #[test]
-    fn the_suggested_endpoint_is_tls_on_the_loopback() {
+    fn the_suggested_endpoint_is_plaintext_on_the_loopback_literal() {
         let suggested = ClientConfig::default().endpoint;
-        assert_eq!(suggested, "wss://127.0.0.1:4320/v1/opamp");
-        assert!(is_tls_endpoint(&suggested));
+        assert_eq!(suggested, "ws://127.0.0.1:4320/v1/opamp");
+        assert!(!is_tls_endpoint(&suggested));
         validate_endpoint(&suggested).expect("the suggestion passes the questionnaire's rule");
-    }
-
-    /// A packaged install has an endpoint and no terminal: the file it writes carries no identity,
-    /// fails the validation the Client applies at startup, and stays on disk to be completed rather
-    /// than answered again.
-    #[test]
-    fn installer_answers_alone_fail_validation_and_stay_on_disk() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(FILE_NAME);
-        run_with_endpoint(
-            &path,
-            "wss://fleet.example.com/v1/opamp",
-            false,
-            &Beside::default(),
-        )
-        .expect("write");
-        let loaded = ClientConfig::load(&path).expect("it parses");
-        let err = loaded.check_admission().expect_err("no identity");
-        assert!(err.contains("cert_file and key_file"), "{err}");
-        assert!(path.exists(), "left on disk to be completed");
     }
 
     /// The endpoint rule is the startup rule: plaintext only to a loopback literal, and the name
@@ -1094,7 +797,7 @@ mod tests {
     }
 
     /// A declined section is absent rather than empty — a bare `[tls]` would say nothing.
-    /// `[packages]` is the one exception, and deliberately: an absent `self_update`
+    /// `[packages]` is the one exception and it is the point of An absent `self_update`
     /// *means* consent, so both answers are written out, `self_update = true` or `= false`. A
     /// reader of the file can tell which it is.
     #[test]
@@ -1196,14 +899,8 @@ mod tests {
     fn interactive_without_a_terminal_fails_instead_of_blocking() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(FILE_NAME);
-        let err = run(
-            &path,
-            &ClientConfig::default(),
-            false,
-            &Beside::default(),
-            None,
-        )
-        .expect_err("no terminal, no questionnaire");
+        let err = run(&path, &ClientConfig::default(), &Beside::default())
+            .expect_err("no terminal, no questionnaire");
         assert!(err.contains("needs a terminal"), "{err}");
         assert!(!path.exists(), "nothing was written");
     }
@@ -1223,7 +920,7 @@ mod tests {
             assert_eq!(
                 mode & 0o777,
                 0o600,
-                "a file naming the private key is the owner's alone"
+                "a file that may hold a secret is the owner's alone"
             );
         }
     }
@@ -1232,8 +929,6 @@ mod tests {
     fn fleet_files(dir: &Path) {
         for (name, content) in [
             (SERVER_CA_FILE, "ca"),
-            (BOOTSTRAP_CERT_FILE, "cert"),
-            (BOOTSTRAP_KEY_FILE, "key"),
             // What `pki init` still writes offline, and nothing reads.
             (
                 "package-signing-key.pub",
@@ -1244,8 +939,8 @@ mod tests {
         }
     }
 
-    /// The fleet's files are found by their exact names; half a bootstrap pair is said and not
-    /// taken, and a package key lying there is neither looked for nor named.
+    /// The fleet's files are found by their exact names, and a package key lying there is neither
+    /// looked for nor named.
     #[test]
     fn the_fleets_files_are_found_beside_the_program_by_their_names() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1253,19 +948,7 @@ mod tests {
         fleet_files(dir.path());
         let beside = Beside::in_dir(dir.path());
         assert_eq!(beside.ca_file, Some(dir.path().join(SERVER_CA_FILE)));
-        assert_eq!(
-            beside.bootstrap,
-            Some(BootstrapFiles::Pair {
-                cert: dir.path().join(BOOTSTRAP_CERT_FILE),
-                key: dir.path().join(BOOTSTRAP_KEY_FILE),
-            })
-        );
         assert!(beside.warnings.is_empty(), "{:?}", beside.warnings);
-
-        std::fs::remove_file(dir.path().join(BOOTSTRAP_KEY_FILE)).expect("remove");
-        let beside = Beside::in_dir(dir.path());
-        assert_eq!(beside.bootstrap, None, "half a pair is no pair");
-        assert_eq!(beside.warnings.len(), 1, "{:?}", beside.warnings);
     }
 
     /// Each default is what the file holds, else what lies beside the program.
@@ -1278,14 +961,10 @@ mod tests {
 
         let fresh = Defaults::of(&ClientConfig::default(), &beside);
         assert_eq!(fresh.ca_file, text(SERVER_CA_FILE));
-        assert_eq!(fresh.cert_file, text(BOOTSTRAP_CERT_FILE));
-        assert_eq!(fresh.key_file, text(BOOTSTRAP_KEY_FILE));
 
         let held = ClientConfig {
             tls: Some(crate::config::TlsConfig {
                 ca_file: Some(PathBuf::from("/held/ca.pem")),
-                cert_file: None,
-                key_file: None,
             }),
             ..ClientConfig::default()
         };
@@ -1295,7 +974,6 @@ mod tests {
             Some("/held/ca.pem"),
             "the file wins"
         );
-        assert_eq!(edited.cert_file, text(BOOTSTRAP_CERT_FILE));
     }
 
     /// `--endpoint` writes the CA it finds beside the program, as a copy beside the file, and no
@@ -1316,10 +994,6 @@ mod tests {
         assert_eq!(
             loaded.tls.expect("tls").ca_file.as_deref(),
             Some(copy.as_path())
-        );
-        assert!(
-            !data.path().join(BOOTSTRAP_CERT_FILE).exists(),
-            "the bootstrap pair is not copied"
         );
         let written = std::fs::read_to_string(&path).expect("read");
         assert!(
@@ -1344,99 +1018,14 @@ mod tests {
         assert!(loaded.tls.and_then(|t| t.ca_file).is_none());
     }
 
-    /// Unasked, the pair beside the program enrols a Client over TLS that holds no issued
-    /// certificate, and only such a one.
+    /// `--fleet-files` names a directory that must be one, and `--endpoint` takes the CA from it
+    /// as it would from beside the program.
     #[test]
-    fn an_unasked_install_enrols_with_the_pair_beside_the_program_until_enrolled() {
-        let program = tempfile::tempdir().expect("tempdir");
-        fleet_files(program.path());
-        let beside = Beside::in_dir(program.path());
-        let state = tempfile::tempdir().expect("tempdir");
-        let config = ClientConfig {
-            endpoint: "wss://fleet.example.com/v1/opamp".to_string(),
-            state_dir: state.path().to_path_buf(),
-            ..ClientConfig::default()
-        };
-        assert_eq!(
-            beside.unasked_enrolment(&config, None),
-            Ok(Some(Bootstrap::Pair {
-                cert: program.path().join(BOOTSTRAP_CERT_FILE),
-                key: program.path().join(BOOTSTRAP_KEY_FILE),
-            }))
-        );
-
-        let loopback = ClientConfig {
-            endpoint: "ws://127.0.0.1:4320/v1/opamp".to_string(),
-            ..config.clone()
-        };
-        assert_eq!(beside.unasked_enrolment(&loopback, None), Ok(None));
-
-        for name in [crate::tls::ISSUED_CERT_FILE, crate::tls::ISSUED_KEY_FILE] {
-            std::fs::write(state.path().join(name), "issued").expect("write");
-        }
-        assert_eq!(
-            beside.unasked_enrolment(&config, None),
-            Ok(None),
-            "enrolled already"
-        );
-        assert_eq!(
-            Beside::default().unasked_enrolment(&ClientConfig::default(), None),
-            Ok(None)
-        );
-    }
-
-    const P12_PASSWORD: &str = "a password of the operator";
-
-    /// A `bootstrap.p12` sealed as the Server seals one, with the PEM of its certificate.
-    fn p12_in(dir: &Path) -> String {
-        let key = rcgen::KeyPair::generate().expect("key");
-        let cert = rcgen::CertificateParams::new(vec!["bootstrap".to_string()])
-            .expect("params")
-            .self_signed(&key)
-            .expect("cert");
-        let file = classis_core::pkcs12::file::seal(cert.der(), &key.serialize_der(), P12_PASSWORD)
-            .expect("sealed");
-        std::fs::write(dir.join(BOOTSTRAP_P12_FILE), file).expect("write");
-        cert.pem()
-    }
-
-    /// A `bootstrap.p12` is found as a bootstrap identity; lying beside a file of the pair,
-    /// neither is taken; `--fleet-files` names a directory that must be one.
-    #[test]
-    fn a_bootstrap_p12_is_found_alone_and_never_beside_the_pair() {
+    fn a_named_fleet_files_directory_is_looked_in_and_must_be_a_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
-        p12_in(dir.path());
-        let beside = Beside::in_named_dir(dir.path()).expect("a directory");
-        assert_eq!(
-            beside.bootstrap,
-            Some(BootstrapFiles::Pkcs12(dir.path().join(BOOTSTRAP_P12_FILE)))
-        );
-        assert!(beside.warnings.is_empty(), "{:?}", beside.warnings);
-        let defaults = Defaults::of(&ClientConfig::default(), &beside);
-        assert_eq!(
-            defaults.cert_file,
-            Some(
-                dir.path()
-                    .join(BOOTSTRAP_P12_FILE)
-                    .to_string_lossy()
-                    .into_owned()
-            ),
-            "offered as the certificate's default"
-        );
-        assert_eq!(defaults.key_file, None);
-
-        std::fs::write(dir.path().join(BOOTSTRAP_KEY_FILE), "key").expect("write");
-        let both = Beside::in_dir(dir.path());
-        assert_eq!(both.bootstrap, None, "the install never guesses");
-        assert!(
-            both.warnings.iter().any(|w| w.contains(BOOTSTRAP_P12_FILE)),
-            "{:?}",
-            both.warnings
-        );
-
-        // `--endpoint` takes the CA from the directory named, as it would from beside the program.
         std::fs::write(dir.path().join(SERVER_CA_FILE), "ca").expect("write");
         let named = Beside::in_named_dir(dir.path()).expect("a directory");
+        assert!(named.warnings.is_empty(), "{:?}", named.warnings);
         let data = tempfile::tempdir().expect("tempdir");
         let copies = run_with_endpoint(
             &data.path().join(FILE_NAME),
@@ -1450,98 +1039,11 @@ mod tests {
         let missing = dir.path().join("no such directory");
         let refused = Beside::in_named_dir(&missing).expect_err("refused");
         assert!(refused.contains("--fleet-files"), "{refused}");
-        let a_file = dir.path().join(BOOTSTRAP_KEY_FILE);
+        let a_file = dir.path().join(SERVER_CA_FILE);
         assert!(
             Beside::in_named_dir(&a_file).is_err(),
             "a file is no directory"
         );
-    }
-
-    /// Unasked, a `bootstrap.p12` enrols with the password `--bootstrap-password-file` gives, and
-    /// fails the install without it, under a password that does not open it, or when the flag has
-    /// no file to open.
-    #[test]
-    fn an_unasked_install_opens_a_bootstrap_p12_with_the_password_file_or_fails() {
-        let program = tempfile::tempdir().expect("tempdir");
-        let cert_pem = p12_in(program.path());
-        let beside = Beside::in_dir(program.path());
-        let state = tempfile::tempdir().expect("tempdir");
-        let config = ClientConfig {
-            endpoint: "wss://fleet.example.com/v1/opamp".to_string(),
-            state_dir: state.path().to_path_buf(),
-            ..ClientConfig::default()
-        };
-        let without = beside
-            .unasked_enrolment(&config, None)
-            .expect_err("no password");
-        assert!(without.contains("--bootstrap-password-file"), "{without}");
-        let wrong = beside
-            .unasked_enrolment(&config, Some("not the password"))
-            .expect_err("wrong password");
-        assert!(wrong.contains("--bootstrap-password-file"), "{wrong}");
-        match beside.unasked_enrolment(&config, Some(P12_PASSWORD)) {
-            Ok(Some(Bootstrap::Pkcs12 { file, identity })) => {
-                assert_eq!(file, program.path().join(BOOTSTRAP_P12_FILE));
-                assert_eq!(
-                    identity.cert_pem,
-                    cert_pem.replace("\r\n", "\n").into_bytes()
-                );
-                opamp::tls::private_key(&identity.key_pem).expect("a key");
-            }
-            other => panic!("expected the opened file, got {other:?}"),
-        }
-
-        let pair_only = tempfile::tempdir().expect("tempdir");
-        fleet_files(pair_only.path());
-        let refused = Beside::in_dir(pair_only.path())
-            .unasked_enrolment(&config, Some(P12_PASSWORD))
-            .expect_err("no file to open");
-        assert!(refused.contains("--bootstrap-password-file"), "{refused}");
-
-        for name in [crate::tls::ISSUED_CERT_FILE, crate::tls::ISSUED_KEY_FILE] {
-            std::fs::write(state.path().join(name), "issued").expect("write");
-        }
-        assert_eq!(
-            beside.unasked_enrolment(&config, None),
-            Ok(None),
-            "an enrolled Client takes no bootstrap identity, and needs no password"
-        );
-    }
-
-    /// The password is the file's first line without its line ending; an empty one is refused.
-    /// `.p12` and `.pfx` are read as PKCS#12.
-    #[test]
-    fn a_password_file_gives_its_first_line_and_a_p12_path_is_known_by_its_extension() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let file = dir.path().join("bootstrap.pass");
-        for (content, expected) in [
-            ("secret password\n", "secret password"),
-            ("secret password\r\nsecond line\n", "secret password"),
-            ("secret password", "secret password"),
-        ] {
-            std::fs::write(&file, content).expect("write");
-            assert_eq!(
-                read_password_file(&file, "--bootstrap-password-file")
-                    .expect("read")
-                    .as_str(),
-                expected
-            );
-        }
-        std::fs::write(&file, "\nsecret").expect("write");
-        assert!(
-            read_password_file(&file, "--bootstrap-password-file").is_err(),
-            "an empty first line"
-        );
-        assert!(read_password_file(&dir.path().join("none"), "--bootstrap-password-file").is_err());
-
-        for (path, p12) in [
-            ("bootstrap.p12", true),
-            ("/x/BOOTSTRAP.PFX", true),
-            ("bootstrap.pem", false),
-            ("p12", false),
-        ] {
-            assert_eq!(is_pkcs12_path(Path::new(path)), p12, "{path}");
-        }
     }
 
     /// The answered CA lands beside the configuration under a fixed name, owner-only, and the
@@ -1633,8 +1135,7 @@ mod tests {
                       heartbeat_interval_secs = 15 # tuned\n\
                       \n\
                       [tls]\n\
-                      cert_file = \"/etc/boot.pem\"\n\
-                      key_file = \"/etc/boot-key.pem\"\n\
+                      ca_file = \"/etc/old-ca.pem\"\n\
                       \n\
                       [packages]\n\
                       self_update = false\n\
@@ -1656,7 +1157,7 @@ mod tests {
         for kept in [
             "# my notes\n",
             "heartbeat_interval_secs = 15 # tuned\n",
-            "cert_file = \"/etc/boot.pem\"\n",
+            "[tls]\n",
             "self_update = false\n",
             "[[supervisor]]\nname = \"collector\"\nkind = \"opentelemetry-collector\"\n",
         ] {
@@ -1700,18 +1201,13 @@ mod tests {
     fn the_defaults_are_what_the_file_holds() {
         let fresh = Defaults::of(&ClientConfig::default(), &Beside::default());
         assert_eq!(fresh.endpoint, ClientConfig::default().endpoint);
-        assert_eq!(
-            (fresh.ca_file, fresh.cert_file, fresh.key_file),
-            (None, None, None)
-        );
+        assert_eq!(fresh.ca_file, None);
 
         let held: ClientConfig = toml::from_str(
             "endpoint = \"wss://fleet.example/v1/opamp\"\n\
              name = \"web-01\"\n\
              [tls]\n\
-             ca_file = \"/d/server-ca.pem\"\n\
-             cert_file = \"/d/boot.pem\"\n\
-             key_file = \"/d/boot-key.pem\"\n",
+             ca_file = \"/d/server-ca.pem\"\n",
         )
         .expect("config");
         assert_eq!(
@@ -1720,32 +1216,8 @@ mod tests {
                 endpoint: "wss://fleet.example/v1/opamp".to_string(),
                 name: "web-01".to_string(),
                 ca_file: Some("/d/server-ca.pem".to_string()),
-                cert_file: Some("/d/boot.pem".to_string()),
-                key_file: Some("/d/boot-key.pem".to_string()),
             }
         );
-    }
-
-    /// The bootstrap pair is asked for while the state directory holds no issued certificate, and
-    /// not after — a bootstrap certificate the file names does not count as enrolled, the issued
-    /// pair alone does. `ask` reads exactly this predicate.
-    #[test]
-    fn the_bootstrap_pair_is_asked_only_before_enrolment() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut config: ClientConfig =
-            toml::from_str("[tls]\ncert_file = \"/d/boot.pem\"\nkey_file = \"/d/boot-key.pem\"\n")
-                .expect("config");
-        config.state_dir = dir.path().to_path_buf();
-        assert!(!config.is_enrolled(), "a bootstrap pair is no membership");
-
-        std::fs::write(dir.path().join(crate::tls::ISSUED_CERT_FILE), "c").expect("write");
-        assert!(
-            !config.is_enrolled(),
-            "a certificate without its key is not one"
-        );
-
-        std::fs::write(dir.path().join(crate::tls::ISSUED_KEY_FILE), "k").expect("write");
-        assert!(config.is_enrolled());
     }
 
     #[test]
