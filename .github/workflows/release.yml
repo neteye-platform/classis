@@ -26,14 +26,26 @@ name: Release
 # `publish` before the release exists, and each shipped program has a CycloneDX SBOM per target
 # beside its archive.
 #
+# The Windows Client program and installer are Authenticode-signed through DigiCert Software Trust
+# in the GitHub environment `Package Signing`: `windows-exe` builds the program, `sign-exe` signs it, `build`
+# packs the signed bytes into the `.tar.gz` and the `.msi`, and `sign-msi` signs the installer.
+# A dry run skips both signing jobs, unless it is started with `sign`, which signs and publishes nothing.
+#
 # The Server ships as a multi-architecture image, `ghcr.io/neteye-platform/classis-server:<version>`,
 # built from packaging/container/Containerfile by copying the Server binaries the Linux rows built
 # and checked. `image` pushes it untagged; `publish` attests it, verifies it, and only then tags it
 # with the version.
 
 on:
-  # A dry run: builds and packs every target, and neither signs nor publishes.
+  # A dry run: builds and packs every target and publishes nothing. It signs the Windows program and
+  # installer only when asked to (`sign`), so the Authenticode setup can be tried before a tag costs a version;
+  # the environment's reviewer approves that run like a release's.
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Authenticode-sign the Windows program and installer (publishes nothing)
+        type: boolean
+        default: false
   # A release: the tag a person pushed on a commit of `main`.
   push:
     # `v` and three numbers: `v0.1.0`. Any other tag, `very-old` included, starts nothing.
@@ -273,8 +285,142 @@ jobs:
             *.cdx.json.sha256
           if-no-files-found: error
 
-  build:
+  # The Windows Client program, built on its own so it can be Authenticode-signed *before* it is
+  # packed: the `.tar.gz` and the `.msi` of `build` then carry the same signed bytes. No secret
+  # here; `sign-exe` signs what this job uploads, and a dry run hands it on unsigned.
+  windows-exe:
     needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Add the target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Build the Client
+        run: cargo build --release -p classis-agent --bin supervisor --target x86_64-pc-windows-msvc --locked
+      # Fails before the signing approval is asked for. `build` asks again of the signed bytes.
+      - name: The binary agrees with the name it will be given
+        run: |
+          reported=$(./target/x86_64-pc-windows-msvc/release/supervisor.exe --version | awk '{print $NF}')
+          expected='${{ needs.version.outputs.full }}'
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::this target reports $reported, the release is $expected"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: supervisor-exe-unsigned
+          path: target/x86_64-pc-windows-msvc/release/supervisor.exe
+          if-no-files-found: error
+
+  # Authenticode-signs the Client program with the certificate held by DigiCert Software Trust.
+  # One of the two Authenticode jobs, beside `sign`, in the environment `Package Signing`. It
+  # checks out no code and builds nothing: it downloads one `.exe`, signs it through DigiCert
+  # (the private key never leaves their HSM) and hands the signed file back.
+  sign-exe:
+    # A release, or a dry run asked to sign; any other run never reaches the environment and `build`
+    # takes the unsigned file.
+    if: >-
+      ${{ (github.event_name == 'push' && needs.version.outputs.publish == 'true')
+      || (github.event_name == 'workflow_dispatch' && inputs.sign) }}
+    needs: [version, windows-exe]
+    runs-on: windows-latest
+    environment: Package Signing
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      SIGN_FILE: exe/supervisor.exe
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: supervisor-exe-unsigned
+          path: exe
+      - name: Install the Software Trust tools
+        shell: pwsh
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:SM_API_KEY) { throw 'the environment Package Signing holds no SM_API_KEY' }
+          $msi = Join-Path $env:RUNNER_TEMP 'smtools-windows-x64.msi'
+          $uri = 'https://one.digicert.com/signingmanager/api-ui/v1/releases/smtools-windows-x64.msi/download'
+          Invoke-WebRequest -Uri $uri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msi
+          # What was downloaded must be signed by DigiCert, Inc. itself before it is run.
+          $sig = Get-AuthenticodeSignature $msi
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O="?DigiCert, Inc\."?(,|$)') {
+            throw "the tools installer is not signed by DigiCert: $($sig.Status)"
+          }
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec exited with $($p.ExitCode)" }
+          $dir = 'C:\Program Files\DigiCert\DigiCert One Signing Manager Tools'
+          if (-not (Test-Path (Join-Path $dir 'smctl.exe'))) { throw "no smctl.exe in $dir" }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+      - name: Write the client certificate
+        env:
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SM_CLIENT_CERT_FILE_B64" ]; then
+            echo "::error::the environment Package Signing holds no SM_CLIENT_CERT_FILE_B64"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$SM_CLIENT_CERT_FILE_B64" | base64 -d > "$RUNNER_TEMP/sm-client-cert.p12"
+          echo "SM_CLIENT_CERT_FILE=$(cygpath -w "$RUNNER_TEMP/sm-client-cert.p12")" >> "$GITHUB_ENV"
+      - name: Sign the file
+        env:
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          FINGERPRINT: ${{ vars.SM_CERT_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
+            if [ -z "${!v}" ]; then echo "::error::the environment Package Signing holds no $v"; exit 1; fi
+          done
+          if [ ! -f "$SIGN_FILE" ]; then
+            echo "::error::the unsigned artifact holds no $SIGN_FILE"
+            exit 1
+          fi
+          smctl healthcheck
+          # Signing by fingerprint reads the certificate from the Windows store; a fresh runner has none.
+          smctl windows certsync
+          smctl sign --fingerprint "$FINGERPRINT" --input "$SIGN_FILE"
+      - name: The signature is valid and is this certificate's
+        shell: pwsh
+        env:
+          FINGERPRINT: ${{ vars.SM_CERT_FINGERPRINT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sig = Get-AuthenticodeSignature $env:SIGN_FILE
+          if ($sig.Status -ne 'Valid') { throw "$env:SIGN_FILE`: $($sig.Status)" }
+          if ($sig.SignerCertificate.Thumbprint -ne $env:FINGERPRINT) { throw "signed by $($sig.SignerCertificate.Thumbprint), not $env:FINGERPRINT" }
+          if (-not $sig.TimeStamperCertificate) { throw 'no timestamp on the signature' }
+      - name: Remove the client certificate
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/sm-client-cert.p12"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: supervisor-exe-signed
+          path: exe/supervisor.exe
+          if-no-files-found: error
+
+  build:
+    needs: [version, windows-exe, sign-exe]
+    # `sign-exe` is skipped on a dry run, and that is not a failure.
+    if: >-
+      ${{ !cancelled()
+      && needs.version.result == 'success'
+      && needs.windows-exe.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.sign-exe.result) }}
     name: ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -306,9 +452,26 @@ jobs:
           # runs wrote.
           persist-credentials: false
       - name: Add the target
+        if: matrix.os != 'windows'
         run: rustup target add ${{ matrix.target }}
       - name: Build the Client
+        if: matrix.os != 'windows'
         run: cargo build --release -p classis-agent --bin supervisor --target ${{ matrix.target }} --locked
+      # Windows takes the program `windows-exe` built, signed by `sign-exe` on a release and as
+      # built on a dry run, so the archive and the installer carry the same bytes.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: matrix.os == 'windows'
+        with:
+          name: ${{ needs.sign-exe.result == 'success' && 'supervisor-exe-signed' || 'supervisor-exe-unsigned' }}
+          path: target/${{ matrix.target }}/release
+      # A release never ships the program unsigned: if `sign-exe` was skipped by mistake, this fails.
+      - name: The Client program is signed on a release
+        if: matrix.os == 'windows' && ((github.event_name == 'push' && needs.version.outputs.publish == 'true') || inputs.sign)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sig = Get-AuthenticodeSignature "target/${{ matrix.target }}/release/supervisor.exe"
+          if ($sig.Status -ne 'Valid') { throw "supervisor.exe is not signed: $($sig.Status)" }
       # A host build: it runs here, on this runner, to pack the artifacts.
       - name: Build the packer
         run: cargo build --release -p classis-tools --bin classisctl --locked
@@ -320,6 +483,8 @@ jobs:
       - name: Build the Server
         if: matrix.os == 'linux'
         run: cargo build --release -p classis-server --bin server --target ${{ matrix.target }} --locked
+      # On Windows this runs the program `sign-exe` signed, which `windows-exe` checked as built: the
+      # bytes differ, so the check is kept.
       - name: The binary agrees with the name it will be given
         if: matrix.native
         run: |
@@ -513,10 +678,16 @@ jobs:
             ${{ env.STEM }}.deb.sha256
             ${{ env.STEM }}.rpm
             ${{ env.STEM }}.rpm.sha256
-            ${{ env.STEM }}.msi
-            ${{ env.STEM }}.msi.sha256
           # Every row produces the archive; only some produce installers. The archive is what
           # `error` is guarding here.
+          if-no-files-found: error
+      # The installer is not published from here: `sign-msi` signs it first and uploads it under
+      # the name `publish` collects. Not matched by that pattern, so a dry run publishes nothing.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.os == 'windows'
+        with:
+          name: msi-unsigned
+          path: ${{ env.STEM }}.msi
           if-no-files-found: error
       # The archive's checksum alone, as an artifact of its own, so the job that
       # holds the signing key downloads a hash and nothing it could run.
@@ -658,9 +829,10 @@ jobs:
           echo "pushed $IMAGE@$digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-  # Signs every entry of the Client's own Package. The only job that names the environment
-  # `Package Signing`, whose secret it receives once a second person with write access approves
-  # it. It checks out no code and builds nothing: it downloads the archives' checksums and the
+  # Signs every entry of the Client's own Package. The only job that receives the
+  # package signing key, from the environment `Package Signing`, once a second person with write
+  # access approves it (`sign-exe` and `sign-msi` share the environment for DigiCert's secrets).
+  # It checks out no code and builds nothing: it downloads the archives' checksums and the
   # tracked certificate, writes the statement each entry's signature covers, signs it with the
   # runner's OpenSSL, and writes the PackageSignature that carries both.
   sign:
@@ -777,10 +949,112 @@ jobs:
             entries/*.tar.gz.sig.sha256
           if-no-files-found: error
 
+  # Authenticode-signs the Windows installer, whose program `sign-exe` already signed. The second
+  # job that names the environment `Package Signing`; like the first it checks out no code and builds
+  # nothing. Its artifact carries the name `publish` collects, with the checksum of the signed file.
+  sign-msi:
+    if: >-
+      ${{ (github.event_name == 'push' && needs.version.outputs.publish == 'true')
+      || (github.event_name == 'workflow_dispatch' && inputs.sign) }}
+    needs: [version, build]
+    runs-on: windows-latest
+    environment: Package Signing
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The `env` context does not exist at the job level, so the artifact's name is spelled out:
+      # `${ARTIFACT}_<version>_windows_amd64`, the Windows row's STEM in `build`.
+      MSI: supervisor_${{ needs.version.outputs.version }}_windows_amd64.msi
+      SIGN_FILE: msi/supervisor_${{ needs.version.outputs.version }}_windows_amd64.msi
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: msi-unsigned
+          path: msi
+      - name: Install the Software Trust tools
+        shell: pwsh
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:SM_API_KEY) { throw 'the environment Package Signing holds no SM_API_KEY' }
+          $msi = Join-Path $env:RUNNER_TEMP 'smtools-windows-x64.msi'
+          $uri = 'https://one.digicert.com/signingmanager/api-ui/v1/releases/smtools-windows-x64.msi/download'
+          Invoke-WebRequest -Uri $uri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msi
+          # What was downloaded must be signed by DigiCert, Inc. itself before it is run.
+          $sig = Get-AuthenticodeSignature $msi
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O="?DigiCert, Inc\."?(,|$)') {
+            throw "the tools installer is not signed by DigiCert: $($sig.Status)"
+          }
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec exited with $($p.ExitCode)" }
+          $dir = 'C:\Program Files\DigiCert\DigiCert One Signing Manager Tools'
+          if (-not (Test-Path (Join-Path $dir 'smctl.exe'))) { throw "no smctl.exe in $dir" }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+      - name: Write the client certificate
+        env:
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SM_CLIENT_CERT_FILE_B64" ]; then
+            echo "::error::the environment Package Signing holds no SM_CLIENT_CERT_FILE_B64"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$SM_CLIENT_CERT_FILE_B64" | base64 -d > "$RUNNER_TEMP/sm-client-cert.p12"
+          echo "SM_CLIENT_CERT_FILE=$(cygpath -w "$RUNNER_TEMP/sm-client-cert.p12")" >> "$GITHUB_ENV"
+      - name: Sign the file
+        env:
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          FINGERPRINT: ${{ vars.SM_CERT_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
+            if [ -z "${!v}" ]; then echo "::error::the environment Package Signing holds no $v"; exit 1; fi
+          done
+          if [ ! -f "$SIGN_FILE" ]; then
+            echo "::error::the unsigned artifact holds no $SIGN_FILE"
+            exit 1
+          fi
+          smctl healthcheck
+          # Signing by fingerprint reads the certificate from the Windows store; a fresh runner has none.
+          smctl windows certsync
+          smctl sign --fingerprint "$FINGERPRINT" --input "$SIGN_FILE"
+      - name: The signature is valid and is this certificate's
+        shell: pwsh
+        env:
+          FINGERPRINT: ${{ vars.SM_CERT_FINGERPRINT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sig = Get-AuthenticodeSignature $env:SIGN_FILE
+          if ($sig.Status -ne 'Valid') { throw "$env:SIGN_FILE`: $($sig.Status)" }
+          if ($sig.SignerCertificate.Thumbprint -ne $env:FINGERPRINT) { throw "signed by $($sig.SignerCertificate.Thumbprint), not $env:FINGERPRINT" }
+          if (-not $sig.TimeStamperCertificate) { throw 'no timestamp on the signature' }
+      - name: Checksum the signed installer
+        run: |
+          set -euo pipefail
+          cd msi
+          sha256sum "$MSI" > "$MSI.sha256"
+      - name: Remove the client certificate
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/sm-client-cert.p12"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.MSI }}
+          path: |
+            msi/${{ env.MSI }}
+            msi/${{ env.MSI }}.sha256
+          if-no-files-found: error
+
   publish:
     # A dry run builds and packs everything and stops here, so it attests nothing.
     if: needs.version.outputs.publish == 'true'
-    needs: [version, build, sbom, image, sign]
+    needs: [version, build, sbom, image, sign, sign-msi]
     runs-on: ubuntu-latest
     # The only job that may attest. It checks out no code
     # and builds nothing; its only actions are download-artifact and attest, and every other step,
@@ -1061,7 +1335,7 @@ jobs:
           ./supervisor service start
           \`\`\`
 
-          The installers carry no code signature: Windows will show an unknown publisher, and \`rpm\` reports no
+          The Windows program and installer are Authenticode-signed. The \`rpm\` package carries no
           signature. Every asset is attested, and \`SHA256SUMS\` covers every asset above; the image
           is attested by its digest.
           EOF
