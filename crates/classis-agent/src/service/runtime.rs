@@ -465,9 +465,12 @@ fn load_effective_config(spec: &RunSpec) -> Result<ClientConfig, String> {
 ///
 /// # Errors
 /// Returns the error that names `enrol` where the host has no `state.json`, and why a file that is
-/// there cannot be read.
+/// there cannot be read, and the one that names `endpoint` where the host enrolled over TLS and the
+/// endpoint is plaintext.
 fn enrolled(mut config: ClientConfig) -> Result<ClientConfig, String> {
-    config.credentials = Some(crate::enrolment::required(&config.state_dir)?);
+    let credentials = crate::enrolment::required(&config.state_dir)?;
+    crate::enrolment::check_endpoint_matches_enrolment(&credentials, &config.endpoint)?;
+    config.credentials = Some(credentials);
     Ok(config)
 }
 

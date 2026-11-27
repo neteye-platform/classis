@@ -9,7 +9,7 @@ use http::header::{HeaderMap, HeaderValue, InvalidHeaderValue, AUTHORIZATION};
 use http::{StatusCode, Uri};
 
 /// What a request presents as its Bearer credential.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub enum Presented<'a> {
     /// No `Authorization` header. A token in the query alone counts as this: tokens in URLs are not
     /// supported.
@@ -25,6 +25,20 @@ pub enum Presented<'a> {
     /// More than one `Authorization` header, or a Bearer header together with an `access_token`
     /// query parameter: more than one transmission method (§2, §3.1).
     InvalidRequest,
+}
+
+/// `Debug` names the token's presence and never its value, so a logged request or a failed
+/// assertion cannot print a credential.
+impl std::fmt::Debug for Presented<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Presented::Absent => f.write_str("Absent"),
+            Presented::Unsupported => f.write_str("Unsupported"),
+            Presented::Token(_) => f.write_str("Token(<redacted>)"),
+            Presented::InvalidToken => f.write_str("InvalidToken"),
+            Presented::InvalidRequest => f.write_str("InvalidRequest"),
+        }
+    }
 }
 
 impl<'a> Presented<'a> {
@@ -299,6 +313,15 @@ mod tests {
             read(&[b"Bearer mF_9.B5f-4.1JqM"], "/"),
             Token("mF_9.B5f-4.1JqM".into())
         );
+    }
+
+    /// A presented token is a credential: its `Debug` output must not carry it.
+    #[test]
+    fn a_presented_token_is_not_printed() {
+        let (headers, uri) = request(&[b"Bearer mF_9.B5f-4.1JqM"], "/");
+        let printed = format!("{:?}", presented(&headers, &uri));
+        assert!(!printed.contains("mF_9"), "{printed}");
+        assert_eq!(printed, "Token(<redacted>)");
     }
 
     /// RFC 6750 §2.1 (`b64token`): the alphabet is ALPHA, DIGIT and `-._~+/`, then any `=`.

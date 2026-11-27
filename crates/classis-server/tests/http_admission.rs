@@ -95,6 +95,7 @@ async fn post(
 /// Over plain HTTP no report is admitted without a token the Server issued: none at all, a token it
 /// never issued, or another scheme is refused `401` with a Bearer challenge. Nothing admits an
 /// unauthenticated Agent.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn the_agent_plane_refuses_a_request_without_a_valid_token() {
     let served = served(None).await;
@@ -120,6 +121,7 @@ async fn the_agent_plane_refuses_a_request_without_a_valid_token() {
 
 /// The package download is on the same plane and is refused the same way: without a token nothing
 /// is served, and the refusal does not say whether the package exists.
+/// Verifies: Q-1
 #[tokio::test]
 async fn the_package_download_asks_for_a_token_too() {
     let served = served(None).await;
@@ -158,6 +160,43 @@ async fn agent_plane_refusals_are_counted_per_forwarded_address() {
         post(&served, unissued, Some("203.0.113.8")).await.status(),
         401,
         "another address is not"
+    );
+}
+
+/// The address counted is the right-most entry — the one the proxy appends — so what the client
+/// wrote to its left neither escapes the back-off nor puts another host's address in it.
+#[tokio::test]
+async fn the_address_counted_is_the_one_the_proxy_appended() {
+    let served = served_with(
+        Limits {
+            max_failures: 2,
+            window_secs: 60,
+            backoff_secs: 60,
+        },
+        None,
+    )
+    .await;
+    let unissued = Some("Bearer a-random-string-the-server-never-issued");
+    for spoofed in ["198.51.100.1", "198.51.100.2"] {
+        let forwarded = format!("{spoofed}, 203.0.113.7");
+        assert_eq!(
+            post(&served, unissued, Some(&forwarded)).await.status(),
+            401
+        );
+    }
+    assert_eq!(
+        post(&served, unissued, Some("198.51.100.1, 203.0.113.7"))
+            .await
+            .status(),
+        429,
+        "the proxy's address is in back-off, whatever was written before it"
+    );
+    assert_eq!(
+        post(&served, unissued, Some("203.0.113.7, 203.0.113.8"))
+            .await
+            .status(),
+        401,
+        "naming that address to its left does not put another's in back-off"
     );
 }
 

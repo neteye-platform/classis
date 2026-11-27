@@ -76,11 +76,9 @@ async fn admit_request(
     next: Next,
 ) -> Response {
     let peer = peer_ip(&request);
-    let websocket = request
-        .headers()
-        .get(header::UPGRADE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    // Read as the endpoint reads it, so that no request it upgrades is admitted as plain HTTP.
+    let websocket =
+        opamp::server::header_has_token(request.headers(), &header::UPGRADE, "websocket");
     match enrolment
         .admit(request.headers(), request.uri(), websocket)
         .await
@@ -214,13 +212,13 @@ fn over_rate() -> Response {
         .into_response()
 }
 
-/// The peer's address: the left-most valid address of `X-Forwarded-For` when the request has the
+/// The peer's address: the right-most valid address of `X-Forwarded-For` when the request has the
 /// header, else the address of the connection the listener put into the request.
 ///
-/// The header is trusted from any source: the Server is reached through a reverse proxy, which is
-/// the one peer on its connections, and it counts failed attempts per address. Whoever can reach
-/// the port can write the header, and so name any address — and so keep a failure count from ever
-/// filling for them.
+/// The Server is reached through a reverse proxy, which appends the address it saw to the header
+/// (or replaces the header with it): the right-most entry is the one the proxy wrote. Every entry
+/// to its left was sent by the client, who can name any address there — so only the right-most
+/// is trusted, and the manual requires a proxy that writes it.
 pub fn peer_ip(request: &Request) -> Option<IpAddr> {
     forwarded_for(request.headers()).or_else(|| {
         request
@@ -230,8 +228,9 @@ pub fn peer_ip(request: &Request) -> Option<IpAddr> {
     })
 }
 
-/// The first address that parses in the `X-Forwarded-For` values, in the order they were sent: a
-/// bare address, an address with a port, or a bracketed IPv6 address.
+/// The last entry of the `X-Forwarded-For` values, in the order they were sent, when it is an
+/// address: a bare address, an address with a port, or a bracketed IPv6 address. An earlier entry
+/// is never reached for when the last is not one — it is the client's.
 fn forwarded_for(headers: &axum::http::HeaderMap) -> Option<IpAddr> {
     headers
         .get_all("x-forwarded-for")
@@ -239,7 +238,8 @@ fn forwarded_for(headers: &axum::http::HeaderMap) -> Option<IpAddr> {
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
         .map(str::trim)
-        .find_map(|entry| {
+        .next_back()
+        .and_then(|entry| {
             entry
                 .parse::<IpAddr>()
                 .ok()

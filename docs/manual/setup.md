@@ -133,7 +133,8 @@ forwards to the Server's ports in plain HTTP ([Plain HTTP behind a reverse
 proxy](server.md#plain-http-behind-a-reverse-proxy)): the Server holds no
 certificate. Keep the
 Server's ports reachable by the proxy alone: the Server counts a peer by the
-left-most `X-Forwarded-For` entry, which anyone who reaches the port can write.
+right-most `X-Forwarded-For` entry, which the proxy must append (or write
+alone): every entry to its left is the client's.
 Then write `/etc/classis-server/server.toml`, giving every path absolutely:
 
 ```toml

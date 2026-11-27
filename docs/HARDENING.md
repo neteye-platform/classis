@@ -255,7 +255,7 @@ worth seeing at a glance. ✅ in force, ⚠️ partial, ❌ absent.
   - ✅ connections capped (`max_connections`) · ✅ HTTP/2 streams and pings
     bounded
   - ✅ failed admissions, enrolments and token requests throttled per address,
-    the left-most `X-Forwarded-For` entry ·
+    the right-most `X-Forwarded-For` entry ·
     ✅ admitted hosts rate-limited per host, and a peer without one per address
 - **Operator plane** — `127.0.0.1:4321` until an operator publishes it.
   - ✅ headers ≤ 30 s · ✅ Basic over the whole plane, required beyond the

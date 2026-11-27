@@ -856,7 +856,7 @@ every download, and for a WebSocket session once, at its upgrade.
   That is how a stolen token is cut off.
 - **Refusals are counted per address.** An authentication refusal on
   `/v1/enrol`, `/v1/token`, `/v1/opamp` or the download counts toward the
-  back-off of the peer's address, the left-most `X-Forwarded-For` entry
+  back-off of the peer's address, the right-most `X-Forwarded-For` entry
   ([Repeated failures are throttled](#repeated-failures-are-throttled)).
 
 The host of an admitted request is the client that holds its token. An Agent's
@@ -1739,13 +1739,14 @@ share — a NetworkPolicy that lets only the proxy reach the Server's ports.
 
 - **The operator's password crosses that hop in the clear.** So does every
   enrolment key, client secret and access token, and every package.
-- **The peer is the address in `X-Forwarded-For`.** The left-most entry that
-  parses as an address (`203.0.113.7`, `203.0.113.7:51000` or `[2001:db8::1]`)
+- **The peer is the address in `X-Forwarded-For`.** The right-most entry,
+  when it is an address (`203.0.113.7`, `203.0.113.7:51000` or `[2001:db8::1]`),
   is the peer the admission throttle counts; without the header, the
-  connection's address. **The header is trusted from any source**: whoever can
-  reach the port can write it, name any address, and so keep their own failures
-  from filling the throttle or put another host's address in back-off. Keep the
-  Server's ports closed to everything but the proxy.
+  connection's address. **The proxy must append the address it saw to the
+  header, or replace the header with it** (nginx: `$proxy_add_x_forwarded_for`
+  or `$remote_addr`): everything to the left of its entry was written by the
+  client, and is never read. Keep the Server's ports closed to everything but the
+  proxy, which would otherwise let whoever reaches the port write the entry.
 - **Outbound connections stay TLS 1.3**: to PostgreSQL and to S3.
 
 An Agent that still presents a client certificate is not refused for it: the

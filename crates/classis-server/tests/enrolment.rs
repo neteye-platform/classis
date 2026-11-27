@@ -64,6 +64,7 @@ struct Setup {
     limits: Limits,
     operator_auth: Option<classis_server::api::OperatorAuth>,
     agent_rate: Option<classis_server::agent_rate::Limits>,
+    max_agents: Option<usize>,
 }
 
 impl Default for Setup {
@@ -73,6 +74,7 @@ impl Default for Setup {
             limits: GENEROUS,
             operator_auth: None,
             agent_rate: None,
+            max_agents: None,
         }
     }
 }
@@ -109,14 +111,16 @@ async fn rig(setup: Setup) -> Rig {
         .create("lab")
         .expect("a space")
         .to_string();
-    let state = Arc::new(
-        support::state_on(dir.path()).with_agent_rate(setup.agent_rate.map(|limits| {
-            Arc::new(classis_server::agent_rate::AgentRate::new(
-                limits,
-                clock.clone(),
-            ))
-        })),
-    );
+    let mut state = support::state_on(dir.path());
+    if let Some(max) = setup.max_agents {
+        state = state.with_max_agents(max);
+    }
+    let state = Arc::new(state.with_agent_rate(setup.agent_rate.map(|limits| {
+        Arc::new(classis_server::agent_rate::AgentRate::new(
+            limits,
+            clock.clone(),
+        ))
+    })));
     let (addr, rest_addr) =
         support::serve_enrolled(state.clone(), enrolment.clone(), setup.operator_auth).await;
     Rig {
@@ -298,6 +302,7 @@ const NOT_ADMITTED: &str = "Bearer error=\"invalid_token\"";
 /// A valid key enrols at once; an unknown key, a key of an unknown Space and text that is no key
 /// do not; a rotated key stops enrolling and the new one enrols, and a host enrolled under the old
 /// key keeps its client and its token.
+/// Verifies: G-17
 #[tokio::test]
 async fn a_valid_key_enrols_and_an_unknown_or_replaced_key_does_not() {
     let rig = rig(Setup::default()).await;
@@ -368,6 +373,7 @@ fn uuid_v7(id: &str) {
 // ---- Tokens ----
 
 /// A new token makes the previous one invalid, on every route.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn a_new_token_makes_the_previous_one_invalid() {
     let rig = rig(Setup::default()).await;
@@ -394,6 +400,7 @@ async fn a_new_token_makes_the_previous_one_invalid() {
 }
 
 /// With `token_lifetime_secs` unset a token has no `expires_in`, and with a finite one it has.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn a_token_expires_in_what_the_lifetime_says_and_never_by_default() {
     let never = rig(Setup::default()).await;
@@ -426,6 +433,7 @@ async fn a_token_expires_in_what_the_lifetime_says_and_never_by_default() {
 
 /// An expired token and a replaced one are refused on `/v1/opamp` over both transports and on the
 /// download route, each time with `invalid_token`.
+/// Verifies: G-17, Q-1
 #[tokio::test]
 async fn an_expired_or_replaced_token_is_refused_on_every_admitted_route() {
     let rig = rig(Setup {
@@ -474,6 +482,7 @@ async fn an_expired_or_replaced_token_is_refused_on_every_admitted_route() {
 
 /// An open WebSocket session outlives its token's expiry, and is closed with 1008 when the token is
 /// replaced; another host's session is not touched.
+/// Verifies: G-17
 #[tokio::test]
 async fn an_open_session_outlives_its_tokens_expiry_and_ends_with_1008_when_it_is_replaced() {
     let rig = rig(Setup {
@@ -534,8 +543,98 @@ async fn an_open_session_outlives_its_tokens_expiry_and_ends_with_1008_when_it_i
     rig.renew(&mut bystander).await;
 }
 
+/// A request whose `Upgrade` header lists `websocket` among other protocols is upgraded by the
+/// endpoint, so it is admitted as a WebSocket session and ends with 1008 when its token is
+/// replaced, as a plain `Upgrade: websocket` one does.
+/// Verifies: G-17
+#[tokio::test]
+async fn an_upgrade_listing_websocket_among_others_ends_when_the_token_is_replaced() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rig = rig(Setup::default()).await;
+    let mut host = rig.enrol().await;
+    let mut stream = tokio::net::TcpStream::connect(rig.addr)
+        .await
+        .expect("connect");
+    let request = format!(
+        "GET /v1/opamp HTTP/1.1\r\nHost: {}\r\nConnection: Upgrade\r\n\
+         Upgrade: h2c, websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Authorization: Bearer {}\r\n\r\n",
+        rig.addr, host.token
+    );
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut byte))
+            .await
+            .expect("an answer within five seconds")
+            .expect("read");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&head);
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+
+    rig.renew(&mut host).await;
+    // A server frame is unmasked: FIN and the close opcode, a length, then the status code.
+    let mut frame = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut frame))
+        .await
+        .expect("the session is ended within five seconds")
+        .expect("a close frame");
+    assert_eq!(frame[0], 0x88, "a close frame");
+    assert_eq!(u16::from_be_bytes([frame[2], frame[3]]), 1008);
+}
+
+/// A peer that never stops sending still has its session closed with 1008 when its token is
+/// replaced: what it sent first does not keep the close waiting.
+/// Verifies: G-17
+#[tokio::test]
+async fn a_session_that_keeps_sending_ends_when_its_token_is_replaced() {
+    let rig = rig(Setup::default()).await;
+    let mut host = rig.enrol().await;
+    let mut socket = websocket(&rig, Some(&host.token)).await.expect("admitted");
+    let uid = InstanceUid::default();
+    send(&mut socket, &report(&uid, 1)).await;
+    recv(&mut socket).await;
+
+    let (mut sink, mut stream) = socket.split();
+    // The peer sends without pause, and reads what it is answered with.
+    let writer = tokio::spawn(async move {
+        let mut sequence = 2;
+        loop {
+            let frame = frame::encode_within(&support::compressed_report(&uid, sequence), LIMIT)
+                .expect("a frame");
+            if sink.send(Message::Binary(frame.into())).await.is_err() {
+                break;
+            }
+            sequence += 1;
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    rig.renew(&mut host).await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(Message::Close(frame))) => break frame,
+                Some(Ok(_)) => continue,
+                // The server closed with the peer's frames still unread, which the transport may
+                // report as a reset instead of the close frame: the session has ended all the same.
+                Some(Err(_)) | None => break None,
+            }
+        }
+    })
+    .await
+    .expect("the session is ended within five seconds");
+    writer.abort();
+    if let Some(frame) = closed {
+        assert_eq!(frame.code, CloseCode::Policy, "1008");
+    }
+}
+
 /// The Agent plane completes an OpAMP exchange on both transports with a bearer token and no
 /// client certificate: the Server speaks plain HTTP and reads none.
+/// Verifies: G-17
 #[tokio::test]
 async fn the_agent_plane_completes_an_exchange_without_a_client_certificate() {
     let rig = rig(Setup::default()).await;
@@ -948,6 +1047,45 @@ async fn messages_and_downloads_are_counted_for_the_admitted_client() {
     );
 }
 
+/// A message refused for the rate limit, and a new Agent refused at the record ceiling, are each
+/// answered `Unavailable` and name the Agent they answer, so its Client can match the refusal to
+/// its request.
+/// Verifies: G-17
+#[tokio::test]
+async fn a_refusal_names_the_agent_it_answers() {
+    let rig = rig(Setup {
+        agent_rate: Some(classis_server::agent_rate::Limits {
+            messages_per_sec: 1,
+            burst: 3,
+        }),
+        max_agents: Some(1),
+        ..Setup::default()
+    })
+    .await;
+    let host = rig.enrol().await;
+    let (first, newcomer) = (InstanceUid::default(), InstanceUid::default());
+    let unavailable = |reply: &ServerToAgent| {
+        reply
+            .error_response
+            .as_ref()
+            .is_some_and(|error| error.r#type == ServerErrorResponseType::Unavailable as i32)
+    };
+    assert!(!unavailable(
+        &rig.report(&host.token, &report(&first, 1)).await
+    ));
+
+    let at_ceiling = rig.report(&host.token, &report(&newcomer, 1)).await;
+    assert!(unavailable(&at_ceiling), "the fleet is full");
+    assert_eq!(at_ceiling.instance_uid, newcomer.as_bytes());
+
+    assert!(!unavailable(
+        &rig.report(&host.token, &report(&first, 2)).await
+    ));
+    let throttled = rig.report(&host.token, &report(&first, 3)).await;
+    assert!(unavailable(&throttled), "the bucket is empty");
+    assert_eq!(throttled.instance_uid, first.as_bytes());
+}
+
 // ---- The challenges ----
 
 #[derive(Clone, Copy, Debug)]
@@ -1077,6 +1215,7 @@ async fn the_routes_send_the_bearer_challenges_of_clauses_2_and_6() {
 /// limit, no back-off, no package offering — answers a request without a credential at the OpAMP
 /// endpoint (both transports) and at the download with `401` and the realm's challenge: there is no
 /// open path, whatever else the state carries.
+/// Verifies: Q-1
 #[tokio::test]
 async fn the_agent_plane_as_built_for_production_has_no_open_path() {
     opamp::tls::install_ring_provider();

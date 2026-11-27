@@ -127,6 +127,21 @@ impl Dacl {
         }
     }
 
+    /// Whether the DACL allows any of `sids` to read the data of the object itself: an allow ACE
+    /// for one of them whose rights include reading, generic or all rights alike.
+    #[must_use]
+    pub fn allows_read_to(&self, sids: &[&str]) -> bool {
+        /// `FILE_READ_DATA`, `GENERIC_READ` and `GENERIC_ALL`.
+        const READS: u32 = 0x0000_0001 | 0x8000_0000 | 0x1000_0000;
+        self.aces.iter().any(|ace| {
+            allows(ace)
+                && sids.iter().any(|sid| trustee_is(ace, sid))
+                && field(ace, 2)
+                    .and_then(mask)
+                    .is_some_and(|rights| rights & READS != 0)
+        })
+    }
+
     /// Whether the DACL holds `ace` as it is, its trustee written as a SID or as the alias the
     /// system writes for it.
     #[must_use]
@@ -322,6 +337,27 @@ mod tests {
     use super::*;
 
     const PROCESS: &str = "S-1-5-80-1-2-3-4-5";
+
+    /// A file that Users, Everyone or any authenticated account may read is found by its DACL,
+    /// however the system writes the right or the trustee; one only SYSTEM and Administrators hold
+    /// is not.
+    #[test]
+    fn a_dacl_that_lets_others_read_is_found() {
+        const OTHERS: [&str; 3] = ["S-1-5-32-545", "S-1-1-0", "S-1-5-11"];
+        let open = Dacl::parse("D:AI(A;ID;0x1200a9;;;BU)(A;ID;FA;;;SY)").expect("parses");
+        assert!(open.allows_read_to(&OTHERS));
+        let everyone = Dacl::parse("D:(A;;GR;;;WD)").expect("parses");
+        assert!(everyone.allows_read_to(&OTHERS));
+        let closed = Dacl::parse("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)").expect("parses");
+        assert!(!closed.allows_read_to(&OTHERS));
+        let denied = Dacl::parse("D:PAI(D;;FR;;;BU)(A;;FA;;;SY)").expect("parses");
+        assert!(!denied.allows_read_to(&OTHERS), "a deny is no read right");
+        let write_only = Dacl::parse("D:PAI(A;;0x2;;;AU)").expect("parses");
+        assert!(
+            !write_only.allows_read_to(&OTHERS),
+            "write alone is no read"
+        );
+    }
 
     /// A DACL is read as the system writes it, and one this module cannot read is refused.
     #[test]
