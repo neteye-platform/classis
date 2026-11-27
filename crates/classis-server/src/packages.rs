@@ -379,10 +379,10 @@ impl Package {
     /// Every artifact is offered from this Server, as a path the Agent resolves against its own
     /// OpAMP endpoint: there is no other host to name. `signature` is the entry's own,
     /// for these exact bytes; the wire is unchanged.
-    fn to_available(&self, entry: &Entry, signature: &[u8]) -> PackageAvailable {
+    fn to_available(&self, entry: &Entry, signature: &[u8], base_path: &str) -> PackageAvailable {
         let file = DownloadableFile {
             download_url: format!(
-                "/api/v1/packages/{}/{}/file?os={}&arch={}",
+                "{base_path}/api/v1/packages/{}/{}/file?os={}&arch={}",
                 self.id.agent_type, self.id.version, entry.platform.os, entry.platform.arch
             ),
             content_hash: entry.content_hash.clone(),
@@ -489,6 +489,9 @@ pub struct PackageStore {
     /// The check every signature passes before it is held: nothing verifies
     /// until [`PackageStore::with_verifier`] arms it.
     verifier: Box<dyn SignatureVerifier>,
+    /// The path the Agent plane is published under, which every offered `download_url` starts
+    /// with; empty at the root.
+    base_path: String,
 }
 
 impl PackageStore {
@@ -548,6 +551,7 @@ impl PackageStore {
             sets: RwLock::new(BTreeMap::new()),
             life: Mutex::new(Life::default()),
             verifier: Box::new(Unarmed),
+            base_path: String::new(),
         };
         // A blob no entry names is deleted at startup: an upload whose entry
         // was never written, or an entry whose deletion stopped short of its blob.
@@ -558,6 +562,14 @@ impl PackageStore {
         }
         *store.sets.write().expect("sets lock") = sets;
         Ok(store)
+    }
+
+    /// Offers every download under `base_path`, the path the proxy in front of the Server
+    /// publishes the Agent plane under: empty, or one that [`crate::config::ServerConfig`] accepted.
+    #[must_use]
+    pub fn with_base_path(mut self, base_path: String) -> Self {
+        self.base_path = base_path;
+        self
     }
 
     /// Replaces the Package Roots the signatures are checked against — tests pass a test Root —
@@ -990,7 +1002,7 @@ impl PackageStore {
         Some(PackagesAvailable {
             packages: [(
                 set.id.agent_type.clone(),
-                set.to_available(entry, signature),
+                set.to_available(entry, signature, &self.base_path),
             )]
             .into(),
             all_packages_hash: aggregate_hash(set, entry),
@@ -2308,6 +2320,30 @@ mod tests {
         assert_eq!(
             offered(&store, Some(&set), &agent("darwin", "amd64", &[])),
             [("otelcol".to_string(), "1.0.0".to_string())]
+        );
+    }
+
+    /// An Agent resolves a path against the origin of its endpoint and drops the endpoint's own
+    /// path, so a Server published under `base_path` offers its downloads under it.
+    #[test]
+    fn the_download_url_is_offered_under_the_base_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = open_store(dir.path())
+            .expect("open")
+            .with_base_path("/classis".to_string());
+        let set = stored_set(&store, "otelcol", "1.2.3", b"bytes");
+        sign_all(&store, &set);
+        let offer = store
+            .offer_for_assigned(Some(&set), Some(&agent("linux", "amd64", &[])))
+            .expect("an offer");
+        let url = &offer.packages["otelcol"]
+            .file
+            .as_ref()
+            .expect("file")
+            .download_url;
+        assert_eq!(
+            url,
+            "/classis/api/v1/packages/otelcol/1.2.3/file?os=linux&arch=amd64"
         );
     }
 

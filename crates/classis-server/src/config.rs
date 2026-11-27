@@ -30,6 +30,11 @@ pub struct ServerConfig {
     /// route the offers point at.
     #[serde(default = "default_listen")]
     pub listen: SocketAddr,
+    /// The path under which the proxy in front of the Server publishes the **Agent plane**, such
+    /// as `/classis`; empty serves it at the root. The Server answers on this path only, and
+    /// offers every package download under it. The Operator plane is not moved.
+    #[serde(default)]
+    pub base_path: String,
     /// The **Operator plane** — REST API, API docs, and the bundled UI — on its own listener.
     /// Absent means the default, which is loopback.
     #[serde(default)]
@@ -968,6 +973,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
             listen: default_listen(),
+            base_path: String::new(),
             rest: RestConfig::default(),
             data_dir: default_data_dir(),
             config_dir: None,
@@ -994,6 +1000,29 @@ impl Default for ServerConfig {
             packages: PackagesConfig::default(),
             token_lifetime_secs: 0,
         }
+    }
+}
+
+/// Holds `base_path` to what a proxy forwards verbatim: empty, or a path that starts with `/`,
+/// names at least one segment, and does not end with `/`. A segment is the unreserved characters
+/// of RFC 3986, so that nothing in it is escaped, templated, or read as a query.
+fn check_base_path(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    let unreserved = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~');
+    let well_formed = path.strip_prefix('/').is_some_and(|rest| {
+        rest.split('/')
+            .all(|s| !s.is_empty() && s.chars().all(unreserved))
+    });
+    if well_formed {
+        Ok(())
+    } else {
+        Err(format!(
+            "base_path {path:?} is not a path — it is empty, or starts with `/`, has no empty \
+             segment and no trailing `/`, and its segments hold only letters, digits, `-`, `.`, \
+             `_` and `~`"
+        ))
     }
 }
 
@@ -1175,6 +1204,7 @@ impl ServerConfig {
                     .to_string(),
             );
         }
+        check_base_path(&self.base_path)?;
         if let Some(offer) = &self.connection_offer {
             offer.check()?;
         }
@@ -1603,6 +1633,45 @@ mod tests {
     fn defaults_apply_to_an_empty_file() {
         let cfg: ServerConfig = toml::from_str("").expect("parse");
         assert_eq!(cfg.listen.port(), 4320);
+    }
+
+    /// The Agent plane is served at the root unless the proxy in front of the Server publishes it
+    /// under a path.
+    #[test]
+    fn the_agent_plane_is_at_the_root_by_default() {
+        let cfg: ServerConfig = toml::from_str("").expect("parse");
+        assert_eq!(cfg.base_path, "");
+        cfg.check().expect("the default is valid");
+    }
+
+    /// `base_path` is a path the proxy forwards verbatim: it starts with `/`, names at least one
+    /// segment, and ends without `/`, so that the Server and the Agent's offered URLs join it the
+    /// same way. Anything else fails startup, naming the key.
+    #[test]
+    fn base_path_is_an_absolute_path_without_a_trailing_slash() {
+        let with = |value: &str| {
+            let cfg: ServerConfig =
+                toml::from_str(&format!("base_path = \"{value}\"")).expect("parse");
+            cfg.check()
+        };
+        for ok in ["/classis", "/fleet/classis", "/a-b_c.d~e"] {
+            with(ok).unwrap_or_else(|e| panic!("{ok} should be valid: {e}"));
+        }
+        for bad in [
+            "classis",
+            "/",
+            "/classis/",
+            "//classis",
+            "/classis//agents",
+            "/classis?x=1",
+            "/classis#top",
+            "/clas sis",
+            "/{id}",
+            "/*",
+        ] {
+            let err = with(bad).expect_err(bad);
+            assert!(err.contains("base_path"), "names the key for {bad}: {err}");
+        }
     }
 
     /// The Operator plane is a second listener, and by default it is on loopback — the

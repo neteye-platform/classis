@@ -37,6 +37,13 @@
 # docs (/api/v1/docs), and the UI (/) — is the [rest] section in the second half of this file.
 listen = "127.0.0.1:4320"
 
+# The path the proxy in front of the Server publishes the Agent plane under, such as "/classis";
+# empty serves it at the root. The Server answers on this path only, and offers every package
+# download under it, because an Agent resolves a download path against the origin of its endpoint
+# and keeps nothing of the endpoint's own path. The proxy forwards the path as it is; the Agents'
+# endpoint is then wss://<host>/classis/v1/opamp. The Operator plane does not move.
+base_path = ""
+
 # The connections the Agent plane holds at once. Past it, a new connection is closed on
 # accept and the ones held keep working. Raise it together with the process's file-descriptor
 # limit for a fleet larger than this.
