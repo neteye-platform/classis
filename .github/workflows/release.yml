@@ -26,6 +26,11 @@ name: Release
 # `publish` before the release exists, and each shipped program has a CycloneDX SBOM per target
 # beside its archive.
 #
+# The Windows Client program and installer are Authenticode-signed through DigiCert Software Trust
+# in the GitHub environment `Signing`: `windows-exe` builds the program, `sign-exe` signs it, `build`
+# packs the signed bytes into the `.tar.gz` and the `.msi`, and `sign-msi` signs the installer.
+# A dry run skips both signing jobs and never reaches the environment.
+#
 # The Server ships as a multi-architecture image, `ghcr.io/neteye-platform/classis-server:<version>`,
 # built from packaging/container/Containerfile by copying the Server binaries the Linux rows built
 # and checked. `image` pushes it untagged; `publish` attests it, verifies it, and only then tags it
@@ -340,7 +345,8 @@ jobs:
           if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'DigiCert') {
             throw "the tools installer is not signed by DigiCert: $($sig.Status)"
           }
-          Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec exited with $($p.ExitCode)" }
           $dir = 'C:\Program Files\DigiCert\DigiCert One Signing Manager Tools'
           if (-not (Test-Path (Join-Path $dir 'smctl.exe'))) { throw "no smctl.exe in $dir" }
           Add-Content -Path $env:GITHUB_PATH -Value $dir
@@ -391,7 +397,11 @@ jobs:
   build:
     needs: [version, windows-exe, sign-exe]
     # `sign-exe` is skipped on a dry run, and that is not a failure.
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    if: >-
+      ${{ !cancelled()
+      && needs.version.result == 'success'
+      && needs.windows-exe.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.sign-exe.result) }}
     name: ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -423,6 +433,7 @@ jobs:
           # runs wrote.
           persist-credentials: false
       - name: Add the target
+        if: matrix.os != 'windows'
         run: rustup target add ${{ matrix.target }}
       - name: Build the Client
         if: matrix.os != 'windows'
@@ -434,6 +445,14 @@ jobs:
         with:
           name: ${{ needs.sign-exe.result == 'success' && 'supervisor-exe-signed' || 'supervisor-exe-unsigned' }}
           path: target/${{ matrix.target }}/release
+      # A release never ships the program unsigned: if `sign-exe` was skipped by mistake, this fails.
+      - name: The Client program is signed on a release
+        if: matrix.os == 'windows' && github.event_name == 'push' && needs.version.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sig = Get-AuthenticodeSignature "target/${{ matrix.target }}/release/supervisor.exe"
+          if ($sig.Status -ne 'Valid') { throw "supervisor.exe is not signed: $($sig.Status)" }
       # A host build: it runs here, on this runner, to pack the artifacts.
       - name: Build the packer
         run: cargo build --release -p classis-tools --bin classisctl --locked
@@ -945,7 +964,8 @@ jobs:
           if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'DigiCert') {
             throw "the tools installer is not signed by DigiCert: $($sig.Status)"
           }
-          Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -NoNewWindow -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec exited with $($p.ExitCode)" }
           $dir = 'C:\Program Files\DigiCert\DigiCert One Signing Manager Tools'
           if (-not (Test-Path (Join-Path $dir 'smctl.exe'))) { throw "no smctl.exe in $dir" }
           Add-Content -Path $env:GITHUB_PATH -Value $dir
@@ -972,7 +992,10 @@ jobs:
           for v in SM_HOST SM_CLIENT_CERT_PASSWORD FINGERPRINT; do
             if [ -z "${!v}" ]; then echo "::error::the environment Signing holds no $v"; exit 1; fi
           done
-          mv msi/*.msi "msi/$MSI"
+          if [ ! -f "msi/$MSI" ]; then
+            echo "::error::the artifact msi-unsigned holds no $MSI"
+            exit 1
+          fi
           smctl healthcheck
           smctl sign --fingerprint "$FINGERPRINT" --input "msi/$MSI"
       - name: The signature is valid and is this certificate's

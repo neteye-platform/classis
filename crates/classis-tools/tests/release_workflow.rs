@@ -1043,20 +1043,35 @@ fn a_release_starts_only_from_a_tag_a_person_pushed() {
 }
 
 #[test]
-fn only_the_sign_job_names_the_signing_environment_and_it_runs_nothing_of_the_repository() {
+fn each_signing_job_alone_names_its_environment_and_secrets_and_runs_nothing_of_the_repository() {
     let workflow = workflow();
     let sign = job(&workflow, "sign");
-    assert_eq!(
-        workflow.matches("environment:").count(),
-        3,
-        "Package Signing, and Signing twice: the Client program and the installer"
-    );
     assert!(
         sign.contains("    environment: Package Signing\n"),
         "{sign}"
     );
-    // The Package Signing key once; DigiCert's API key (twice), client certificate and its password, in each of the two Authenticode jobs.
-    assert_eq!(workflow.matches("secrets.").count(), 9, "nine secret uses");
+    // Every job that names an environment or reads a secret, and nothing besides them.
+    let names = |needle: &str| -> Vec<&str> {
+        [
+            "advisories",
+            "version",
+            "sbom",
+            "windows-exe",
+            "sign-exe",
+            "build",
+            "image",
+            "sign",
+            "sign-msi",
+            "publish",
+        ]
+        .into_iter()
+        .filter(|j| job(&workflow, j).contains(needle))
+        .collect()
+    };
+    assert_eq!(names("environment:"), ["sign-exe", "sign", "sign-msi"]);
+    assert_eq!(names("secrets."), ["sign-exe", "sign", "sign-msi"]);
+    assert_eq!(names("SM_"), ["sign-exe", "sign-msi"]);
+    assert_eq!(workflow.matches("secrets.PACKAGE_SIGNING_KEY").count(), 1);
     assert!(
         sign.contains("${{ secrets.PACKAGE_SIGNING_KEY }}"),
         "{sign}"
@@ -1402,4 +1417,80 @@ fn the_version_step_takes_the_annotated_tag_that_started_the_run() {
         !run(&"0".repeat(40)),
         "a tag on another commit is a spent number"
     );
+}
+
+#[test]
+fn the_authenticode_jobs_run_on_a_release_alone_and_run_nothing_of_the_repository() {
+    let workflow = workflow();
+    for name in ["sign-exe", "sign-msi"] {
+        let j = job(&workflow, name);
+        assert!(j.contains("    environment: Signing\n"), "{name}");
+        assert!(
+            j.contains(
+                "    if: github.event_name == 'push' && needs.version.outputs.publish == 'true'\n"
+            ),
+            "{name}: a dry run must never reach the environment"
+        );
+        assert!(!j.contains("actions/checkout"), "{name}");
+        assert!(!j.contains("cargo "), "{name}");
+        assert_eq!(grants(permissions(j)), ["contents: read"], "{name}");
+    }
+    assert!(job(&workflow, "sign-exe").contains("    needs: [version, windows-exe]\n"));
+    assert!(job(&workflow, "sign-msi").contains("    needs: [version, build]\n"));
+}
+
+#[test]
+fn the_build_packs_the_program_sign_exe_signed_and_is_not_held_by_a_skipped_signing() {
+    let workflow = workflow();
+    let build = job(&workflow, "build");
+    assert!(
+        build.contains("    needs: [version, windows-exe, sign-exe]\n"),
+        "{build}"
+    );
+    // A dry run skips `sign-exe`; a failed gate or build must still stop the matrix.
+    for part in [
+        "needs.version.result == 'success'",
+        "needs.windows-exe.result == 'success'",
+        "contains(fromJSON('[\"success\",\"skipped\"]'), needs.sign-exe.result)",
+    ] {
+        assert!(build.contains(part), "{part}");
+    }
+    assert!(build.contains(
+        "name: ${{ needs.sign-exe.result == 'success' && 'supervisor-exe-signed' || 'supervisor-exe-unsigned' }}"
+    ));
+    assert!(build.contains("          path: target/${{ matrix.target }}/release\n"));
+    // On a release the program that is packed must carry a valid signature.
+    let check = step(build, "The Client program is signed on a release");
+    assert!(check.contains("github.event_name == 'push'"), "{check}");
+    assert!(check.contains("Get-AuthenticodeSignature"), "{check}");
+}
+
+#[test]
+fn the_signed_installer_is_named_as_build_names_it_and_publish_collects_it() {
+    let workflow = workflow();
+    // `build` names the installer `$STEM.msi`, STEM being `<ARTIFACT>_<version>_<os>_<arch>`.
+    assert!(workflow.contains("  ARTIFACT: supervisor\n"));
+    let msi = job(&workflow, "sign-msi");
+    assert!(
+        msi.contains(
+            "      MSI: supervisor_${{ needs.version.outputs.version }}_windows_amd64.msi\n"
+        ),
+        "{msi}"
+    );
+    assert!(
+        !msi.contains("mv "),
+        "the artifact already carries this name: {msi}"
+    );
+    // The pattern `publish` downloads takes the signed installer and none of the intermediate files.
+    let publish = job(&workflow, "publish");
+    assert!(publish
+        .contains("pattern: '{sbom,signatures,${{ env.ARTIFACT }}_*,${{ env.OPERATOR_TOOL }}_*}'"));
+    for name in [
+        "msi-unsigned",
+        "supervisor-exe-unsigned",
+        "supervisor-exe-signed",
+    ] {
+        assert!(!glob("supervisor_*", name), "{name} would be published");
+    }
+    assert!(glob("supervisor_*", "supervisor_1.2.3_windows_amd64.msi"));
 }
