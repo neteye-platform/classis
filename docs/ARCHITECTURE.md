@@ -152,8 +152,9 @@ module has no role.
 - **Server listeners** — both planes speak plain HTTP behind a reverse proxy
   that terminates TLS: `config` refuses `[tls]`, `[rest.tls]`, `[client_ca]` and
   `[enrolment]` by name, and the peer a request is counted for is the right-most
-  `X-Forwarded-For` entry (the one the proxy writes), else the connection's address. `listen` serves
-  both planes on one handle with one drain and a connection cap each.
+  `X-Forwarded-For` entry (the one the proxy writes), else the connection's
+  address. `listen` serves both planes on one handle with one drain and a
+  connection cap each.
 - **Server admission** — `transport::admit` is a layer round `/v1/opamp` and the
   package download. It reads the `Authorization: Bearer` credential with
   `oauth-token`'s `bearer`, asks `enrolment::Enrolment` which client holds the
