@@ -163,6 +163,43 @@ async fn agent_plane_refusals_are_counted_per_forwarded_address() {
     );
 }
 
+/// The address counted is the right-most entry — the one the proxy appends — so what the client
+/// wrote to its left neither escapes the back-off nor puts another host's address in it.
+#[tokio::test]
+async fn the_address_counted_is_the_one_the_proxy_appended() {
+    let served = served_with(
+        Limits {
+            max_failures: 2,
+            window_secs: 60,
+            backoff_secs: 60,
+        },
+        None,
+    )
+    .await;
+    let unissued = Some("Bearer a-random-string-the-server-never-issued");
+    for spoofed in ["198.51.100.1", "198.51.100.2"] {
+        let forwarded = format!("{spoofed}, 203.0.113.7");
+        assert_eq!(
+            post(&served, unissued, Some(&forwarded)).await.status(),
+            401
+        );
+    }
+    assert_eq!(
+        post(&served, unissued, Some("198.51.100.1, 203.0.113.7"))
+            .await
+            .status(),
+        429,
+        "the proxy's address is in back-off, whatever was written before it"
+    );
+    assert_eq!(
+        post(&served, unissued, Some("203.0.113.7, 203.0.113.8"))
+            .await
+            .status(),
+        401,
+        "naming that address to its left does not put another's in back-off"
+    );
+}
+
 fn basic(password: &str) -> String {
     let encoded =
         base64::engine::general_purpose::STANDARD.encode(format!("fleet-admin:{password}"));
