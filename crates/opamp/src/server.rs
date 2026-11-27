@@ -394,8 +394,11 @@ async fn serve_socket<H: Handler, S>(
     loop {
         tokio::select! {
             // A shutdown comes first, so a peer that keeps sending cannot hold its session past it.
-            // Then what has arrived is read before a check judges it, so bytes that waited on this
-            // side while the loop was busy count for the peer.
+            // The outbound side is next, for the same reason: it is what ends a session whose
+            // credential was replaced, and a peer that keeps sending must not keep that close
+            // waiting, or have its messages handled once it is due. Then what has arrived is read
+            // before a check judges it, so bytes that waited on this side while the loop was busy
+            // count for the peer.
             biased;
             () = next_closing(&mut sessions) => {
                 // The listener is shutting down: the peer is told so, and reconnects to whatever
@@ -407,6 +410,26 @@ async fn serve_socket<H: Handler, S>(
                     })))
                     .await;
                 break;
+            }
+            item = next_outbound(&mut outbound) => {
+                let Some(item) = item else {
+                    let frame = handler.closing(&connection).map(|closing| CloseFrame {
+                        code: CloseCode::from(closing.code),
+                        reason: closing.reason.into(),
+                    });
+                    let _ = socket.send(Message::Close(frame)).await;
+                    break;
+                };
+                let mut gone = false;
+                for message in handler.on_outbound(&mut connection, item) {
+                    if !send_framed(&mut socket, &message, limit).await {
+                        gone = true;
+                        break;
+                    }
+                }
+                if gone {
+                    break;
+                }
             }
             incoming = socket.next() => {
                 let message = match incoming {
@@ -446,26 +469,6 @@ async fn serve_socket<H: Handler, S>(
                     if !send_framed(&mut socket, &reply, limit).await {
                         break;
                     }
-                }
-            }
-            item = next_outbound(&mut outbound) => {
-                let Some(item) = item else {
-                    let frame = handler.closing(&connection).map(|closing| CloseFrame {
-                        code: CloseCode::from(closing.code),
-                        reason: closing.reason.into(),
-                    });
-                    let _ = socket.send(Message::Close(frame)).await;
-                    break;
-                };
-                let mut gone = false;
-                for message in handler.on_outbound(&mut connection, item) {
-                    if !send_framed(&mut socket, &message, limit).await {
-                        gone = true;
-                        break;
-                    }
-                }
-                if gone {
-                    break;
                 }
             }
             scheduled = next_check(&mut check) => {
