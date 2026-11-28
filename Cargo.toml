@@ -55,7 +55,7 @@ flate2 = "1"
 # `classisctl package pack` build the artifact an operator has otherwise no supported way to
 # produce. Only `crates/classis-tools` and the Client's own tests ask for it; the
 # Client daemon never encodes, and does not enable it.
-sevenz-rust2 = { version = "0.24", default-features = false, features = ["aes256"] }
+sevenz-rust2 = { version = "0.27", default-features = false, features = ["aes256"] }
 # Reading a `.zip` package artifact — the container the GLPI Agent's portable Windows
 # build is published in. Default features pull C-binding codecs (bzip2, xz, zstd), so only
 # `deflate` is taken, which decompresses on the `flate2`/`miniz_oxide` chain already present;
@@ -120,7 +120,7 @@ x509-parser = "0.18"
 # so the Client refuses what `p12-keystore` would accept beyond PBES2 with PBKDF2-HMAC-SHA-2 and
 # AES-CBC under a SHA-2 MAC — the same versions it already pulls in.
 p12-keystore = { version = "=0.4.1", default-features = false }
-pkcs12 = "=0.2.0-pre.0"
+pkcs12 = "=0.2.0-rc.0"
 pkcs5 = { version = "0.8", features = ["pbes2"] }
 der = "0.8"
 # The Agent's own telemetry: the standard's own implementation, not a second copy of its
@@ -155,7 +155,7 @@ async-trait = "0.1"
 
 # Process CPU and memory for a pid on Linux, macOS, and Windows — the one gap the SDK leaves, and
 # three platform APIs not worth hand-rolling. Pure Rust over libc.
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 # The built-in root store, for the one case the transports' own defaults cannot cover: a Client
 # presenting a client certificate to a Server with a publicly trusted one, which needs
 # a rustls config built by hand. Data, not code — and already in the tree via the TLS stack.
@@ -173,7 +173,7 @@ tokio-postgres = { version = "0.7.18", default-features = false, features = ["ru
 deadpool-postgres = { version = "0.14.2", default-features = false, features = ["rt_tokio_1"] }
 tokio-postgres-rustls = { version = "0.14.0", default-features = false, features = ["ring"] }
 # Server-side TLS listener; `-no-provider` so it uses the ring provider we install, not aws-lc-rs.
-axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.9", default-features = false, features = ["tls-rustls-no-provider"] }
 # The hyper timer the HTTP/1 header-read timeout needs to exist at all: hyper defaults
 # that timeout to 30 seconds but resolves it to *nothing* while no `Timer` is installed, and
 # neither axum nor axum-server installs one. `tokio` is the only feature asked for — it is what

@@ -3,6 +3,6 @@
   "description": "Build inputs of crates/classis-server/static/shiki.js; see scripts/vendor-shiki.sh.",
   "dependencies": {
     "esbuild": "0.28.2",
-    "shiki": "4.5.0"
+    "shiki": "4.6.0"
   }
 }
